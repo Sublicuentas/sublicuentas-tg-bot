@@ -117,3 +117,17 @@ setInterval(() => {
 setInterval(() => {
   console.log("Bot activo...");
 }, 60000);
+
+// ===============================
+// SERVIDOR FALSO PARA RENDER
+// ===============================
+const http = require("http");
+
+const PORT = process.env.PORT || 3000;
+
+http.createServer((req, res) => {
+  res.writeHead(200);
+  res.end("Bot Sublicuentas activo");
+}).listen(PORT, () => {
+  console.log("🌐 Web service activo en puerto " + PORT);
+});
