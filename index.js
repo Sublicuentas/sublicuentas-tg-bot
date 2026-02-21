@@ -2,39 +2,221 @@ const TelegramBot = require("node-telegram-bot-api");
 const admin = require("firebase-admin");
 const http = require("http");
 
-// ===============================
-// VARIABLES DE ENTORNO
-// ===============================
-const BOT_TOKEN = process.env.BOT_TOKEN;
-const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID;
-const FIREBASE_CLIENT_EMAIL = process.env.FIREBASE_CLIENT_EMAIL;
-const FIREBASE_PRIVATE_KEY = process.env.FIREBASE_PRIVATE_KEY;
+// ================= BOT =================
+const bot = new TelegramBot(process.env.BOT_TOKEN,{ polling:true });
 
-if (!BOT_TOKEN) throw new Error("Falta BOT_TOKEN");
-if (!FIREBASE_PROJECT_ID) throw new Error("Falta FIREBASE_PROJECT_ID");
-if (!FIREBASE_CLIENT_EMAIL) throw new Error("Falta FIREBASE_CLIENT_EMAIL");
-if (!FIREBASE_PRIVATE_KEY) throw new Error("Falta FIREBASE_PRIVATE_KEY");
-
-// ===============================
-// FIREBASE INIT
-// ===============================
+// ================= FIREBASE =================
 admin.initializeApp({
-  credential: admin.credential.cert({
-    projectId: FIREBASE_PROJECT_ID,
-    clientEmail: FIREBASE_CLIENT_EMAIL,
-    privateKey: FIREBASE_PRIVATE_KEY.replace(/\\n/g, "\n"),
-  }),
+ credential: admin.credential.cert({
+   projectId: process.env.FIREBASE_PROJECT_ID,
+   clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+   privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g,"\n")
+ })
 });
+
 const db = admin.firestore();
 
-// ===============================
-// TELEGRAM BOT
-// ===============================
-const bot = new TelegramBot(BOT_TOKEN, { polling: true });
-console.log("✅ Bot iniciado");
+console.log("✅ SUBLICUENTAS BOT ONLINE");
 
-// ===============================
-// PLATAFORMAS (IGUAL A FIREBASE)
+// ================= ADMIN =================
+async function isAdmin(id){
+ const doc = await db.collection("admins").doc(String(id)).get();
+ return doc.exists && doc.data().activo === true;
+}
+
+// ================= CONFIG =================
+async function getTotal(plataforma){
+ const doc = await db.collection("config")
+  .doc("totales_plataforma").get();
+ return doc.data()?.[plataforma] || "?";
+}
+
+// ================= LISTAR =================
+async function listar(chatId,plataforma,titulo){
+
+ const snap = await db.collection("inventario")
+  .where("plataforma","==",plataforma)
+  .where("estado","==","activa")
+  .where("disp",">=",1)
+  .get();
+
+ if(snap.empty)
+   return bot.sendMessage(chatId,`❌ Sin cuentas ${titulo}`);
+
+ let txt=`📺 ${titulo}\n\n`;
+ let total=0;
+
+ snap.forEach(d=>{
+   const x=d.data();
+   txt+=`📧 ${x.correo}\n👤 ${x.disp} libres\n\n`;
+   total+=x.disp;
+ });
+
+ txt+=`🔥 Perfiles disponibles: ${total}`;
+ bot.sendMessage(chatId,txt);
+}
+
+// ================= START =================
+bot.onText(/\/start/,async msg=>{
+ if(!(await isAdmin(msg.from.id)))
+   return bot.sendMessage(msg.chat.id,"⛔ Acceso denegado");
+
+ bot.sendMessage(msg.chat.id,
+`✅ PANEL SUBLICUENTAS
+
+/netflix
+/disneyp
+/disneys
+/hbomax
+/primevideo
+/paramount
+/crunchyroll
+/stock`);
+});
+
+// ================= LISTADOS =================
+bot.onText(/\/netflix/,msg=>listar(msg.chat.id,"netflix","NETFLIX"));
+bot.onText(/\/disneyp/,msg=>listar(msg.chat.id,"disneyp","DISNEY PREMIUM"));
+bot.onText(/\/disneys/,msg=>listar(msg.chat.id,"disneys","DISNEY STANDARD"));
+bot.onText(/\/hbomax/,msg=>listar(msg.chat.id,"hbomax","HBO MAX"));
+bot.onText(/\/primevideo/,msg=>listar(msg.chat.id,"primevideo","PRIME VIDEO"));
+bot.onText(/\/paramount/,msg=>listar(msg.chat.id,"paramount","PARAMOUNT+"));
+bot.onText(/\/crunchyroll/,msg=>listar(msg.chat.id,"crunchyroll","CRUNCHYROLL"));
+
+// ================= STOCK GENERAL =================
+bot.onText(/\/stock/,async msg=>{
+
+ const plataformas=[
+ ["netflix","NETFLIX"],
+ ["disneyp","DISNEY PREMIUM"],
+ ["disneys","DISNEY STANDARD"],
+ ["hbomax","HBO MAX"],
+ ["primevideo","PRIME VIDEO"],
+ ["paramount","PARAMOUNT+"],
+ ["crunchyroll","CRUNCHYROLL"]
+ ];
+
+ let txt="📊 STOCK GENERAL\n\n";
+
+ for(const p of plataformas){
+  const snap=await db.collection("inventario")
+   .where("plataforma","==",p[0])
+   .where("estado","==","activa")
+   .get();
+
+  let suma=0;
+  snap.forEach(d=>suma+=d.data().disp);
+
+  txt+=`🎬 ${p[1]} → ${suma} perfiles\n`;
+ }
+
+ bot.sendMessage(msg.chat.id,txt);
+});
+
+// ================= VENTA =================
+async function procesarVenta(chatId,plataforma){
+
+ const snap = await db.collection("inventario")
+  .where("plataforma","==",plataforma)
+  .where("estado","==","activa")
+  .where("disp",">=",1)
+  .orderBy("disp","desc")
+  .limit(1)
+  .get();
+
+ if(snap.empty)
+   return bot.sendMessage(chatId,"⚠️ SIN STOCK");
+
+ const doc=snap.docs[0];
+ const data=doc.data();
+
+ let nuevo=data.disp-1;
+ let estado="activa";
+
+ if(nuevo<=0){
+   nuevo=0;
+   estado="agotada";
+ }
+
+ await doc.ref.update({
+   disp:nuevo,
+   estado,
+   updatedAt:new Date()
+ });
+
+ const total=await getTotal(plataforma);
+
+ let txt=
+`✅ ENTREGA REALIZADA
+📌 ${plataforma.toUpperCase()}
+📧 ${data.correo}
+👤 ${nuevo}/${total}`;
+
+ if(nuevo===1)
+   txt+="\n⚠️ Solo queda 1 perfil";
+
+ if(nuevo===0)
+   txt+="\n⛔ Cuenta bloqueada automáticamente";
+
+ bot.sendMessage(chatId,txt);
+}
+
+bot.onText(/\/venta (.+)/,msg=>procesarVenta(msg.chat.id,msg.text.split(" ")[1]));
+bot.onText(/\/auto (.+)/,msg=>procesarVenta(msg.chat.id,msg.text.split(" ")[1]));
+
+// ================= ADD =================
+bot.onText(/\/add (.+) (.+) (\d+)/,async(msg,m)=>{
+
+ await db.collection("inventario").add({
+   correo:m[1],
+   plataforma:m[2],
+   disp:parseInt(m[3]),
+   estado:"activa",
+   createdAt:new Date(),
+   updatedAt:new Date()
+ });
+
+ bot.sendMessage(msg.chat.id,"✅ Cuenta agregada");
+});
+
+// ================= ADDP =================
+bot.onText(/\/addp (.+)/,async(msg,m)=>{
+
+ const snap=await db.collection("inventario")
+  .where("correo","==",m[1]).get();
+
+ snap.forEach(async doc=>{
+   let d=doc.data();
+   let nuevo=Math.max(0,d.disp-1);
+   let estado=nuevo===0?"agotada":"activa";
+   await doc.ref.update({disp:nuevo,estado});
+ });
+
+ bot.sendMessage(msg.chat.id,"➖ Perfil descontado");
+});
+
+// ================= DELP (REACTIVA) =================
+bot.onText(/\/delp (.+)/,async(msg,m)=>{
+
+ const snap=await db.collection("inventario")
+  .where("correo","==",m[1]).get();
+
+ snap.forEach(async doc=>{
+   let d=doc.data();
+   await doc.ref.update({
+     disp:d.disp+1,
+     estado:"activa"
+   });
+ });
+
+ bot.sendMessage(msg.chat.id,"➕ Perfil liberado / Reactivada");
+});
+
+// ================= KEEP ALIVE =================
+http.createServer((req,res)=>{
+ res.writeHead(200);
+ res.end("BOT OK");
+}).listen(process.env.PORT||3000);// PLATAFORMAS (IGUAL A FIREBASE)
 // (cmd -> inventario.plataforma key)
 // ===============================
 const PLATFORMS = {
