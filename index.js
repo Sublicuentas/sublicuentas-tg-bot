@@ -59,7 +59,11 @@ bot.onText(/\/netflix/, async (msg) => {
 bot.onText(/\/start/, (msg)=>{
   bot.sendMessage(msg.chat.id,"✅ Bot Sublicuentas activo");
 });
-// Mantener Render activo
+
+setInterval(() => {
+  console.log("Bot activo...");
+}, 60000);
+
 setInterval(() => {
   console.log("Bot activo...");
 }, 60000);
