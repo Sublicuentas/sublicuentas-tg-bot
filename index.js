@@ -2,762 +2,445 @@ const TelegramBot = require("node-telegram-bot-api");
 const admin = require("firebase-admin");
 const http = require("http");
 
-// ================= BOT =================
-const bot = new TelegramBot(process.env.BOT_TOKEN,{ polling:true });
+// ===============================
+// ENV CHECK
+// ===============================
+const BOT_TOKEN = process.env.BOT_TOKEN;
+const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID;
+const FIREBASE_CLIENT_EMAIL = process.env.FIREBASE_CLIENT_EMAIL;
+const FIREBASE_PRIVATE_KEY = process.env.FIREBASE_PRIVATE_KEY;
 
-// ================= FIREBASE =================
+if (!BOT_TOKEN) throw new Error("Falta BOT_TOKEN");
+if (!FIREBASE_PROJECT_ID) throw new Error("Falta FIREBASE_PROJECT_ID");
+if (!FIREBASE_CLIENT_EMAIL) throw new Error("Falta FIREBASE_CLIENT_EMAIL");
+if (!FIREBASE_PRIVATE_KEY) throw new Error("Falta FIREBASE_PRIVATE_KEY");
+
+// ===============================
+// FIREBASE INIT
+// ===============================
 admin.initializeApp({
- credential: admin.credential.cert({
-   projectId: process.env.FIREBASE_PROJECT_ID,
-   clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-   privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g,"\n")
- })
+  credential: admin.credential.cert({
+    projectId: FIREBASE_PROJECT_ID,
+    clientEmail: FIREBASE_CLIENT_EMAIL,
+    privateKey: FIREBASE_PRIVATE_KEY.replace(/\\n/g, "\n"),
+  }),
 });
-
 const db = admin.firestore();
 
-console.log("✅ SUBLICUENTAS BOT ONLINE");
-
-// ================= ADMIN =================
-async function isAdmin(id){
- const doc = await db.collection("admins").doc(String(id)).get();
- return doc.exists && doc.data().activo === true;
-}
-
-// ================= CONFIG =================
-async function getTotal(plataforma){
- const doc = await db.collection("config")
-  .doc("totales_plataforma").get();
- return doc.data()?.[plataforma] || "?";
-}
-
-// ================= LISTAR =================
-async function listar(chatId,plataforma,titulo){
-
- const snap = await db.collection("inventario")
-  .where("plataforma","==",plataforma)
-  .where("estado","==","activa")
-  .where("disp",">=",1)
-  .get();
-
- if(snap.empty)
-   return bot.sendMessage(chatId,`❌ Sin cuentas ${titulo}`);
-
- let txt=`📺 ${titulo}\n\n`;
- let total=0;
-
- snap.forEach(d=>{
-   const x=d.data();
-   txt+=`📧 ${x.correo}\n👤 ${x.disp} libres\n\n`;
-   total+=x.disp;
- });
-
- txt+=`🔥 Perfiles disponibles: ${total}`;
- bot.sendMessage(chatId,txt);
-}
-
-// ================= START =================
-bot.onText(/\/start/,async msg=>{
- if(!(await isAdmin(msg.from.id)))
-   return bot.sendMessage(msg.chat.id,"⛔ Acceso denegado");
-
- bot.sendMessage(msg.chat.id,
-`✅ PANEL SUBLICUENTAS
-
-/netflix
-/disneyp
-/disneys
-/hbomax
-/primevideo
-/paramount
-/crunchyroll
-/stock`);
-});
-
-// ================= LISTADOS =================
-bot.onText(/\/netflix/,msg=>listar(msg.chat.id,"netflix","NETFLIX"));
-bot.onText(/\/disneyp/,msg=>listar(msg.chat.id,"disneyp","DISNEY PREMIUM"));
-bot.onText(/\/disneys/,msg=>listar(msg.chat.id,"disneys","DISNEY STANDARD"));
-bot.onText(/\/hbomax/,msg=>listar(msg.chat.id,"hbomax","HBO MAX"));
-bot.onText(/\/primevideo/,msg=>listar(msg.chat.id,"primevideo","PRIME VIDEO"));
-bot.onText(/\/paramount/,msg=>listar(msg.chat.id,"paramount","PARAMOUNT+"));
-bot.onText(/\/crunchyroll/,msg=>listar(msg.chat.id,"crunchyroll","CRUNCHYROLL"));
-
-// ================= STOCK GENERAL =================
-bot.onText(/\/stock/,async msg=>{
-
- const plataformas=[
- ["netflix","NETFLIX"],
- ["disneyp","DISNEY PREMIUM"],
- ["disneys","DISNEY STANDARD"],
- ["hbomax","HBO MAX"],
- ["primevideo","PRIME VIDEO"],
- ["paramount","PARAMOUNT+"],
- ["crunchyroll","CRUNCHYROLL"]
- ];
-
- let txt="📊 STOCK GENERAL\n\n";
-
- for(const p of plataformas){
-  const snap=await db.collection("inventario")
-   .where("plataforma","==",p[0])
-   .where("estado","==","activa")
-   .get();
-
-  let suma=0;
-  snap.forEach(d=>suma+=d.data().disp);
-
-  txt+=`🎬 ${p[1]} → ${suma} perfiles\n`;
- }
-
- bot.sendMessage(msg.chat.id,txt);
-});
-
-// ================= VENTA =================
-async function procesarVenta(chatId,plataforma){
-
- const snap = await db.collection("inventario")
-  .where("plataforma","==",plataforma)
-  .where("estado","==","activa")
-  .where("disp",">=",1)
-  .orderBy("disp","desc")
-  .limit(1)
-  .get();
-
- if(snap.empty)
-   return bot.sendMessage(chatId,"⚠️ SIN STOCK");
-
- const doc=snap.docs[0];
- const data=doc.data();
-
- let nuevo=data.disp-1;
- let estado="activa";
-
- if(nuevo<=0){
-   nuevo=0;
-   estado="agotada";
- }
-
- await doc.ref.update({
-   disp:nuevo,
-   estado,
-   updatedAt:new Date()
- });
-
- const total=await getTotal(plataforma);
-
- let txt=
-`✅ ENTREGA REALIZADA
-📌 ${plataforma.toUpperCase()}
-📧 ${data.correo}
-👤 ${nuevo}/${total}`;
-
- if(nuevo===1)
-   txt+="\n⚠️ Solo queda 1 perfil";
-
- if(nuevo===0)
-   txt+="\n⛔ Cuenta bloqueada automáticamente";
-
- bot.sendMessage(chatId,txt);
-}
-
-bot.onText(/\/venta (.+)/,msg=>procesarVenta(msg.chat.id,msg.text.split(" ")[1]));
-bot.onText(/\/auto (.+)/,msg=>procesarVenta(msg.chat.id,msg.text.split(" ")[1]));
-
-// ================= ADD =================
-bot.onText(/\/add (.+) (.+) (\d+)/,async(msg,m)=>{
-
- await db.collection("inventario").add({
-   correo:m[1],
-   plataforma:m[2],
-   disp:parseInt(m[3]),
-   estado:"activa",
-   createdAt:new Date(),
-   updatedAt:new Date()
- });
-
- bot.sendMessage(msg.chat.id,"✅ Cuenta agregada");
-});
-
-// ================= ADDP =================
-bot.onText(/\/addp (.+)/,async(msg,m)=>{
-
- const snap=await db.collection("inventario")
-  .where("correo","==",m[1]).get();
-
- snap.forEach(async doc=>{
-   let d=doc.data();
-   let nuevo=Math.max(0,d.disp-1);
-   let estado=nuevo===0?"agotada":"activa";
-   await doc.ref.update({disp:nuevo,estado});
- });
-
- bot.sendMessage(msg.chat.id,"➖ Perfil descontado");
-});
-
-// ================= DELP (REACTIVA) =================
-bot.onText(/\/delp (.+)/,async(msg,m)=>{
-
- const snap=await db.collection("inventario")
-  .where("correo","==",m[1]).get();
-
- snap.forEach(async doc=>{
-   let d=doc.data();
-   await doc.ref.update({
-     disp:d.disp+1,
-     estado:"activa"
-   });
- });
-
- bot.sendMessage(msg.chat.id,"➕ Perfil liberado / Reactivada");
-});
-
-// ================= KEEP ALIVE =================
-http.createServer((req,res)=>{
- res.writeHead(200);
- res.end("BOT OK");
-}).listen(process.env.PORT||3000);// PLATAFORMAS (IGUAL A FIREBASE)
-// (cmd -> inventario.plataforma key)
 // ===============================
-const PLATFORMS = {
-  netflix: { key: "netflix", label: "NETFLIX" },
-  disneyp: { key: "disneyp", label: "DISNEY PREMIUM" },
-  disneys: { key: "disneys", label: "DISNEY STANDARD" },
-  hbo: { key: "hbomax", label: "HBO MAX" },
-  prime: { key: "primevideo", label: "PRIME VIDEO" },
-  paramount: { key: "paramount", label: "PARAMOUNT+" },
-  crunchy: { key: "crunchyroll", label: "CRUNCHYROLL" },
-};
-
-// Orden para panel/resumen
-const PLATFORM_ORDER = [
-  { key: "netflix", label: "NETFLIX", totalKey: "netflix" },
-  { key: "disneyp", label: "DISNEY PREMIUM", totalKey: "disneyp" },
-  { key: "disneys", label: "DISNEY STANDARD", totalKey: "disneys" },
-  { key: "hbomax", label: "HBO MAX", totalKey: "hbomax" },
-  { key: "primevideo", label: "PRIME VIDEO", totalKey: "primevideo" },
-  { key: "paramount", label: "PARAMOUNT+", totalKey: "paramount" },
-  { key: "crunchyroll", label: "CRUNCHYROLL", totalKey: "crunchyroll" },
-];
+// TELEGRAM BOT
+// ===============================
+const bot = new TelegramBot(BOT_TOKEN, { polling: true });
+console.log("✅ SUBLICUENTAS BOT ONLINE");
 
 // ===============================
 // ADMIN CHECK
-// admins/{telegramUserId} => { activo: true }
 // ===============================
 async function isAdmin(userId) {
   const doc = await db.collection("admins").doc(String(userId)).get();
   return doc.exists && doc.data()?.activo === true;
 }
 
-async function requireAdmin(msg) {
-  const ok = await isAdmin(msg.from.id);
-  if (!ok) await bot.sendMessage(msg.chat.id, "⛔ Acceso denegado");
-  return ok;
+// ===============================
+// CONFIG (totales_plataforma)
+// ===============================
+async function getTotal(plataformaKey) {
+  const doc = await db.collection("config").doc("totales_plataforma").get();
+  return doc.exists ? (doc.data()?.[plataformaKey] ?? null) : null;
 }
 
 // ===============================
-// CONFIG (totales)
-// config/totales_plataforma
+// LISTAR PLATAFORMA (solo activas con disp>=1)
 // ===============================
-async function getTotals() {
-  const cfg = await db.collection("config").doc("totales_plataforma").get();
-  if (!cfg.exists) return null;
-  return cfg.data() || {};
-}
-
-// ===============================
-// MENÚ
-// ===============================
-function menuText() {
-  return (
-    "✅ Bot Sublicuentas activo\n\n" +
-    "📦 STOCK:\n" +
-    "/stock (panel completo)\n" +
-    "/netflix\n/disneyp\n/disneys\n/hbo\n/prime\n/paramount\n/crunchy\n\n" +
-    "📧 LISTADOS:\n" +
-    "/list netflix\n/list disneyp\n/list disneys\n/list hbomax\n/list primevideo\n/list paramount\n/list crunchyroll\n\n" +
-    "🔎 BUSCAR:\n" +
-    "/buscar correo@gmail.com\n\n" +
-    "🏆 RANKING:\n" +
-    "/top\n\n" +
-    "➕ AGREGAR CUENTAS:\n" +
-    "/add correo@gmail.com netflix 5 [activa]\n" +
-    "/addm (lote)\n\n" +
-    "⚙️ INVENTARIO PERFILES:\n" +
-    "/addp correo@gmail.com  (resta 1)\n" +
-    "/delp correo@gmail.com  (suma 1)\n"
-  );
-}
-
-bot.onText(/^\/start$/i, async (msg) => {
-  if (!(await requireAdmin(msg))) return;
-  await bot.sendMessage(msg.chat.id, menuText());
-});
-
-bot.onText(/^\/help$/i, async (msg) => {
-  if (!(await requireAdmin(msg))) return;
-  await bot.sendMessage(msg.chat.id, menuText());
-});
-
-// ===============================
-// STOCK por plataforma (lista correos + disp/total)
-// ===============================
-async function sendStock(chatId, platKey, label, totalKey) {
-  const totals = await getTotals();
-  if (!totals) return bot.sendMessage(chatId, "⚠️ Falta config/totales_plataforma");
-
-  const total = Number(totals[totalKey] ?? 0);
-  if (!total) {
-    return bot.sendMessage(chatId, `⚠️ No está configurado el total para ${label} (campo: ${totalKey})`);
-  }
-
+async function listar(chatId, plataformaKey, titulo) {
   const snap = await db
     .collection("inventario")
-    .where("plataforma", "==", platKey)
-    .where("disp", ">=", 1)
+    .where("plataforma", "==", plataformaKey)
     .where("estado", "==", "activa")
+    .where("disp", ">=", 1)
     .get();
 
-  if (snap.empty) return bot.sendMessage(chatId, `⚠️ ${label} SIN PERFILES DISPONIBLES`);
+  if (snap.empty) return bot.sendMessage(chatId, `❌ Sin cuentas ${titulo}`);
 
-  let texto = `📌 ${label} — STOCK DISPONIBLE\n\n`;
+  const totalMax = await getTotal(plataformaKey);
+
+  let txt = `📺 ${titulo}\n\n`;
   let suma = 0;
   let i = 1;
 
   snap.forEach((doc) => {
     const d = doc.data();
-    texto += `${i}) ${d.correo} — ${d.disp}/${total}\n`;
+    txt += `${i}) 📧 ${d.correo}\n👤 ${Number(d.disp || 0)} libres${totalMax ? `/${totalMax}` : ""}\n\n`;
     suma += Number(d.disp || 0);
     i++;
   });
 
-  texto += `\n━━━━━━━━━━━━━━`;
-  texto += `\n📊 Cuentas con stock: ${i - 1}`;
-  texto += `\n👤 Perfiles libres totales: ${suma}`;
-
-  return bot.sendMessage(chatId, texto);
+  txt += `🔥 Perfiles disponibles: ${suma}`;
+  return bot.sendMessage(chatId, txt);
 }
 
 // ===============================
-// COMANDOS STOCK: /netflix /disneyp /disneys /hbo /prime /paramount /crunchy
+// STOCK GENERAL (suma de disp por plataforma)
 // ===============================
-Object.keys(PLATFORMS).forEach((cmd) => {
-  bot.onText(new RegExp(`^\\/${cmd}$`, "i"), async (msg) => {
-    if (!(await requireAdmin(msg))) return;
+async function stockGeneral(chatId) {
+  const plataformas = [
+    ["netflix", "NETFLIX"],
+    ["disneyp", "DISNEY PREMIUM"],
+    ["disneys", "DISNEY STANDARD"],
+    ["hbomax", "HBO MAX"],
+    ["primevideo", "PRIME VIDEO"],
+    ["paramount", "PARAMOUNT+"],
+    ["crunchyroll", "CRUNCHYROLL"],
+  ];
 
-    const chatId = msg.chat.id;
-    const p = PLATFORMS[cmd];
+  let txt = "📊 STOCK GENERAL\n\n";
 
-    // En tu caso, totalKey coincide con la key de plataforma (hbomax, primevideo, etc.)
-    const totalKey = p.key;
-
-    await sendStock(chatId, p.key, p.label, totalKey);
-  });
-});
-
-// ===============================
-// /STOCK (panel completo resumen)
-// ===============================
-bot.onText(/^\/stock$/i, async (msg) => {
-  if (!(await requireAdmin(msg))) return;
-  const chatId = msg.chat.id;
-
-  const totals = await getTotals();
-  if (!totals) return bot.sendMessage(chatId, "⚠️ Falta config/totales_plataforma");
-
-  let texto = "📊 PANEL DE STOCK — SUBLICUENTAS\n\n";
-  let globalCuentas = 0;
-  let globalPerfiles = 0;
-
-  for (const p of PLATFORM_ORDER) {
+  for (const [key, label] of plataformas) {
     const snap = await db
       .collection("inventario")
-      .where("plataforma", "==", p.key)
-      .where("disp", ">=", 1)
+      .where("plataforma", "==", key)
       .where("estado", "==", "activa")
+      .where("disp", ">=", 1)
       .get();
 
-    if (snap.empty) {
-      texto += `❌ ${p.label}: 0 cuentas (0 perfiles)\n`;
-      continue;
-    }
+    let suma = 0;
+    snap.forEach((d) => (suma += Number(d.data().disp || 0)));
 
-    let cuentas = 0;
-    let perfiles = 0;
-
-    snap.forEach((d) => {
-      const x = d.data();
-      cuentas += 1;
-      perfiles += Number(x.disp || 0);
-    });
-
-    globalCuentas += cuentas;
-    globalPerfiles += perfiles;
-
-    texto += `✅ ${p.label}: ${cuentas} cuentas (${perfiles} perfiles)\n`;
+    txt += `🎬 ${label} → ${suma} perfiles\n`;
   }
 
-  texto += `\n━━━━━━━━━━━━━━\n`;
-  texto += `📦 TOTAL CUENTAS CON STOCK: ${globalCuentas}\n`;
-  texto += `👤 TOTAL PERFILES LIBRES: ${globalPerfiles}\n`;
-
-  return bot.sendMessage(chatId, texto);
-});
+  return bot.sendMessage(chatId, txt);
+}
 
 // ===============================
-// /LIST plataformaKey
-// Ej: /list netflix | disneyp | hbomax | primevideo | crunchyroll
+// VENTA / AUTO (elige cuenta con más disp)
+// - descuenta 1
+// - alerta en 1
+// - auto-bloqueo en 0 (estado=agotada)
 // ===============================
-bot.onText(/^\/list\s+([a-zA-Z0-9_]+)$/i, async (msg, match) => {
-  if (!(await requireAdmin(msg))) return;
-  const chatId = msg.chat.id;
-
-  const platKey = String(match[1] || "").toLowerCase().trim();
-  const valid = PLATFORM_ORDER.find((p) => p.key === platKey);
-  if (!valid) {
-    return bot.sendMessage(
-      chatId,
-      "⚠️ Plataforma inválida.\nUsa: netflix, disneyp, disneys, hbomax, primevideo, paramount, crunchyroll"
-    );
-  }
-
-  const totals = await getTotals();
-  if (!totals) return bot.sendMessage(chatId, "⚠️ Falta config/totales_plataforma");
-
-  const total = Number(totals[valid.totalKey] ?? 0);
-
+async function procesarVenta(chatId, plataformaKey) {
   const snap = await db
     .collection("inventario")
-    .where("plataforma", "==", valid.key)
-    .where("disp", ">=", 1)
+    .where("plataforma", "==", plataformaKey)
     .where("estado", "==", "activa")
+    .where("disp", ">=", 1)
+    .orderBy("disp", "desc")
+    .limit(1)
     .get();
 
-  if (snap.empty) return bot.sendMessage(chatId, `⚠️ ${valid.label} SIN PERFILES DISPONIBLES`);
-
-  const MAX = 60; // evitar corte por Telegram
-  let texto = `📧 LISTADO — ${valid.label}\n\n`;
-  let i = 1;
-
-  for (const doc of snap.docs.slice(0, MAX)) {
-    const d = doc.data();
-    texto += `${i}) ${d.correo} — ${d.disp}/${total}\n`;
-    i++;
+  if (snap.empty) {
+    return bot.sendMessage(chatId, `⚠️ ${plataformaKey.toUpperCase()} SIN STOCK`);
   }
 
-  if (snap.size > MAX) {
-    texto += `\n… y ${snap.size - MAX} más (limité a ${MAX} para que Telegram no corte el mensaje)`;
+  const doc = snap.docs[0];
+  const data = doc.data();
+
+  let nuevo = Number(data.disp || 0) - 1;
+  let estado = "activa";
+
+  if (nuevo <= 0) {
+    nuevo = 0;
+    estado = "agotada";
   }
 
-  return bot.sendMessage(chatId, texto);
+  await doc.ref.update({
+    disp: nuevo,
+    estado,
+    updatedAt: new Date(),
+  });
+
+  const totalMax = await getTotal(plataformaKey);
+
+  let txt =
+`🎟 ENTREGA AUTOMATICA
+
+📌 ${plataformaKey.toUpperCase()}
+📧 ${data.correo}
+👤 Disponible ahora: ${nuevo}${totalMax ? `/${totalMax}` : ""}`;
+
+  if (nuevo === 1) txt += `\n⚠️ ALERTA: solo queda 1 perfil`;
+  if (nuevo === 0) txt += `\n⛔ AGOTADA: cuenta bloqueada automaticamente`;
+
+  return bot.sendMessage(chatId, txt);
+}
+
+// ===============================
+// START / HELP
+// ===============================
+function panelText() {
+  return (
+`✅ PANEL SUBLICUENTAS
+
+📦 LISTADOS:
+/netflix /disneyp /disneys
+/hbomax /primevideo /paramount /crunchyroll
+
+📊 GENERAL:
+/stock
+/menu
+
+⚡ VENTAS:
+/auto netflix
+/venta netflix
+
+⚙️ ADMIN:
+/add correo plataforma disp
+/addp correo
+/delp correo`
+  );
+}
+
+bot.onText(/^\/start$/i, async (msg) => {
+  if (!(await isAdmin(msg.from.id))) return bot.sendMessage(msg.chat.id, "⛔ Acceso denegado");
+  return bot.sendMessage(msg.chat.id, panelText());
+});
+
+bot.onText(/^\/help$/i, async (msg) => {
+  if (!(await isAdmin(msg.from.id))) return bot.sendMessage(msg.chat.id, "⛔ Acceso denegado");
+  return bot.sendMessage(msg.chat.id, panelText());
 });
 
 // ===============================
-// /BUSCAR correo@gmail.com
+// LISTADOS POR PLATAFORMA
 // ===============================
-bot.onText(/^\/buscar\s+(.+)$/i, async (msg, match) => {
-  if (!(await requireAdmin(msg))) return;
-  const chatId = msg.chat.id;
+bot.onText(/^\/netflix$/i, async (msg) => {
+  if (!(await isAdmin(msg.from.id))) return bot.sendMessage(msg.chat.id, "⛔ Acceso denegado");
+  return listar(msg.chat.id, "netflix", "NETFLIX");
+});
+
+bot.onText(/^\/disneyp$/i, async (msg) => {
+  if (!(await isAdmin(msg.from.id))) return bot.sendMessage(msg.chat.id, "⛔ Acceso denegado");
+  return listar(msg.chat.id, "disneyp", "DISNEY PREMIUM");
+});
+
+bot.onText(/^\/disneys$/i, async (msg) => {
+  if (!(await isAdmin(msg.from.id))) return bot.sendMessage(msg.chat.id, "⛔ Acceso denegado");
+  return listar(msg.chat.id, "disneys", "DISNEY STANDARD");
+});
+
+bot.onText(/^\/hbomax$/i, async (msg) => {
+  if (!(await isAdmin(msg.from.id))) return bot.sendMessage(msg.chat.id, "⛔ Acceso denegado");
+  return listar(msg.chat.id, "hbomax", "HBO MAX");
+});
+
+bot.onText(/^\/primevideo$/i, async (msg) => {
+  if (!(await isAdmin(msg.from.id))) return bot.sendMessage(msg.chat.id, "⛔ Acceso denegado");
+  return listar(msg.chat.id, "primevideo", "PRIME VIDEO");
+});
+
+bot.onText(/^\/paramount$/i, async (msg) => {
+  if (!(await isAdmin(msg.from.id))) return bot.sendMessage(msg.chat.id, "⛔ Acceso denegado");
+  return listar(msg.chat.id, "paramount", "PARAMOUNT+");
+});
+
+bot.onText(/^\/crunchyroll$/i, async (msg) => {
+  if (!(await isAdmin(msg.from.id))) return bot.sendMessage(msg.chat.id, "⛔ Acceso denegado");
+  return listar(msg.chat.id, "crunchyroll", "CRUNCHYROLL");
+});
+
+// ===============================
+// STOCK GENERAL
+// ===============================
+bot.onText(/^\/stock$/i, async (msg) => {
+  if (!(await isAdmin(msg.from.id))) return bot.sendMessage(msg.chat.id, "⛔ Acceso denegado");
+  return stockGeneral(msg.chat.id);
+});
+
+// ===============================
+// AUTO / VENTA
+// ===============================
+bot.onText(/^\/auto\s+(.+)$/i, async (msg, match) => {
+  if (!(await isAdmin(msg.from.id))) return bot.sendMessage(msg.chat.id, "⛔ Acceso denegado");
+  const plataforma = String(match[1] || "").trim().toLowerCase();
+  return procesarVenta(msg.chat.id, plataforma);
+});
+
+bot.onText(/^\/venta\s+(.+)$/i, async (msg, match) => {
+  if (!(await isAdmin(msg.from.id))) return bot.sendMessage(msg.chat.id, "⛔ Acceso denegado");
+  const plataforma = String(match[1] || "").trim().toLowerCase();
+  return procesarVenta(msg.chat.id, plataforma);
+});
+
+// ===============================
+// ADD CUENTA
+// /add correo netflix 5
+// ===============================
+bot.onText(/^\/add\s+(\S+)\s+(\S+)\s+(\d+)(?:\s+(\S+))?$/i, async (msg, match) => {
+  if (!(await isAdmin(msg.from.id))) return bot.sendMessage(msg.chat.id, "⛔ Acceso denegado");
 
   const correo = String(match[1] || "").trim().toLowerCase();
-  if (!correo.includes("@")) return bot.sendMessage(chatId, "Uso: /buscar correo@gmail.com");
+  const plataforma = String(match[2] || "").trim().toLowerCase();
+  const disp = Number(match[3] || 0);
+  const estado = String(match[4] || "activa").trim().toLowerCase();
+
+  if (!correo.includes("@")) {
+    return bot.sendMessage(msg.chat.id, "❌ Correo invalido. Ej: /add correo@gmail.com netflix 5");
+  }
+
+  await db.collection("inventario").add({
+    correo,
+    plataforma,
+    disp,
+    estado,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+
+  const totalMax = await getTotal(plataforma);
+
+  return bot.sendMessage(
+    msg.chat.id,
+    `✅ Agregada\n📌 ${plataforma.toUpperCase()}\n📧 ${correo}\n👤 ${disp}${totalMax ? `/${totalMax}` : ""}\n🟢 Estado: ${estado}`
+  );
+});
+
+// ===============================
+// ADDP (resta 1 + alerta + auto-bloqueo)
+// ===============================
+bot.onText(/^\/addp\s+(\S+)$/i, async (msg, match) => {
+  if (!(await isAdmin(msg.from.id))) return bot.sendMessage(msg.chat.id, "⛔ Acceso denegado");
+
+  const correo = String(match[1] || "").trim().toLowerCase();
 
   const snap = await db.collection("inventario").where("correo", "==", correo).limit(1).get();
-  if (snap.empty) return bot.sendMessage(chatId, `❌ No encontrado:\n${correo}`);
+  if (snap.empty) return bot.sendMessage(msg.chat.id, "⚠️ Correo no encontrado");
 
-  const d = snap.docs[0].data();
-  const totals = await getTotals();
-  const total = Number(totals?.[d.plataforma] ?? 0);
-  const label = PLATFORM_ORDER.find((p) => p.key === d.plataforma)?.label || d.plataforma;
+  const doc = snap.docs[0];
+  const d = doc.data();
+
+  let nuevo = Number(d.disp || 0) - 1;
+  let estado = "activa";
+  if (nuevo <= 0) {
+    nuevo = 0;
+    estado = "agotada";
+  }
+
+  await doc.ref.update({ disp: nuevo, estado, updatedAt: new Date() });
+
+  const totalMax = await getTotal(d.plataforma);
+
+  let txt =
+`➖ Perfil descontado
+📌 ${String(d.plataforma).toUpperCase()}
+📧 ${correo}
+👤 ${nuevo}${totalMax ? `/${totalMax}` : ""}`;
+
+  if (nuevo === 1) txt += `\n⚠️ ALERTA: solo queda 1 perfil`;
+  if (nuevo === 0) txt += `\n⛔ AGOTADA: bloqueada automaticamente`;
+
+  return bot.sendMessage(msg.chat.id, txt);
+});
+
+// ===============================
+// DELP (suma 1 + reactiva)
+// ===============================
+bot.onText(/^\/delp\s+(\S+)$/i, async (msg, match) => {
+  if (!(await isAdmin(msg.from.id))) return bot.sendMessage(msg.chat.id, "⛔ Acceso denegado");
+
+  const correo = String(match[1] || "").trim().toLowerCase();
+
+  const snap = await db.collection("inventario").where("correo", "==", correo).limit(1).get();
+  if (snap.empty) return bot.sendMessage(msg.chat.id, "⚠️ Correo no encontrado");
+
+  const doc = snap.docs[0];
+  const d = doc.data();
+
+  const nuevo = Number(d.disp || 0) + 1;
+
+  await doc.ref.update({
+    disp: nuevo,
+    estado: "activa", // ✅ reactiva SIEMPRE
+    updatedAt: new Date(),
+  });
+
+  const totalMax = await getTotal(d.plataforma);
 
   return bot.sendMessage(
-    chatId,
-    `🔎 RESULTADO\n\n📌 Plataforma: ${label}\n📧 Correo: ${d.correo}\n🟢 Estado: ${d.estado || "sin_estado"}\n👤 Disponibles: ${Number(d.disp ?? 0)}/${total || "?"}`
+    msg.chat.id,
+    `➕ Perfil liberado\n📌 ${String(d.plataforma).toUpperCase()}\n📧 ${correo}\n👤 ${nuevo}${totalMax ? `/${totalMax}` : ""}\n✅ Estado: activa`
   );
 });
 
 // ===============================
-// /TOP (ranking por perfiles libres)
+// MENU INTERACTIVO (/menu)
 // ===============================
-bot.onText(/^\/top$/i, async (msg) => {
-  if (!(await requireAdmin(msg))) return;
-  const chatId = msg.chat.id;
+bot.onText(/^\/menu$/i, async (msg) => {
+  if (!(await isAdmin(msg.from.id))) return bot.sendMessage(msg.chat.id, "⛔ Acceso denegado");
 
-  const results = [];
-
-  for (const p of PLATFORM_ORDER) {
-    const snap = await db
-      .collection("inventario")
-      .where("plataforma", "==", p.key)
-      .where("disp", ">=", 1)
-      .where("estado", "==", "activa")
-      .get();
-
-    let cuentas = 0;
-    let perfiles = 0;
-
-    snap.forEach((doc) => {
-      const d = doc.data();
-      cuentas += 1;
-      perfiles += Number(d.disp || 0);
-    });
-
-    results.push({ label: p.label, cuentas, perfiles });
-  }
-
-  results.sort((a, b) => b.perfiles - a.perfiles);
-
-  let texto = "🏆 TOP STOCK — SUBLICUENTAS\n\n";
-  results.forEach((r, idx) => {
-    texto += `${idx + 1}) ${r.label}: ${r.perfiles} perfiles (${r.cuentas} cuentas)\n`;
+  return bot.sendMessage(msg.chat.id, "📊 PANEL SUBLICUENTAS", {
+    reply_markup: {
+      inline_keyboard: [
+        [
+          { text: "📺 Netflix", callback_data: "list_netflix" },
+          { text: "🎬 Disney Premium", callback_data: "list_disneyp" },
+        ],
+        [
+          { text: "🎞 Disney Standard", callback_data: "list_disneys" },
+          { text: "🍿 HBO Max", callback_data: "list_hbomax" },
+        ],
+        [
+          { text: "🎥 Prime Video", callback_data: "list_primevideo" },
+          { text: "📀 Paramount+", callback_data: "list_paramount" },
+        ],
+        [{ text: "🍥 Crunchyroll", callback_data: "list_crunchyroll" }],
+        [{ text: "📦 Stock General", callback_data: "stock_general" }],
+        [
+          { text: "⚡ Auto Netflix", callback_data: "auto_netflix" },
+          { text: "⚡ Auto DisneyP", callback_data: "auto_disneyp" },
+        ],
+        [
+          { text: "⚡ Auto HBO", callback_data: "auto_hbomax" },
+          { text: "⚡ Auto Prime", callback_data: "auto_primevideo" },
+        ],
+      ],
+    },
   });
-
-  return bot.sendMessage(chatId, texto);
 });
 
 // ===============================
-// addp / delp (inventario perfiles por correo)
+// BOTONES (callback_query)
 // ===============================
-function parseEmailArg(text) {
-  const parts = String(text || "").trim().split(/\s+/);
-  if (parts.length < 2) return null;
-  return parts[1].trim().toLowerCase();
-}
+bot.on("callback_query", async (q) => {
+  try {
+    const chatId = q.message.chat.id;
 
-async function updateDispByEmail(chatId, email, delta) {
-  const emailNorm = email.toLowerCase();
-
-  const q = await db.collection("inventario").where("correo", "==", emailNorm).limit(1).get();
-  if (q.empty) return bot.sendMessage(chatId, `❌ No encontré ese correo en inventario:\n${emailNorm}`);
-
-  const ref = q.docs[0].ref;
-
-  await db.runTransaction(async (tx) => {
-    const doc = await tx.get(ref);
-    const d = doc.data();
-
-    const totals = await getTotals();
-    const max = Number(totals?.[d.plataforma] ?? 0);
-    if (!max) throw new Error(`No hay total configurado para plataforma: ${d.plataforma}`);
-
-    const current = Number(d.disp ?? 0);
-    let next = current + delta;
-
-    if (next < 0) next = 0;
-    if (next > max) next = max;
-
-    tx.update(ref, {
-      disp: next,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
-  });
-
-  const done = await ref.get();
-  const d2 = done.data();
-  const totals = await getTotals();
-  const max = Number(totals?.[d2.plataforma] ?? 0);
-  const label = PLATFORM_ORDER.find((p) => p.key === d2.plataforma)?.label || d2.plataforma;
-
-  return bot.sendMessage(chatId, `✅ Actualizado\n📌 ${label}\n📧 ${d2.correo}\n👤 Disponibles: ${d2.disp}/${max}`);
-}
-
-bot.onText(/^\/addp(\s+.+)?$/i, async (msg) => {
-  if (!(await requireAdmin(msg))) return;
-  const chatId = msg.chat.id;
-  const email = parseEmailArg(msg.text);
-  if (!email) return bot.sendMessage(chatId, "Uso: /addp correo@gmail.com");
-  await updateDispByEmail(chatId, email, -1);
-});
-
-bot.onText(/^\/delp(\s+.+)?$/i, async (msg) => {
-  if (!(await requireAdmin(msg))) return;
-  const chatId = msg.chat.id;
-  const email = parseEmailArg(msg.text);
-  if (!email) return bot.sendMessage(chatId, "Uso: /delp correo@gmail.com");
-  await updateDispByEmail(chatId, email, +1);
-});
-
-// ===============================
-// Normalizar plataforma (acepta alias)
-// ===============================
-function normalizePlatform(input) {
-  const p = String(input || "").trim().toLowerCase();
-
-  // alias -> keys reales
-  if (p === "hbo") return "hbomax";
-  if (p === "prime") return "primevideo";
-  if (p === "crunchy") return "crunchyroll";
-
-  const allowed = new Set([
-    "netflix",
-    "disneyp",
-    "disneys",
-    "hbomax",
-    "primevideo",
-    "paramount",
-    "crunchyroll",
-  ]);
-
-  return allowed.has(p) ? p : null;
-}
-
-// ===============================
-// Crear o actualizar cuenta (por correo)
-// ===============================
-async function upsertAccount({ chatId, correo, plataforma, disp, estado = "activa" }) {
-  const totals = await getTotals();
-  if (!totals) return bot.sendMessage(chatId, "⚠️ Falta config/totales_plataforma");
-
-  const max = Number(totals[plataforma] ?? 0);
-  if (!max) {
-    return bot.sendMessage(chatId, `⚠️ No hay total configurado para ${plataforma} en config/totales_plataforma`);
-  }
-
-  let dispNum = Number(disp);
-  if (!Number.isFinite(dispNum)) dispNum = max;
-  if (dispNum < 0) dispNum = 0;
-  if (dispNum > max) dispNum = max;
-
-  const email = String(correo || "").trim().toLowerCase();
-  if (!email.includes("@")) return bot.sendMessage(chatId, `❌ Correo inválido: ${correo}`);
-
-  const q = await db.collection("inventario").where("correo", "==", email).limit(1).get();
-
-  const label = PLATFORM_ORDER.find((x) => x.key === plataforma)?.label || plataforma;
-
-  if (q.empty) {
-    await db.collection("inventario").add({
-      correo: email,
-      plataforma,
-      disp: dispNum,
-      estado,
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
-
-    return bot.sendMessage(chatId, `✅ Agregada\n📌 ${label}\n📧 ${email}\n👤 Disponibles: ${dispNum}/${max}\n🟢 Estado: ${estado}`);
-  } else {
-    const ref = q.docs[0].ref;
-    await ref.update({
-      plataforma,
-      disp: dispNum,
-      estado,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
-
-    return bot.sendMessage(chatId, `♻️ Actualizada\n📌 ${label}\n📧 ${email}\n👤 Disponibles: ${dispNum}/${max}\n🟢 Estado: ${estado}`);
-  }
-}
-
-// ===============================
-// /ADD correo plataforma disp [estado]
-// Ej: /add correo@gmail.com netflix 5
-// Ej: /add correo@gmail.com hbomax 3 activa
-// ===============================
-bot.onText(/^\/add\s+(.+)$/i, async (msg, match) => {
-  if (!(await requireAdmin(msg))) return;
-  const chatId = msg.chat.id;
-
-  const parts = String(match[1] || "").trim().split(/\s+/);
-  if (parts.length < 3) {
-    return bot.sendMessage(
-      chatId,
-      "Uso: /add correo@gmail.com plataforma disp [estado]\nEj: /add correo@gmail.com netflix 5"
-    );
-  }
-
-  const correo = parts[0];
-  const plataformaRaw = parts[1];
-  const disp = parts[2];
-  const estado = parts[3] || "activa";
-
-  const plataforma = normalizePlatform(plataformaRaw);
-  if (!plataforma) {
-    return bot.sendMessage(
-      chatId,
-      "❌ Plataforma inválida.\nUsa: netflix, disneyp, disneys, hbomax(hbo), primevideo(prime), paramount, crunchyroll(crunchy)"
-    );
-  }
-
-  await upsertAccount({ chatId, correo, plataforma, disp, estado });
-});
-
-// ===============================
-// /ADDM (ayuda)
-// ===============================
-bot.onText(/^\/addm$/i, async (msg) => {
-  if (!(await requireAdmin(msg))) return;
-  const chatId = msg.chat.id;
-
-  return bot.sendMessage(
-    chatId,
-    "📥 Envíe el lote así (en el mismo chat):\n\n/addm\ncorreo1@gmail.com netflix 5\ncorreo2@gmail.com disneyp 6\ncorreo3@gmail.com hbomax 5 activa"
-  );
-});
-
-// ===============================
-// /ADDM con líneas (lote real)
-// ===============================
-bot.onText(/^\/addm[\s\S]+/i, async (msg) => {
-  if (!(await requireAdmin(msg))) return;
-  const chatId = msg.chat.id;
-
-  const text = String(msg.text || "");
-  const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
-
-  const payload = lines.slice(1); // quita /addm
-  if (payload.length === 0) {
-    return bot.sendMessage(chatId, "⚠️ No veo líneas. Ej:\n/addm\ncorreo@gmail.com netflix 5");
-  }
-
-  let ok = 0;
-  let bad = 0;
-  const errors = [];
-
-  const MAX_LINES = 50;
-  const useLines = payload.slice(0, MAX_LINES);
-
-  for (const line of useLines) {
-    const parts = line.split(/\s+/);
-    if (parts.length < 3) {
-      bad++;
-      errors.push(`❌ Línea inválida: ${line}`);
-      continue;
+    // seguridad: también validamos admin en botones
+    if (!(await isAdmin(q.from.id))) {
+      await bot.answerCallbackQuery(q.id, { text: "Acceso denegado", show_alert: true });
+      return;
     }
 
-    const correo = parts[0];
-    const plataforma = normalizePlatform(parts[1]);
-    const disp = parts[2];
-    const estado = parts[3] || "activa";
+    const data = q.data;
 
-    if (!plataforma) {
-      bad++;
-      errors.push(`❌ Plataforma inválida: ${parts[1]} (línea: ${line})`);
-      continue;
-    }
+    // Listados
+    if (data === "list_netflix") await listar(chatId, "netflix", "NETFLIX");
+    if (data === "list_disneyp") await listar(chatId, "disneyp", "DISNEY PREMIUM");
+    if (data === "list_disneys") await listar(chatId, "disneys", "DISNEY STANDARD");
+    if (data === "list_hbomax") await listar(chatId, "hbomax", "HBO MAX");
+    if (data === "list_primevideo") await listar(chatId, "primevideo", "PRIME VIDEO");
+    if (data === "list_paramount") await listar(chatId, "paramount", "PARAMOUNT+");
+    if (data === "list_crunchyroll") await listar(chatId, "crunchyroll", "CRUNCHYROLL");
 
+    // Stock general
+    if (data === "stock_general") await stockGeneral(chatId);
+
+    // Auto entrega
+    if (data === "auto_netflix") await procesarVenta(chatId, "netflix");
+    if (data === "auto_disneyp") await procesarVenta(chatId, "disneyp");
+    if (data === "auto_hbomax") await procesarVenta(chatId, "hbomax");
+    if (data === "auto_primevideo") await procesarVenta(chatId, "primevideo");
+
+    await bot.answerCallbackQuery(q.id);
+  } catch (e) {
+    console.error("callback_query error:", e);
     try {
-      await upsertAccount({ chatId, correo, plataforma, disp, estado });
-      ok++;
-    } catch (e) {
-      bad++;
-      errors.push(`❌ Error en línea: ${line}`);
-      console.error(e);
-    }
+      await bot.answerCallbackQuery(q.id, { text: "Error", show_alert: true });
+    } catch {}
   }
-
-  let resumen = `📌 Lote procesado\n✅ OK: ${ok}\n⚠️ Fallos: ${bad}`;
-  if (payload.length > MAX_LINES) resumen += `\n(Procesé solo ${MAX_LINES} líneas por seguridad)`;
-
-  if (errors.length) {
-    resumen += `\n\nErrores (primeros ${Math.min(10, errors.length)}):\n${errors.slice(0, 10).join("\n")}`;
-  }
-
-  return bot.sendMessage(chatId, resumen);
 });
 
 // ===============================
-// SERVER PARA RENDER (mantener vivo)
+// KEEP ALIVE (Render Web Service)
 // ===============================
 const PORT = process.env.PORT || 3000;
 http
