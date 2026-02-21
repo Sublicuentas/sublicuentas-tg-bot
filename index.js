@@ -2,75 +2,78 @@ const TelegramBot = require("node-telegram-bot-api");
 const admin = require("firebase-admin");
 const http = require("http");
 
-// Mostrar errores reales en Render
+// ===== DEBUG: que SIEMPRE imprima algo =====
+console.log("🚀 Arrancando app...");
+
+// Capturar errores reales
 process.on("unhandledRejection", (err) => console.error("UNHANDLED:", err));
 process.on("uncaughtException", (err) => console.error("UNCAUGHT:", err));
 
-// ===============================
-// VARIABLES DE ENTORNO (Render)
-// ===============================
+// ===== ENV =====
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID;
 const FIREBASE_CLIENT_EMAIL = process.env.FIREBASE_CLIENT_EMAIL;
 const FIREBASE_PRIVATE_KEY = process.env.FIREBASE_PRIVATE_KEY;
 
-if (!BOT_TOKEN) throw new Error("Falta BOT_TOKEN");
-if (!FIREBASE_PROJECT_ID) throw new Error("Falta FIREBASE_PROJECT_ID");
-if (!FIREBASE_CLIENT_EMAIL) throw new Error("Falta FIREBASE_CLIENT_EMAIL");
-if (!FIREBASE_PRIVATE_KEY) throw new Error("Falta FIREBASE_PRIVATE_KEY");
-
-// ===============================
-// FIREBASE INIT
-// ===============================
-admin.initializeApp({
-  credential: admin.credential.cert({
-    projectId: FIREBASE_PROJECT_ID,
-    clientEmail: FIREBASE_CLIENT_EMAIL,
-    privateKey: FIREBASE_PRIVATE_KEY.replace(/\\n/g, "\n"),
-  }),
+console.log("🔎 ENV check:", {
+  BOT_TOKEN: !!BOT_TOKEN,
+  FIREBASE_PROJECT_ID: !!FIREBASE_PROJECT_ID,
+  FIREBASE_CLIENT_EMAIL: !!FIREBASE_CLIENT_EMAIL,
+  FIREBASE_PRIVATE_KEY: !!FIREBASE_PRIVATE_KEY,
 });
+
+// Si falta algo, que quede CLARÍSIMO
+if (!BOT_TOKEN) throw new Error("Falta BOT_TOKEN en Render ENV");
+if (!FIREBASE_PROJECT_ID) throw new Error("Falta FIREBASE_PROJECT_ID en Render ENV");
+if (!FIREBASE_CLIENT_EMAIL) throw new Error("Falta FIREBASE_CLIENT_EMAIL en Render ENV");
+if (!FIREBASE_PRIVATE_KEY) throw new Error("Falta FIREBASE_PRIVATE_KEY en Render ENV");
+
+// ===== Firebase init con try/catch =====
+try {
+  admin.initializeApp({
+    credential: admin.credential.cert({
+      projectId: FIREBASE_PROJECT_ID,
+      clientEmail: FIREBASE_CLIENT_EMAIL,
+      privateKey: FIREBASE_PRIVATE_KEY.replace(/\\n/g, "\n"),
+    }),
+  });
+  console.log("✅ Firebase Admin inicializado");
+} catch (e) {
+  console.error("❌ Firebase init falló:", e);
+  process.exit(1);
+}
 
 const db = admin.firestore();
 
-// ===============================
-// TELEGRAM BOT
-// ===============================
-const bot = new TelegramBot(BOT_TOKEN, { polling: true });
+// ===== Telegram bot =====
+let bot;
+try {
+  bot = new TelegramBot(BOT_TOKEN, { polling: true });
+  console.log("✅ Telegram polling iniciado");
+} catch (e) {
+  console.error("❌ Telegram init falló:", e);
+  process.exit(1);
+}
 
-console.log("✅ Bot iniciado");
-
-// ===============================
-// VALIDAR ADMIN
-// ===============================
+// ===== Admin check =====
 async function isAdmin(userId) {
   const doc = await db.collection("admins").doc(String(userId)).get();
   return doc.exists && doc.data()?.activo === true;
 }
 
-// ===============================
-// /START
-// ===============================
 bot.onText(/^\/start$/, async (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
 
-  if (!(await isAdmin(userId))) {
-    return bot.sendMessage(chatId, "⛔ Acceso denegado");
-  }
-
+  if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
   bot.sendMessage(chatId, "✅ Bot Sublicuentas activo\nComando: /netflix");
 });
 
-// ===============================
-// /NETFLIX STOCK
-// ===============================
 bot.onText(/^\/netflix$/, async (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
 
-  if (!(await isAdmin(userId))) {
-    return bot.sendMessage(chatId, "⛔ Acceso denegado");
-  }
+  if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
 
   const config = await db.collection("config").doc("totales_plataforma").get();
   const total = config.data()?.netflix || 5;
@@ -82,9 +85,7 @@ bot.onText(/^\/netflix$/, async (msg) => {
     .where("estado", "==", "activa")
     .get();
 
-  if (snap.empty) {
-    return bot.sendMessage(chatId, "⚠️ NETFLIX SIN PERFILES DISPONIBLES");
-  }
+  if (snap.empty) return bot.sendMessage(chatId, "⚠️ NETFLIX SIN PERFILES DISPONIBLES");
 
   let texto = "📌 NETFLIX — STOCK DISPONIBLE\n\n";
   let suma = 0;
@@ -97,21 +98,11 @@ bot.onText(/^\/netflix$/, async (msg) => {
     i++;
   });
 
-  texto += `\n━━━━━━━━━━━━━━`;
-  texto += `\n📊 Cuentas con stock: ${i - 1}`;
-  texto += `\n👤 Perfiles libres totales: ${suma}`;
-
+  texto += `\n━━━━━━━━━━━━━━\n📊 Cuentas con stock: ${i - 1}\n👤 Perfiles libres totales: ${suma}`;
   bot.sendMessage(chatId, texto);
 });
 
-// ===============================
-// KEEP ALIVE LOG
-// ===============================
-setInterval(() => console.log("🟢 Bot activo..."), 60000);
-
-// ===============================
-// WEB SERVER (Render requiere puerto)
-// ===============================
+// ===== Web server para Render =====
 const PORT = process.env.PORT || 3000;
 http
   .createServer((req, res) => {
@@ -120,15 +111,7 @@ http
   })
   .listen(PORT, "0.0.0.0", () => {
     console.log("🌐 Listening on " + PORT);
-  });nsole.log("🌐 Web service activo en puerto " + PORT);
-});
+  });
 
-const http = require("http");
-
-const PORT = process.env.PORT || 3000;
-http.createServer((req, res) => {
-  res.writeHead(200, { "Content-Type": "text/plain" });
-  res.end("OK");
-}).listen(PORT, "0.0.0.0", () => {
-  console.log("🌐 Listening on " + PORT);
-});
+// ===== Keep alive log =====
+setInterval(() => console.log("🟢 Bot activo..."), 60000);
