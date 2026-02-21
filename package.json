@@ -1,7 +1,12 @@
 {
-  "name": "sublicuentas-bot",
+  "name": "sublicuentas-tg-bot",
   "version": "1.0.0",
+  "description": "Bot Telegram Inventario Sublicuentas",
   "main": "index.js",
+  "type": "commonjs",
+  "engines": {
+    "node": "18.x"
+  },
   "scripts": {
     "start": "node index.js"
   },
