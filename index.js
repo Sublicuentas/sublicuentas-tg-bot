@@ -677,6 +677,36 @@ bot.onText(/\/venta\s+(.+)/i, async (msg, match) => {
   if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
   return ejecutarVenta(chatId, plataforma);
 });
+// /del correo  (borra TODOS los duplicados)
+bot.onText(/\/del\s+(\S+)/i, async (msg, match) => {
+  const chatId = msg.chat.id;
+  const userId = msg.from.id;
+
+  if (!(await isAdmin(userId)))
+    return bot.sendMessage(chatId, "⛔ Acceso denegado");
+
+  const correo = String(match[1]).toLowerCase().trim();
+
+  const snap = await db
+    .collection("inventario")
+    .where("correo", "==", correo)
+    .get();
+
+  if (snap.empty)
+    return bot.sendMessage(chatId, "⚠️ Cuenta no encontrada.");
+
+  let borrados = 0;
+
+  for (const doc of snap.docs) {
+    await doc.ref.delete();
+    borrados++;
+  }
+
+  return bot.sendMessage(
+    chatId,
+    `🗑️ Eliminadas ${borrados} cuentas\n📧 ${correo}`
+  );
+});
 
 // /auto plataforma
 bot.onText(/\/auto\s+(.+)/i, async (msg, match) => {
