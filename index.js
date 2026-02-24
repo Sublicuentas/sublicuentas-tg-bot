@@ -1,29 +1,25 @@
 /**
  * index.js — Sublicuentas Inventario (FINAL)
- * Cambios pedidos:
- * ✅ Muestra la clave (no "guardada")
- * ✅ Listados ordenados por más perfiles libres primero
- * ✅ Estado "llena" en vez de "bloqueada"
- * ✅ /add ahora: /add correo clave plataforma disp [activa|llena]
- * ✅ /addm lote: correo clave plataforma disp [activa|llena]
+ * ✅ Modo inteligente /add: si existe (correo+plataforma) actualiza, si no, crea
+ * ✅ Guarda y MUESTRA la clave que usted escribe (campo: clave)
+ * ✅ AUTO elige SIEMPRE la cuenta con MÁS perfiles libres (máximo disp)
+ * ✅ “BLOQUEADA” ahora se muestra como “LLENA” (y se guarda como "llena")
+ * ✅ /del borra por correo (elimina duplicados con IDs raros)
+ * ✅ Botones sin “Error”: answerCallbackQuery incluido
  */
 
+const http = require("http");
 const TelegramBot = require("node-telegram-bot-api");
 const admin = require("firebase-admin");
-const http = require("http");
 
 // ===============================
-// VARIABLES DE ENTORNO (Render)
+// ENV
 // ===============================
 const BOT_TOKEN = process.env.BOT_TOKEN;
+
 const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID;
 const FIREBASE_CLIENT_EMAIL = process.env.FIREBASE_CLIENT_EMAIL;
 const FIREBASE_PRIVATE_KEY = process.env.FIREBASE_PRIVATE_KEY;
-
-if (!BOT_TOKEN) throw new Error("Falta BOT_TOKEN");
-if (!FIREBASE_PROJECT_ID) throw new Error("Falta FIREBASE_PROJECT_ID");
-if (!FIREBASE_CLIENT_EMAIL) throw new Error("Falta FIREBASE_CLIENT_EMAIL");
-if (!FIREBASE_PRIVATE_KEY) throw new Error("Falta FIREBASE_PRIVATE_KEY");
 
 // ===============================
 // FIREBASE INIT
@@ -32,7 +28,7 @@ admin.initializeApp({
   credential: admin.credential.cert({
     projectId: FIREBASE_PROJECT_ID,
     clientEmail: FIREBASE_CLIENT_EMAIL,
-    privateKey: FIREBASE_PRIVATE_KEY.replace(/\\n/g, "\n"),
+    privateKey: (FIREBASE_PRIVATE_KEY || "").replace(/\\n/g, "\n"),
   }),
 });
 
@@ -71,18 +67,6 @@ function docIdInventario(correo, plataforma) {
   return `${safePlat}__${safeMail}`;
 }
 
-// Estado interno: "activa" | "llena"
-function normalizarEstado(txt = "") {
-  const e = String(txt).toLowerCase();
-  if (e === "bloqueada") return "llena"; // por si alguien escribe "bloqueada"
-  if (e === "llena") return "llena";
-  return "activa";
-}
-
-function labelEstado(estado) {
-  return String(estado) === "llena" ? "LLENA" : "ACTIVA";
-}
-
 async function isAdmin(userId) {
   const doc = await db.collection("admins").doc(String(userId)).get();
   return doc.exists && doc.data().activo === true;
@@ -95,35 +79,44 @@ async function getTotalPorPlataforma(plataforma) {
   return cfg.data()?.[p] ?? null;
 }
 
+// Estado visible (LLENA) aunque en BD haya quedado "bloqueada" viejo
+function estadoVisible(estado) {
+  const e = String(estado || "").toLowerCase();
+  if (e === "bloqueada") return "LLENA";
+  if (e === "llena") return "LLENA";
+  return "ACTIVA";
+}
+
+function estadoNormalizado(estadoInput = "activa", disp = 1) {
+  // Regla: si disp <= 0 => "llena"
+  if (Number(disp) <= 0) return "llena";
+  const e = String(estadoInput || "").toLowerCase();
+  return e === "llena" || e === "bloqueada" ? "llena" : "activa";
+}
+
 // ===============================
 // PANEL / MENU (texto)
 // ===============================
 function panelTexto() {
   return (
     "✅ *PANEL SUBLICUENTAS*\n\n" +
-    "📦 *LISTADOS (ordenados por más libres):*\n" +
+    "📦 *LISTADOS:*\n" +
     "/netflix /disneyp /disneys\n" +
     "/hbomax /primevideo /paramount\n" +
     "/crunchyroll\n\n" +
     "📊 *GENERAL:*\n" +
     "/stock\n" +
     "/menu\n\n" +
-    "⚡ *AUTO (toma 1 perfil del que más tenga):*\n" +
+    "⚡ *VENTAS:*\n" +
     "/auto netflix\n" +
-    "/auto disneyp\n" +
-    "/auto disneys\n" +
-    "/auto hbomax\n" +
-    "/auto primevideo\n" +
-    "/auto paramount\n" +
-    "/auto crunchyroll\n\n" +
-    "💸 *VENTA (toma 1 perfil del primero disponible):*\n" +
     "/venta netflix\n\n" +
     "⚙️ *ADMIN:*\n" +
     "/add correo clave plataforma disp [activa|llena]\n" +
     "/addm (lote)\n" +
     "/buscar correo\n" +
     "/addp correo (resta 1)\n" +
-    "/delp correo (suma 1)\n"
+    "/delp correo (suma 1)\n" +
+    "/del correo (BORRA TODO ese correo)\n"
   );
 }
 
@@ -161,17 +154,17 @@ async function mostrarMenu(chatId) {
   });
 }
 
-// Responder callback SIEMPRE para evitar "Error" en Telegram
 bot.on("callback_query", async (q) => {
-  const chatId = q.message?.chat?.id;
-  const userId = q.from?.id;
+  const chatId = q.message.chat.id;
+  const userId = q.from.id;
   const data = q.data || "";
 
   try {
     await bot.answerCallbackQuery(q.id);
 
-    if (!chatId) return;
-    if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+    if (!(await isAdmin(userId))) {
+      return bot.sendMessage(chatId, "⛔ Acceso denegado");
+    }
 
     if (data === "stockgeneral") return mostrarStockGeneral(chatId);
 
@@ -182,18 +175,18 @@ bot.on("callback_query", async (q) => {
 
     if (data.startsWith("auto:")) {
       const plat = data.split(":")[1];
-      return ejecutarAuto(chatId, plat);
+      return ejecutarAutoVenta(chatId, plat);
     }
 
     return bot.sendMessage(chatId, "⚠️ Acción no reconocida.");
   } catch (err) {
-    console.log("❌ callback_query error:", err?.message || err);
-    if (chatId) return bot.sendMessage(chatId, "⚠️ Error interno en botón (revise logs).");
+    console.log("❌ callback_query error:", err.message);
+    return bot.sendMessage(chatId, "⚠️ Error interno en botón (revise logs).");
   }
 });
 
 // ===============================
-// STOCK POR PLATAFORMA (ordenado)
+// STOCK POR PLATAFORMA (ORDENADO por disp desc)
 // ===============================
 async function mostrarStockPlataforma(chatId, plataforma) {
   const p = normalizarPlataforma(plataforma);
@@ -212,21 +205,20 @@ async function mostrarStockPlataforma(chatId, plataforma) {
     return bot.sendMessage(chatId, `⚠️ ${p.toUpperCase()} SIN PERFILES DISPONIBLES`);
   }
 
-  // ✅ Ordenar en memoria: más libres primero
-  const docs = snap.docs
-    .map((d) => ({ id: d.id, ...d.data() }))
-    .sort((a, b) => Number(b.disp || 0) - Number(a.disp || 0));
+  const arr = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  arr.sort((a, b) => Number(b.disp || 0) - Number(a.disp || 0)); // 🔥 mayor disp primero
 
   let texto = `📌 ${p.toUpperCase()} — STOCK DISPONIBLE (ordenado)\n\n`;
   let suma = 0;
 
-  docs.forEach((d, idx) => {
+  arr.forEach((d, idx) => {
+    const clave = (d.clave && String(d.clave).trim()) ? `🔑 ${d.clave}` : "🔑 -";
+    texto += `${idx + 1}) ${d.correo} — ${clave} — ${d.disp}/${total ?? "-"}\n`;
     suma += Number(d.disp || 0);
-    texto += `${idx + 1}) ${d.correo} — 🔑 ${d.clave || "-"} — ${d.disp}/${total ?? "-"}\n`;
   });
 
   texto += `\n━━━━━━━━━━━━━━`;
-  texto += `\n📊 Cuentas con stock: ${docs.length}`;
+  texto += `\n📊 Cuentas con stock: ${arr.length}`;
   texto += `\n👤 Perfiles libres totales: ${suma}`;
 
   return bot.sendMessage(chatId, texto);
@@ -259,11 +251,11 @@ async function mostrarStockGeneral(chatId) {
 }
 
 // ===============================
-// AUTOBLOQUEO + ALERTA
+// AUTOBLOQUEO (cuando llega a 0)
 // - Si disp queda 0 => estado "llena"
 // - Si /delp sube de 0 => estado vuelve "activa"
 // ===============================
-async function aplicarAutoLlenoYAlerta(chatId, ref, dataAntes, dataDespues) {
+async function aplicarAutoBloqueoYAlerta(chatId, ref, dataAntes, dataDespues) {
   const antes = Number(dataAntes?.disp ?? 0);
   const despues = Number(dataDespues?.disp ?? 0);
 
@@ -288,8 +280,8 @@ async function aplicarAutoLlenoYAlerta(chatId, ref, dataAntes, dataDespues) {
 }
 
 // ===============================
-// VENTA: toma 1 perfil del PRIMERO disponible (sin ordenar)
-// /venta netflix
+// VENTA (toma 1 perfil del PRIMER correo disponible)
+// /venta netflix -> toma el primero (sin ordenar)
 // ===============================
 async function ejecutarVenta(chatId, plataforma) {
   const p = normalizarPlataforma(plataforma);
@@ -303,7 +295,9 @@ async function ejecutarVenta(chatId, plataforma) {
     .limit(1)
     .get();
 
-  if (snap.empty) return bot.sendMessage(chatId, `⚠️ ${p.toUpperCase()} SIN PERFILES PARA VENDER`);
+  if (snap.empty) {
+    return bot.sendMessage(chatId, `⚠️ ${p.toUpperCase()} SIN PERFILES PARA VENDER`);
+  }
 
   const doc = snap.docs[0];
   const ref = doc.ref;
@@ -314,61 +308,80 @@ async function ejecutarVenta(chatId, plataforma) {
   const nuevoDisp = Math.max(0, Number(d.disp || 0) - 1);
 
   await ref.set(
-    { disp: nuevoDisp, updatedAt: admin.firestore.FieldValue.serverTimestamp() },
+    {
+      disp: nuevoDisp,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    },
     { merge: true }
   );
 
   const despues = { ...d, disp: nuevoDisp };
-  await aplicarAutoLlenoYAlerta(chatId, ref, antes, despues);
+  await aplicarAutoBloqueoYAlerta(chatId, ref, antes, despues);
+
+  const clave = (d.clave && String(d.clave).trim()) ? d.clave : "-";
 
   return bot.sendMessage(
     chatId,
-    `✅ *VENTA REGISTRADA*\n📌 ${p.toUpperCase()}\n📧 ${d.correo}\n🔑 ${d.clave || "-"}\n👤 Disp: ${nuevoDisp}/${total ?? "-"}\nEstado: *${labelEstado(nuevoDisp <= 0 ? "llena" : d.estado)}*`,
+    `✅ *VENTA REGISTRADA*\n📌 ${p.toUpperCase()}\n📧 ${d.correo}\n🔑 ${clave}\n👤 Disp: ${nuevoDisp}/${total ?? "-"}\nEstado: *${nuevoDisp <= 0 ? "LLENA" : "ACTIVA"}*`,
     { parse_mode: "Markdown" }
   );
 }
 
 // ===============================
-// AUTO: toma 1 perfil de la cuenta con MÁS libres (ordenado)
+// AUTO (elige la cuenta con MÁS perfiles libres)
 // /auto netflix
 // ===============================
-async function ejecutarAuto(chatId, plataforma) {
+async function ejecutarAutoVenta(chatId, plataforma) {
   const p = normalizarPlataforma(plataforma);
   if (!esPlataformaValida(p)) return bot.sendMessage(chatId, "⚠️ Plataforma inválida.");
 
   const snap = await db
     .collection("inventario")
     .where("plataforma", "==", p)
-    .where("estado", "==", "activa")
     .where("disp", ">=", 1)
+    .where("estado", "==", "activa")
     .get();
 
-  if (snap.empty) return bot.sendMessage(chatId, `⚠️ ${p.toUpperCase()} SIN PERFILES PARA AUTO`);
-
-  // ✅ escoger el mayor disp (en memoria)
-  let best = snap.docs[0];
-  for (const d of snap.docs) {
-    if (Number(d.data().disp || 0) > Number(best.data().disp || 0)) best = d;
+  if (snap.empty) {
+    return bot.sendMessage(chatId, `⚠️ ${p.toUpperCase()} SIN PERFILES PARA VENDER`);
   }
 
-  const ref = best.ref;
-  const data = best.data();
+  // 🔥 Elegir máximo disp (sin depender de índices)
+  let best = snap.docs[0];
+  let bestDisp = Number(best.data().disp || 0);
+
+  snap.docs.forEach((d) => {
+    const disp = Number(d.data().disp || 0);
+    if (disp > bestDisp) {
+      best = d;
+      bestDisp = disp;
+    }
+  });
+
+  const doc = best;
+  const ref = doc.ref;
+  const d = doc.data();
   const total = await getTotalPorPlataforma(p);
 
-  const antes = { ...data };
-  const nuevoDisp = Math.max(0, Number(data.disp || 0) - 1);
+  const antes = { ...d };
+  const nuevoDisp = Math.max(0, Number(d.disp || 0) - 1);
 
   await ref.set(
-    { disp: nuevoDisp, updatedAt: admin.firestore.FieldValue.serverTimestamp() },
+    {
+      disp: nuevoDisp,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    },
     { merge: true }
   );
 
-  const despues = { ...data, disp: nuevoDisp };
-  await aplicarAutoLlenoYAlerta(chatId, ref, antes, despues);
+  const despues = { ...d, disp: nuevoDisp };
+  await aplicarAutoBloqueoYAlerta(chatId, ref, antes, despues);
+
+  const clave = (d.clave && String(d.clave).trim()) ? d.clave : "-";
 
   return bot.sendMessage(
     chatId,
-    `⚡ *AUTO APLICADO (mayor stock)*\n📌 ${p.toUpperCase()}\n📧 ${data.correo}\n🔑 ${data.clave || "-"}\n👤 Disp: ${nuevoDisp}/${total ?? "-"}\nEstado: *${labelEstado(nuevoDisp <= 0 ? "llena" : data.estado)}*`,
+    `⚡ *AUTO APLICADO (mayor stock)*\n📌 ${p.toUpperCase()}\n📧 ${d.correo}\n🔑 ${clave}\n👤 Disp: ${nuevoDisp}/${total ?? "-"}\nEstado: *${nuevoDisp <= 0 ? "LLENA" : "ACTIVA"}*`,
     { parse_mode: "Markdown" }
   );
 }
@@ -376,23 +389,30 @@ async function ejecutarAuto(chatId, plataforma) {
 // ===============================
 // COMANDOS
 // ===============================
+
+// /start
 bot.onText(/\/start/i, async (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
+
   if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
   return bot.sendMessage(chatId, panelTexto(), { parse_mode: "Markdown" });
 });
 
+// /menu
 bot.onText(/\/menu/i, async (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
+
   if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
   return mostrarMenu(chatId);
 });
 
+// /stock
 bot.onText(/\/stock/i, async (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
+
   if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
   return mostrarStockGeneral(chatId);
 });
@@ -402,6 +422,7 @@ PLATAFORMAS.forEach((p) => {
   bot.onText(new RegExp("^\\/" + p + "$", "i"), async (msg) => {
     const chatId = msg.chat.id;
     const userId = msg.from.id;
+
     if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
     return mostrarStockPlataforma(chatId, p);
   });
@@ -422,46 +443,110 @@ bot.onText(/\/buscar\s+(.+)/i, async (msg, match) => {
   let texto = `🔎 *RESULTADO*\n📧 ${correo}\n\n`;
   snap.forEach((d) => {
     const x = d.data();
-    texto += `✅ ${String(x.plataforma).toUpperCase()} — ${x.disp} — ${labelEstado(x.estado)} — 🔑 ${x.clave || "-"}\n`;
+    const clave = (x.clave && String(x.clave).trim()) ? x.clave : "-";
+    texto += `✅ ${String(x.plataforma).toUpperCase()} — Disp:${x.disp} — 🔑 ${clave} — Estado:${estadoVisible(x.estado)}\n`;
   });
 
   return bot.sendMessage(chatId, texto, { parse_mode: "Markdown" });
 });
 
-// ✅ /add correo clave plataforma disp [estado]
-bot.onText(/\/add\s+(\S+)\s+(\S+)\s+(\S+)\s+(\d+)(?:\s+(\S+))?/i, async (msg, match) => {
+// ===============================
+// /add (MODO INTELIGENTE)
+// FORMATO RECOMENDADO:
+// /add correo clave plataforma disp [activa|llena]
+//
+// ✅ Acepta también el viejo sin clave:
+// /add correo plataforma disp [activa|llena]
+// (en ese caso clave = "-")
+// ===============================
+bot.onText(/\/add\s+(.+)/i, async (msg, match) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
 
   if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
 
-  const correo = String(match[1]).trim().toLowerCase();
-  const clave = String(match[2]).trim(); // 👈 clave
-  const plataforma = normalizarPlataforma(match[3]);
-  const disp = Number(match[4]);
-  const estado = normalizarEstado(match[5] || "activa");
+  const raw = String(match[1] || "").trim();
+  const parts = raw.split(/\s+/).filter(Boolean);
+
+  if (parts.length < 3) {
+    return bot.sendMessage(chatId, "⚠️ Uso:\n/add correo clave plataforma disp [activa|llena]");
+  }
+
+  // Detectar si viene con clave o no
+  // Con clave: 4+ tokens -> correo clave plataforma disp ...
+  // Sin clave: 3+ tokens -> correo plataforma disp ...
+  let correo = "";
+  let clave = "-";
+  let plataforma = "";
+  let disp = 0;
+  let estadoInput = "activa";
+
+  if (parts.length >= 4 && esPlataformaValida(parts[2]) && /^\d+$/.test(parts[3])) {
+    // correo clave plataforma disp [estado]
+    correo = String(parts[0]).toLowerCase();
+    clave = String(parts[1]);
+    plataforma = normalizarPlataforma(parts[2]);
+    disp = Number(parts[3]);
+    estadoInput = String(parts[4] || "activa").toLowerCase();
+  } else if (esPlataformaValida(parts[1]) && /^\d+$/.test(parts[2])) {
+    // correo plataforma disp [estado]  (legacy)
+    correo = String(parts[0]).toLowerCase();
+    clave = "-";
+    plataforma = normalizarPlataforma(parts[1]);
+    disp = Number(parts[2]);
+    estadoInput = String(parts[3] || "activa").toLowerCase();
+  } else {
+    return bot.sendMessage(chatId, "⚠️ Formato inválido.\nUse:\n/add correo clave plataforma disp [activa|llena]");
+  }
 
   if (!correo.includes("@")) return bot.sendMessage(chatId, "⚠️ Correo inválido.");
-  if (!clave) return bot.sendMessage(chatId, "⚠️ Falta clave.");
   if (!esPlataformaValida(plataforma)) return bot.sendMessage(chatId, "⚠️ Plataforma inválida.");
   if (!Number.isFinite(disp) || disp < 0) return bot.sendMessage(chatId, "⚠️ disp inválido.");
 
-  const ref = db.collection("inventario").doc(docIdInventario(correo, plataforma));
+  const estado = estadoNormalizado(estadoInput, disp);
   const now = admin.firestore.FieldValue.serverTimestamp();
 
-  const finalEstado = disp <= 0 ? "llena" : estado;
+  // ✅ MODO INTELIGENTE:
+  // 1) Buscar cualquier doc existente con mismo correo+plataforma (aunque tenga ID raro)
+  const snap = await db
+    .collection("inventario")
+    .where("correo", "==", correo)
+    .where("plataforma", "==", plataforma)
+    .limit(10)
+    .get();
+
+  let ref = null;
+  let existing = null;
+
+  if (!snap.empty) {
+    // Si hay varios (duplicados), actualizamos el PRIMERO y borramos los demás
+    ref = snap.docs[0].ref;
+    existing = snap.docs[0].data();
+
+    if (snap.docs.length > 1) {
+      for (let i = 1; i < snap.docs.length; i++) {
+        await snap.docs[i].ref.delete();
+      }
+    }
+  } else {
+    // 2) Si no existe, usar ID normalizado estable
+    ref = db.collection("inventario").doc(docIdInventario(correo, plataforma));
+    const prev = await ref.get();
+    existing = prev.exists ? prev.data() : null;
+  }
 
   const data = {
     correo,
-    clave,
     plataforma,
     disp,
-    estado: finalEstado,
+    estado,
+    clave: String(clave || "-"),
     updatedAt: now,
   };
 
-  const prev = await ref.get();
-  if (!prev.exists) data.createdAt = now;
+  // Mantener createdAt si existe
+  if (existing?.createdAt) data.createdAt = existing.createdAt;
+  else data.createdAt = now;
 
   await ref.set(data, { merge: true });
 
@@ -469,12 +554,19 @@ bot.onText(/\/add\s+(\S+)\s+(\S+)\s+(\S+)\s+(\d+)(?:\s+(\S+))?/i, async (msg, ma
 
   return bot.sendMessage(
     chatId,
-    `✅ *Agregada*\n📌 ${plataforma.toUpperCase()}\n📧 ${correo}\n🔑 ${clave}\n👤 Disponibles: ${disp}/${total ?? "-"}\nEstado: *${labelEstado(finalEstado)}*`,
+    `✅ *Agregada*\n📌 ${plataforma.toUpperCase()}\n📧 ${correo}\n🔑 ${data.clave}\n👤 Disponibles: ${disp}/${total ?? "-"}\nEstado: *${estadoVisible(data.estado)}*`,
     { parse_mode: "Markdown" }
   );
 });
 
+// ===============================
 // /addm (lote)
+// Formato recomendado por línea:
+// correo clave plataforma disp [activa|llena]
+//
+// También soporta legacy:
+// correo plataforma disp [activa|llena]
+// ===============================
 bot.onText(/\/addm/i, async (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
@@ -483,12 +575,11 @@ bot.onText(/\/addm/i, async (msg) => {
 
   return bot.sendMessage(
     chatId,
-    "📌 *PEGUE EL LOTE* (una cuenta por línea)\nFormato:\n`correo clave plataforma disp [activa|llena]`\n\nEj:\n`a@gmail.com pass123 netflix 5 activa`\n`b@gmail.com pass999 disneyp 5`\n",
+    "📌 *PEGUE EL LOTE* (una cuenta por línea)\nFormato:\n`correo clave plataforma disp [activa|llena]`\n\nEj:\n`a@gmail.com pass123 netflix 5`\n`b@gmail.com - disneyp 5 activa`\n\nLegacy:\n`c@gmail.com netflix 5`",
     { parse_mode: "Markdown" }
   );
 });
 
-// Procesar lotes pegados (multi-línea)
 bot.on("message", async (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
@@ -510,37 +601,79 @@ bot.on("message", async (msg) => {
   let fail = 0;
 
   for (const line of lines) {
-    const parts = line.split(/\s+/);
-
-    // correo clave plataforma disp [estado]
-    if (parts.length < 4) {
+    const parts = line.split(/\s+/).filter(Boolean);
+    if (parts.length < 3) {
       fail++;
       continue;
     }
 
-    const correo = String(parts[0]).toLowerCase();
-    const clave = String(parts[1] || "").trim();
-    const plataforma = normalizarPlataforma(parts[2]);
-    const disp = Number(parts[3]);
-    const estado = normalizarEstado(parts[4] || "activa");
+    let correo = "";
+    let clave = "-";
+    let plataforma = "";
+    let disp = 0;
+    let estadoInput = "activa";
 
-    if (!correo.includes("@") || !clave || !esPlataformaValida(plataforma) || !Number.isFinite(disp)) {
+    if (parts.length >= 4 && esPlataformaValida(parts[2]) && /^\d+$/.test(parts[3])) {
+      // correo clave plataforma disp [estado]
+      correo = String(parts[0]).toLowerCase();
+      clave = String(parts[1]);
+      plataforma = normalizarPlataforma(parts[2]);
+      disp = Number(parts[3]);
+      estadoInput = String(parts[4] || "activa").toLowerCase();
+    } else if (esPlataformaValida(parts[1]) && /^\d+$/.test(parts[2])) {
+      // legacy correo plataforma disp [estado]
+      correo = String(parts[0]).toLowerCase();
+      clave = "-";
+      plataforma = normalizarPlataforma(parts[1]);
+      disp = Number(parts[2]);
+      estadoInput = String(parts[3] || "activa").toLowerCase();
+    } else {
       fail++;
       continue;
     }
 
-    const ref = db.collection("inventario").doc(docIdInventario(correo, plataforma));
+    if (!correo.includes("@") || !esPlataformaValida(plataforma) || !Number.isFinite(disp)) {
+      fail++;
+      continue;
+    }
+
+    const estado = estadoNormalizado(estadoInput, disp);
     const now = admin.firestore.FieldValue.serverTimestamp();
 
-    const prev = await ref.get();
+    // Modo inteligente por línea: buscar correo+plataforma
+    const snap = await db
+      .collection("inventario")
+      .where("correo", "==", correo)
+      .where("plataforma", "==", plataforma)
+      .limit(10)
+      .get();
+
+    let ref = null;
+    let existing = null;
+
+    if (!snap.empty) {
+      ref = snap.docs[0].ref;
+      existing = snap.docs[0].data();
+
+      if (snap.docs.length > 1) {
+        for (let i = 1; i < snap.docs.length; i++) {
+          await snap.docs[i].ref.delete();
+        }
+      }
+    } else {
+      ref = db.collection("inventario").doc(docIdInventario(correo, plataforma));
+      const prev = await ref.get();
+      existing = prev.exists ? prev.data() : null;
+    }
+
     await ref.set(
       {
         correo,
-        clave,
         plataforma,
-        disp: Math.max(0, disp),
-        estado: disp <= 0 ? "llena" : estado,
-        createdAt: prev.exists ? prev.data().createdAt : now,
+        disp,
+        estado,
+        clave: String(clave || "-"),
+        createdAt: existing?.createdAt ? existing.createdAt : now,
         updatedAt: now,
       },
       { merge: true }
@@ -552,7 +685,9 @@ bot.on("message", async (msg) => {
   return bot.sendMessage(chatId, `✅ Lote procesado.\nOK: ${ok}\nFallos: ${fail}`);
 });
 
+// ===============================
 // /addp correo  (resta 1)
+// ===============================
 bot.onText(/\/addp\s+(\S+)/i, async (msg, match) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
@@ -565,7 +700,10 @@ bot.onText(/\/addp\s+(\S+)/i, async (msg, match) => {
   if (snap.empty) return bot.sendMessage(chatId, "⚠️ No encontrado.");
 
   if (snap.size > 1) {
-    return bot.sendMessage(chatId, "⚠️ Ese correo aparece en varias plataformas. Use /buscar.");
+    return bot.sendMessage(
+      chatId,
+      "⚠️ Ese correo aparece en varias plataformas. Use /buscar y luego /add para corregir. (O borre con /del correo)"
+    );
   }
 
   const doc = snap.docs[0];
@@ -585,18 +723,20 @@ bot.onText(/\/addp\s+(\S+)/i, async (msg, match) => {
   );
 
   const despues = { ...d, disp: nuevoDisp };
-  await aplicarAutoLlenoYAlerta(chatId, ref, antes, despues);
+  await aplicarAutoBloqueoYAlerta(chatId, ref, antes, despues);
 
-  const estadoFinal = nuevoDisp <= 0 ? "llena" : (d.estado || "activa");
+  const clave = (d.clave && String(d.clave).trim()) ? d.clave : "-";
 
   return bot.sendMessage(
     chatId,
-    `✅ *Actualizado*\n📌 ${String(d.plataforma).toUpperCase()}\n📧 ${correo}\n🔑 ${d.clave || "-"}\n👤 Disponibles: ${nuevoDisp}/${total ?? "-"}\nEstado: *${labelEstado(estadoFinal)}*`,
+    `✅ *Actualizado*\n📌 ${String(d.plataforma).toUpperCase()}\n📧 ${correo}\n🔑 ${clave}\n👤 Disponibles: ${nuevoDisp}/${total ?? "-"}\nEstado: *${nuevoDisp <= 0 ? "LLENA" : "ACTIVA"}*`,
     { parse_mode: "Markdown" }
   );
 });
 
+// ===============================
 // /delp correo  (suma 1) + reactiva si sube de 0
+// ===============================
 bot.onText(/\/delp\s+(\S+)/i, async (msg, match) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
@@ -609,7 +749,10 @@ bot.onText(/\/delp\s+(\S+)/i, async (msg, match) => {
   if (snap.empty) return bot.sendMessage(chatId, "⚠️ No encontrado.");
 
   if (snap.size > 1) {
-    return bot.sendMessage(chatId, "⚠️ Ese correo aparece en varias plataformas. Use /buscar.");
+    return bot.sendMessage(
+      chatId,
+      "⚠️ Ese correo aparece en varias plataformas. Use /buscar y luego /add para corregir. (O borre con /del correo)"
+    );
   }
 
   const doc = snap.docs[0];
@@ -628,93 +771,61 @@ bot.onText(/\/delp\s+(\S+)/i, async (msg, match) => {
     { merge: true }
   );
 
+  const clave = (d.clave && String(d.clave).trim()) ? d.clave : "-";
+
   return bot.sendMessage(
     chatId,
-    `✅ *Actualizado*\n📌 ${String(d.plataforma).toUpperCase()}\n📧 ${correo}\n🔑 ${d.clave || "-"}\n👤 Disponibles: ${nuevoDisp}/${total ?? "-"}\nEstado: *${labelEstado(nuevoDisp > 0 ? "activa" : d.estado)}*`,
+    `✅ *Actualizado*\n📌 ${String(d.plataforma).toUpperCase()}\n📧 ${correo}\n🔑 ${clave}\n👤 Disponibles: ${nuevoDisp}/${total ?? "-"}\nEstado: *${nuevoDisp > 0 ? "ACTIVA" : "LLENA"}*`,
     { parse_mode: "Markdown" }
   );
 });
 
-// /del correo plataforma  (BORRAR CUENTA COMPLETA)
-bot.onText(/\/del\s+(\S+)\s+(\S+)/i, async (msg, match) => {
-  const chatId = msg.chat.id;
-  const userId = msg.from.id;
-
-  if (!(await isAdmin(userId)))
-    return bot.sendMessage(chatId, "⛔ Acceso denegado");
-
-  const correo = String(match[1]).toLowerCase().trim();
-  const plataforma = normalizarPlataforma(match[2]);
-
-  if (!correo.includes("@"))
-    return bot.sendMessage(chatId, "⚠️ Correo inválido.");
-
-  if (!esPlataformaValida(plataforma))
-    return bot.sendMessage(chatId, "⚠️ Plataforma inválida.");
-
-  const ref = db
-    .collection("inventario")
-    .doc(docIdInventario(correo, plataforma));
-
-  const doc = await ref.get();
-
-  if (!doc.exists)
-    return bot.sendMessage(chatId, "⚠️ Cuenta no encontrada.");
-
-  await ref.delete();
-
-  return bot.sendMessage(
-    chatId,
-    `🗑️ Cuenta eliminada\n📌 ${plataforma.toUpperCase()}\n📧 ${correo}`
-  );
-});
-
-// /venta plataforma
-bot.onText(/\/venta\s+(.+)/i, async (msg, match) => {
-  const chatId = msg.chat.id;
-  const userId = msg.from.id;
-  const plataforma = String(match[1] || "").trim();
-  if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
-  return ejecutarVenta(chatId, plataforma);
-});
-// /del correo  (borra TODOS los duplicados)
+// ===============================
+// /del correo  (BORRA TODO ese correo) ✅ para eliminar duplicados
+// ===============================
 bot.onText(/\/del\s+(\S+)/i, async (msg, match) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
 
-  if (!(await isAdmin(userId)))
-    return bot.sendMessage(chatId, "⛔ Acceso denegado");
+  if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
 
-  const correo = String(match[1]).toLowerCase().trim();
+  const correo = String(match[1] || "").toLowerCase().trim();
+  if (!correo.includes("@")) return bot.sendMessage(chatId, "⚠️ Uso: /del correo");
 
-  const snap = await db
-    .collection("inventario")
-    .where("correo", "==", correo)
-    .get();
-
-  if (snap.empty)
-    return bot.sendMessage(chatId, "⚠️ Cuenta no encontrada.");
+  const snap = await db.collection("inventario").where("correo", "==", correo).get();
+  if (snap.empty) return bot.sendMessage(chatId, "⚠️ Cuenta no encontrada.");
 
   let borrados = 0;
-
-  for (const doc of snap.docs) {
-    await doc.ref.delete();
+  for (const d of snap.docs) {
+    await d.ref.delete();
     borrados++;
   }
 
-  return bot.sendMessage(
-    chatId,
-    `🗑️ Eliminadas ${borrados} cuentas\n📧 ${correo}`
-  );
+  return bot.sendMessage(chatId, `🗑️ Eliminadas ${borrados} cuentas\n📧 ${correo}`);
 });
 
+// ===============================
+// /venta plataforma
+// ===============================
+bot.onText(/\/venta\s+(.+)/i, async (msg, match) => {
+  const chatId = msg.chat.id;
+  const userId = msg.from.id;
+  const plataforma = String(match[1] || "").trim();
+
+  if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+  return ejecutarVenta(chatId, plataforma);
+});
+
+// ===============================
 // /auto plataforma
+// ===============================
 bot.onText(/\/auto\s+(.+)/i, async (msg, match) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
   const plataforma = String(match[1] || "").trim();
+
   if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
-  return ejecutarAuto(chatId, plataforma);
+  return ejecutarAutoVenta(chatId, plataforma);
 });
 
 // ===============================
