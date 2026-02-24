@@ -635,6 +635,40 @@ bot.onText(/\/delp\s+(\S+)/i, async (msg, match) => {
   );
 });
 
+// /del correo plataforma  (BORRAR CUENTA COMPLETA)
+bot.onText(/\/del\s+(\S+)\s+(\S+)/i, async (msg, match) => {
+  const chatId = msg.chat.id;
+  const userId = msg.from.id;
+
+  if (!(await isAdmin(userId)))
+    return bot.sendMessage(chatId, "⛔ Acceso denegado");
+
+  const correo = String(match[1]).toLowerCase().trim();
+  const plataforma = normalizarPlataforma(match[2]);
+
+  if (!correo.includes("@"))
+    return bot.sendMessage(chatId, "⚠️ Correo inválido.");
+
+  if (!esPlataformaValida(plataforma))
+    return bot.sendMessage(chatId, "⚠️ Plataforma inválida.");
+
+  const ref = db
+    .collection("inventario")
+    .doc(docIdInventario(correo, plataforma));
+
+  const doc = await ref.get();
+
+  if (!doc.exists)
+    return bot.sendMessage(chatId, "⚠️ Cuenta no encontrada.");
+
+  await ref.delete();
+
+  return bot.sendMessage(
+    chatId,
+    `🗑️ Cuenta eliminada\n📌 ${plataforma.toUpperCase()}\n📧 ${correo}`
+  );
+});
+
 // /venta plataforma
 bot.onText(/\/venta\s+(.+)/i, async (msg, match) => {
   const chatId = msg.chat.id;
