@@ -1,22 +1,17 @@
-/**
- * Sublicuentas Inventario Bot (Render + Firestore)
- * - Admin gate por colección: admins/{userId} => {activo:true}
- * - Inventario: inventario/{docId} => {correo, plataforma, disp, estado, createdAt, updatedAt}
- * - Config: config/totales_plataforma => {netflix, disneyp, disneys, hbomax, primevideo, paramount, crunchyroll}
- *
- * ENV (Render):
- * BOT_TOKEN
- * FIREBASE_PROJECT_ID
- * FIREBASE_CLIENT_EMAIL
- * FIREBASE_PRIVATE_KEY   (pegado completo, incluyendo -----BEGIN/END-----, con \n)
- */
+// index.js — SUBLICUENTAS INVENTARIO BOT (Render)
+// ✅ Stock por plataforma + Stock general
+// ✅ /add /addm /buscar /addp /delp
+// ✅ Auto-bloqueo (0 => bloqueada) + /delp reactiva si sube de 0
+// ✅ /venta (toma 1) + /auto (toma 1 de la cuenta con MÁS perfiles)
+// ✅ Menú con botones (inline keyboard) sin “Error” (answerCallbackQuery)
+// ✅ Guarda correo + clave (password) por cuenta
 
 const TelegramBot = require("node-telegram-bot-api");
 const admin = require("firebase-admin");
 const http = require("http");
 
 // ===============================
-// VARIABLES DE ENTORNO
+// VARIABLES DE ENTORNO (Render)
 // ===============================
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID;
@@ -60,7 +55,6 @@ const PLATAFORMAS = [
   "crunchyroll",
 ];
 
-// Normaliza textos tipo "prime video" -> "primevideo"
 function normalizarPlataforma(txt = "") {
   return String(txt).toLowerCase().replace(/\s+/g, "");
 }
@@ -70,7 +64,6 @@ function esPlataformaValida(p) {
 }
 
 function docIdInventario(correo, plataforma) {
-  // DocID seguro (sin /)
   const safeMail = String(correo).trim().toLowerCase().replace(/[\/#?&]/g, "_");
   const safePlat = normalizarPlataforma(plataforma);
   return `${safePlat}__${safeMail}`;
@@ -105,7 +98,7 @@ function panelTexto() {
     "/auto netflix\n" +
     "/venta netflix\n\n" +
     "⚙️ *ADMIN:*\n" +
-    "/add correo plataforma disp [activa|bloqueada]\n" +
+    "/add correo clave plataforma disp [activa|bloqueada]\n" +
     "/addm (lote)\n" +
     "/buscar correo\n" +
     "/addp correo (resta 1)\n" +
@@ -149,8 +142,8 @@ async function mostrarMenu(chatId) {
 
 // FIX “Error” en botones: responder callback_query siempre
 bot.on("callback_query", async (q) => {
-  const chatId = q.message.chat.id;
-  const userId = q.from.id;
+  const chatId = q.message?.chat?.id;
+  const userId = q.from?.id;
   const data = q.data || "";
 
   try {
@@ -174,7 +167,7 @@ bot.on("callback_query", async (q) => {
 
     return bot.sendMessage(chatId, "⚠️ Acción no reconocida.");
   } catch (err) {
-    console.log("❌ callback_query error:", err.message);
+    console.log("❌ callback_query error:", err);
     return bot.sendMessage(chatId, "⚠️ Error interno en botón (revise logs).");
   }
 });
@@ -246,13 +239,12 @@ async function mostrarStockGeneral(chatId) {
 // ===============================
 // AUTOBLOQUEO (cuando llega a 0)
 // - Si disp queda 0 => estado "bloqueada"
-// - Si /delp sube de 0 => estado vuelve "activa" (tal como quedaron)
+// - Si /delp sube de 0 => estado vuelve "activa"
 // ===============================
 async function aplicarAutoBloqueoYAlerta(chatId, ref, dataAntes, dataDespues) {
   const antes = Number(dataAntes?.disp ?? 0);
   const despues = Number(dataDespues?.disp ?? 0);
 
-  // Si llegó a 0 o menos: bloquear
   if (despues <= 0) {
     await ref.set(
       {
@@ -274,7 +266,7 @@ async function aplicarAutoBloqueoYAlerta(chatId, ref, dataAntes, dataDespues) {
 }
 
 // ===============================
-// VENTA (toma 1 perfil del primer correo disponible)
+// VENTA (toma 1 perfil de la primera cuenta que encuentre)
 // /venta netflix
 // ===============================
 async function ejecutarVenta(chatId, plataforma) {
@@ -302,10 +294,7 @@ async function ejecutarVenta(chatId, plataforma) {
   const nuevoDisp = Math.max(0, Number(d.disp || 0) - 1);
 
   await ref.set(
-    {
-      disp: nuevoDisp,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    },
+    { disp: nuevoDisp, updatedAt: admin.firestore.FieldValue.serverTimestamp() },
     { merge: true }
   );
 
@@ -319,9 +308,51 @@ async function ejecutarVenta(chatId, plataforma) {
   );
 }
 
+// ===============================
+// AUTO (elige la cuenta con MÁS perfiles disponibles)
+// /auto netflix
+// ===============================
 async function ejecutarAutoVenta(chatId, plataforma) {
-  // Por ahora: auto = ejecutar 1 venta (opción 1)
-  return ejecutarVenta(chatId, plataforma);
+  const p = normalizarPlataforma(plataforma);
+  if (!esPlataformaValida(p)) return bot.sendMessage(chatId, "⚠️ Plataforma inválida.");
+
+  // 🔥 Auto = escoger la cuenta con MÁS perfiles
+  // ⚠️ Firestore puede pedir índice compuesto; si sale link en logs, lo creas.
+  const snap = await db
+    .collection("inventario")
+    .where("plataforma", "==", p)
+    .where("estado", "==", "activa")
+    .where("disp", ">=", 1)
+    .orderBy("disp", "desc")
+    .orderBy("updatedAt", "asc") // desempate
+    .limit(1)
+    .get();
+
+  if (snap.empty) {
+    return bot.sendMessage(chatId, `⚠️ ${p.toUpperCase()} SIN PERFILES PARA AUTO`);
+  }
+
+  const doc = snap.docs[0];
+  const ref = doc.ref;
+  const d = doc.data();
+  const total = await getTotalPorPlataforma(p);
+
+  const antes = { ...d };
+  const nuevoDisp = Math.max(0, Number(d.disp || 0) - 1);
+
+  await ref.set(
+    { disp: nuevoDisp, updatedAt: admin.firestore.FieldValue.serverTimestamp() },
+    { merge: true }
+  );
+
+  const despues = { ...d, disp: nuevoDisp };
+  await aplicarAutoBloqueoYAlerta(chatId, ref, antes, despues);
+
+  return bot.sendMessage(
+    chatId,
+    `⚡ *AUTO APLICADO*\n📌 ${p.toUpperCase()}\n📧 ${d.correo}\n👤 Disp: ${nuevoDisp}/${total ?? "-"}`,
+    { parse_mode: "Markdown" }
+  );
 }
 
 // ===============================
@@ -387,20 +418,22 @@ bot.onText(/\/buscar\s+(.+)/i, async (msg, match) => {
   return bot.sendMessage(chatId, texto, { parse_mode: "Markdown" });
 });
 
-// /add correo plataforma disp [estado]
-bot.onText(/\/add\s+(\S+)\s+(\S+)\s+(\d+)(?:\s+(\S+))?/i, async (msg, match) => {
+// /add correo clave plataforma disp [estado]
+bot.onText(/\/add\s+(\S+)\s+(\S+)\s+(\S+)\s+(\d+)(?:\s+(\S+))?/i, async (msg, match) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
 
   if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
 
   const correo = String(match[1]).trim().toLowerCase();
-  const plataforma = normalizarPlataforma(match[2]);
-  const disp = Number(match[3]);
-  const estadoInput = String(match[4] || "activa").toLowerCase();
+  const clave = String(match[2]).trim();
+  const plataforma = normalizarPlataforma(match[3]);
+  const disp = Number(match[4]);
+  const estadoInput = String(match[5] || "activa").toLowerCase();
   const estado = estadoInput === "bloqueada" ? "bloqueada" : "activa";
 
   if (!correo.includes("@")) return bot.sendMessage(chatId, "⚠️ Correo inválido.");
+  if (!clave) return bot.sendMessage(chatId, "⚠️ Falta clave.");
   if (!esPlataformaValida(plataforma)) return bot.sendMessage(chatId, "⚠️ Plataforma inválida.");
   if (!Number.isFinite(disp) || disp < 0) return bot.sendMessage(chatId, "⚠️ disp inválido.");
 
@@ -409,13 +442,13 @@ bot.onText(/\/add\s+(\S+)\s+(\S+)\s+(\d+)(?:\s+(\S+))?/i, async (msg, match) => 
 
   const data = {
     correo,
+    clave,
     plataforma,
     disp,
     estado: disp <= 0 ? "bloqueada" : estado,
     updatedAt: now,
   };
 
-  // si no existe, crea createdAt
   const prev = await ref.get();
   if (!prev.exists) data.createdAt = now;
 
@@ -425,14 +458,14 @@ bot.onText(/\/add\s+(\S+)\s+(\S+)\s+(\d+)(?:\s+(\S+))?/i, async (msg, match) => 
 
   return bot.sendMessage(
     chatId,
-    `✅ *Agregada*\n📌 ${plataforma.toUpperCase()}\n📧 ${correo}\n👤 Disponibles: ${disp}/${total ?? "-"}\n🟢 Estado: ${data.estado}`,
+    `✅ *Agregada*\n📌 ${plataforma.toUpperCase()}\n📧 ${correo}\n🔑 Clave: guardada\n👤 Disponibles: ${disp}/${total ?? "-"}\n🟢 Estado: ${data.estado}`,
     { parse_mode: "Markdown" }
   );
 });
 
 // /addm (lote)
 // Formato: pegar líneas así:
-// correo plataforma disp [estado]
+// correo clave plataforma disp [estado]
 bot.onText(/\/addm/i, async (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
@@ -441,21 +474,20 @@ bot.onText(/\/addm/i, async (msg) => {
 
   return bot.sendMessage(
     chatId,
-    "📌 *PEGUE EL LOTE* (una cuenta por línea)\nFormato:\n`correo plataforma disp [activa|bloqueada]`\n\nEj:\n`a@gmail.com netflix 5`\n`b@gmail.com disneyp 5 activa`",
+    "📌 *PEGUE EL LOTE* (una cuenta por línea)\nFormato:\n`correo clave plataforma disp [activa|bloqueada]`\n\nEj:\n`a@gmail.com pass123 netflix 5`\n`b@gmail.com clave456 disneyp 5 activa`",
     { parse_mode: "Markdown" }
   );
 });
 
+// Procesar lote cuando mandes varias líneas (sin /)
 bot.on("message", async (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
   const text = msg.text || "";
 
-  // Detectar lote: si el mensaje tiene varias líneas y parece lote, procesarlo
   if (!text.includes("\n")) return;
-  if (text.startsWith("/")) return; // no procesar comandos aquí
+  if (text.startsWith("/")) return;
 
-  // Seguridad
   if (!(await isAdmin(userId))) return;
 
   const lines = text
@@ -472,17 +504,19 @@ bot.on("message", async (msg) => {
 
   for (const line of lines) {
     const parts = line.split(/\s+/);
-    if (parts.length < 3) {
+    if (parts.length < 4) {
       fail++;
       continue;
     }
+
     const correo = String(parts[0]).toLowerCase();
-    const plataforma = normalizarPlataforma(parts[1]);
-    const disp = Number(parts[2]);
-    const estadoInput = String(parts[3] || "activa").toLowerCase();
+    const clave = String(parts[1]);
+    const plataforma = normalizarPlataforma(parts[2]);
+    const disp = Number(parts[3]);
+    const estadoInput = String(parts[4] || "activa").toLowerCase();
     const estado = estadoInput === "bloqueada" ? "bloqueada" : "activa";
 
-    if (!correo.includes("@") || !esPlataformaValida(plataforma) || !Number.isFinite(disp)) {
+    if (!correo.includes("@") || !clave || !esPlataformaValida(plataforma) || !Number.isFinite(disp)) {
       fail++;
       continue;
     }
@@ -494,6 +528,7 @@ bot.on("message", async (msg) => {
     await ref.set(
       {
         correo,
+        clave,
         plataforma,
         disp,
         estado: disp <= 0 ? "bloqueada" : estado,
@@ -517,14 +552,13 @@ bot.onText(/\/addp\s+(\S+)/i, async (msg, match) => {
   if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
   if (!correo.includes("@")) return bot.sendMessage(chatId, "⚠️ Uso: /addp correo");
 
-  // Busca todos los docs con ese correo (si existe en varias plataformas, baja en todas? -> aquí solo advierte)
   const snap = await db.collection("inventario").where("correo", "==", correo).get();
   if (snap.empty) return bot.sendMessage(chatId, "⚠️ No encontrado.");
 
   if (snap.size > 1) {
     return bot.sendMessage(
       chatId,
-      "⚠️ Ese correo aparece en varias plataformas. Use /buscar y luego /add con doc específico (o deje el correo único por plataforma)."
+      "⚠️ Ese correo aparece en varias plataformas. Use /buscar y luego /add con correo+plataforma (o deje correo único)."
     );
   }
 
@@ -546,12 +580,12 @@ bot.onText(/\/addp\s+(\S+)/i, async (msg, match) => {
 
   return bot.sendMessage(
     chatId,
-    `✅ *Actualizado*\n📌 ${String(d.plataforma).toUpperCase()}\n📧 ${correo}\n👤 Disponibles: ${nuevoDisp}/${total ?? "-"}\nEstado: ${(nuevoDisp <= 0 ? "bloqueada" : d.estado)}`,
+    `✅ *Actualizado*\n📌 ${String(d.plataforma).toUpperCase()}\n📧 ${correo}\n👤 Disponibles: ${nuevoDisp}/${total ?? "-"}\nEstado: ${nuevoDisp <= 0 ? "bloqueada" : d.estado}`,
     { parse_mode: "Markdown" }
   );
 });
 
-// /delp correo  (suma 1) + reactiva si sube de 0 (tal como quedaron)
+// /delp correo  (suma 1) + reactiva si sube de 0
 bot.onText(/\/delp\s+(\S+)/i, async (msg, match) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
@@ -566,7 +600,7 @@ bot.onText(/\/delp\s+(\S+)/i, async (msg, match) => {
   if (snap.size > 1) {
     return bot.sendMessage(
       chatId,
-      "⚠️ Ese correo aparece en varias plataformas. Use /buscar y luego /add con doc específico (o deje el correo único por plataforma)."
+      "⚠️ Ese correo aparece en varias plataformas. Use /buscar y luego /add con correo+plataforma (o deje correo único)."
     );
   }
 
@@ -577,7 +611,6 @@ bot.onText(/\/delp\s+(\S+)/i, async (msg, match) => {
 
   const nuevoDisp = Number(d.disp || 0) + 1;
 
-  // ✅ Si sube de 0, reactivar automáticamente
   await ref.set(
     {
       disp: nuevoDisp,
@@ -629,6 +662,6 @@ http
   });
 
 // ===============================
-// KEEP ALIVE LOG (opcional)
+// KEEP ALIVE LOG
 // ===============================
 setInterval(() => console.log("🟢 Bot activo..."), 60000);
