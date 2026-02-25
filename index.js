@@ -1525,24 +1525,7 @@ bot.on("message", async (msg) => {
       return enviarFichaCliente(chatId, p.clientId);
     }
 
-    // renovar: pedir fecha y luego confirmar con botones
-    if (p.mode === "renFecha") {
-      if (!isFechaDMY(t)) return bot.sendMessage(chatId, "⚠️ Formato inválido. Use dd/mm/yyyy:");
-
-      pending.delete(String(chatId));
-      return bot.sendMessage(chatId, `🔄 Confirmar renovación a fecha: *${t}* ?`, {
-        parse_mode: "Markdown",
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: "✅ Confirmar", callback_data: `cli:ren:confirm:${p.clientId}:${p.servicioIndex}:${t}` }],
-            [{ text: "⬅️ Cancelar", callback_data: `cli:ren:cancel:${p.clientId}` }],
-          ],
-        },
-      });
-    }
-  }
-});
-// =======================================
+    // =======================================
 // BUSQUEDA AUTOMATICA (nombre o telefono)
 // =======================================
 bot.on("text", async (ctx) => {
@@ -1566,6 +1549,25 @@ bot.on("text", async (ctx) => {
   mostrarFichaCliente(ctx, cliente);
 
 });
+
+    // renovar: pedir fecha y luego confirmar con botones
+    if (p.mode === "renFecha") {
+      if (!isFechaDMY(t)) return bot.sendMessage(chatId, "⚠️ Formato inválido. Use dd/mm/yyyy:");
+
+      pending.delete(String(chatId));
+      return bot.sendMessage(chatId, `🔄 Confirmar renovación a fecha: *${t}* ?`, {
+        parse_mode: "Markdown",
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "✅ Confirmar", callback_data: `cli:ren:confirm:${p.clientId}:${p.servicioIndex}:${t}` }],
+            [{ text: "⬅️ Cancelar", callback_data: `cli:ren:cancel:${p.clientId}` }],
+          ],
+        },
+      });
+    }
+  }
+});
+// =======================================
 // ===============================
 // SERVIDOR HTTP (Render)
 // ===============================
