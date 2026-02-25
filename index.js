@@ -1542,7 +1542,30 @@ bot.on("message", async (msg) => {
     }
   }
 });
+// =======================================
+// BUSQUEDA AUTOMATICA (nombre o telefono)
+// =======================================
+bot.on("text", async (ctx) => {
 
+  const texto = ctx.message.text.trim().toLowerCase();
+
+  // ignorar comandos reales del bot
+  if (texto.startsWith("/")) return;
+
+  // evitar que choque con respuestas del wizard
+  if (ctx.session?.esperandoDato) return;
+
+  const cliente = clientes.find(c =>
+    c.nombre.toLowerCase().includes(texto) ||
+    c.telefono.includes(texto)
+  );
+
+  if (!cliente) return; // no responde nada si no encuentra
+
+  // abre ficha directa
+  mostrarFichaCliente(ctx, cliente);
+
+});
 // ===============================
 // SERVIDOR HTTP (Render)
 // ===============================
