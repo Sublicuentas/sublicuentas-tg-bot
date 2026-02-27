@@ -51,46 +51,46 @@ const db = admin.firestore();
 // ADMINS (COMANDOS)
 // ===============================
 
-// ✅ cualquiera puede ver su ID
+// ver ID propio
 bot.onText(/^\/myid$/i, async (msg) => {
-  return bot.sendMessage(msg.chat.id, `🆔 Tu ID es: ${msg.from.id}`);
+  bot.sendMessage(msg.chat.id, `🆔 Tu ID es: ${msg.from.id}`);
 });
 
-// ✅ solo admins pueden agregar admins
+// agregar admin
 bot.onText(/^\/adminadd\s+(\d+)$/i, async (msg, match) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
 
-  if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+  if (!(await isAdmin(userId)))
+    return bot.sendMessage(chatId, "⛔ Acceso denegado");
 
-  const newId = String(match[1]).trim();
+  const newId = String(match[1]);
 
-  await db.collection("admins").doc(newId).set(
-    {
-      activo: true,
-      addedBy: String(userId),
-      addedAt: admin.firestore.FieldValue.serverTimestamp(),
-    },
-    { merge: true }
-  );
+  await db.collection("admins").doc(newId).set({
+    activo: true,
+    addedBy: userId,
+    addedAt: admin.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true });
 
-  return bot.sendMessage(chatId, `✅ Admin agregado: ${newId}`);
+  bot.sendMessage(chatId, `✅ Nuevo admin agregado: ${newId}`);
 });
 
-// ✅ solo admins pueden desactivar admins
+// quitar admin
 bot.onText(/^\/admindel\s+(\d+)$/i, async (msg, match) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
 
-  if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+  if (!(await isAdmin(userId)))
+    return bot.sendMessage(chatId, "⛔ Acceso denegado");
 
-  const targetId = String(match[1]).trim();
+  const targetId = String(match[1]);
 
-  await db.collection("admins").doc(targetId).set({ activo: false }, { merge: true });
+  await db.collection("admins").doc(targetId).set({
+    activo: false
+  }, { merge: true });
 
-  return bot.sendMessage(chatId, `🗑️ Admin desactivado: ${targetId}`);
+  bot.sendMessage(chatId, `🗑️ Admin desactivado: ${targetId}`);
 });
-
 // ===============================
 // TELEGRAM BOT
 // ===============================
@@ -1734,6 +1734,8 @@ bot.on("message", async (msg) => {
       return enviarFichaCliente(chatId, p.clientId);
     }
 
+
+   
     // editar vendedor
     if (p.mode === "editVendedor") {
       await db.collection("clientes").doc(String(p.clientId)).set(
