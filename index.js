@@ -48,6 +48,50 @@ admin.initializeApp({
 const db = admin.firestore();
 
 // ===============================
+// ADMINS (COMANDOS)
+// ===============================
+
+// ✅ cualquiera puede ver su ID
+bot.onText(/^\/myid$/i, async (msg) => {
+  return bot.sendMessage(msg.chat.id, `🆔 Tu ID es: ${msg.from.id}`);
+});
+
+// ✅ solo admins pueden agregar admins
+bot.onText(/^\/adminadd\s+(\d+)$/i, async (msg, match) => {
+  const chatId = msg.chat.id;
+  const userId = msg.from.id;
+
+  if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+
+  const newId = String(match[1]).trim();
+
+  await db.collection("admins").doc(newId).set(
+    {
+      activo: true,
+      addedBy: String(userId),
+      addedAt: admin.firestore.FieldValue.serverTimestamp(),
+    },
+    { merge: true }
+  );
+
+  return bot.sendMessage(chatId, `✅ Admin agregado: ${newId}`);
+});
+
+// ✅ solo admins pueden desactivar admins
+bot.onText(/^\/admindel\s+(\d+)$/i, async (msg, match) => {
+  const chatId = msg.chat.id;
+  const userId = msg.from.id;
+
+  if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+
+  const targetId = String(match[1]).trim();
+
+  await db.collection("admins").doc(targetId).set({ activo: false }, { merge: true });
+
+  return bot.sendMessage(chatId, `🗑️ Admin desactivado: ${targetId}`);
+});
+
+// ===============================
 // TELEGRAM BOT
 // ===============================
 const bot = new TelegramBot(BOT_TOKEN, { polling: true });
