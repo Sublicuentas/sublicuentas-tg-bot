@@ -596,6 +596,143 @@ bot.onText(/\/delp\s+(\S+)\s+(\S+)\s+(\d+)/i, async (msg, match) => {
     { parse_mode: "Markdown" }
   );
 });
+// ===============================
+// ✅ BUSQUEDA ROBUSTA (clientes + inventario)
+// ===============================
+function esTelefono(txt) {
+  const t = String(txt || "").trim();
+  return /^[0-9]{7,15}$/.test(t);
+}
+
+function limpiarQuery(txt) {
+  return String(txt || "")
+    .trim()
+    .replace(/^\/+/, "") // quita / al inicio
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+}
+
+// Inventario: fallback "scan" para encontrar correos aunque where exacto falle por espacios invisibles
+async function buscarInventarioPorCorreoRobusto(correoLower) {
+  const q = String(correoLower || "").trim().toLowerCase();
+
+  // 1) intento exacto (rápido)
+  const exact = await db.collection("inventario").where("correo", "==", q).limit(20).get();
+  if (!exact.empty) {
+    return exact.docs.map((d) => ({ id: d.id, ...d.data(), _ref: d.ref }));
+  }
+
+  // 2) fallback: escaneo limitado (seguro para inventarios pequeños/medianos)
+  // (evita que "disneyp" no aparezca aunque exista)
+  const snap = await db.collection("inventario").limit(2000).get();
+  const out = [];
+  snap.forEach((doc) => {
+    const x = doc.data() || {};
+    const c = String(x.correo || "").trim().toLowerCase();
+    if (c === q) out.push({ id: doc.id, ...x, _ref: doc.ref });
+  });
+  return out.slice(0, 20);
+}
+
+// Clientes: busca por telefono exacto o por nombre contiene
+async function buscarClienteRobusto(queryLower) {
+  const q = String(queryLower || "").trim().toLowerCase();
+
+  // 1) telefono exacto
+  if (esTelefono(q)) {
+    const snapTel = await db.collection("clientes").where("telefono", "==", q).limit(5).get();
+    if (!snapTel.empty) {
+      return snapTel.docs.map((d) => ({ id: d.id, ...d.data(), _ref: d.ref }));
+    }
+  }
+
+  // 2) por nombre contiene (scan limitado)
+  const snap = await db.collection("clientes").limit(1500).get();
+  const encontrados = [];
+  snap.forEach((doc) => {
+    const c = doc.data() || {};
+    const nombre = String(c.nombrePerfil || "").toLowerCase();
+    const tel = String(c.telefono || "").toLowerCase();
+    const vend = String(c.vendedor || "").toLowerCase();
+    if (nombre.includes(q) || tel.includes(q) || vend.includes(q)) {
+      encontrados.push({ id: doc.id, ...c, _ref: doc.ref });
+    }
+  });
+
+  // ordena: coincidencia mas fuerte primero (nombre exacto > contiene)
+  encontrados.sort((a, b) => {
+    const an = String(a.nombrePerfil || "").toLowerCase();
+    const bn = String(b.nombrePerfil || "").toLowerCase();
+    const aExact = an === q ? 1 : 0;
+    const bExact = bn === q ? 1 : 0;
+    if (aExact !== bExact) return bExact - aExact;
+    return an.localeCompare(bn);
+  });
+
+  return encontrados.slice(0, 10);
+}
+
+// ✅ FICHA CLIENTE (mensaje + botones)
+// Nota: Aquí NO mostramos "ID:" (como pediste)
+async function enviarFichaCliente(chatId, cliente) {
+  const nombre = cliente.nombrePerfil || "-";
+  const tel = cliente.telefono || "-";
+  const vend = cliente.vendedor || "-";
+
+  const sus = Array.isArray(cliente.suscripciones) ? cliente.suscripciones : [];
+  const lista = [];
+
+  // Si tu cliente guardó campos base, lo agregamos como servicio #1 si no viene duplicado
+  if (cliente.plataforma && cliente.correo) {
+    lista.push({
+      plataforma: cliente.plataforma,
+      correo: cliente.correo,
+      pin: cliente.pin || "-",
+      precio: cliente.precio || 0,
+      fechaRenovacion: cliente.fechaRenovacion || "-",
+    });
+  }
+
+  // Suscripciones extra
+  sus.forEach((s) => {
+    // evita duplicado exacto
+    const key = `${String(s.plataforma||"")}|${String(s.correo||"")}|${String(s.fechaRenovacion||"")}`;
+    const exists = lista.some((x) => `${x.plataforma}|${x.correo}|${x.fechaRenovacion}` === key);
+    if (!exists) lista.push(s);
+  });
+
+  let t = `✅ *Cliente*\n`;
+  t += `*Datos del cliente:*\n`;
+  t += `${nombre}\n${tel}\n${vend}\n\n`;
+  t += `*SERVICIOS:*\n`;
+
+  if (lista.length === 0) {
+    t += `— Sin servicios —`;
+  } else {
+    let i = 1;
+    for (const s of lista) {
+      t += `${i}) ${s.plataforma || "-"} — ${s.correo || "-"} — ${Number(s.precio || 0)} Lps — Renueva: ${s.fechaRenovacion || "-"}\n`;
+      i++;
+    }
+  }
+
+  // Botones principales de ficha
+  return bot.sendMessage(chatId, t, {
+    parse_mode: "Markdown",
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: "➕ Agregar plataforma", callback_data: `cli:addplat:${cliente.id}` }],
+        [
+          { text: "🔄 Renovar", callback_data: `cli:renovar:${cliente.id}` },
+          { text: "❌ Eliminar perfil", callback_data: `cli:delperfil:${cliente.id}` },
+        ],
+        [{ text: "✏️ Editar cliente", callback_data: `cli:edit:${cliente.id}` }],
+        [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
+      ],
+    },
+  });
+}
+
 
 // ===============================
 // CLIENTES: ESTRUCTURA
