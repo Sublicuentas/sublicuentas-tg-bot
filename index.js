@@ -36,15 +36,19 @@ const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID;
 const FIREBASE_CLIENT_EMAIL = process.env.FIREBASE_CLIENT_EMAIL;
 const FIREBASE_PRIVATE_KEY = process.env.FIREBASE_PRIVATE_KEY;
 
-// ✅ SUPER ADMINS (para poder crear admins)
-const SUPER_ADMINS = String(process.env.SUPER_ADMINS || "")
-  .split(",")
-  .map((x) => x.trim())
-  .filter(Boolean);
+// ✅ SUPER ADMINS (modo seguro)
+const SUPER_ADMINS = [
+  "5728675990" // ← TU ID DIRECTO (dueño)
+];
 
-if (!BOT_TOKEN) throw new Error("Falta BOT_TOKEN");
-if (!FIREBASE_PROJECT_ID || !FIREBASE_CLIENT_EMAIL || !FIREBASE_PRIVATE_KEY) {
-  throw new Error("Faltan variables Firebase (PROJECT_ID / CLIENT_EMAIL / PRIVATE_KEY)");
+// también permite usar ENV si existe
+if (process.env.SUPER_ADMINS) {
+  process.env.SUPER_ADMINS.split(",")
+    .map(x => x.trim())
+    .filter(Boolean)
+    .forEach(id => {
+      if (!SUPER_ADMINS.includes(id)) SUPER_ADMINS.push(id);
+    });
 }
 
 // ===============================
