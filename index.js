@@ -12,11 +12,6 @@
  F) ✅ Submenú correo: Agregar/Quitar/Editar clave por wizard (SIN /addp /delp) + refresca mismo panel
  G) ✅ Inventario: QUITADOS botones de abajo (📧 1..N) — solo Atrás/Inicio/Siguiente/Actualizar/Volver
  H) ✅ Botón CLIENTES funciona: Buscar por /NOMBRE /TELEFONO + /buscar + /cliente + Reporte TXT (botón)
-
- ✅ FIX EXTRA (para que /netflix /disneyp SIEMPRE LISTEN):
- I) ✅ Inventario NO filtra estado en Firestore (porque a veces está “ACTIVA/activa/LLENA/llena”)
-    => Solo filtra disp>=1 y plataforma==p, y el estado se filtra en código con fmtEstado()
- J) ✅ /reindex_inventario (SUPER_ADMIN): normaliza correo/plataforma/estado/disp + corrige docId plataforma__correo
 */
 
 const http = require("http");
@@ -125,35 +120,6 @@ function limpiarQuery(txt) {
 function isEmailLike(s) {
   const x = String(s || "").trim().toLowerCase();
   return x.includes("@") && x.includes(".");
-}
-
-// ===============================
-// ✅ FIX: REINDEX INVENTARIO (NORMALIZA TODO) + HELPERS
-// ===============================
-function normEstadoToDb(estadoRaw, dispRaw) {
-  const disp = Number(dispRaw || 0);
-  if (!Number.isFinite(disp) || disp <= 0) return "llena";
-
-  const e = String(estadoRaw || "").trim().toLowerCase();
-  if (!e) return "activa";
-  if (e.includes("llen") || e.includes("bloq") || e === "0") return "llena";
-  return "activa";
-}
-
-function mapPlataformaToNorm(pRaw = "") {
-  const p = normalizarPlataforma(pRaw);
-
-  if (PLATAFORMAS.includes(p)) return p;
-
-  if (p.includes("net")) return "netflix";
-  if (p.includes("disney") && (p.includes("prem") || p === "disneyp")) return "disneyp";
-  if (p.includes("disney") && (p.includes("stan") || p.includes("std") || p === "disneys")) return "disneys";
-  if (p.includes("hbo")) return "hbomax";
-  if (p.includes("prime")) return "primevideo";
-  if (p.includes("param")) return "paramount";
-  if (p.includes("crunch")) return "crunchyroll";
-
-  return p; // no reconocido
 }
 
 // ✅ parse fecha dd/mm/yyyy para ordenar servicios
@@ -276,99 +242,6 @@ bot.onText(/\/reindex_clientes/i, async (msg) => {
   }
 
   return bot.sendMessage(chatId, `✅ Reindex terminado: ${ok} clientes actualizados.`);
-});
-
-// ===============================
-// ✅ /reindex_inventario (FIX REAL)
-// ===============================
-bot.onText(/\/reindex_inventario/i, async (msg) => {
-  const chatId = msg.chat.id;
-  const userId = msg.from.id;
-
-  if (!isSuperAdmin(userId)) return bot.sendMessage(chatId, "⛔ Solo SUPER ADMIN.");
-
-  const snap = await db.collection("inventario").limit(10000).get();
-  if (snap.empty) return bot.sendMessage(chatId, "⚠️ Inventario vacío.");
-
-  let ok = 0;
-  let moved = 0;
-  let fixedPlat = 0;
-  let fixedEstado = 0;
-  let badPlat = 0;
-
-  const batchSize = 400;
-  let batch = db.batch();
-  let opCount = 0;
-
-  const flush = async () => {
-    if (opCount > 0) {
-      await batch.commit();
-      batch = db.batch();
-      opCount = 0;
-    }
-  };
-
-  for (const d of snap.docs) {
-    const data = d.data() || {};
-
-    const correo = String(data.correo || "").trim().toLowerCase();
-    const platNorm = mapPlataformaToNorm(data.plataforma || "");
-    const dispNum = Number(data.disp || 0);
-    const disp = Number.isFinite(dispNum) ? dispNum : 0;
-
-    if (!PLATAFORMAS.includes(platNorm)) badPlat++;
-
-    const estadoNorm = normEstadoToDb(data.estado, disp);
-
-    const finalDisp = disp <= 0 ? 0 : disp;
-    const finalEstado = finalDisp <= 0 ? "llena" : estadoNorm;
-
-    const nuevoDocId = docIdInventario(correo, platNorm);
-
-    const needsMove = d.id !== nuevoDocId;
-    const platChanged = normalizarPlataforma(data.plataforma || "") !== platNorm;
-    const estadoChanged = String(data.estado || "").trim().toLowerCase() !== finalEstado;
-
-    if (platChanged) fixedPlat++;
-    if (estadoChanged) fixedEstado++;
-
-    const payload = {
-      correo,
-      plataforma: platNorm,
-      disp: finalDisp,
-      estado: finalEstado,
-      clave: String(data.clave || "").trim(),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    };
-    if (data.createdAt) payload.createdAt = data.createdAt;
-
-    if (needsMove) {
-      const newRef = db.collection("inventario").doc(nuevoDocId);
-      batch.set(newRef, payload, { merge: true });
-      batch.delete(d.ref);
-      moved++;
-      opCount += 2;
-    } else {
-      batch.set(d.ref, payload, { merge: true });
-      opCount += 1;
-    }
-
-    ok++;
-    if (opCount >= batchSize) await flush();
-  }
-
-  await flush();
-
-  const resumen =
-    `✅ Reindex inventario terminado.\n\n` +
-    `• Docs procesados: ${ok}\n` +
-    `• Docs movidos (docId corregido): ${moved}\n` +
-    `• Plataformas normalizadas: ${fixedPlat}\n` +
-    `• Estados normalizados: ${fixedEstado}\n` +
-    `• Plataformas NO reconocidas: ${badPlat}\n\n` +
-    `📌 Si “NO reconocidas” > 0, revise el campo plataforma de esos docs.`;
-
-  return bot.sendMessage(chatId, resumen);
 });
 
 // ===============================
@@ -540,7 +413,6 @@ async function menuRenovaciones(chatId) {
 
 // ===============================
 // INVENTARIO: LISTA + PAGINACION (PANEL) — SIN 📧 1..N
-// ✅ FIX: NO filtrar "estado" en Firestore para que liste aunque esté mal escrito
 // ===============================
 async function inventarioPlataformaTexto(plataforma, page) {
   const p = normalizarPlataforma(plataforma);
@@ -550,11 +422,11 @@ async function inventarioPlataformaTexto(plataforma, page) {
     .collection("inventario")
     .where("plataforma", "==", p)
     .where("disp", ">=", 1)
+    .where("estado", "==", "activa")
     .get();
 
   const docs = snap.docs
     .map((d) => ({ id: d.id, ...d.data() }))
-    .filter((x) => fmtEstado(x.estado) === "ACTIVA") // aquí filtramos robusto
     .sort((a, b) => Number(b.disp || 0) - Number(a.disp || 0));
 
   const totalItems = docs.length;
@@ -576,6 +448,7 @@ async function inventarioPlataformaTexto(plataforma, page) {
     docs.forEach((x) => (libresTotal += Number(x.disp || 0)));
 
     for (const d of slice) {
+      // Si luego quieres ocultar clave aquí, lo quitamos.
       texto += `${i}) ${d.correo} — 🔑 ${d?.clave ? d.clave : "-"} — ${d.disp}/${total ?? "-"}\n`;
       i++;
     }
@@ -629,17 +502,15 @@ async function mostrarStockGeneral(chatId) {
       .collection("inventario")
       .where("plataforma", "==", p)
       .where("disp", ">=", 1)
+      .where("estado", "==", "activa")
       .get();
 
     let libres = 0;
-    snap.forEach((d) => {
-      const x = d.data() || {};
-      if (fmtEstado(x.estado) === "ACTIVA") libres += Number(x.disp || 0);
-    });
-
+    snap.forEach((d) => (libres += Number(d.data().disp || 0)));
     texto += `✅ *${p}*: ${libres} libres (/${totals?.[p] ?? "-"})\n`;
   }
 
+  // reporte: mensaje normal (si quieres que sea panel también, lo cambiamos)
   return bot.sendMessage(chatId, texto, { parse_mode: "Markdown" });
 }
 
@@ -726,6 +597,7 @@ bot.onText(/\/add\s+(.+)/i, async (msg, match) => {
   const total = await getTotalPorPlataforma(plataforma);
   const claveOut = data.clave ? data.clave : "-";
 
+  // ✅ si el panel está en ese correo/plataforma, refrescamos
   try {
     const ctx = pending.get(String(chatId));
     if (ctx?.mode === "invSubmenuCtx" && ctx?.plat === plataforma && ctx?.correo === correo) {
@@ -778,6 +650,7 @@ bot.onText(/\/editclave\s+(\S+)\s+(\S+)\s+(.+)/i, async (msg, match) => {
 
   await ref.set({ clave: nueva, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
 
+  // ✅ refresca panel si estaba en submenu de ese correo
   try {
     const ctx = pending.get(String(chatId));
     if (ctx?.mode === "invSubmenuCtx" && ctx?.plat === plataforma && ctx?.correo === correo) {
@@ -1061,6 +934,7 @@ async function buscarClienteRobusto(queryLower) {
 
   if (!snapName.empty) return snapName.docs.map((d) => ({ id: d.id, ...d.data() }));
 
+  // fallback suave
   const snap = await db.collection("clientes").limit(1000).get();
   const encontrados = [];
   snap.forEach((doc) => {
@@ -1095,7 +969,9 @@ bot.onText(/\/buscar\s+(.+)/i, async (msg, match) => {
   if (!resultados.length) return bot.sendMessage(chatId, "⚠️ Sin resultados.");
   if (resultados.length === 1) return enviarFichaCliente(chatId, resultados[0].id);
 
-  const kb = resultados.map((c) => [{ text: `👤 ${c.nombrePerfil || "-"} (${c.telefono || "-"})`, callback_data: `cli:view:${c.id}` }]);
+  const kb = resultados.map((c) => [
+    { text: `👤 ${c.nombrePerfil || "-"} (${c.telefono || "-"})`, callback_data: `cli:view:${c.id}` },
+  ]);
   kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
 
   return bot.sendMessage(chatId, "🔎 Seleccione el cliente:", { reply_markup: { inline_keyboard: kb } });
@@ -1122,7 +998,7 @@ bot.onText(/\/clientes_txt/i, async (msg) => {
 });
 
 // ===============================
-// RENOVACIONES + TXT
+// RENOVACIONES + TXT (se mantiene)
 // ===============================
 async function obtenerRenovacionesPorFecha(fechaDMY, vendedorOpt) {
   const snap = await db.collection("clientes").limit(5000).get();
@@ -1287,10 +1163,7 @@ bot.onText(/\/adminadd\s+(\d+)/i, async (msg, match) => {
   if (!isSuperAdmin(userId)) return bot.sendMessage(chatId, "⛔ Solo SUPER ADMIN puede agregar admins.");
 
   const id = String(match[1] || "").trim();
-  await db
-    .collection("admins")
-    .doc(id)
-    .set({ activo: true, updatedAt: admin.firestore.FieldValue.serverTimestamp(), creadoPor: String(userId) }, { merge: true });
+  await db.collection("admins").doc(id).set({ activo: true, updatedAt: admin.firestore.FieldValue.serverTimestamp(), creadoPor: String(userId) }, { merge: true });
   return bot.sendMessage(chatId, `✅ Admin agregado: ${id}`);
 });
 
@@ -1300,10 +1173,7 @@ bot.onText(/\/admindel\s+(\d+)/i, async (msg, match) => {
   if (!isSuperAdmin(userId)) return bot.sendMessage(chatId, "⛔ Solo SUPER ADMIN puede eliminar admins.");
 
   const id = String(match[1] || "").trim();
-  await db
-    .collection("admins")
-    .doc(id)
-    .set({ activo: false, updatedAt: admin.firestore.FieldValue.serverTimestamp(), desactivadoPor: String(userId) }, { merge: true });
+  await db.collection("admins").doc(id).set({ activo: false, updatedAt: admin.firestore.FieldValue.serverTimestamp(), desactivadoPor: String(userId) }, { merge: true });
   return bot.sendMessage(chatId, `🗑️ Admin desactivado: ${id}`);
 });
 
@@ -1489,6 +1359,7 @@ bot.on("callback_query", async (q) => {
     if (data.startsWith("inv:menu:sumar:")) {
       const [, , , plat, correo] = data.split(":");
       pending.set(String(chatId), { mode: "invSumarQty", plat, correo });
+      pending.set(String(chatId) + ":ctx", { mode: "invSubmenuCtx", plat: normalizarPlataforma(plat), correo: String(correo).toLowerCase() });
 
       return upsertPanel(
         chatId,
@@ -1501,6 +1372,7 @@ bot.on("callback_query", async (q) => {
     if (data.startsWith("inv:menu:restar:")) {
       const [, , , plat, correo] = data.split(":");
       pending.set(String(chatId), { mode: "invRestarQty", plat, correo });
+      pending.set(String(chatId) + ":ctx", { mode: "invSubmenuCtx", plat: normalizarPlataforma(plat), correo: String(correo).toLowerCase() });
 
       return upsertPanel(
         chatId,
@@ -1513,6 +1385,7 @@ bot.on("callback_query", async (q) => {
     if (data.startsWith("inv:menu:clave:")) {
       const [, , , plat, correo] = data.split(":");
       pending.set(String(chatId), { mode: "invEditClave", plat, correo });
+      pending.set(String(chatId) + ":ctx", { mode: "invSubmenuCtx", plat: normalizarPlataforma(plat), correo: String(correo).toLowerCase() });
 
       return upsertPanel(
         chatId,
@@ -1607,7 +1480,6 @@ bot.on("message", async (msg) => {
         "txt",
         "clientes_txt",
         "reindex_clientes",
-        "reindex_inventario",
         "add",
         "addp",
         "delp",
@@ -1623,7 +1495,7 @@ bot.on("message", async (msg) => {
 
       // ✅ cualquier "/algo" no reservado => búsqueda rápida
       if (!comandosReservados.has(first)) {
-        const query = cmd;
+        const query = cmd; // ej: "estrella"
 
         if (esTelefono(query)) {
           const resultados = await buscarPorTelefonoTodos(query);
@@ -1636,7 +1508,9 @@ bot.on("message", async (msg) => {
         if (!resultados.length) return bot.sendMessage(chatId, "⚠️ Sin resultados.");
         if (resultados.length === 1) return enviarFichaCliente(chatId, resultados[0].id);
 
-        const kb = resultados.map((c) => [{ text: `👤 ${c.nombrePerfil || "-"} (${c.telefono || "-"})`, callback_data: `cli:view:${c.id}` }]);
+        const kb = resultados.map((c) => [
+          { text: `👤 ${c.nombrePerfil || "-"} (${c.telefono || "-"})`, callback_data: `cli:view:${c.id}` },
+        ]);
         kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
         return bot.sendMessage(chatId, "🔎 Seleccione el cliente:", { reply_markup: { inline_keyboard: kb } });
       }
@@ -1690,6 +1564,7 @@ bot.on("message", async (msg) => {
 
         await ref.set({ disp: nuevoDisp, estado: "activa", updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
 
+        // ✅ REFRESCA SUBMENU (mismo panel)
         pending.set(String(chatId), { mode: "invSubmenuCtx", plat, correo });
         return enviarSubmenuInventario(chatId, plat, correo);
       }
@@ -1726,6 +1601,7 @@ bot.on("message", async (msg) => {
         const despues = { ...d, disp: nuevoDisp, plataforma: plat, correo };
         await aplicarAutoLleno(chatId, ref, antes, despues);
 
+        // ✅ REFRESCA SUBMENU (mismo panel)
         pending.set(String(chatId), { mode: "invSubmenuCtx", plat, correo });
         return enviarSubmenuInventario(chatId, plat, correo);
       }
@@ -1755,6 +1631,7 @@ bot.on("message", async (msg) => {
 
         await ref.set({ clave: nueva, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
 
+        // ✅ REFRESCA SUBMENU (mismo panel)
         pending.set(String(chatId), { mode: "invSubmenuCtx", plat, correo });
         return enviarSubmenuInventario(chatId, plat, correo);
       }
