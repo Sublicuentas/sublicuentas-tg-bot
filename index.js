@@ -472,7 +472,6 @@ async function menuClientes(chatId) {
 
         [{ text: "📄 TXT General", callback_data: "cli:txt:general" }],
         [{ text: "📄 TXT por vendedor", callback_data: "cli:txt:vendedores" }],
-        [{ text: "📄 TXT 1 por vendedor", callback_data: "cli:txt:vendedores_split" }],
         [{ text: "📄 TXT por vendedor (1)", callback_data: "cli:txt:vend_pick" }],
 
         [{ text: "👤 + Agregar vendedor", callback_data: "vend:add" }],
