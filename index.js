@@ -1,22 +1,11 @@
 /*
- ✅ SUBLICUENTAS TG BOT — INDEX FINAL (ACTUALIZADO 100% COPIAR/PEGAR)
-
- ✅ INCLUYE TODO LO QUE ACABAMOS DE INDICAR:
- 1) ✅ /netflix /disneyp /plataformas vuelve a funcionar (acepta /netflix, /netflix@bot, /netflix 1, etc.)
- 2) ✅ ELIMINAR PERFIL (borrar servicio) visible como botón "🗑️ Eliminar perfil"
- 3) ✅ RENOVAR SERVICIO:
-    - Botón “🔄 Renovar servicio” en ficha del cliente
-    - Escoger qué servicio renovar
-    - Opciones: +30 días o Fecha manual (dd/mm/yyyy)
-
- ✅ TAMBIÉN CONSERVA TODO LO QUE YA TENÍAS:
- - Panel 1 solo mensaje (upsertPanel)
- - Inventario paginado
- - Submenú correo inventario: Agregar/Quitar/Editar clave/Borrar correo
- - Clientes: wizard crear cliente + agregar servicios
- - Buscar robusto: /buscar /cliente y /NOMBRE /TELEFONO
- - TXT renovaciones y clientes
- - Admins + SUPER_ADMIN
+ ✅ SUBLICUENTAS TG BOT — INDEX FINAL (ACTUALIZADO)
+ ✅ FIX: TXT clientes limpio (Nombre|Tel) + TOTAL
+ ✅ TXT por vendedor (1 archivo) + TXT 1 por vendedor (split)
+ ✅ FIX símbolos raros en TXT (ASCII limpio)
+ ✅ FIX: Submenu inventario completo (Agregar/Quitar/Editar clave/Borrar) + PENDING flows
+ ✅ FIX: Clientes completo (Editar cliente / Servicios / Renovar +30 / Fecha manual / Agregar servicio) + PENDING flows
+ ✅ FIX: Wizard callbacks (plat / addmore / finish)
 */
 
 const http = require("http");
@@ -169,11 +158,12 @@ function addDaysDMY(dmy, days) {
 }
 
 // ===============================
-// ✅ TXT SÚPER ESTABLE (BUFFER)
+// ✅ TXT SÚPER ESTABLE (ASCII LIMPIO) — NO SÍMBOLOS RAROS
 // ===============================
 async function enviarTxtComoArchivo(chatId, contenido, filename = "reporte.txt") {
-  const buffer = Buffer.from(String(contenido || ""), "utf8");
-  return bot.sendDocument(chatId, buffer, {}, { filename, contentType: "text/plain" });
+  const limpio = stripAcentos(String(contenido || "")).replace(/[^\x00-\x7F]/g, "");
+  const buffer = Buffer.from(limpio, "utf8");
+  return bot.sendDocument(chatId, { source: buffer, filename }, { contentType: "text/plain" });
 }
 
 // ===============================
@@ -207,9 +197,7 @@ async function upsertPanel(chatId, text, replyMarkup, parseMode = "Markdown") {
         disable_web_page_preview: true,
       });
       return;
-    } catch (e) {
-      // si falla => enviamos nuevo
-    }
+    } catch (e) {}
   }
 
   const sent = await bot.sendMessage(chatId, text, {
@@ -393,12 +381,14 @@ async function menuInventario(chatId) {
 async function menuClientes(chatId) {
   return upsertPanel(
     chatId,
-    "👥 *CLIENTES*\n\n• Nuevo cliente (wizard)\n• Buscar (abre ficha)\n• Reporte TXT (lista general)\n\n💡 Tip rápido:\nEscriba: */NOMBRE* o */TELEFONO* y le abre lista directo (con servicios).",
+    "👥 *CLIENTES*\n\n• Nuevo cliente (wizard)\n• Buscar (abre ficha)\n• TXT General (Nombre | Tel)\n• TXT por Vendedor\n• TXT 1 por Vendedor\n\n💡 Tip rápido:\nEscriba: */NOMBRE* o */TELEFONO* y le abre lista directo.",
     {
       inline_keyboard: [
         [{ text: "➕ Nuevo cliente", callback_data: "cli:wiz:start" }],
         [{ text: "🔎 Buscar", callback_data: "menu:buscar" }],
-        [{ text: "📄 Reporte TXT", callback_data: "cli:txt:general" }],
+        [{ text: "📄 TXT General", callback_data: "cli:txt:general" }],
+        [{ text: "📄 TXT por vendedor", callback_data: "cli:txt:vendedores" }],
+        [{ text: "📄 TXT 1 por vendedor", callback_data: "cli:txt:vendedores_split" }],
         [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
       ],
     }
@@ -414,7 +404,7 @@ async function menuPagos(chatId) {
 async function menuRenovaciones(chatId) {
   return upsertPanel(
     chatId,
-    "📅 *RENOVACIONES*\n\nComandos:\n• /renovaciones hoy\n• /renovaciones dd/mm/yyyy\n• /renovaciones NOMBRE dd/mm/yyyy\n\nTXT:\n• /txt hoy\n• /txt dd/mm/yyyy\n• /txt NOMBRE dd/mm/yyyy\n",
+    "📅 *RENOVACIONES*\n\nComandos:\n• /renovaciones hoy\n• /renovaciones dd/mm/yyyy\n• /renovaciones VENDEDOR dd/mm/yyyy\n\nTXT:\n• /txt hoy\n• /txt dd/mm/yyyy\n• /txt VENDEDOR dd/mm/yyyy\n",
     {
       inline_keyboard: [
         [{ text: "📅 Renovaciones hoy", callback_data: "ren:hoy" }],
@@ -469,11 +459,11 @@ async function inventarioPlataformaTexto(plataforma, page) {
 
     texto += `\n━━━━━━━━━━━━━━\n`;
     texto += `📊 Correos con stock: ${totalItems}\n`;
-    texto += `👤 Perfiles libres totales: ${libresTotal}\n`;
+    texto += `👤 Perfiles libres totales: ${libresTotal}\n\n`;
+    texto += `👉 Para abrir submenu: escriba /correo (ej: /mail@gmail.com)\n`;
   }
 
   texto += `\n📄 Página: ${safePage + 1}/${totalPages}`;
-
   return { texto, safePage, totalPages };
 }
 
@@ -673,7 +663,7 @@ bot.onText(/\/editclave\s+(\S+)\s+(\S+)\s+(.+)/i, async (msg, match) => {
 });
 
 // ===============================
-// CLIENTES: FICHA + MENÚS (EDITAR / EDITAR SERVICIOS / AGREGAR / ELIMINAR / RENOVAR)
+// CLIENTES: FICHA + MENÚS (EDITAR / SERVICIOS / RENOVAR)
 // ===============================
 async function getCliente(clientId) {
   const ref = db.collection("clientes").doc(String(clientId));
@@ -778,7 +768,6 @@ async function menuServicio(chatId, clientId, idx) {
         [{ text: "🔐 Cambiar pin", callback_data: `cli:serv:edit:pin:${clientId}:${idx}` }],
         [{ text: "💰 Cambiar precio", callback_data: `cli:serv:edit:precio:${clientId}:${idx}` }],
         [{ text: "📅 Cambiar fecha", callback_data: `cli:serv:edit:fecha:${clientId}:${idx}` }],
-        // ✅ PEDIDO: eliminar perfil visible
         [{ text: "🗑️ Eliminar perfil", callback_data: `cli:serv:del:ask:${clientId}:${idx}` }],
         [{ text: "⬅️ Volver lista", callback_data: `cli:serv:list:${clientId}` }],
         [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
@@ -789,7 +778,7 @@ async function menuServicio(chatId, clientId, idx) {
 }
 
 // ===============================
-// CLIENTES: LISTA / TXT
+// CLIENTES: LISTA / TXT (FIX: LISTA SIMPLE)
 // ===============================
 async function enviarListaResultadosClientes(chatId, resultados) {
   let txt = `📱 *TELÉFONO REPETIDO*\nSe encontraron *${resultados.length}* clientes con ese número.\n\n`;
@@ -798,15 +787,11 @@ async function enviarListaResultadosClientes(chatId, resultados) {
     const nombre = c.nombrePerfil || "-";
     const tel = c.telefono || "-";
     const vend = c.vendedor || "-";
-    const servicios = Array.isArray(c.servicios) ? c.servicios : [];
-
-    txt += `*${i + 1})* ${nombre} — ${tel} — ${vend}\n`;
-    txt += `${resumenServiciosUnaLinea(servicios)}\n`;
-    txt += `━━━━━━━━━━━━━━\n`;
+    txt += `*${i + 1})* ${nombre} | ${tel} | ${vend}\n`;
   });
 
   if (txt.length > 3800) {
-    return enviarTxtComoArchivo(chatId, stripAcentos(txt), `clientes_tel_${Date.now()}.txt`);
+    return enviarTxtComoArchivo(chatId, txt, `clientes_tel_${Date.now()}.txt`);
   }
 
   const kb = resultados.map((c, i) => [
@@ -817,6 +802,7 @@ async function enviarListaResultadosClientes(chatId, resultados) {
   return bot.sendMessage(chatId, txt, { parse_mode: "Markdown", reply_markup: { inline_keyboard: kb } });
 }
 
+// ✅ TXT GENERAL: SOLO NOMBRE | TEL + TOTAL
 async function reporteClientesTXTGeneral(chatId) {
   const snap = await db.collection("clientes").limit(5000).get();
   if (snap.empty) return bot.sendMessage(chatId, "⚠️ No hay clientes.");
@@ -824,17 +810,94 @@ async function reporteClientesTXTGeneral(chatId) {
   const arr = snap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
   arr.sort((a, b) => normTxt(a.nombrePerfil).localeCompare(normTxt(b.nombrePerfil)));
 
-  let body = "REPORTE GENERAL CLIENTES (CON SERVICIOS)\n\n";
+  let body = "CLIENTES (NOMBRE | TELEFONO)\n\n";
   arr.forEach((c, i) => {
-    body += `${String(i + 1).padStart(2, "0")}) ${stripAcentos(c.nombrePerfil || "-")} | ${onlyDigits(c.telefono || "-")} | ${stripAcentos(c.vendedor || "-")}\n`;
-    const servicios = Array.isArray(c.servicios) ? c.servicios : [];
-    if (!servicios.length) body += `   • (sin servicios)\n`;
-    else body += "   • " + stripAcentos(resumenServiciosUnaLinea(servicios)).split("\n").join("\n   • ") + "\n";
-    body += "\n";
+    const nombre = stripAcentos(c.nombrePerfil || "-").replace(/[^\x00-\x7F]/g, "");
+    const tel = onlyDigits(c.telefono || "");
+    body += `${String(i + 1).padStart(3, "0")}) ${nombre} | ${tel}\n`;
   });
 
-  body += `--------------------\nTOTAL CLIENTES: ${arr.length}\n`;
-  return enviarTxtComoArchivo(chatId, body, `clientes_general_${Date.now()}.txt`);
+  body += `\n--------------------\nTOTAL CLIENTES: ${arr.length}\n`;
+  return enviarTxtComoArchivo(chatId, body, `clientes_${Date.now()}.txt`);
+}
+
+// ✅ TXT POR VENDEDOR (1 ARCHIVO)
+async function reporteClientesPorVendedorTXT(chatId) {
+  const snap = await db.collection("clientes").limit(5000).get();
+  if (snap.empty) return bot.sendMessage(chatId, "⚠️ No hay clientes.");
+
+  const arr = snap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
+
+  const map = new Map();
+  for (const c of arr) {
+    const vend = String(c.vendedor || "SIN VENDEDOR").trim() || "SIN VENDEDOR";
+    if (!map.has(vend)) map.set(vend, []);
+    map.get(vend).push(c);
+  }
+
+  const vendedores = Array.from(map.keys()).sort((a, b) => normTxt(a).localeCompare(normTxt(b)));
+
+  let body = "CLIENTES POR VENDEDOR (NOMBRE | TELEFONO)\n\n";
+
+  for (const vend of vendedores) {
+    const lista = map.get(vend) || [];
+    lista.sort((a, b) => normTxt(a.nombrePerfil).localeCompare(normTxt(b.nombrePerfil)));
+
+    const vendClean = stripAcentos(vend).replace(/[^\x00-\x7F]/g, "");
+    body += `=== ${vendClean} ===\n`;
+    body += `TOTAL: ${lista.length}\n\n`;
+
+    lista.forEach((c, i) => {
+      const nombre = stripAcentos(c.nombrePerfil || "-").replace(/[^\x00-\x7F]/g, "");
+      const tel = onlyDigits(c.telefono || "");
+      body += `${String(i + 1).padStart(3, "0")}) ${nombre} | ${tel}\n`;
+    });
+
+    body += `\n--------------------\n\n`;
+  }
+
+  body += `FIN\n`;
+  return enviarTxtComoArchivo(chatId, body, `clientes_por_vendedor_${Date.now()}.txt`);
+}
+
+// ✅ 1 TXT POR VENDEDOR (manda varios archivos)
+async function reporteClientesSplitPorVendedorTXT(chatId) {
+  const snap = await db.collection("clientes").limit(5000).get();
+  if (snap.empty) return bot.sendMessage(chatId, "⚠️ No hay clientes.");
+
+  const arr = snap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
+
+  const map = new Map();
+  for (const c of arr) {
+    const vend = String(c.vendedor || "SIN VENDEDOR").trim() || "SIN VENDEDOR";
+    if (!map.has(vend)) map.set(vend, []);
+    map.get(vend).push(c);
+  }
+
+  const vendedores = Array.from(map.keys()).sort((a, b) => normTxt(a).localeCompare(normTxt(b)));
+
+  await bot.sendMessage(chatId, `📄 Generando ${vendedores.length} TXT (1 por vendedor)...`);
+
+  for (const vend of vendedores) {
+    const lista = map.get(vend) || [];
+    lista.sort((a, b) => normTxt(a.nombrePerfil).localeCompare(normTxt(b.nombrePerfil)));
+
+    const vendClean = stripAcentos(vend).replace(/[^\x00-\x7F]/g, "");
+    let body = `VENDEDOR: ${vendClean}\n`;
+    body += `TOTAL CLIENTES: ${lista.length}\n\n`;
+    body += "CLIENTES (NOMBRE | TELEFONO)\n\n";
+
+    lista.forEach((c, i) => {
+      const nombre = stripAcentos(c.nombrePerfil || "-").replace(/[^\x00-\x7F]/g, "");
+      const tel = onlyDigits(c.telefono || "");
+      body += `${String(i + 1).padStart(3, "0")}) ${nombre} | ${tel}\n`;
+    });
+
+    const fileSafe = vendClean.replace(/[^\w\-]+/g, "_").slice(0, 40) || "VENDEDOR";
+    await enviarTxtComoArchivo(chatId, body, `clientes_${fileSafe}_${Date.now()}.txt`);
+  }
+
+  return bot.sendMessage(chatId, "✅ Listo: enviados los TXT por vendedor.");
 }
 
 // ===============================
@@ -875,7 +938,6 @@ async function buscarClienteRobusto(queryLower) {
 
   if (!snapName.empty) return snapName.docs.map((d) => ({ id: d.id, ...d.data() }));
 
-  // fallback suave
   const snap = await db.collection("clientes").limit(1000).get();
   const encontrados = [];
   snap.forEach((doc) => {
@@ -889,7 +951,7 @@ async function buscarClienteRobusto(queryLower) {
 }
 
 // ===============================
-// COMANDOS CLIENTES: /buscar /cliente /clientes_txt
+// COMANDOS CLIENTES: /buscar /cliente /clientes_txt + NUEVOS
 // ===============================
 bot.onText(/\/buscar\s+(.+)/i, async (msg, match) => {
   const chatId = msg.chat.id;
@@ -936,6 +998,20 @@ bot.onText(/\/clientes_txt/i, async (msg) => {
   const userId = msg.from.id;
   if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
   return reporteClientesTXTGeneral(chatId);
+});
+
+bot.onText(/\/vendedores_txt/i, async (msg) => {
+  const chatId = msg.chat.id;
+  const userId = msg.from.id;
+  if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+  return reporteClientesPorVendedorTXT(chatId);
+});
+
+bot.onText(/\/vendedores_txt_split/i, async (msg) => {
+  const chatId = msg.chat.id;
+  const userId = msg.from.id;
+  if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+  return reporteClientesSplitPorVendedorTXT(chatId);
 });
 
 // ===============================
@@ -1101,7 +1177,7 @@ async function wizardNext(chatId, text) {
 }
 
 // ===============================
-// RENOVACIONES + TXT (se mantiene)
+// RENOVACIONES + TXT
 // ===============================
 async function obtenerRenovacionesPorFecha(fechaDMY, vendedorOpt) {
   const snap = await db.collection("clientes").limit(5000).get();
@@ -1201,7 +1277,7 @@ bot.onText(/\/renovaciones(?:\s+(.+))?/i, async (msg, match) => {
       fecha = parts[parts.length - 1];
       vendedor = parts.slice(0, -1).join(" ");
     } else {
-      return bot.sendMessage(chatId, "⚠️ Uso:\n/renovaciones hoy\n/renovaciones dd/mm/yyyy\n/renovaciones NOMBRE dd/mm/yyyy");
+      return bot.sendMessage(chatId, "⚠️ Uso:\n/renovaciones hoy\n/renovaciones dd/mm/yyyy\n/renovaciones VENDEDOR dd/mm/yyyy");
     }
   }
 
@@ -1229,7 +1305,7 @@ bot.onText(/\/txt(?:\s+(.+))?/i, async (msg, match) => {
       fecha = parts[parts.length - 1];
       vendedor = parts.slice(0, -1).join(" ");
     } else {
-      return bot.sendMessage(chatId, "⚠️ Uso:\n/txt hoy\n/txt dd/mm/yyyy\n/txt NOMBRE dd/mm/yyyy");
+      return bot.sendMessage(chatId, "⚠️ Uso:\n/txt hoy\n/txt dd/mm/yyyy\n/txt VENDEDOR dd/mm/yyyy");
     }
   }
 
@@ -1253,7 +1329,7 @@ async function listarRevendedores(chatId) {
     t += `• ${x.nombre || x.id} — ${estado}\n`;
   });
 
-  if (t.length > 3800) return enviarTxtComoArchivo(chatId, stripAcentos(t), `revendedores_${Date.now()}.txt`);
+  if (t.length > 3800) return enviarTxtComoArchivo(chatId, t, `revendedores_${Date.now()}.txt`);
   return bot.sendMessage(chatId, t, { parse_mode: "Markdown" });
 }
 
@@ -1331,7 +1407,7 @@ bot.onText(/\/stock/i, async (msg) => {
 });
 
 // ===============================
-// CALLBACKS (TRY/CATCH)
+// CALLBACKS
 // ===============================
 bot.on("callback_query", async (q) => {
   const chatId = q.message?.chat?.id;
@@ -1347,7 +1423,7 @@ bot.on("callback_query", async (q) => {
     if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
     if (data === "noop") return;
 
-    // MENUS (panel)
+    // MENUS
     if (data === "go:inicio") return menuPrincipal(chatId);
     if (data === "menu:inventario") return menuInventario(chatId);
     if (data === "menu:clientes") return menuClientes(chatId);
@@ -1376,35 +1452,112 @@ bot.on("callback_query", async (q) => {
       return enviarSubmenuInventario(chatId, plat, correo);
     }
 
+    // ===============================
+    // INVENTARIO: SUBMENU ACCIONES (sumar/restar/clave/borrar/cancel)
+    // ===============================
+    if (data.startsWith("inv:menu:sumar:")) {
+      const [, , , plat, correo] = data.split(":");
+      pending.set(String(chatId), { mode: "invSumarQty", plat, correo });
+      return upsertPanel(
+        chatId,
+        `➕ *Agregar perfil*\n📌 ${String(plat).toUpperCase()}\n📧 ${correo}\n\nEscriba cantidad a *SUMAR* (ej: 1):`,
+        { inline_keyboard: [[{ text: "↩️ Cancelar", callback_data: `inv:menu:cancel:${plat}:${correo}` }]] },
+        "Markdown"
+      );
+    }
+
+    if (data.startsWith("inv:menu:restar:")) {
+      const [, , , plat, correo] = data.split(":");
+      pending.set(String(chatId), { mode: "invRestarQty", plat, correo });
+      return upsertPanel(
+        chatId,
+        `➖ *Quitar perfil*\n📌 ${String(plat).toUpperCase()}\n📧 ${correo}\n\nEscriba cantidad a *RESTAR* (ej: 1):`,
+        { inline_keyboard: [[{ text: "↩️ Cancelar", callback_data: `inv:menu:cancel:${plat}:${correo}` }]] },
+        "Markdown"
+      );
+    }
+
+    if (data.startsWith("inv:menu:clave:")) {
+      const [, , , plat, correo] = data.split(":");
+      pending.set(String(chatId), { mode: "invEditClave", plat, correo });
+      return upsertPanel(
+        chatId,
+        `✏️ *Editar clave*\n📌 ${String(plat).toUpperCase()}\n📧 ${correo}\n\nEscriba la nueva clave:`,
+        { inline_keyboard: [[{ text: "↩️ Cancelar", callback_data: `inv:menu:cancel:${plat}:${correo}` }]] },
+        "Markdown"
+      );
+    }
+
+    if (data.startsWith("inv:menu:cancel:")) {
+      const [, , , plat, correo] = data.split(":");
+      pending.delete(String(chatId));
+      pending.set(String(chatId), { mode: "invSubmenuCtx", plat: normalizarPlataforma(plat), correo: String(correo).toLowerCase() });
+      return enviarSubmenuInventario(chatId, plat, correo);
+    }
+
+    if (data.startsWith("inv:menu:borrar:")) {
+      const [, , , plat, correo] = data.split(":");
+      return bot.sendMessage(chatId, `🗑️ Confirmar *borrar correo*?\n📌 ${String(plat).toUpperCase()}\n📧 ${correo}`, {
+        parse_mode: "Markdown",
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "✅ Confirmar", callback_data: `inv:menu:borrarok:${normalizarPlataforma(plat)}:${String(correo).toLowerCase()}` }],
+            [{ text: "⬅️ Cancelar", callback_data: `inv:menu:cancel:${plat}:${correo}` }],
+          ],
+        },
+      });
+    }
+
+    if (data.startsWith("inv:menu:borrarok:")) {
+      const [, , , plat, correo] = data.split(":");
+      const ref = db.collection("inventario").doc(docIdInventario(correo, plat));
+      const doc = await ref.get();
+      if (!doc.exists) return bot.sendMessage(chatId, "⚠️ No existe ese correo en inventario.");
+      await ref.delete();
+      pending.delete(String(chatId));
+      return bot.sendMessage(chatId, `🗑️ Borrado:\n📌 ${String(plat).toUpperCase()}\n📧 ${correo}`);
+    }
+
     // CLIENTES
     if (data === "cli:txt:general") return reporteClientesTXTGeneral(chatId);
+    if (data === "cli:txt:vendedores") return reporteClientesPorVendedorTXT(chatId);
+    if (data === "cli:txt:vendedores_split") return reporteClientesSplitPorVendedorTXT(chatId);
+
     if (data.startsWith("cli:view:")) return enviarFichaCliente(chatId, data.split(":")[2]);
     if (data === "cli:wiz:start") return wizardStart(chatId);
 
-    // Editar cliente
+    // ===============================
+    // CLIENTES: EDITAR CLIENTE (menu + prompts)
+    // ===============================
     if (data.startsWith("cli:edit:menu:")) return menuEditarCliente(chatId, data.split(":")[3]);
+
     if (data.startsWith("cli:edit:nombre:")) {
       const clientId = data.split(":")[3];
       pending.set(String(chatId), { mode: "cliEditNombre", clientId });
       return upsertPanel(chatId, "👤 *Editar nombre*\nEscriba el nuevo nombre:", { inline_keyboard: [[{ text: "⬅️ Cancelar", callback_data: `cli:edit:menu:${clientId}` }]] }, "Markdown");
     }
+
     if (data.startsWith("cli:edit:tel:")) {
       const clientId = data.split(":")[3];
       pending.set(String(chatId), { mode: "cliEditTel", clientId });
       return upsertPanel(chatId, "📱 *Editar teléfono*\nEscriba el nuevo teléfono:", { inline_keyboard: [[{ text: "⬅️ Cancelar", callback_data: `cli:edit:menu:${clientId}` }]] }, "Markdown");
     }
+
     if (data.startsWith("cli:edit:vend:")) {
       const clientId = data.split(":")[3];
       pending.set(String(chatId), { mode: "cliEditVendedor", clientId });
       return upsertPanel(chatId, "🧑‍💼 *Editar vendedor*\nEscriba el nuevo vendedor:", { inline_keyboard: [[{ text: "⬅️ Cancelar", callback_data: `cli:edit:menu:${clientId}` }]] }, "Markdown");
     }
 
-    // Editar servicios
+    // ===============================
+    // CLIENTES: SERVICIOS (lista / menu / editar / borrar)
+    // ===============================
     if (data.startsWith("cli:serv:list:")) return menuListaServicios(chatId, data.split(":")[3]);
     if (data.startsWith("cli:serv:menu:")) return menuServicio(chatId, data.split(":")[3], Number(data.split(":")[4]));
+
+    // agregar servicio (abre selector de plataforma)
     if (data.startsWith("cli:serv:add:")) {
       const clientId = data.split(":")[3];
-      pending.set(String(chatId), { mode: "cliAddServPlat", clientId });
       return upsertPanel(
         chatId,
         "➕ *AGREGAR SERVICIO*\nSeleccione plataforma:",
@@ -1430,7 +1583,6 @@ bot.on("callback_query", async (q) => {
       );
     }
 
-    // seleccionar plataforma para agregar servicio
     if (data.startsWith("cli:add:plat:")) {
       const parts = data.split(":");
       const plat = parts[3];
@@ -1439,7 +1591,7 @@ bot.on("callback_query", async (q) => {
       return upsertPanel(chatId, `📧 *Correo* (${plat})\nEscriba el correo:`, { inline_keyboard: [[{ text: "⬅️ Cancelar", callback_data: `cli:view:${clientId}` }]] }, "Markdown");
     }
 
-    // editar campos del servicio
+    // editar campos de servicio
     if (data.startsWith("cli:serv:edit:")) {
       const parts = data.split(":");
       const field = parts[3]; // plat/mail/pin/precio/fecha
@@ -1472,27 +1624,19 @@ bot.on("callback_query", async (q) => {
         );
       }
 
-      // campos por texto
       if (field === "mail") pending.set(String(chatId), { mode: "cliServEditMail", clientId, idx });
       if (field === "pin") pending.set(String(chatId), { mode: "cliServEditPin", clientId, idx });
       if (field === "precio") pending.set(String(chatId), { mode: "cliServEditPrecio", clientId, idx });
       if (field === "fecha") pending.set(String(chatId), { mode: "cliServEditFecha", clientId, idx });
 
       const titulo =
-        field === "mail"
-          ? "📧 *Cambiar correo*"
-          : field === "pin"
-          ? "🔐 *Cambiar pin*"
-          : field === "precio"
-          ? "💰 *Cambiar precio*"
-          : "📅 *Cambiar fecha*";
+        field === "mail" ? "📧 *Cambiar correo*" : field === "pin" ? "🔐 *Cambiar pin*" : field === "precio" ? "💰 *Cambiar precio*" : "📅 *Cambiar fecha*";
 
       const hint = field === "precio" ? "Escriba el precio (solo número):" : field === "fecha" ? "Escriba dd/mm/yyyy:" : "Escriba el nuevo valor:";
 
       return upsertPanel(chatId, `${titulo}\n${hint}`, { inline_keyboard: [[{ text: "⬅️ Cancelar", callback_data: `cli:serv:menu:${clientId}:${idx}` }]] }, "Markdown");
     }
 
-    // set plataforma
     if (data.startsWith("cli:serv:set:plat:")) {
       const parts = data.split(":");
       const plat = parts[4];
@@ -1502,6 +1646,7 @@ bot.on("callback_query", async (q) => {
       const ref = db.collection("clientes").doc(String(clientId));
       const doc = await ref.get();
       if (!doc.exists) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
+
       const c = doc.data() || {};
       const servicios = Array.isArray(c.servicios) ? c.servicios : [];
       if (idx < 0 || idx >= servicios.length) return bot.sendMessage(chatId, "⚠️ Servicio inválido.");
@@ -1511,7 +1656,7 @@ bot.on("callback_query", async (q) => {
       return menuServicio(chatId, clientId, idx);
     }
 
-    // ✅ ELIMINAR PERFIL (confirmación)
+    // eliminar perfil
     if (data.startsWith("cli:serv:del:ask:")) {
       const parts = data.split(":");
       const clientId = parts[4];
@@ -1538,6 +1683,7 @@ bot.on("callback_query", async (q) => {
       const ref = db.collection("clientes").doc(String(clientId));
       const doc = await ref.get();
       if (!doc.exists) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
+
       const c = doc.data() || {};
       const servicios = Array.isArray(c.servicios) ? c.servicios : [];
       if (idx < 0 || idx >= servicios.length) return bot.sendMessage(chatId, "⚠️ Servicio inválido.");
@@ -1545,13 +1691,12 @@ bot.on("callback_query", async (q) => {
       servicios.splice(idx, 1);
       await ref.set({ servicios, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
 
-      // vuelve a lista servicios o ficha
       if (servicios.length) return menuListaServicios(chatId, clientId);
       return enviarFichaCliente(chatId, clientId);
     }
 
     // ===============================
-    // ✅ RENOVAR SERVICIO (ESCOGER SERVICIO)
+    // CLIENTES: RENOVAR (lista / menu / +30 / fecha manual)
     // ===============================
     if (data.startsWith("cli:ren:list:")) {
       const clientId = data.split(":")[3];
@@ -1563,10 +1708,7 @@ bot.on("callback_query", async (q) => {
       if (!servicios.length) return bot.sendMessage(chatId, "⚠️ Este cliente no tiene servicios.");
 
       const kb = servicios.map((s, i) => [
-        {
-          text: `🔄 ${i + 1}) ${s.plataforma} — ${s.correo} (Ren: ${s.fechaRenovacion || "-"})`,
-          callback_data: `cli:ren:menu:${clientId}:${i}`,
-        },
+        { text: `🔄 ${i + 1}) ${s.plataforma} — ${s.correo} (Ren: ${s.fechaRenovacion || "-"})`, callback_data: `cli:ren:menu:${clientId}:${i}` },
       ]);
       kb.push([{ text: "⬅️ Volver", callback_data: `cli:view:${clientId}` }]);
       kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
@@ -1586,11 +1728,7 @@ bot.on("callback_query", async (q) => {
       if (idx < 0 || idx >= servicios.length) return bot.sendMessage(chatId, "⚠️ Servicio inválido.");
 
       const s = servicios[idx] || {};
-      const texto =
-        `🔄 *RENOVAR SERVICIO #${idx + 1}*\n` +
-        `📌 ${s.plataforma || "-"}\n` +
-        `📧 ${s.correo || "-"}\n` +
-        `📅 Actual: *${s.fechaRenovacion || "-"}*`;
+      const texto = `🔄 *RENOVAR SERVICIO #${idx + 1}*\n📌 ${s.plataforma || "-"}\n📧 ${s.correo || "-"}\n📅 Actual: *${s.fechaRenovacion || "-"}*`;
 
       return upsertPanel(
         chatId,
@@ -1645,69 +1783,9 @@ bot.on("callback_query", async (q) => {
       );
     }
 
-    // INVENTARIO submenu prompts
-    if (data.startsWith("inv:menu:sumar:")) {
-      const [, , , plat, correo] = data.split(":");
-      pending.set(String(chatId), { mode: "invSumarQty", plat, correo });
-      return upsertPanel(
-        chatId,
-        `➕ *Agregar perfil*\n📌 ${String(plat).toUpperCase()}\n📧 ${correo}\n\nEscriba cantidad a *SUMAR* (ej: 1):`,
-        { inline_keyboard: [[{ text: "↩️ Cancelar", callback_data: `inv:menu:cancel:${plat}:${correo}` }]] },
-        "Markdown"
-      );
-    }
-
-    if (data.startsWith("inv:menu:restar:")) {
-      const [, , , plat, correo] = data.split(":");
-      pending.set(String(chatId), { mode: "invRestarQty", plat, correo });
-      return upsertPanel(
-        chatId,
-        `➖ *Quitar perfil*\n📌 ${String(plat).toUpperCase()}\n📧 ${correo}\n\nEscriba cantidad a *RESTAR* (ej: 1):`,
-        { inline_keyboard: [[{ text: "↩️ Cancelar", callback_data: `inv:menu:cancel:${plat}:${correo}` }]] },
-        "Markdown"
-      );
-    }
-
-    if (data.startsWith("inv:menu:clave:")) {
-      const [, , , plat, correo] = data.split(":");
-      pending.set(String(chatId), { mode: "invEditClave", plat, correo });
-      return upsertPanel(
-        chatId,
-        `✏️ *Editar clave*\n📌 ${String(plat).toUpperCase()}\n📧 ${correo}\n\nEscriba la nueva clave:`,
-        { inline_keyboard: [[{ text: "↩️ Cancelar", callback_data: `inv:menu:cancel:${plat}:${correo}` }]] },
-        "Markdown"
-      );
-    }
-
-    if (data.startsWith("inv:menu:cancel:")) {
-      const [, , , plat, correo] = data.split(":");
-      pending.delete(String(chatId));
-      return enviarSubmenuInventario(chatId, plat, correo);
-    }
-
-    if (data.startsWith("inv:menu:borrar:")) {
-      const [, , , plat, correo] = data.split(":");
-      return bot.sendMessage(chatId, `🗑️ Confirmar *borrar correo*?\n📌 ${String(plat).toUpperCase()}\n📧 ${correo}`, {
-        parse_mode: "Markdown",
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: "✅ Confirmar", callback_data: `inv:menu:borrarok:${normalizarPlataforma(plat)}:${String(correo).toLowerCase()}` }],
-            [{ text: "⬅️ Cancelar", callback_data: `inv:menu:cancel:${plat}:${correo}` }],
-          ],
-        },
-      });
-    }
-
-    if (data.startsWith("inv:menu:borrarok:")) {
-      const [, , , plat, correo] = data.split(":");
-      const ref = db.collection("inventario").doc(docIdInventario(correo, plat));
-      const doc = await ref.get();
-      if (!doc.exists) return bot.sendMessage(chatId, "⚠️ No existe ese correo en inventario.");
-      await ref.delete();
-      return bot.sendMessage(chatId, `🗑️ Borrado:\n📌 ${String(plat).toUpperCase()}\n📧 ${correo}`);
-    }
-
-    // WIZARD: elegir plataforma
+    // ===============================
+    // WIZARD CALLBACKS (plat / addmore / finish)
+    // ===============================
     if (data.startsWith("wiz:plat:")) {
       const parts = data.split(":");
       const plat = parts[2];
@@ -1730,6 +1808,7 @@ bot.on("callback_query", async (q) => {
       const clientId = data.split(":")[2];
       const st = w(chatId);
       if (!st) return bot.sendMessage(chatId, "⚠️ Wizard no activo.");
+
       st.clientId = clientId;
       st.step = 4;
       st.servStep = 1;
@@ -1803,13 +1882,13 @@ bot.on("message", async (msg) => {
       const cmd = limpiarQuery(text);
       const first = cmd.split(" ")[0];
 
-      // ✅ PRIORIDAD: /correo abre submenu inventario si existe
+      // /correo => submenu inventario
       if (isEmailLike(first)) {
         const correo = first;
         const hits = await buscarInventarioPorCorreo(correo);
 
         if (hits.length === 1) {
-          pending.set(String(chatId), { mode: "invSubmenuCtx", plat: normalizarPlataforma(hits[0].plataforma), correo });
+          pending.set(String(chatId), { mode: "invSubmenuCtx", plat: normalizarPlataforma(hits[0].plataforma), correo: String(correo).toLowerCase() });
           return enviarSubmenuInventario(chatId, hits[0].plataforma, correo);
         }
 
@@ -1831,6 +1910,8 @@ bot.on("message", async (msg) => {
         "renovaciones",
         "txt",
         "clientes_txt",
+        "vendedores_txt",
+        "vendedores_txt_split",
         "reindex_clientes",
         "add",
         "del",
@@ -1841,7 +1922,7 @@ bot.on("message", async (msg) => {
         ...PLATAFORMAS,
       ]);
 
-      // ✅ cualquier "/algo" no reservado => búsqueda rápida
+      // /algo no reservado => búsqueda rápida
       if (!comandosReservados.has(first)) {
         const query = cmd;
 
@@ -1867,7 +1948,7 @@ bot.on("message", async (msg) => {
     }
 
     // =========================
-    // WIZARD CLIENTES
+    // Wizard activo
     // =========================
     if (wizard.has(String(chatId))) {
       if (!(await isAdmin(userId))) return;
@@ -1875,7 +1956,7 @@ bot.on("message", async (msg) => {
     }
 
     // =========================
-    // PENDING FLOWS
+    // PENDING FLOWS (INVENTARIO + CLIENTES + RENOVAR + SERVICIOS)
     // =========================
     if (pending.has(String(chatId))) {
       if (!(await isAdmin(userId))) return;
@@ -1886,14 +1967,7 @@ bot.on("message", async (msg) => {
       // INVENTARIO SUMAR
       if (p.mode === "invSumarQty") {
         const qty = Number(t);
-        if (!Number.isFinite(qty) || qty <= 0) {
-          return upsertPanel(
-            chatId,
-            "⚠️ Cantidad inválida. Escriba un número (ej: 1):",
-            { inline_keyboard: [[{ text: "↩️ Cancelar", callback_data: `inv:menu:cancel:${p.plat}:${p.correo}` }]] },
-            "Markdown"
-          );
-        }
+        if (!Number.isFinite(qty) || qty <= 0) return bot.sendMessage(chatId, "⚠️ Cantidad inválida. Escriba un número (ej: 1)");
 
         pending.delete(String(chatId));
 
@@ -1902,9 +1976,7 @@ bot.on("message", async (msg) => {
 
         const ref = db.collection("inventario").doc(docIdInventario(correo, plat));
         const doc = await ref.get();
-        if (!doc.exists) {
-          return upsertPanel(chatId, "⚠️ Ese correo no existe en inventario.", { inline_keyboard: [[{ text: "🏠 Inicio", callback_data: "go:inicio" }]] }, "Markdown");
-        }
+        if (!doc.exists) return bot.sendMessage(chatId, "⚠️ Ese correo no existe en inventario.");
 
         const d = doc.data() || {};
         const nuevoDisp = Number(d.disp || 0) + qty;
@@ -1918,14 +1990,7 @@ bot.on("message", async (msg) => {
       // INVENTARIO RESTAR
       if (p.mode === "invRestarQty") {
         const qty = Number(t);
-        if (!Number.isFinite(qty) || qty <= 0) {
-          return upsertPanel(
-            chatId,
-            "⚠️ Cantidad inválida. Escriba un número (ej: 1):",
-            { inline_keyboard: [[{ text: "↩️ Cancelar", callback_data: `inv:menu:cancel:${p.plat}:${p.correo}` }]] },
-            "Markdown"
-          );
-        }
+        if (!Number.isFinite(qty) || qty <= 0) return bot.sendMessage(chatId, "⚠️ Cantidad inválida. Escriba un número (ej: 1)");
 
         pending.delete(String(chatId));
 
@@ -1934,9 +1999,7 @@ bot.on("message", async (msg) => {
 
         const ref = db.collection("inventario").doc(docIdInventario(correo, plat));
         const doc = await ref.get();
-        if (!doc.exists) {
-          return upsertPanel(chatId, "⚠️ Ese correo no existe en inventario.", { inline_keyboard: [[{ text: "🏠 Inicio", callback_data: "go:inicio" }]] }, "Markdown");
-        }
+        if (!doc.exists) return bot.sendMessage(chatId, "⚠️ Ese correo no existe en inventario.");
 
         const d = doc.data() || {};
         const antes = { ...d };
@@ -1999,12 +2062,14 @@ bot.on("message", async (msg) => {
         await ref.set({ nombrePerfil: t, nombre_norm: normTxt(t), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
         return menuEditarCliente(chatId, p.clientId);
       }
+
       if (p.mode === "cliEditTel") {
         pending.delete(String(chatId));
         const ref = db.collection("clientes").doc(String(p.clientId));
         await ref.set({ telefono: t, telefono_norm: onlyDigits(t), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
         return menuEditarCliente(chatId, p.clientId);
       }
+
       if (p.mode === "cliEditVendedor") {
         pending.delete(String(chatId));
         const ref = db.collection("clientes").doc(String(p.clientId));
@@ -2018,16 +2083,19 @@ bot.on("message", async (msg) => {
         pending.set(String(chatId), { mode: "cliAddServPin", clientId: p.clientId, plat: p.plat, mail: t.toLowerCase() });
         return bot.sendMessage(chatId, "🔐 Escriba el pin/clave:");
       }
+
       if (p.mode === "cliAddServPin") {
         pending.set(String(chatId), { mode: "cliAddServPrecio", clientId: p.clientId, plat: p.plat, mail: p.mail, pin: t });
         return bot.sendMessage(chatId, "💰 Precio (solo número, Lps):");
       }
+
       if (p.mode === "cliAddServPrecio") {
         const n = Number(t);
         if (!Number.isFinite(n) || n <= 0) return bot.sendMessage(chatId, "⚠️ Precio inválido. Escriba solo número:");
         pending.set(String(chatId), { mode: "cliAddServFecha", clientId: p.clientId, plat: p.plat, mail: p.mail, pin: p.pin, precio: n });
         return bot.sendMessage(chatId, "📅 Fecha renovación (dd/mm/yyyy):");
       }
+
       if (p.mode === "cliAddServFecha") {
         if (!isFechaDMY(t)) return bot.sendMessage(chatId, "⚠️ Formato inválido. Use dd/mm/yyyy:");
         pending.delete(String(chatId));
@@ -2063,11 +2131,13 @@ bot.on("message", async (msg) => {
         await patchServicio(p.clientId, p.idx, { correo: t.toLowerCase() });
         return menuServicio(chatId, p.clientId, p.idx);
       }
+
       if (p.mode === "cliServEditPin") {
         pending.delete(String(chatId));
         await patchServicio(p.clientId, p.idx, { pin: t });
         return menuServicio(chatId, p.clientId, p.idx);
       }
+
       if (p.mode === "cliServEditPrecio") {
         const n = Number(t);
         if (!Number.isFinite(n) || n <= 0) return bot.sendMessage(chatId, "⚠️ Precio inválido.");
@@ -2075,12 +2145,15 @@ bot.on("message", async (msg) => {
         await patchServicio(p.clientId, p.idx, { precio: n });
         return menuServicio(chatId, p.clientId, p.idx);
       }
+
       if (p.mode === "cliServEditFecha") {
         if (!isFechaDMY(t)) return bot.sendMessage(chatId, "⚠️ Formato inválido. Use dd/mm/yyyy");
         pending.delete(String(chatId));
         await patchServicio(p.clientId, p.idx, { fechaRenovacion: t });
         return menuServicio(chatId, p.clientId, p.idx);
       }
+
+      return;
     }
   } catch (err) {
     console.log("❌ message handler error:", err?.message || err);
@@ -2101,5 +2174,4 @@ http
     console.log("🌐 Web service activo en puerto " + PORT);
   });
 
-// Keep alive
 setInterval(() => console.log("🟢 Bot activo..."), 60000);
