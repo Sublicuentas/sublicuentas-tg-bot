@@ -2160,18 +2160,3 @@ bot.on("message", async (msg) => {
     bot.sendMessage(chatId, "⚠️ Error interno (revise logs).");
   }
 });
-
-// ===============================
-// SERVIDOR HTTP (Render)
-// ===============================
-const PORT = process.env.PORT || 3000;
-http
-  .createServer((req, res) => {
-    res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
-    res.end("Sublicuentas bot OK");
-  })
-  .listen(PORT, "0.0.0.0", () => {
-    console.log("🌐 Web service activo en puerto " + PORT);
-  });
-
-setInterval(() => console.log("🟢 Bot activo..."), 60000);function isSuperAdmin
