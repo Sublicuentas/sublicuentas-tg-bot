@@ -1048,10 +1048,45 @@ async function buscarClienteRobusto(queryLower) {
   const q = normTxt(qRaw);
   const qTel = onlyDigits(qRaw);
 
+  // 1) Si parece teléfono => buscar por teléfono (incluye repetidos)
   if (qTel && qTel.length >= 7) {
     return await buscarPorTelefonoTodos(qTel);
   }
 
+  // 2) Intento rápido por índice (prefijo). Si falla o no encuentra, hacemos scan total.
+  try {
+    const snapName = await db
+      .collection("clientes")
+      .orderBy("nombre_norm")
+      .startAt(q)
+      .endAt(q + "\uf8ff")
+      .limit(25)
+      .get();
+
+    if (!snapName.empty) return snapName.docs.map((d) => ({ id: d.id, ...d.data() }));
+  } catch (e) {
+    // si firestore pide index o algo raro, seguimos con scan total
+    console.log("⚠️ buscarClienteRobusto orderBy error:", e?.message || e);
+  }
+
+  // 3) Scan TOTAL (para que SIEMPRE encuentre aunque no haya índices, o nombre_norm esté raro)
+  const snap = await db.collection("clientes").limit(5000).get();
+
+  const encontrados = [];
+  snap.forEach((doc) => {
+    const c = doc.data() || {};
+    const n = normTxt(c.nombrePerfil || c.nombre || c.nombre_norm || "");
+    const t = onlyDigits(c.telefono || c.telefono_norm || "");
+    const v = normTxt(c.vendedor || c.vendedor_norm || "");
+
+    // match por contiene en nombre/vendedor
+    if (q && (n.includes(q) || v.includes(q))) {
+      encontrados.push({ id: doc.id, ...c });
+      return;
+    }
+
+    // si escriben numeros mezclados o tel parcial
+    if (
   const snapName = await db
     .collection("clientes")
     .orderBy("nombre_norm")
