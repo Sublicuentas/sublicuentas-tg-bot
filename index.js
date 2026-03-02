@@ -162,10 +162,26 @@ function addDaysDMY(dmy, days) {
 // ===============================
 async function enviarTxtComoArchivo(chatId, contenido, filename = "reporte.txt") {
   const limpio = stripAcentos(String(contenido || "")).replace(/[^\x00-\x7F]/g, "");
-  const buffer = Buffer.from(limpio, "utf8");
-  return bot.sendDocument(chatId, { source: buffer, filename }, { contentType: "text/plain" });
-}
 
+  // Telegram limita caption/strings, pero documento aguanta bien.
+  const buffer = Buffer.from(limpio, "utf8");
+
+  // ✅ Forma más estable en node-telegram-bot-api
+  return bot.sendDocument(
+    chatId,
+    {
+      value: buffer,
+      options: {
+        filename,
+        contentType: "text/plain",
+      },
+    },
+    {
+      caption: "✅ TXT generado",
+      disable_notification: true,
+    }
+  );
+}
 // ===============================
 // ✅ ADMIN HELPERS
 // ===============================
