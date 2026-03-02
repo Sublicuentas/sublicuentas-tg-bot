@@ -12,11 +12,18 @@
  F) ✅ Submenú correo: Agregar/Quitar/Editar clave por wizard (SIN /addp /delp) + refresca mismo panel
  G) ✅ Inventario: QUITADOS botones de abajo (📧 1..N) — solo Atrás/Inicio/Siguiente/Actualizar/Volver
  H) ✅ Botón CLIENTES funciona: Buscar por /NOMBRE /TELEFONO + /buscar + /cliente + Reporte TXT (botón)
+
+ ✅ FIX CRÍTICO:
+ I) ✅ Inventario SIN índices compuestos (solo where plataforma y filtros en JS) => /netflix /disneyp vuelve a listar
 */
 
 const http = require("http");
 const TelegramBot = require("node-telegram-bot-api");
 const admin = require("firebase-admin");
+
+// ✅ Anti-crash logs (muy importante)
+process.on("unhandledRejection", (err) => console.log("❌ unhandledRejection:", err));
+process.on("uncaughtException", (err) => console.log("❌ uncaughtException:", err));
 
 // ===============================
 // ENV
@@ -412,21 +419,19 @@ async function menuRenovaciones(chatId) {
 }
 
 // ===============================
-// INVENTARIO: LISTA + PAGINACION (PANEL) — SIN 📧 1..N
+// ✅ INVENTARIO: LISTA + PAGINACION (PANEL) — SIN ÍNDICES COMPUESTOS
 // ===============================
 async function inventarioPlataformaTexto(plataforma, page) {
   const p = normalizarPlataforma(plataforma);
   const total = await getTotalPorPlataforma(p);
 
-  const snap = await db
-    .collection("inventario")
-    .where("plataforma", "==", p)
-    .where("disp", ">=", 1)
-    .where("estado", "==", "activa")
-    .get();
+  // ✅ SIN índice compuesto: solo filtramos por plataforma en Firestore
+  const snap = await db.collection("inventario").where("plataforma", "==", p).get();
 
   const docs = snap.docs
     .map((d) => ({ id: d.id, ...d.data() }))
+    // ✅ filtros en JS
+    .filter((x) => Number(x.disp || 0) >= 1 && String(x.estado || "").toLowerCase() === "activa")
     .sort((a, b) => Number(b.disp || 0) - Number(a.disp || 0));
 
   const totalItems = docs.length;
@@ -498,19 +503,18 @@ async function mostrarStockGeneral(chatId) {
   let texto = "📦 *STOCK GENERAL*\n\n";
 
   for (const p of PLATAFORMAS) {
-    const snap = await db
-      .collection("inventario")
-      .where("plataforma", "==", p)
-      .where("disp", ">=", 1)
-      .where("estado", "==", "activa")
-      .get();
+    // ✅ SIN índice compuesto
+    const snap = await db.collection("inventario").where("plataforma", "==", p).get();
 
     let libres = 0;
-    snap.forEach((d) => (libres += Number(d.data().disp || 0)));
+    snap.forEach((d) => {
+      const x = d.data() || {};
+      if (String(x.estado || "").toLowerCase() === "activa") libres += Number(x.disp || 0);
+    });
+
     texto += `✅ *${p}*: ${libres} libres (/${totals?.[p] ?? "-"})\n`;
   }
 
-  // reporte: mensaje normal (si quieres que sea panel también, lo cambiamos)
   return bot.sendMessage(chatId, texto, { parse_mode: "Markdown" });
 }
 
@@ -824,7 +828,7 @@ async function wizardNext(chatId, text) {
 }
 
 // ===============================
-// CLIENTES: LISTA / FICHA / TXT (ARREGLA TU BOTÓN)
+// CLIENTES: LISTA / FICHA / TXT
 // ===============================
 async function enviarListaResultadosClientes(chatId, resultados) {
   let txt = `📱 *TELÉFONO REPETIDO*\nSe encontraron *${resultados.length}* clientes con ese número.\n\n`;
