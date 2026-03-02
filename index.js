@@ -1345,11 +1345,8 @@ async function wizardNext(chatId, text) {
 // ===============================
 bot.onText(/\/start/i, async (msg) => {
   const chatId = msg.chat.id;
-  const userId = msg.from.id;
-  if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
-  return menuPrincipal(chatId);
+  return bot.sendMessage(chatId, "✅ Para abrir el menú use: /menu");
 });
-
 bot.onText(/\/menu/i, async (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
