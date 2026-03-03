@@ -2326,14 +2326,8 @@ setInterval(async () => {
       await enviarTxtRenovacionesDiariasPorVendedor();
       console.log(`✅ AutoTXT 7AM enviado (${dmy}) TZ=${TZ}`);
     }
-  } catch (e) {
-    console.log("❌ AutoTXT error:", e?.message || e);
+  } catch (err) {
+    console.log("❌ message handler error:", err?.message || err);
+    bot.sendMessage(chatId, "⚠️ Error interno (revise logs).");
   }
-}, 30 * 1000);
-
-process.on("unhandledRejection", (reason) => {
-  console.error("❌ unhandledRejection:", reason);
-});
-process.on("uncaughtException", (err) => {
-  console.error("❌ uncaughtException:", err);
 });
