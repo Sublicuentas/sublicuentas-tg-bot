@@ -12,7 +12,7 @@
  ✅ FIX: Clientes completo (Editar cliente / Servicios / Renovar +30 / Fecha manual / Agregar servicio) + PENDING flows
  ✅ FIX: Wizard callbacks (plat / addmore / finish)
  ✅ NUEVO: Plataformas inventario agregadas:
-    - vix (4), appletv (4), universal (4), youtube (1), spotify (1), canva (1), vipnetflix (1)
+    - vix (4), appletv9 (4), universal (4), youtube (1), spotify (1), canva (1), vipnetflix (1)
  ✅ FIX ROBUSTO: Wizard plataforma no cae en "Acción no reconocida" (normalización y fallback)
 */
 
@@ -2183,16 +2183,17 @@ bot.on("message", async (msg) => {
         pending.set(String(chatId), { mode: "cliAddServFecha", clientId: p.clientId, plat: p.plat, mail: p.mail, pin: p.pin, precio: n });
         return bot.sendMessage(chatId, "📅 Fecha renovación (dd/mm/yyyy):");
       }
-
-  if (p.mode === "cliAddServFecha") {
+if (p.mode === "cliAddServFecha") {
   try {
-    if (!isFechaDMY(t)) return bot.sendMessage(chatId, "⚠️ Formato inválido. Use dd/mm/yyyy:");
+    if (!isFechaDMY(t))
+      return bot.sendMessage(chatId, "⚠️ Formato inválido. Use dd/mm/yyyy:");
 
     pending.delete(String(chatId));
 
     const ref = db.collection("clientes").doc(String(p.clientId));
     const doc = await ref.get();
-    if (!doc.exists) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
+    if (!doc.exists)
+      return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
 
     const c = doc.data() || {};
     const servicios = Array.isArray(c.servicios) ? c.servicios : [];
@@ -2215,10 +2216,13 @@ bot.on("message", async (msg) => {
     console.log("❌ cliAddServFecha error:", err?.message || err);
     return bot.sendMessage(
       chatId,
-      ⚠️ Error guardando servicio.\nDetalle: ${String(err?.message || err).slice(0, 300)}
+      `⚠️ Error guardando servicio.\nDetalle: ${String(
+        err?.message || err
+      ).slice(0, 300)}`
     );
   }
 }
+  
       // EDITAR SERVICIO CAMPOS
       async function patchServicio(clientId, idx, patch) {
         const ref = db.collection("clientes").doc(String(clientId));
