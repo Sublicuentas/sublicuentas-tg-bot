@@ -2185,9 +2185,25 @@ bot.on("message", async (msg) => {
       }
 
       if (p.mode === "cliAddServFecha") {
-        if (!isFechaDMY(t)) return bot.sendMessage(chatId, "⚠️ Formato inválido. Use dd/mm/yyyy:");
-        pending.delete(String(chatId));
+  try {
+    if (!isFechaDMY(t)) return bot.sendMessage(chatId, "⚠️ Formato inválido. Use dd/mm/yyyy:");
+    pending.delete(String(chatId));
 
+    const ref = db.collection("clientes").doc(String(p.clientId));
+    const doc = await ref.get();
+    if (!doc.exists) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
+
+    const c = doc.data() || {};
+    const servicios = Array.isArray(c.servicios) ? c.servicios : [];
+    servicios.push({ plataforma: p.plat, correo: p.mail, pin: p.pin, precio: p.precio, fechaRenovacion: t });
+
+    await ref.set({ servicios, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+    return enviarFichaCliente(chatId, p.clientId);
+  } catch (err) {
+    console.log("❌ cliAddServFecha error:", err?.message || err);
+    return bot.sendMessage(chatId, `⚠️ Error guardando servicio.\nDetalle: ${String(err?.message || err).slice(0, 300)}`);
+  }
+}
         const ref = db.collection("clientes").doc(String(p.clientId));
         const doc = await ref.get();
         if (!doc.exists) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
