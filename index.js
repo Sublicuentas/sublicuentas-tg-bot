@@ -2263,7 +2263,6 @@ bot.on("message", async (msg) => {
     console.log("❌ message handler error:", err?.message || err);
     bot.sendMessage(chatId, "⚠️ Error interno (revise logs).");
   }
-});
 
 // ===============================
 // ✅ AUTO TXT 7:00 AM (por vendedor) — renovaciones diarias
