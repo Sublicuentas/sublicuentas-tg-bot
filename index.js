@@ -2222,8 +2222,8 @@ if (p.mode === "cliAddServFecha") {
     );
   }
 }
-  
-      // EDITAR SERVICIO CAMPOS
+
+   // EDITAR SERVICIO CAMPOS
       async function patchServicio(clientId, idx, patch) {
         const ref = db.collection("clientes").doc(String(clientId));
         const doc = await ref.get();
@@ -2232,7 +2232,10 @@ if (p.mode === "cliAddServFecha") {
         const servicios = Array.isArray(c.servicios) ? c.servicios : [];
         if (idx < 0 || idx >= servicios.length) return false;
         servicios[idx] = { ...(servicios[idx] || {}), ...patch };
-        await ref.set({ servicios, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        await ref.set(
+          { servicios, updatedAt: admin.firestore.FieldValue.serverTimestamp() },
+          { merge: true }
+        );
         return true;
       }
 
@@ -2251,14 +2254,16 @@ if (p.mode === "cliAddServFecha") {
 
       if (p.mode === "cliServEditPrecio") {
         const n = Number(t);
-        if (!Number.isFinite(n) || n <= 0) return bot.sendMessage(chatId, "⚠️ Precio inválido.");
+        if (!Number.isFinite(n) || n <= 0)
+          return bot.sendMessage(chatId, "⚠️ Precio inválido.");
         pending.delete(String(chatId));
         await patchServicio(p.clientId, p.idx, { precio: n });
         return menuServicio(chatId, p.clientId, p.idx);
       }
 
       if (p.mode === "cliServEditFecha") {
-        if (!isFechaDMY(t)) return bot.sendMessage(chatId, "⚠️ Formato inválido. Use dd/mm/yyyy");
+        if (!isFechaDMY(t))
+          return bot.sendMessage(chatId, "⚠️ Formato inválido. Use dd/mm/yyyy");
         pending.delete(String(chatId));
         await patchServicio(p.clientId, p.idx, { fechaRenovacion: t });
         return menuServicio(chatId, p.clientId, p.idx);
@@ -2270,6 +2275,7 @@ if (p.mode === "cliAddServFecha") {
     console.log("❌ message handler error:", err?.message || err);
     bot.sendMessage(chatId, "⚠️ Error interno (revise logs).");
   }
+}); // ✅✅✅ CIERRE REAL DEL bot.on("message")
 
 // ===============================
 // ✅ AUTO TXT 7:00 AM (por vendedor) — renovaciones diarias
@@ -2301,7 +2307,10 @@ function getTimePartsNow() {
 async function enviarTxtRenovacionesDiariasPorVendedor() {
   const { dmy } = getTimePartsNow();
 
-  const snap = await db.collection("revendedores").where("activo", "==", true).get();
+  const snap = await db
+    .collection("revendedores")
+    .where("activo", "==", true)
+    .get();
   if (snap.empty) return;
 
   for (const doc of snap.docs) {
@@ -2326,8 +2335,15 @@ setInterval(async () => {
       await enviarTxtRenovacionesDiariasPorVendedor();
       console.log(`✅ AutoTXT 7AM enviado (${dmy}) TZ=${TZ}`);
     }
-  } catch (err) {
-    console.log("❌ message handler error:", err?.message || err);
-    bot.sendMessage(chatId, "⚠️ Error interno (revise logs).");
+  } catch (e) {
+    // ✅ aquí NO existe chatId, solo log
+    console.log("❌ AutoTXT error:", e?.message || e);
   }
+}, 30 * 1000);
+
+process.on("unhandledRejection", (reason) => {
+  console.error("❌ unhandledRejection:", reason);
+});
+process.on("uncaughtException", (err) => {
+  console.error("❌ uncaughtException:", err);
 });
