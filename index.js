@@ -2184,9 +2184,10 @@ bot.on("message", async (msg) => {
         return bot.sendMessage(chatId, "📅 Fecha renovación (dd/mm/yyyy):");
       }
 
-      if (p.mode === "cliAddServFecha") {
+  if (p.mode === "cliAddServFecha") {
   try {
     if (!isFechaDMY(t)) return bot.sendMessage(chatId, "⚠️ Formato inválido. Use dd/mm/yyyy:");
+
     pending.delete(String(chatId));
 
     const ref = db.collection("clientes").doc(String(p.clientId));
@@ -2195,27 +2196,29 @@ bot.on("message", async (msg) => {
 
     const c = doc.data() || {};
     const servicios = Array.isArray(c.servicios) ? c.servicios : [];
-    servicios.push({ plataforma: p.plat, correo: p.mail, pin: p.pin, precio: p.precio, fechaRenovacion: t });
 
-    await ref.set({ servicios, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+    servicios.push({
+      plataforma: p.plat,
+      correo: p.mail,
+      pin: p.pin,
+      precio: p.precio,
+      fechaRenovacion: t,
+    });
+
+    await ref.set(
+      { servicios, updatedAt: admin.firestore.FieldValue.serverTimestamp() },
+      { merge: true }
+    );
+
     return enviarFichaCliente(chatId, p.clientId);
   } catch (err) {
     console.log("❌ cliAddServFecha error:", err?.message || err);
-    return bot.sendMessage(chatId, `⚠️ Error guardando servicio.\nDetalle: ${String(err?.message || err).slice(0, 300)}`);
+    return bot.sendMessage(
+      chatId,
+      ⚠️ Error guardando servicio.\nDetalle: ${String(err?.message || err).slice(0, 300)}
+    );
   }
 }
-        const ref = db.collection("clientes").doc(String(p.clientId));
-        const doc = await ref.get();
-        if (!doc.exists) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
-
-        const c = doc.data() || {};
-        const servicios = Array.isArray(c.servicios) ? c.servicios : [];
-        servicios.push({ plataforma: p.plat, correo: p.mail, pin: p.pin, precio: p.precio, fechaRenovacion: t });
-
-        await ref.set({ servicios, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
-        return enviarFichaCliente(chatId, p.clientId);
-      }
-
       // EDITAR SERVICIO CAMPOS
       async function patchServicio(clientId, idx, patch) {
         const ref = db.collection("clientes").doc(String(clientId));
