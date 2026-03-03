@@ -2308,3 +2308,10 @@ setInterval(async () => {
     console.log("❌ AutoTXT error:", e?.message || e);
   }
 }, 30 * 1000);
+
+process.on("unhandledRejection", (reason) => {
+  console.error("❌ unhandledRejection:", reason);
+});
+process.on("uncaughtException", (err) => {
+  console.error("❌ uncaughtException:", err);
+});
