@@ -2329,18 +2329,15 @@ setInterval(async () => {
   try {
     const { dmy, hh, mm } = getTimePartsNow();
 
-    // corre 07:00 una vez por día
     if (hh === 7 && mm === 0 && _lastDailyRun !== dmy) {
       _lastDailyRun = dmy;
       await enviarTxtRenovacionesDiariasPorVendedor();
       console.log(`✅ AutoTXT 7AM enviado (${dmy}) TZ=${TZ}`);
     }
   } catch (e) {
-    // ✅ aquí NO existe chatId, solo log
     console.log("❌ AutoTXT error:", e?.message || e);
   }
-}, 30 * 1000);
-
+}, 30 * 1000); // ✅ 
 process.on("unhandledRejection", (reason) => {
   console.error("❌ unhandledRejection:", reason);
 });
