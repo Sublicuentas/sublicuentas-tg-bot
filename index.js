@@ -1237,20 +1237,62 @@ async function wizardNext(chatId, text) {
     }
 
     if (st.servStep === 5) {
-      if (!isFechaDMY(t)) return bot.sendMessage(chatId, "⚠️ Formato inválido. Use dd/mm/yyyy:");
-      s.fechaRenovacion = t;
+  try {
+    if (!isFechaDMY(t)) return bot.sendMessage(chatId, "⚠️ Formato inválido. Use dd/mm/yyyy:");
+    s.fechaRenovacion = String(t).trim();
 
-      const clientRef = db.collection("clientes").doc(st.clientId);
-      const doc = await clientRef.get();
-      const cur = doc.exists ? doc.data() : {};
-      const arr = Array.isArray(cur.servicios) ? cur.servicios : [];
-      arr.push({
-        plataforma: s.plataforma,
-        correo: s.correo,
-        pin: s.pin,
-        precio: s.precio,
-        fechaRenovacion: s.fechaRenovacion,
-      });
+    // ✅ feedback inmediato (evita “se quedó pegado”)
+    await bot.sendMessage(chatId, "⏳ Guardando servicio...");
+
+    const clientRef = db.collection("clientes").doc(String(st.clientId));
+    const doc = await clientRef.get();
+    if (!doc.exists) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado (doc no existe).");
+
+    const cur = doc.data() || {};
+    const arr = Array.isArray(cur.servicios) ? cur.servicios : [];
+
+    arr.push({
+      plataforma: String(s.plataforma || "").trim(),
+      correo: String(s.correo || "").trim().toLowerCase(),
+      pin: String(s.pin || "").trim(),
+      precio: Number(s.precio || 0),
+      fechaRenovacion: s.fechaRenovacion,
+    });
+
+    await clientRef.set(
+      { servicios: arr, updatedAt: admin.firestore.FieldValue.serverTimestamp() },
+      { merge: true }
+    );
+
+    // reset para siguiente servicio
+    st.servicio = {};
+    st.servStep = 1;
+    st.step = 4;
+    wset(chatId, st);
+
+    const ordenados = serviciosOrdenados(arr);
+    const resumen =
+      `✅ Servicio agregado.\n¿Desea agregar otra plataforma a este cliente?\n\n` +
+      `Cliente:\n${cur?.nombrePerfil || st.data.nombrePerfil}\n${cur?.telefono || st.data.telefono}\n${cur?.vendedor || st.data.vendedor}\n\n` +
+      `SERVICIOS (ordenados por fecha):\n` +
+      ordenados
+        .map((x, i) => `${i + 1}) ${x.plataforma} — ${x.correo} — ${x.precio} Lps — Renueva: ${x.fechaRenovacion}`)
+        .join("\n");
+
+    // ✅ sin Markdown aquí (evita que caracteres raros rompan)
+    return bot.sendMessage(chatId, resumen, {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "➕ Agregar otra", callback_data: `wiz:addmore:${st.clientId}` }],
+          [{ text: "✅ Finalizar", callback_data: `wiz:finish:${st.clientId}` }],
+        ],
+      },
+    });
+  } catch (err) {
+    console.log("❌ Wizard servStep 5 error:", err?.message || err);
+    return bot.sendMessage(chatId, `⚠️ Error guardando servicio.\nDetalle: ${String(err?.message || err).slice(0, 300)}`);
+  }
+    }
 
       await clientRef.set({ servicios: arr, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
 
