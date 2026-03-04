@@ -1236,7 +1236,7 @@ async function wizardNext(chatId, text) {
       return bot.sendMessage(chatId, "(Servicio 5/5) Fecha renovación (dd/mm/yyyy):");
     }
 
-    if (st.servStep === 5) {
+if (st.servStep === 5) {
   if (!isFechaDMY(t)) {
     return bot.sendMessage(chatId, "⚠️ Formato inválido. Use dd/mm/yyyy:");
   }
@@ -1246,7 +1246,6 @@ async function wizardNext(chatId, text) {
 
     const clientRef = db.collection("clientes").doc(String(st.clientId));
     const doc = await clientRef.get();
-
     if (!doc.exists) {
       return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
     }
@@ -1255,9 +1254,9 @@ async function wizardNext(chatId, text) {
     const arr = Array.isArray(cur.servicios) ? cur.servicios : [];
 
     arr.push({
-      plataforma: s.plataforma,
-      correo: s.correo,
-      pin: s.pin,
+      plataforma: String(s.plataforma || "").trim(),
+      correo: String(s.correo || "").trim().toLowerCase(),
+      pin: String(s.pin || "").trim(),
       precio: Number(s.precio || 0),
       fechaRenovacion: s.fechaRenovacion,
     });
@@ -1284,14 +1283,7 @@ async function wizardNext(chatId, text) {
       `⚠️ Error guardando servicio.\nDetalle: ${String(err?.message || err).slice(0, 300)}`
     );
   }
-    }
-
-    // reset para siguiente servicio
-    st.servicio = {};
-    st.servStep = 1;
-    st.step = 4;
-    wset(chatId, st);
-
+}
     const ordenados = serviciosOrdenados(arr);
     const resumen =
       `✅ Servicio agregado.\n¿Desea agregar otra plataforma a este cliente?\n\n` +
