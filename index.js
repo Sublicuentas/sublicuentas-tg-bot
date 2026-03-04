@@ -1246,9 +1246,7 @@ if (st.servStep === 5) {
 
     const clientRef = db.collection("clientes").doc(String(st.clientId));
     const doc = await clientRef.get();
-    if (!doc.exists) {
-      return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
-    }
+    if (!doc.exists) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
 
     const cur = doc.data() || {};
     const arr = Array.isArray(cur.servicios) ? cur.servicios : [];
@@ -1262,10 +1260,7 @@ if (st.servStep === 5) {
     });
 
     await clientRef.set(
-      {
-        servicios: arr,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      },
+      { servicios: arr, updatedAt: admin.firestore.FieldValue.serverTimestamp() },
       { merge: true }
     );
 
@@ -1275,15 +1270,6 @@ if (st.servStep === 5) {
     st.step = 4;
     wset(chatId, st);
 
-    return enviarFichaCliente(chatId, st.clientId);
-  } catch (err) {
-    console.log("❌ Wizard servStep 5 error:", err?.message || err);
-    return bot.sendMessage(
-      chatId,
-      `⚠️ Error guardando servicio.\nDetalle: ${String(err?.message || err).slice(0, 300)}`
-    );
-  }
-}
     const ordenados = serviciosOrdenados(arr);
     const resumen =
       `✅ Servicio agregado.\n¿Desea agregar otra plataforma a este cliente?\n\n` +
@@ -1293,6 +1279,23 @@ if (st.servStep === 5) {
         .map((x, i) => `${i + 1}) ${x.plataforma} — ${x.correo} — ${x.precio} Lps — Renueva: ${x.fechaRenovacion}`)
         .join("\n");
 
+    return bot.sendMessage(chatId, resumen, {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "➕ Agregar otra", callback_data: `wiz:addmore:${st.clientId}` }],
+          [{ text: "✅ Finalizar", callback_data: `wiz:finish:${st.clientId}` }],
+        ],
+      },
+    });
+  } catch (err) {
+    console.log("❌ Wizard servStep 5 error:", err?.message || err);
+    return bot.sendMessage(
+      chatId,
+      `⚠️ Error guardando servicio.\nDetalle: ${String(err?.message || err).slice(0, 300)}`
+    );
+  }
+}
+   
     // ✅ sin Markdown aquí (evita que caracteres raros rompan)
     return bot.sendMessage(chatId, resumen, {
       reply_markup: {
