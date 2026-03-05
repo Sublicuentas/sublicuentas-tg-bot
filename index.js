@@ -19,6 +19,7 @@
  ✅ Wizard callbacks (plat / addmore / finish) sin duplicados
  ✅ Plataformas inventario incluidas
  ✅ Normalización + fallback robusto
+ ✅ CORTE APLICADO: removido caracter basura final y limpieza de handlers /miid y /vincular
 */
 
 const http = require("http");
@@ -1113,24 +1114,17 @@ bot.onText(/\/vendedores_txt_split/i, async (msg) => {
   return reporteClientesSplitPorVendedorTXT(chatId);
 });
 
-// ✅ VINCULACIÓN
+// ✅ /miid (AHORA: cualquier usuario puede verlo para facilitar vincular)
 bot.onText(/\/miid/i, async (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-
-  // admin o vendedor pueden ver su id
-  const ok = (await isAdmin(userId)) || (await isVendedor(userId));
-  if (!ok) return bot.sendMessage(chatId, "⛔ Acceso denegado");
-
   return bot.sendMessage(chatId, `🆔 Tu Telegram ID es: ${userId}`);
 });
 
+// ✅ /vincular_vendedor (AHORA: permitido aunque no sea admin ni esté vinculado aún)
 bot.onText(/\/vincular_vendedor\s+(.+)/i, async (msg, match) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-
-  // admin o vendedor (para poder vincularse)
-  const ok = (await isAdmin(userId)) || true;
 
   const nombre = String(match[1] || "").trim();
   if (!nombre) return bot.sendMessage(chatId, "⚠️ Uso: /vincular_vendedor NOMBRE");
@@ -1629,7 +1623,7 @@ bot.on("callback_query", async (q) => {
       "ren:mis",
       "txt:mis",
       "vend:vincular:info",
-      "rev:lista", // opcional
+      "rev:lista",
       "ren:hoy",
       "txt:hoy",
       "menu:renovaciones",
@@ -1638,7 +1632,6 @@ bot.on("callback_query", async (q) => {
 
     if (!adminOk) {
       if (!vendedorOnlyAllowed.has(data)) {
-        // permitir callbacks de vincular por texto (solo info)
         return upsertPanel(
           chatId,
           "⛔ Modo vendedor: solo renovaciones.\n\nUsa:\n• Mis renovaciones\n• TXT Mis renovaciones\n• /vincular_vendedor TU_NOMBRE (si falta)\n",
@@ -1674,7 +1667,11 @@ bot.on("callback_query", async (q) => {
 
       if (data.startsWith("inv:open:")) {
         const [, , plat, correo] = data.split(":");
-        pending.set(String(chatId), { mode: "invSubmenuCtx", plat: normalizarPlataforma(plat), correo: String(correo).toLowerCase() });
+        pending.set(String(chatId), {
+          mode: "invSubmenuCtx",
+          plat: normalizarPlataforma(plat),
+          correo: String(correo).toLowerCase(),
+        });
         return enviarSubmenuInventario(chatId, plat, correo);
       }
 
@@ -1715,7 +1712,11 @@ bot.on("callback_query", async (q) => {
       if (data.startsWith("inv:menu:cancel:")) {
         const [, , , plat, correo] = data.split(":");
         pending.delete(String(chatId));
-        pending.set(String(chatId), { mode: "invSubmenuCtx", plat: normalizarPlataforma(plat), correo: String(correo).toLowerCase() });
+        pending.set(String(chatId), {
+          mode: "invSubmenuCtx",
+          plat: normalizarPlataforma(plat),
+          correo: String(correo).toLowerCase(),
+        });
         return enviarSubmenuInventario(chatId, plat, correo);
       }
 
@@ -1725,7 +1726,12 @@ bot.on("callback_query", async (q) => {
           parse_mode: "Markdown",
           reply_markup: {
             inline_keyboard: [
-              [{ text: "✅ Confirmar", callback_data: `inv:menu:borrarok:${normalizarPlataforma(plat)}:${String(correo).toLowerCase()}` }],
+              [
+                {
+                  text: "✅ Confirmar",
+                  callback_data: `inv:menu:borrarok:${normalizarPlataforma(plat)}:${String(correo).toLowerCase()}`,
+                },
+              ],
               [{ text: "⬅️ Cancelar", callback_data: `inv:menu:cancel:${plat}:${correo}` }],
             ],
           },
@@ -1984,7 +1990,10 @@ bot.on("callback_query", async (q) => {
         if (!servicios.length) return bot.sendMessage(chatId, "⚠️ Este cliente no tiene servicios.");
 
         const kb = servicios.map((s, i) => [
-          { text: `🔄 ${i + 1}) ${s.plataforma} — ${s.correo} (Ren: ${s.fechaRenovacion || "-"})`, callback_data: `cli:ren:menu:${clientId}:${i}` },
+          {
+            text: `🔄 ${i + 1}) ${s.plataforma} — ${s.correo} (Ren: ${s.fechaRenovacion || "-"})`,
+            callback_data: `cli:ren:menu:${clientId}:${i}`,
+          },
         ]);
         kb.push([{ text: "⬅️ Volver", callback_data: `cli:view:${clientId}` }]);
         kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
@@ -2148,10 +2157,14 @@ bot.on("message", async (msg) => {
       const adminOk = await isAdmin(userId);
       const vendOk = await isVendedor(userId);
 
-      if (!adminOk && !vendOk) return;
-
+      // permitimos /miid y /vincular_vendedor incluso si NO tiene rol aún
       const cmd = limpiarQuery(text);
       const first = cmd.split(" ")[0];
+
+      if (!adminOk && !vendOk) {
+        if (first === "miid" || first === "vincular_vendedor") return;
+        return;
+      }
 
       // /correo => submenu inventario (admin only)
       if (adminOk && isEmailLike(first)) {
@@ -2159,7 +2172,11 @@ bot.on("message", async (msg) => {
         const hits = await buscarInventarioPorCorreo(correo);
 
         if (hits.length === 1) {
-          pending.set(String(chatId), { mode: "invSubmenuCtx", plat: normalizarPlataforma(hits[0].plataforma), correo: String(correo).toLowerCase() });
+          pending.set(String(chatId), {
+            mode: "invSubmenuCtx",
+            plat: normalizarPlataforma(hits[0].plataforma),
+            correo: String(correo).toLowerCase(),
+          });
           return enviarSubmenuInventario(chatId, hits[0].plataforma, correo);
         }
 
