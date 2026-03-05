@@ -977,6 +977,25 @@ async function menuServicio(chatId, clientId, idx) {
 }
 
 // ===============================
+// COMANDO: VER MI TELEGRAM ID
+// ===============================
+bot.onText(/\/miid/i, async (msg) => {
+
+  const chatId = msg.chat.id;
+  const userId = msg.from.id;
+
+  await bot.sendMessage(
+    chatId,
+`🆔 Tu Telegram ID es:
+
+${userId}
+
+📩 Envíalo al administrador para activarte en el sistema.`
+  );
+
+});
+
+// ===============================
 // CLIENTES: LISTA RESULTADOS / TXT
 // ===============================
 async function enviarListaResultadosClientes(chatId, resultados) {
