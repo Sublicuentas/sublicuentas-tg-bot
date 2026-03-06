@@ -2510,3 +2510,18 @@ bot.on("message", async (msg) => {
         pending.delete(String(chatId));
 
         const
+
+         // ==============================
+// HTTP KEEP ALIVE (RENDER)
+// ==============================
+
+const http = require("http");
+
+const PORT = process.env.PORT || 10000;
+
+http.createServer((req, res) => {
+  res.writeHead(200);
+  res.end("OK");
+}).listen(PORT, () => {
+  console.log("🌐 HTTP KEEPALIVE activo en puerto", PORT);
+});
