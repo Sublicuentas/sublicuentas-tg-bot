@@ -16,7 +16,6 @@ const http = require("http");
 const TelegramBot = require("node-telegram-bot-api");
 const admin = require("firebase-admin");
 
-
 // ===============================
 // ENV
 // ===============================
@@ -32,7 +31,6 @@ if (!FIREBASE_PROJECT_ID || !FIREBASE_CLIENT_EMAIL || !FIREBASE_PRIVATE_KEY) {
   throw new Error("Faltan variables Firebase");
 }
 
-
 // ===============================
 // FIREBASE
 // ===============================
@@ -45,10 +43,10 @@ admin.initializeApp({
 });
 
 const db = admin.firestore();
-
+console.log("✅ FIREBASE PROJECT:", admin.app().options.projectId);
 
 // ===============================
-// BOT
+// BOT BLINDADO
 // ===============================
 const bot = new TelegramBot(BOT_TOKEN, {
   polling: {
@@ -58,62 +56,63 @@ const bot = new TelegramBot(BOT_TOKEN, {
   },
 });
 
+bot.on("polling_error", (err) => {
+  console.error("❌ polling_error:", err?.message || err);
+});
+
+bot.on("webhook_error", (err) => {
+  console.error("❌ webhook_error:", err?.message || err);
+});
+
 async function startBotSafe() {
   try {
     await bot.stopPolling().catch(() => {});
     await bot.deleteWebHook().catch(() => {});
     await bot.startPolling();
-    console.log("BOT iniciado");
+    console.log("✅ Bot iniciado (polling blindado)");
   } catch (err) {
-    console.error("Error iniciando polling:", err?.message || err);
+    console.error("❌ Error iniciando polling:", err?.message || err);
   }
 }
 
 startBotSafe();
 
-
 // ===============================
 // CONSTANTES
 // ===============================
 const PLATAFORMAS = [
-"netflix",
-"vipnetflix",
-"disneyp",
-"disneys",
-"hbomax",
-"primevideo",
-"paramount",
-"crunchyroll",
-"vix",
-"appletv",
-"universal",
-"youtube",
-"spotify",
-"canva",
-"oleadatv1",
-"oleadatv3",
-"iptv1",
-"iptv3",
-"iptv4"
+  "netflix",
+  "vipnetflix",
+  "disneyp",
+  "disneys",
+  "hbomax",
+  "primevideo",
+  "paramount",
+  "crunchyroll",
+  "vix",
+  "appletv",
+  "universal",
+  "youtube",
+  "spotify",
+  "canva",
+  "oleadatv1",
+  "oleadatv3",
+  "iptv1",
+  "iptv3",
+  "iptv4",
 ];
 
 const PAGE_SIZE = 10;
 
-
 // ===============================
-// HELPERS GENERALES
+// HELPERS
 // ===============================
 function stripAcentos(str = "") {
-  return String(str)
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "");
+  return String(str).normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 }
 
 function normTxt(str = "") {
-  return stripAcentos(str)
-    .toLowerCase()
-    .trim()
-    .replace(/\s+/g, " ");
+  return stripAcentos(String(str || "")).toLowerCase().trim().replace(/\s+/g, " ");
 }
 
 function onlyDigits(str = "") {
@@ -121,11 +120,25 @@ function onlyDigits(str = "") {
 }
 
 function normalizarPlataforma(txt = "") {
-  return String(txt)
-    .toLowerCase()
-    .trim()
-    .replace(/\s+/g, "")
-    .replace(/[\.\-_/]+/g, "");
+  return String(txt).toLowerCase().trim().replace(/\s+/g, "").replace(/[\.\-_/]+/g, "");
+}
+
+function esPlataformaValida(p) {
+  return PLATAFORMAS.includes(normalizarPlataforma(p));
+}
+
+function safeMail(correo) {
+  return String(correo).trim().toLowerCase().replace(/[\/#?&]/g, "_");
+}
+
+function docIdInventario(correo, plataforma) {
+  return `${normalizarPlataforma(plataforma)}__${safeMail(correo)}`;
+}
+
+function fmtEstado(estado) {
+  const e = String(estado || "").toLowerCase();
+  if (e === "bloqueada" || e === "llena") return "LLENA";
+  return "ACTIVA";
 }
 
 function isFechaDMY(s) {
@@ -136,63 +149,126 @@ function hoyDMY() {
   const d = new Date();
   const dd = String(d.getDate()).padStart(2, "0");
   const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const yyyy = d.getFullYear();
+  const yyyy = String(d.getFullYear());
   return `${dd}/${mm}/${yyyy}`;
 }
 
+function esTelefono(txt) {
+  const t = onlyDigits(String(txt || "").trim());
+  return /^[0-9]{7,15}$/.test(t);
+}
+
+function limpiarQuery(txt) {
+  return String(txt || "").trim().replace(/^\/+/, "").replace(/\s+/g, " ").toLowerCase();
+}
+
+function isEmailLike(s) {
+  const x = String(s || "").trim().toLowerCase();
+  return x.includes("@") && x.includes(".");
+}
+
+function parseDMYtoTS(dmy) {
+  const s = String(dmy || "").trim();
+  const m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (!m) return Number.POSITIVE_INFINITY;
+  return new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1])).getTime();
+}
+
+function serviciosOrdenados(servicios = []) {
+  const arr = Array.isArray(servicios) ? servicios.slice() : [];
+  arr.sort((a, b) => parseDMYtoTS(a.fechaRenovacion) - parseDMYtoTS(b.fechaRenovacion));
+  return arr;
+}
+
+function addDaysDMY(dmy, days) {
+  if (!isFechaDMY(dmy)) return null;
+  const [dd, mm, yyyy] = dmy.split("/").map(Number);
+  const dt = new Date(yyyy, mm - 1, dd);
+  dt.setDate(dt.getDate() + Number(days || 0));
+  return `${String(dt.getDate()).padStart(2, "0")}/${String(dt.getMonth() + 1).padStart(2, "0")}/${dt.getFullYear()}`;
+}
+
+async function enviarTxtComoArchivo(chatId, contenido, filename = "reporte.txt") {
+  const limpio = stripAcentos(String(contenido || "")).replace(/[^\x00-\x7F]/g, "");
+  const buffer = Buffer.from(limpio, "utf8");
+  return bot.sendDocument(chatId, buffer, {}, { filename, contentType: "text/plain" });
+}
+
+function logInfo(...args) {
+  console.log("ℹ️", ...args);
+}
+
+function logErr(...args) {
+  console.log("❌", ...args);
+}
 
 // ===============================
-// HELPERS CRM CLIENTES
+// HELPERS REVENDEDORES
+// ===============================
+function getSafeRevNombre(r = {}, fallbackId = "") {
+  return String(r.nombre || r.Nombre || fallbackId || "").trim();
+}
+
+function getSafeRevActivo(r = {}) {
+  return r.activo === true || r.Activo === true;
+}
+
+function getSafeRevTelegramId(r = {}) {
+  return String(r.telegramId ?? r.TelegramId ?? "").trim();
+}
+
+function normalizeRevendedorDoc(doc) {
+  const data = doc.data() || {};
+  const nombre = getSafeRevNombre(data, doc.id);
+  const activo = getSafeRevActivo(data);
+  const telegramId = getSafeRevTelegramId(data);
+
+  return {
+    id: doc.id,
+    ...data,
+    nombre,
+    activo,
+    telegramId,
+    nombre_norm: normTxt(nombre),
+  };
+}
+
+// ===============================
+// HELPERS CRM / DUPLICADOS CLIENTES
 // ===============================
 async function clienteDuplicado(nombre, telefono, excludeId = "") {
-
   const nombreN = normTxt(nombre);
   const telN = onlyDigits(telefono);
-
   if (!nombreN || !telN) return null;
 
   const snap = await db.collection("clientes").limit(5000).get();
-
   let duplicado = null;
 
   snap.forEach((doc) => {
-
-    if (excludeId && doc.id === excludeId) return;
+    if (excludeId && String(doc.id) === String(excludeId)) return;
 
     const c = doc.data() || {};
-
     const dbNombre = normTxt(c.nombrePerfil || "");
     const dbTel = onlyDigits(c.telefono || "");
 
-    if (dbNombre === nombreN && dbTel === telN) {
+    if (dbNombre === nombreN && dbTel === telN && !duplicado) {
       duplicado = { id: doc.id, ...c };
     }
-
   });
 
   return duplicado;
 }
 
-
 async function borrarDuplicadosClientes() {
-
   const snap = await db.collection("clientes").limit(5000).get();
-
   const mapa = new Map();
   const batch = db.batch();
-
   let borrados = 0;
 
   snap.forEach((doc) => {
-
     const c = doc.data() || {};
-
-    const key =
-      normTxt(c.nombrePerfil || "") +
-      "|" +
-      onlyDigits(c.telefono || "");
-
-    if (!key) return;
+    const key = `${normTxt(c.nombrePerfil || "")}|${onlyDigits(c.telefono || "")}`;
+    if (!key || key === "|") return;
 
     if (mapa.has(key)) {
       batch.delete(doc.ref);
@@ -200,175 +276,125 @@ async function borrarDuplicadosClientes() {
     } else {
       mapa.set(key, doc.id);
     }
-
   });
 
   if (borrados > 0) await batch.commit();
-
   return borrados;
 }
 
 // ===============================
-// NORMALIZAR TEXTO
-// ===============================
-function normTxt(s) {
-  return stripAcentos(String(s || ""))
-    .toLowerCase()
-    .trim();
-}
-
-
-// ===============================
-// SOLO DIGITOS
-// ===============================
-function onlyDigits(s) {
-  return String(s || "").replace(/\D/g, "");
-}
-
-
-// ===============================
-// DEDUP CLIENTES
-// ===============================
-function dedupeClientes(arr) {
-  const seen = new Set();
-  const out = [];
-
-  for (const c of arr) {
-    const key =
-      normTxt(c.nombrePerfil || "") +
-      "|" +
-      onlyDigits(c.telefono || "");
-
-    if (!seen.has(key)) {
-      seen.add(key);
-      out.push(c);
-    }
-  }
-
-  return out;
-}
-
-// ===============================
-// LABEL PLATAFORMA
-// ===============================
-function labelPlataforma(p) {
-  const map = {
-    netflix: "Netflix",
-    vipnetflix: "Netflix VIP",
-    disney: "Disney+",
-    prime: "Prime Video",
-    max: "HBO Max",
-    vix: "Vix+",
-    paramount: "Paramount+",
-    apple: "Apple TV+",
-    universal: "Universal+",
-    crunchyroll: "Crunchyroll",
-    youtube: "YouTube",
-    spotify: "Spotify",
-    canva: "Canva",
-  };
-
-  return map[p] || String(p || "").toUpperCase();
-}
-
-
-// ===============================
-// RESUMEN CLIENTE TXT
-// ===============================
-function clienteResumenTXT(c) {
-  const servicios = Array.isArray(c.servicios) ? c.servicios : [];
-
-  let txt = "";
-  txt += `CLIENTE\n`;
-  txt += `Nombre: ${stripAcentos(c.nombrePerfil || "-")}\n`;
-  txt += `Telefono: ${onlyDigits(c.telefono || "-")}\n`;
-  txt += `Vendedor: ${stripAcentos(c.vendedor || "-")}\n\n`;
-
-  txt += `SERVICIOS\n`;
-
-  servicios.forEach((s, i) => {
-    txt += `${i + 1}) ${labelPlataforma(s.plataforma)}\n`;
-    txt += `Correo: ${s.correo || "-"}\n`;
-    txt += `Pin: ${s.pin || "-"}\n`;
-    txt += `Precio: ${s.precio || 0} Lps\n`;
-    txt += `Renovacion: ${s.fechaRenovacion || "-"}\n\n`;
-  });
-
-  txt += `TOTAL SERVICIOS: ${servicios.length}\n`;
-
-  return txt;
-}
-
-// ===============================
-// CRM SERVICIOS
+// HELPERS CRM
 // ===============================
 function daysUntilDMY(dmy) {
-
   if (!isFechaDMY(dmy)) return null;
 
-  const [dd, mm, yyyy] = dmy.split("/").map(Number);
-
+  const [dd, mm, yyyy] = String(dmy).split("/").map(Number);
   const target = new Date(yyyy, mm - 1, dd);
   const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 
-  const today = new Date(
-    now.getFullYear(),
-    now.getMonth(),
-    now.getDate()
-  );
-
-  return Math.round(
-    (target.getTime() - today.getTime()) /
-      86400000
-  );
+  return Math.round((target.getTime() - today.getTime()) / 86400000);
 }
 
-function estadoServicioLabel(fecha) {
+function estadoServicioLabel(fechaRenovacion) {
+  const d = daysUntilDMY(fechaRenovacion);
+  if (d === null) return "⚪ Sin fecha";
+  if (d < 0) return "⚫ Vencido";
+  if (d === 0) return "🔴 Vence hoy";
+  if (d >= 1 && d <= 3) return "🟡 Próximo";
+  return "🟢 Activo";
+}
 
-  const d = daysUntilDMY(fecha);
+function emojiPlataforma(plataforma = "") {
+  const p = normalizarPlataforma(plataforma);
+  const map = {
+    netflix: "📺",
+    vipnetflix: "🔥",
+    disneyp: "🏰",
+    disneys: "🎞️",
+    hbomax: "🍿",
+    primevideo: "🎥",
+    paramount: "📀",
+    crunchyroll: "🍥",
+    vix: "🎬",
+    appletv: "🍎",
+    universal: "🌎",
+    youtube: "▶️",
+    spotify: "🎵",
+    canva: "🎨",
+    oleadatv1: "🌊",
+    oleadatv3: "🌊",
+    iptv1: "📡",
+    iptv3: "📡",
+    iptv4: "📡",
+  };
+  return map[p] || "📦";
+}
 
-  if (d === null) return "⚪ sin fecha";
-  if (d < 0) return "⚫ vencido";
-  if (d === 0) return "🔴 vence hoy";
-  if (d <= 3) return "🟡 próximo";
-
-  return "🟢 activo";
+function labelPlataforma(plataforma = "") {
+  const p = normalizarPlataforma(plataforma);
+  return `${emojiPlataforma(p)} ${p}`;
 }
 
 function resumenClienteCRM(cliente) {
-
-  const servicios = Array.isArray(cliente.servicios)
-    ? cliente.servicios
-    : [];
-
-  let total = 0;
-  let prox = "";
-
+  const servicios = serviciosOrdenados(Array.isArray(cliente?.servicios) ? cliente.servicios : []);
+  let totalMensual = 0;
+  let proxFecha = "";
   let venceHoy = 0;
   let vencidos = 0;
   let proximos = 0;
 
   for (const s of servicios) {
-
-    total += Number(s.precio || 0);
-
+    totalMensual += Number(s.precio || 0);
     const d = daysUntilDMY(s.fechaRenovacion);
 
-    if (!prox && s.fechaRenovacion) prox = s.fechaRenovacion;
-
+    if (proxFecha === "" && isFechaDMY(s.fechaRenovacion)) proxFecha = s.fechaRenovacion;
     if (d === 0) venceHoy++;
-    if (d < 0) vencidos++;
-    if (d >= 1 && d <= 3) proximos++;
+    if (d !== null && d < 0) vencidos++;
+    if (d !== null && d >= 1 && d <= 3) proximos++;
   }
+
+  let estadoGeneral = "🟢 Estable";
+  if (vencidos > 0 || venceHoy > 0) estadoGeneral = "🔴 Atención";
+  else if (proximos > 0) estadoGeneral = "🟡 Seguimiento";
 
   return {
     servicios,
-    totalMensual: total,
-    proxFecha: prox || "-",
+    totalMensual,
+    proxFecha: proxFecha || "-",
     venceHoy,
     vencidos,
-    proximos
+    proximos,
+    estadoGeneral,
   };
+}
+
+function clienteResumenTXT(c) {
+  const r = resumenClienteCRM(c);
+
+  let body = "";
+  body += `CLIENTE CRM\n\n`;
+  body += `NOMBRE: ${stripAcentos(c.nombrePerfil || "-")}\n`;
+  body += `TELEFONO: ${onlyDigits(c.telefono || "") || "-"}\n`;
+  body += `VENDEDOR: ${stripAcentos(c.vendedor || "-")}\n\n`;
+  body += `SERVICIOS ACTIVOS: ${r.servicios.length}\n`;
+  body += `TOTAL MENSUAL: ${r.totalMensual} Lps\n`;
+  body += `PROXIMA RENOVACION: ${r.proxFecha}\n`;
+  body += `VENCE HOY: ${r.venceHoy}\n`;
+  body += `VENCIDOS: ${r.vencidos}\n`;
+  body += `PROXIMOS: ${r.proximos}\n`;
+  body += `ESTADO GENERAL: ${stripAcentos(r.estadoGeneral)}\n\n`;
+  body += `SERVICIOS\n\n`;
+
+  if (!r.servicios.length) {
+    body += "SIN SERVICIOS\n";
+  } else {
+    r.servicios.forEach((s, i) => {
+      body += `${i + 1}) ${normalizarPlataforma(s.plataforma)} | ${s.correo || "-"} | ${Number(s.precio || 0)} Lps | ${s.fechaRenovacion || "-"} | ${stripAcentos(estadoServicioLabel(s.fechaRenovacion))}\n`;
+    });
+  }
+
+  return body;
 }
 
 // ===============================
@@ -1314,7 +1340,7 @@ async function wizardNext(chatId, text) {
       }
     }
   }
-               }
+}
 
 
 // ===============================
