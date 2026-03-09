@@ -1008,7 +1008,7 @@ function kbPlataformasWiz(prefix, clientId, idxOpt) {
     ],
     [{ text: "📡 iptv (4)", callback_data: cb("iptv4") }],
   ];
-}
+  }
 
 // ===============================
 // WIZARD CLIENTES
@@ -1447,7 +1447,7 @@ async function menuEditarCliente(chatId,clientId){
     "Markdown"
   );
 
-     }
+}
 
 // ===============================
 // BÚSQUEDA CLIENTES
@@ -2491,17 +2491,31 @@ bot.on("callback_query", async (q) => {
         const platRaw = parts[2] || "";
         const clientId = parts[3] || null;
 
-        const st = w(chatId);
-        if (!st) return bot.sendMessage(chatId, "⚠️ Wizard no activo. Toque ➕ Nuevo cliente.");
-
         const plat = normalizarPlataforma(platRaw);
-        if (!esPlataformaValida(plat)) return bot.sendMessage(chatId, `⚠️ Plataforma inválida en wizard: ${platRaw}`);
+        if (!esPlataformaValida(plat)) {
+          return bot.sendMessage(chatId, `⚠️ Plataforma inválida en wizard: ${platRaw}`);
+        }
+
+        let st = w(chatId);
+
+        if (!st) {
+          st = {
+            step: 4,
+            clientId,
+            nombre: "",
+            telefono: "",
+            vendedor: "",
+            servicio: {},
+            servStep: 1,
+          };
+        }
 
         st.clientId = clientId || st.clientId;
         st.servicio = st.servicio || {};
         st.servicio.plataforma = plat;
         st.servStep = 2;
         st.step = 4;
+
         wset(chatId, st);
 
         return bot.sendMessage(chatId, "(Servicio 2/5) Correo de la cuenta:");
@@ -2509,18 +2523,28 @@ bot.on("callback_query", async (q) => {
 
       if (data.startsWith("wiz:addmore:")) {
         const clientId = data.split(":")[2];
-        const st = w(chatId);
-        if (!st) return bot.sendMessage(chatId, "⚠️ Wizard no activo.");
 
-        st.clientId = clientId;
-        st.step = 4;
-        st.servStep = 1;
-        st.servicio = {};
-        wset(chatId, st);
+        const nuevoState = {
+          step: 4,
+          clientId,
+          nombre: "",
+          telefono: "",
+          vendedor: "",
+          servicio: {},
+          servStep: 1,
+        };
 
-        return bot.sendMessage(chatId, "📌 Agregar otro servicio\nSeleccione plataforma:", {
-          reply_markup: { inline_keyboard: kbPlataformasWiz("wiz:plat", clientId) },
-        });
+        wset(chatId, nuevoState);
+
+        return bot.sendMessage(
+          chatId,
+          "📌 Agregar otro servicio\nSeleccione plataforma:",
+          {
+            reply_markup: {
+              inline_keyboard: kbPlataformasWiz("wiz:plat", clientId),
+            },
+          }
+        );
       }
 
       if (data.startsWith("wiz:finish:")) {
@@ -2905,7 +2929,7 @@ bot.on("message", async (msg) => {
       if (cmd !== "menu" && cmd !== "start") {
         return bot.sendMessage(
           chatId,
-          "⚠️ Está en creación de cliente.\nPrimero toque *➕ Agregar otra* o *✅ Finalizar*.",
+          "⚠️ Está en creación de cliente.\nPrimero toque *➕ Agregar otro* o *✅ Finalizar*.",
           { parse_mode: "Markdown" }
         );
       }
