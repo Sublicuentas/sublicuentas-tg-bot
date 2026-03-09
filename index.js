@@ -10,6 +10,7 @@
  ✅ Inventario + Clientes + Renovaciones + Revendedores
  ✅ CRM CLIENTE
  ✅ BLOQUEO DUPLICADOS
+ ✅ FIX MARKDOWN EN CORREOS / NOMBRES
 */
 
 const http = require("http");
@@ -186,6 +187,10 @@ function addDaysDMY(dmy, days) {
   const dt = new Date(yyyy, mm - 1, dd);
   dt.setDate(dt.getDate() + Number(days || 0));
   return `${String(dt.getDate()).padStart(2, "0")}/${String(dt.getMonth() + 1).padStart(2, "0")}/${dt.getFullYear()}`;
+}
+
+function escMD(text = "") {
+  return String(text || "").replace(/([_*\[\]()~`>#+\-=|{}.!])/g, "\\$1");
 }
 
 async function enviarTxtComoArchivo(chatId, contenido, filename = "reporte.txt") {
@@ -587,8 +592,7 @@ function emojiPlataforma(plataforma = "") {
 }
 
 function labelPlataforma(plataforma = "") {
-  const p = normalizarPlataforma(plataforma);
-  return `${emojiPlataforma(p)} ${p}`;
+  return `${emojiPlataforma(plataforma)} ${normalizarPlataforma(plataforma)}`;
 }
 
 function resumenClienteCRM(cliente) {
@@ -809,10 +813,10 @@ async function enviarSubmenuInventario(chatId, plataforma, correo) {
   const total = await getTotalPorPlataforma(plat);
 
   const t =
-    `📧 *${mail}*\n` +
-    `📌 *${plat.toUpperCase()}*\n` +
+    `📧 *${escMD(mail)}*\n` +
+    `📌 *${escMD(plat.toUpperCase())}*\n` +
     `👤 Disp: *${Number(item.disp || 0)}*/${total ?? "-"}\n` +
-    `Estado: *${fmtEstado(item.estado)}*`;
+    `Estado: *${escMD(fmtEstado(item.estado))}*`;
 
   return upsertPanel(
     chatId,
@@ -1008,97 +1012,7 @@ function kbPlataformasWiz(prefix, clientId, idxOpt) {
     ],
     [{ text: "📡 iptv (4)", callback_data: cb("iptv4") }],
   ];
-  }
-
-// ===============================
-// WIZARD CLIENTES
-// ===============================
-async function wizardStart(chatId) {
-
-  const state = {
-    step: 1,
-    clientId: null,
-    nombre: "",
-    telefono: "",
-    vendedor: "",
-    servicio: {},
-    servStep: 0
-  };
-
-  wset(chatId, state);
-
-  return bot.sendMessage(
-    chatId,
-    "👤 *Nuevo cliente*\n\nEscriba el *nombre del cliente*:",
-    { parse_mode: "Markdown" }
-  );
 }
-
-async function wizardNext(chatId, text) {
-
-  const st = w(chatId);
-  if (!st) return;
-
-  // ===============================
-  // PASO 1 NOMBRE
-  // ===============================
-  if (st.step === 1) {
-
-    const nombre = String(text).trim();
-
-    if (nombre.length < 2) {
-      return bot.sendMessage(chatId,"⚠️ Nombre muy corto.");
-    }
-
-    st.nombre = nombre;
-    st.step = 2;
-
-    wset(chatId,st);
-
-    return bot.sendMessage(
-      chatId,
-      "📱 Escriba el *teléfono del cliente*:",
-      { parse_mode:"Markdown" }
-    );
-  }
-
-  // ===============================
-  // PASO 2 TELEFONO
-  // ===============================
-  if (st.step === 2) {
-
-    if (!esTelefono(text)) {
-      return bot.sendMessage(chatId,"⚠️ Teléfono inválido.");
-    }
-
-    st.telefono = text;
-    st.step = 3;
-
-    wset(chatId,st);
-
-    return bot.sendMessage(
-      chatId,
-      "🧑‍💼 Escriba el *vendedor*:",
-      { parse_mode:"Markdown" }
-    );
-  }
-
-  // ===============================
-  // PASO 3 VENDEDOR
-  // ===============================
-  if (st.step === 3) {
-
-    st.vendedor = text;
-
-    const dup = await clienteDuplicado(st.nombre,st.telefono);
-
-    if (dup) {
-      return bot.sendMessage(
-        chatId,
-        "⚠️ Ya existe un cliente con ese nombre y teléfono."
-      );
-    }
-
     const ref = await db.collection("clientes").add({
 
       nombrePerfil: st.nombre,
