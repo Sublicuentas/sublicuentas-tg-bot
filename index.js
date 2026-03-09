@@ -209,6 +209,46 @@ async function borrarDuplicadosClientes() {
 }
 
 // ===============================
+// NORMALIZAR TEXTO
+// ===============================
+function normTxt(s) {
+  return stripAcentos(String(s || ""))
+    .toLowerCase()
+    .trim();
+}
+
+
+// ===============================
+// SOLO DIGITOS
+// ===============================
+function onlyDigits(s) {
+  return String(s || "").replace(/\D/g, "");
+}
+
+
+// ===============================
+// DEDUP CLIENTES
+// ===============================
+function dedupeClientes(arr) {
+  const seen = new Set();
+  const out = [];
+
+  for (const c of arr) {
+    const key =
+      normTxt(c.nombrePerfil || "") +
+      "|" +
+      onlyDigits(c.telefono || "");
+
+    if (!seen.has(key)) {
+      seen.add(key);
+      out.push(c);
+    }
+  }
+
+  return out;
+}
+
+// ===============================
 // LABEL PLATAFORMA
 // ===============================
 function labelPlataforma(p) {
