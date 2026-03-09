@@ -208,6 +208,56 @@ async function borrarDuplicadosClientes() {
   return borrados;
 }
 
+// ===============================
+// LABEL PLATAFORMA
+// ===============================
+function labelPlataforma(p) {
+  const map = {
+    netflix: "Netflix",
+    vipnetflix: "Netflix VIP",
+    disney: "Disney+",
+    prime: "Prime Video",
+    max: "HBO Max",
+    vix: "Vix+",
+    paramount: "Paramount+",
+    apple: "Apple TV+",
+    universal: "Universal+",
+    crunchyroll: "Crunchyroll",
+    youtube: "YouTube",
+    spotify: "Spotify",
+    canva: "Canva",
+  };
+
+  return map[p] || String(p || "").toUpperCase();
+}
+
+
+// ===============================
+// RESUMEN CLIENTE TXT
+// ===============================
+function clienteResumenTXT(c) {
+  const servicios = Array.isArray(c.servicios) ? c.servicios : [];
+
+  let txt = "";
+  txt += `CLIENTE\n`;
+  txt += `Nombre: ${stripAcentos(c.nombrePerfil || "-")}\n`;
+  txt += `Telefono: ${onlyDigits(c.telefono || "-")}\n`;
+  txt += `Vendedor: ${stripAcentos(c.vendedor || "-")}\n\n`;
+
+  txt += `SERVICIOS\n`;
+
+  servicios.forEach((s, i) => {
+    txt += `${i + 1}) ${labelPlataforma(s.plataforma)}\n`;
+    txt += `Correo: ${s.correo || "-"}\n`;
+    txt += `Pin: ${s.pin || "-"}\n`;
+    txt += `Precio: ${s.precio || 0} Lps\n`;
+    txt += `Renovacion: ${s.fechaRenovacion || "-"}\n\n`;
+  });
+
+  txt += `TOTAL SERVICIOS: ${servicios.length}\n`;
+
+  return txt;
+}
 
 // ===============================
 // CRM SERVICIOS
