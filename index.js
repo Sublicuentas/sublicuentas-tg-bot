@@ -1,5 +1,5 @@
 /*
- ✅ SUBLICUENTAS TG BOT — INDEX FINAL (BLINDADO v7)
+ ✅ SUBLICUENTAS TG BOT — INDEX FINAL (BLINDADO v8)
  ✅ FIX 409 menú / editMessageText
  ✅ FIX crash por archivo cortado
  ✅ FIX http duplicado
@@ -11,6 +11,9 @@
  ✅ CRM CLIENTE
  ✅ BLOQUEO DUPLICADOS
  ✅ FIX MARKDOWN EN CORREOS / NOMBRES
+ ✅ FIX WIZARD FINALIZAR
+ ✅ RENOVAR TODOS +30
+ ✅ INVENTARIO REAL POR CLIENTES EN CADA CORREO
 */
 
 const http = require("http");
@@ -113,7 +116,10 @@ function stripAcentos(str = "") {
 }
 
 function normTxt(str = "") {
-  return stripAcentos(String(str || "")).toLowerCase().trim().replace(/\s+/g, " ");
+  return stripAcentos(String(str || ""))
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, " ");
 }
 
 function onlyDigits(str = "") {
@@ -121,7 +127,11 @@ function onlyDigits(str = "") {
 }
 
 function normalizarPlataforma(txt = "") {
-  return String(txt).toLowerCase().trim().replace(/\s+/g, "").replace(/[\.\-_/]+/g, "");
+  return String(txt)
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, "")
+    .replace(/[\.\-_/]+/g, "");
 }
 
 function esPlataformaValida(p) {
@@ -160,7 +170,11 @@ function esTelefono(txt) {
 }
 
 function limpiarQuery(txt) {
-  return String(txt || "").trim().replace(/^\/+/, "").replace(/\s+/g, " ").toLowerCase();
+  return String(txt || "")
+    .trim()
+    .replace(/^\/+/, "")
+    .replace(/\s+/g, " ")
+    .toLowerCase();
 }
 
 function isEmailLike(s) {
@@ -190,7 +204,7 @@ function addDaysDMY(dmy, days) {
 }
 
 function escMD(text = "") {
-  return String(text || "").replace(/([_*\[\]()~`>#+\-=|{}.!])/g, "\\$1");
+  return String(text || "").replace(/([_*\[\]()~`>#+\-=|{}.!\\])/g, "\\$1");
 }
 
 async function enviarTxtComoArchivo(chatId, contenido, filename = "reporte.txt") {
@@ -1012,7 +1026,7 @@ function kbPlataformasWiz(prefix, clientId, idxOpt) {
     ],
     [{ text: "📡 iptv (4)", callback_data: cb("iptv4") }],
   ];
-}
+     }
 
 // ===============================
 // FICHA CLIENTE / CRM / EDICIÓN
@@ -1151,6 +1165,176 @@ async function menuServicio(chatId, clientId, idx) {
     },
     "Markdown"
   );
+}
+
+// ===============================
+// WIZARD CORREO / CLIENTES EN CORREO
+// ===============================
+async function buscarCorreoInventarioPorPlatCorreo(plataforma, correo) {
+  const plat = normalizarPlataforma(plataforma);
+  const mail = String(correo || "").trim().toLowerCase();
+
+  const directRef = db.collection("inventario").doc(docIdInventario(mail, plat));
+  const directSnap = await directRef.get();
+
+  if (directSnap.exists) {
+    return {
+      id: directSnap.id,
+      ref: directRef,
+      data: directSnap.data() || {},
+    };
+  }
+
+  const snap = await db
+    .collection("inventario")
+    .where("plataforma", "==", plat)
+    .where("correo", "==", mail)
+    .limit(1)
+    .get();
+
+  if (!snap.empty) {
+    const d = snap.docs[0];
+    return {
+      id: d.id,
+      ref: d.ref,
+      data: d.data() || {},
+    };
+  }
+
+  return null;
+}
+
+function getCapacidadCorreo(data = {}, plataforma = "") {
+  const desdeData = Number(data.capacidad || data.total || 0);
+  if (Number.isFinite(desdeData) && desdeData > 0) return desdeData;
+
+  const plat = normalizarPlataforma(plataforma);
+  const mapa = {
+    netflix: 5,
+    vipnetflix: 1,
+    disney: 6,
+    disneyp: 6,
+    disneyplus: 6,
+    max: 5,
+    hbomax: 5,
+    primevideo: 6,
+    prime: 6,
+    paramount: 6,
+    vix: 5,
+    crunchyroll: 5,
+    spotify: 1,
+    youtube: 1,
+    canva: 1,
+    appletv: 6,
+    universal: 6,
+    oleadatv1: 1,
+    oleadatv3: 3,
+    iptv1: 1,
+    iptv3: 3,
+    iptv4: 4,
+  };
+
+  return mapa[plat] || 6;
+}
+
+async function mostrarListaCorreosPlataforma(chatId, plataforma) {
+  const plat = normalizarPlataforma(plataforma);
+
+  const snap = await db
+    .collection("inventario")
+    .where("plataforma", "==", plat)
+    .limit(500)
+    .get();
+
+  if (snap.empty) {
+    return bot.sendMessage(
+      chatId,
+      `📭 *${escMD(String(plat).toUpperCase())}*\n\nNo hay correos registrados en esta plataforma.`,
+      {
+        parse_mode: "Markdown",
+        reply_markup: {
+          inline_keyboard: [[{ text: "🏠 Inicio", callback_data: "go:inicio" }]],
+        },
+      }
+    );
+  }
+
+  const docs = snap.docs.map((d) => ({
+    id: d.id,
+    ...(d.data() || {}),
+  }));
+
+  docs.sort((a, b) => {
+    const aCorreo = String(a.correo || "").toLowerCase();
+    const bCorreo = String(b.correo || "").toLowerCase();
+    return aCorreo.localeCompare(bCorreo);
+  });
+
+  let txt = `📂 *${escMD(String(plat).toUpperCase())}*\n\n`;
+  txt += `Seleccione un correo:\n`;
+
+  const kb = docs.map((item) => {
+    const clientes = Array.isArray(item.clientes) ? item.clientes : [];
+    const capacidad = getCapacidadCorreo(item, plat);
+    const ocupados = clientes.length;
+    const disponibles = Math.max(0, capacidad - ocupados);
+    const estado = disponibles === 0 ? "LLENA" : "CON ESPACIO";
+
+    return [{
+      text: `${item.correo || "correo"} | ${ocupados}/${capacidad} | ${estado}`,
+      callback_data: `mail_panel|${plat}|${encodeURIComponent(item.correo || "")}`,
+    }];
+  });
+
+  kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
+
+  return bot.sendMessage(chatId, txt, {
+    parse_mode: "Markdown",
+    reply_markup: {
+      inline_keyboard: kb,
+    },
+  });
+}
+
+async function mostrarPanelCorreo(chatId, plataforma, correo) {
+  const plat = normalizarPlataforma(plataforma);
+  const mail = String(correo || "").trim().toLowerCase();
+
+  const found = await buscarCorreoInventarioPorPlatCorreo(plat, mail);
+  if (!found) {
+    return bot.sendMessage(chatId, "❌ Este correo no existe.");
+  }
+
+  const data = found.data || {};
+  const clientes = Array.isArray(data.clientes) ? data.clientes : [];
+  const capacidad = getCapacidadCorreo(data, plat);
+
+  const ocupados = clientes.length;
+  const disponibles = Math.max(0, capacidad - ocupados);
+  const estado = disponibles === 0 ? "LLENA" : "CON ESPACIO";
+
+  let txt = "";
+  txt += `📧 *${escMD(mail)}*\n`;
+  txt += `📌 *${escMD(String(plat).toUpperCase())}*\n\n`;
+  txt += `👤 *Ocupados:* ${ocupados}/${capacidad}\n`;
+  txt += `✅ *Disponibles:* ${disponibles}\n`;
+  txt += `📊 *Estado:* ${escMD(estado)}`;
+
+  return bot.sendMessage(chatId, txt, {
+    parse_mode: "Markdown",
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: "👥 Ver clientes", callback_data: `mail_ver_clientes|${plat}|${encodeURIComponent(mail)}` }],
+        [{ text: "➕ Agregar cliente", callback_data: `mail_add_cliente|${plat}|${encodeURIComponent(mail)}` }],
+        [{ text: "➖ Quitar cliente", callback_data: `mail_del_cliente|${plat}|${encodeURIComponent(mail)}` }],
+        [{ text: "🔐 Editar PIN", callback_data: `mail_edit_pin|${plat}|${encodeURIComponent(mail)}` }],
+        [{ text: "✏️ Editar clave del correo", callback_data: `mail_edit_clave|${plat}|${encodeURIComponent(mail)}` }],
+        [{ text: "🗑️ Borrar correo", callback_data: `mail_delete|${plat}|${encodeURIComponent(mail)}` }],
+        [{ text: "⬅️ Volver Inventario", callback_data: `inv:${plat}:0` }],
+        [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
+      ],
+    },
+  });
 }
 
 // ===============================
@@ -1663,12 +1847,7 @@ bot.onText(/\/reindex_clientes/i, async (msg) => {
     const vendedor_norm = normTxt(c.vendedor || c.vendedor_norm || "");
 
     await d.ref.set(
-      {
-        nombre_norm,
-        telefono_norm,
-        vendedor_norm,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      },
+      { nombre_norm, telefono_norm, vendedor_norm, updatedAt: admin.firestore.FieldValue.serverTimestamp() },
       { merge: true }
     );
     ok++;
@@ -1698,10 +1877,7 @@ bot.onText(/\/add\s+(.+)/i, async (msg, match) => {
   const parts = raw.split(/\s+/);
 
   if (parts.length < 3) {
-    return bot.sendMessage(
-      chatId,
-      "⚠️ Uso: /add correo CLAVE plataforma disp [activa|llena]\nO: /add correo plataforma disp"
-    );
+    return bot.sendMessage(chatId, "⚠️ Uso: /add correo CLAVE plataforma disp [activa|llena]\nO: /add correo plataforma disp");
   }
 
   let correo = "";
@@ -1739,12 +1915,16 @@ bot.onText(/\/add\s+(.+)/i, async (msg, match) => {
   const now = admin.firestore.FieldValue.serverTimestamp();
 
   const prev = await ref.get();
+  const prevData = prev.exists ? (prev.data() || {}) : {};
+  const capacidad = getCapacidadCorreo(prevData, plataforma);
+
   const data = {
     correo,
     plataforma,
     disp,
     clave: clave ? String(clave) : prev.exists ? prev.data()?.clave || "" : "",
     estado: disp <= 0 ? "llena" : estado,
+    capacidad,
     updatedAt: now,
   };
   if (!prev.exists) data.createdAt = now;
@@ -1885,10 +2065,7 @@ bot.onText(/\/renovaciones(?:\s+(.+))?/i, async (msg, match) => {
       fecha = parts[parts.length - 1];
       vendedor = parts.slice(0, -1).join(" ");
     } else {
-      return bot.sendMessage(
-        chatId,
-        "⚠️ Uso:\n/renovaciones hoy\n/renovaciones dd/mm/yyyy\n/renovaciones VENDEDOR dd/mm/yyyy"
-      );
+      return bot.sendMessage(chatId, "⚠️ Uso:\n/renovaciones hoy\n/renovaciones dd/mm/yyyy\n/renovaciones VENDEDOR dd/mm/yyyy");
     }
   }
 
@@ -1940,19 +2117,13 @@ bot.onText(/\/txt(?:\s+(.+))?/i, async (msg, match) => {
 bot.onText(/\/id/i, async (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-  return bot.sendMessage(
-    chatId,
-    `🆔 Tu Telegram ID es:\n${userId}\n\n📩 Envíelo al administrador para activarte en el bot.`
-  );
+  return bot.sendMessage(chatId, `🆔 Tu Telegram ID es:\n${userId}\n\n📩 Envíelo al administrador para activarte en el bot.`);
 });
 
 bot.onText(/\/miid/i, async (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-  return bot.sendMessage(
-    chatId,
-    `🆔 Tu Telegram ID es:\n${userId}\n\n📩 Envíelo al administrador para activarte en el bot.`
-  );
+  return bot.sendMessage(chatId, `🆔 Tu Telegram ID es:\n${userId}\n\n📩 Envíelo al administrador para activarte en el bot.`);
 });
 
 bot.onText(/\/vincular_vendedor\s+(.+)/i, async (msg, match) => {
@@ -2364,6 +2535,318 @@ bot.on("callback_query", async (q) => {
         await ref.delete();
         pending.delete(String(chatId));
         return bot.sendMessage(chatId, `🗑️ Borrado:\n📌 ${String(plat).toUpperCase()}\n📧 ${correo}`);
+      }
+
+      // ==============================
+      // WIZARD CORREO / CLIENTES EN CORREO
+      // ==============================
+      if (data.startsWith("mail_panel|")) {
+        const [, plataforma, correoEnc] = data.split("|");
+        const correo = decodeURIComponent(correoEnc || "");
+        return mostrarPanelCorreo(chatId, plataforma, correo);
+      }
+
+      if (data.startsWith("mail_ver_clientes|")) {
+        const [, plataforma, correoEnc] = data.split("|");
+        const correo = decodeURIComponent(correoEnc || "");
+
+        const found = await buscarCorreoInventarioPorPlatCorreo(plataforma, correo);
+        if (!found) return bot.sendMessage(chatId, "❌ El correo no existe.");
+
+        const correoData = found.data || {};
+        const clientes = Array.isArray(correoData.clientes) ? correoData.clientes : [];
+        const capacidad = getCapacidadCorreo(correoData, plataforma);
+        const ocupados = clientes.length;
+        const disponibles = Math.max(0, capacidad - ocupados);
+        const estado = disponibles === 0 ? "LLENA" : "CON ESPACIO";
+
+        let txt = "👥 *Clientes en este correo*\n\n";
+        txt += `📧 *${escMD(correo)}*\n`;
+        txt += `📌 *${escMD(String(plataforma).toUpperCase())}*\n\n`;
+
+        if (!clientes.length) {
+          txt += "_No hay clientes asignados._\n\n";
+        } else {
+          clientes.forEach((c, i) => {
+            txt += `${i + 1}. ${escMD(c.nombre || "Sin nombre")} — PIN ${escMD(c.pin || "----")}\n`;
+          });
+          txt += "\n";
+        }
+
+        txt += `👤 *Ocupados:* ${ocupados}/${capacidad}\n`;
+        txt += `✅ *Disponibles:* ${disponibles}\n`;
+        txt += `📊 *Estado:* ${escMD(estado)}`;
+
+        return bot.sendMessage(chatId, txt, {
+          parse_mode: "Markdown",
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: "⬅️ Volver al correo", callback_data: `mail_panel|${normalizarPlataforma(plataforma)}|${encodeURIComponent(correo)}` }],
+              [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
+            ],
+          },
+        });
+      }
+
+      if (data.startsWith("mail_add_cliente|")) {
+        const [, plataforma, correoEnc] = data.split("|");
+        const correo = decodeURIComponent(correoEnc || "");
+
+        const found = await buscarCorreoInventarioPorPlatCorreo(plataforma, correo);
+        if (!found) return bot.sendMessage(chatId, "❌ El correo no existe.");
+
+        const correoData = found.data || {};
+        const clientes = Array.isArray(correoData.clientes) ? correoData.clientes : [];
+        const capacidad = getCapacidadCorreo(correoData, plataforma);
+        const ocupados = clientes.length;
+        const disponibles = Math.max(0, capacidad - ocupados);
+
+        if (disponibles <= 0) {
+          return bot.sendMessage(
+            chatId,
+            `❌ Esta cuenta ya está llena.\n\n👤 Ocupados: ${ocupados}/${capacidad}\n✅ Disponibles: 0\n📊 Estado: LLENA`
+          );
+        }
+
+        pending.set(String(chatId), {
+          mode: "mailAddClienteNombre",
+          plataforma: normalizarPlataforma(plataforma),
+          correo: String(correo).toLowerCase(),
+        });
+
+        return bot.sendMessage(chatId, "👤 *Agregar cliente*\n\nEscriba el nombre del cliente:", {
+          parse_mode: "Markdown",
+        });
+      }
+
+      if (data.startsWith("mail_del_cliente|")) {
+        const [, plataforma, correoEnc] = data.split("|");
+        const correo = decodeURIComponent(correoEnc || "");
+
+        const found = await buscarCorreoInventarioPorPlatCorreo(plataforma, correo);
+        if (!found) return bot.sendMessage(chatId, "❌ El correo no existe.");
+
+        const correoData = found.data || {};
+        const clientes = Array.isArray(correoData.clientes) ? correoData.clientes : [];
+
+        if (!clientes.length) {
+          return bot.sendMessage(chatId, "⚠️ Este correo no tiene clientes.");
+        }
+
+        const kb = clientes.map((c, i) => [
+          {
+            text: `${i + 1}. ${c.nombre || "Sin nombre"} — PIN ${c.pin || "----"}`,
+            callback_data: `mail_del_cliente_ok|${normalizarPlataforma(plataforma)}|${encodeURIComponent(correo)}|${i}`,
+          },
+        ]);
+
+        kb.push([{ text: "⬅️ Volver", callback_data: `mail_panel|${normalizarPlataforma(plataforma)}|${encodeURIComponent(correo)}` }]);
+
+        return bot.sendMessage(
+          chatId,
+          `➖ *Quitar cliente*\n\n📧 *${escMD(correo)}*\n\nSeleccione el cliente que desea quitar:`,
+          {
+            parse_mode: "Markdown",
+            reply_markup: { inline_keyboard: kb },
+          }
+        );
+      }
+
+      if (data.startsWith("mail_del_cliente_ok|")) {
+        const [, plataforma, correoEnc, indexStr] = data.split("|");
+        const correo = decodeURIComponent(correoEnc || "");
+        const index = Number(indexStr);
+
+        const found = await buscarCorreoInventarioPorPlatCorreo(plataforma, correo);
+        if (!found) return bot.sendMessage(chatId, "❌ El correo no existe.");
+
+        const ref = found.ref;
+        const correoData = found.data || {};
+        let clientes = Array.isArray(correoData.clientes) ? correoData.clientes.slice() : [];
+
+        if (!clientes.length) return bot.sendMessage(chatId, "⚠️ Este correo ya no tiene clientes.");
+        if (isNaN(index) || index < 0 || index >= clientes.length) return bot.sendMessage(chatId, "❌ Cliente inválido.");
+
+        const cliente = clientes[index];
+        clientes.splice(index, 1);
+
+        clientes = clientes.map((c, i) => ({
+          ...c,
+          slot: i + 1,
+        }));
+
+        const capacidad = getCapacidadCorreo(correoData, plataforma);
+        const ocupados = clientes.length;
+        const disponibles = Math.max(0, capacidad - ocupados);
+        const estado = disponibles === 0 ? "LLENA" : "CON ESPACIO";
+
+        await ref.set(
+          {
+            clientes,
+            ocupados,
+            disponibles,
+            disp: disponibles,
+            estado,
+            capacidad,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        );
+
+        await bot.sendMessage(
+          chatId,
+          "✅ *Cliente quitado correctamente*\n\n" +
+            `👤 *Nombre:* ${escMD(cliente.nombre || "Sin nombre")}\n` +
+            `🔐 *PIN:* ${escMD(cliente.pin || "----")}\n\n` +
+            `👤 *Ocupados:* ${ocupados}/${capacidad}\n` +
+            `✅ *Disponibles:* ${disponibles}\n` +
+            `📊 *Estado:* ${escMD(estado)}`,
+          { parse_mode: "Markdown" }
+        );
+
+        return mostrarPanelCorreo(chatId, plataforma, correo);
+      }
+
+      if (data.startsWith("mail_edit_pin|")) {
+        const [, plataforma, correoEnc] = data.split("|");
+        const correo = decodeURIComponent(correoEnc || "");
+
+        const found = await buscarCorreoInventarioPorPlatCorreo(plataforma, correo);
+        if (!found) return bot.sendMessage(chatId, "❌ El correo no existe.");
+
+        const correoData = found.data || {};
+        const clientes = Array.isArray(correoData.clientes) ? correoData.clientes : [];
+
+        if (!clientes.length) return bot.sendMessage(chatId, "⚠️ Este correo no tiene clientes.");
+
+        const kb = clientes.map((c, i) => [
+          {
+            text: `${i + 1}. ${c.nombre || "Sin nombre"} — PIN ${c.pin || "----"}`,
+            callback_data: `mail_edit_pin_sel|${normalizarPlataforma(plataforma)}|${encodeURIComponent(correo)}|${i}`,
+          },
+        ]);
+
+        kb.push([{ text: "⬅️ Volver", callback_data: `mail_panel|${normalizarPlataforma(plataforma)}|${encodeURIComponent(correo)}` }]);
+
+        return bot.sendMessage(
+          chatId,
+          `🔐 *Editar PIN*\n\n📧 *${escMD(correo)}*\n\nSeleccione el cliente:`,
+          {
+            parse_mode: "Markdown",
+            reply_markup: { inline_keyboard: kb },
+          }
+        );
+      }
+
+      if (data.startsWith("mail_edit_pin_sel|")) {
+        const [, plataforma, correoEnc, indexStr] = data.split("|");
+        const correo = decodeURIComponent(correoEnc || "");
+        const clienteIndex = Number(indexStr);
+
+        const found = await buscarCorreoInventarioPorPlatCorreo(plataforma, correo);
+        if (!found) return bot.sendMessage(chatId, "❌ El correo no existe.");
+
+        const correoData = found.data || {};
+        const clientes = Array.isArray(correoData.clientes) ? correoData.clientes : [];
+
+        if (!clientes.length) return bot.sendMessage(chatId, "⚠️ Este correo no tiene clientes.");
+        if (isNaN(clienteIndex) || clienteIndex < 0 || clienteIndex >= clientes.length) {
+          return bot.sendMessage(chatId, "❌ Cliente inválido.");
+        }
+
+        const cliente = clientes[clienteIndex];
+
+        pending.set(String(chatId), {
+          mode: "mailEditPin",
+          plataforma: normalizarPlataforma(plataforma),
+          correo: String(correo).toLowerCase(),
+          clienteIndex,
+        });
+
+        return bot.sendMessage(
+          chatId,
+          "🔐 *Editar PIN*\n\n" +
+            `👤 *Cliente:* ${escMD(cliente.nombre || "Sin nombre")}\n` +
+            `🔑 *PIN actual:* ${escMD(cliente.pin || "----")}\n\n` +
+            "Escriba el nuevo PIN de 4 dígitos:",
+          { parse_mode: "Markdown" }
+        );
+      }
+
+      if (data.startsWith("mail_edit_clave|")) {
+        const [, plataforma, correoEnc] = data.split("|");
+        const correo = decodeURIComponent(correoEnc || "");
+
+        const found = await buscarCorreoInventarioPorPlatCorreo(plataforma, correo);
+        if (!found) return bot.sendMessage(chatId, "❌ El correo no existe.");
+
+        const correoData = found.data || {};
+        const claveActual = correoData.clave || "Sin clave";
+
+        pending.set(String(chatId), {
+          mode: "mailEditClaveCorreo",
+          plataforma: normalizarPlataforma(plataforma),
+          correo: String(correo).toLowerCase(),
+        });
+
+        return bot.sendMessage(
+          chatId,
+          "✏️ *Editar clave del correo*\n\n" +
+            `📧 *Correo:* ${escMD(correo)}\n` +
+            `🔑 *Clave actual:* ${escMD(claveActual)}\n\n` +
+            "Escriba la nueva clave del correo:",
+          { parse_mode: "Markdown" }
+        );
+      }
+
+      if (data.startsWith("mail_delete|")) {
+        const [, plataforma, correoEnc] = data.split("|");
+        const correo = decodeURIComponent(correoEnc || "");
+
+        const found = await buscarCorreoInventarioPorPlatCorreo(plataforma, correo);
+        if (!found) return bot.sendMessage(chatId, "❌ Este correo ya no existe.");
+
+        return bot.sendMessage(
+          chatId,
+          "⚠️ *Confirmar eliminación*\n\n" +
+            `📧 *Correo:* ${escMD(correo)}\n\n` +
+            "Esta acción eliminará la cuenta del inventario.\n\n¿Está seguro que desea borrarla?",
+          {
+            parse_mode: "Markdown",
+            reply_markup: {
+              inline_keyboard: [
+                [{ text: "✅ Sí borrar", callback_data: `mail_delete_confirm|${normalizarPlataforma(plataforma)}|${encodeURIComponent(correo)}` }],
+                [{ text: "❌ Cancelar", callback_data: `mail_panel|${normalizarPlataforma(plataforma)}|${encodeURIComponent(correo)}` }],
+              ],
+            },
+          }
+        );
+      }
+
+      if (data.startsWith("mail_delete_confirm|")) {
+        const [, plataforma, correoEnc] = data.split("|");
+        const correo = decodeURIComponent(correoEnc || "");
+
+        const found = await buscarCorreoInventarioPorPlatCorreo(plataforma, correo);
+        if (!found) return mostrarListaCorreosPlataforma(chatId, plataforma);
+
+        const ref = found.ref;
+        const correoData = found.data || {};
+        const clientes = Array.isArray(correoData.clientes) ? correoData.clientes : [];
+
+        if (clientes.length > 0) {
+          await bot.sendMessage(chatId, "⚠️ Este correo tenía clientes asignados. Se eliminará igualmente del inventario.");
+        }
+
+        await ref.delete();
+
+        await bot.sendMessage(
+          chatId,
+          `🗑️ *Correo eliminado*\n\n📧 ${escMD(correo)}`,
+          { parse_mode: "Markdown" }
+        );
+
+        return mostrarListaCorreosPlataforma(chatId, plataforma);
       }
 
       if (data === "cli:txt:general") return reporteClientesTXTGeneral(chatId);
@@ -2818,7 +3301,7 @@ bot.on("message", async (msg) => {
       if (cmd !== "menu" && cmd !== "start") {
         return bot.sendMessage(
           chatId,
-          "⚠️ Está en creación de cliente.\nPrimero toque *➕ Agregar otro* o *✅ Finalizar*.",
+          "⚠️ Está en creación de cliente.\nPrimero toque *➕ Agregar otra* o *✅ Finalizar*.",
           { parse_mode: "Markdown" }
         );
       }
@@ -2916,6 +3399,129 @@ bot.on("message", async (msg) => {
 
       const p = pending.get(String(chatId));
       const t = String(text || "").trim();
+
+      if (p.mode === "mailAddClienteNombre") {
+        if (!t) return bot.sendMessage(chatId, "⚠️ Escriba el nombre del cliente.");
+
+        pending.set(String(chatId), {
+          mode: "mailAddClientePin",
+          plataforma: p.plataforma,
+          correo: p.correo,
+          nombre: t,
+        });
+
+        return bot.sendMessage(chatId, "🔐 Escriba el PIN del cliente:");
+      }
+
+      if (p.mode === "mailAddClientePin") {
+        if (!t) return bot.sendMessage(chatId, "⚠️ Escriba el PIN.");
+
+        pending.delete(String(chatId));
+
+        const found = await buscarCorreoInventarioPorPlatCorreo(p.plataforma, p.correo);
+        if (!found) return bot.sendMessage(chatId, "❌ El correo no existe.");
+
+        const ref = found.ref;
+        const correoData = found.data || {};
+        let clientes = Array.isArray(correoData.clientes) ? correoData.clientes.slice() : [];
+
+        const capacidad = getCapacidadCorreo(correoData, p.plataforma);
+        const ocupadosActual = clientes.length;
+        const disponiblesActual = Math.max(0, capacidad - ocupadosActual);
+
+        if (disponiblesActual <= 0) {
+          return bot.sendMessage(chatId, "❌ Esta cuenta ya está llena.");
+        }
+
+        clientes.push({
+          nombre: p.nombre,
+          pin: t,
+          slot: clientes.length + 1,
+        });
+
+        const ocupados = clientes.length;
+        const disponibles = Math.max(0, capacidad - ocupados);
+        const estado = disponibles === 0 ? "LLENA" : "CON ESPACIO";
+
+        await ref.set(
+          {
+            clientes,
+            ocupados,
+            disponibles,
+            disp: disponibles,
+            estado,
+            capacidad,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        );
+
+        await bot.sendMessage(
+          chatId,
+          "✅ *Cliente agregado correctamente*\n\n" +
+            `👤 *Nombre:* ${escMD(p.nombre)}\n` +
+            `🔐 *PIN:* ${escMD(t)}\n\n` +
+            `👤 *Ocupados:* ${ocupados}/${capacidad}\n` +
+            `✅ *Disponibles:* ${disponibles}\n` +
+            `📊 *Estado:* ${escMD(estado)}`,
+          { parse_mode: "Markdown" }
+        );
+
+        return mostrarPanelCorreo(chatId, p.plataforma, p.correo);
+      }
+
+      if (p.mode === "mailEditPin") {
+        if (!t) return bot.sendMessage(chatId, "⚠️ Escriba el nuevo PIN.");
+
+        pending.delete(String(chatId));
+
+        const found = await buscarCorreoInventarioPorPlatCorreo(p.plataforma, p.correo);
+        if (!found) return bot.sendMessage(chatId, "❌ El correo no existe.");
+
+        const ref = found.ref;
+        const correoData = found.data || {};
+        let clientes = Array.isArray(correoData.clientes) ? correoData.clientes.slice() : [];
+
+        if (p.clienteIndex < 0 || p.clienteIndex >= clientes.length) {
+          return bot.sendMessage(chatId, "❌ Cliente inválido.");
+        }
+
+        clientes[p.clienteIndex] = {
+          ...clientes[p.clienteIndex],
+          pin: t,
+        };
+
+        await ref.set(
+          {
+            clientes,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        );
+
+        await bot.sendMessage(chatId, "✅ PIN actualizado correctamente.");
+        return mostrarPanelCorreo(chatId, p.plataforma, p.correo);
+      }
+
+      if (p.mode === "mailEditClaveCorreo") {
+        if (!t) return bot.sendMessage(chatId, "⚠️ Escriba la nueva clave.");
+
+        pending.delete(String(chatId));
+
+        const found = await buscarCorreoInventarioPorPlatCorreo(p.plataforma, p.correo);
+        if (!found) return bot.sendMessage(chatId, "❌ El correo no existe.");
+
+        await found.ref.set(
+          {
+            clave: t,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        );
+
+        await bot.sendMessage(chatId, "✅ Clave del correo actualizada.");
+        return mostrarPanelCorreo(chatId, p.plataforma, p.correo);
+      }
 
       if (p.mode === "invSumarQty") {
         const qty = Number(t);
