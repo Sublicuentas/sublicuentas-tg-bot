@@ -1026,9 +1026,8 @@ function kbPlataformasWiz(prefix, clientId, idxOpt) {
     ],
     [{ text: "📡 iptv (4)", callback_data: cb("iptv4") }],
   ];
-     }
 
-// ===============================
+ // ===============================
 // FICHA CLIENTE / CRM / EDICIÓN
 // ===============================
 async function enviarFichaCliente(chatId, clientId) {
@@ -1170,6 +1169,10 @@ async function menuServicio(chatId, clientId, idx) {
 // ===============================
 // WIZARD CORREO / CLIENTES EN CORREO
 // ===============================
+function escapeMarkdown(text = "") {
+  return String(text).replace(/([_*\[\]()~`>#+\-=|{}.!\\])/g, "\\$1");
+}
+
 async function buscarCorreoInventarioPorPlatCorreo(plataforma, correo) {
   const plat = normalizarPlataforma(plataforma);
   const mail = String(correo || "").trim().toLowerCase();
@@ -1320,11 +1323,12 @@ async function mostrarPanelCorreo(chatId, plataforma, correo) {
   txt += `✅ *Disponibles:* ${disponibles}\n`;
   txt += `📊 *Estado:* ${escMD(estado)}`;
 
-  return bot.sendMessage(chatId, txt, {
-    parse_mode: "Markdown",
-    reply_markup: {
+  return upsertPanel(
+    chatId,
+    txt,
+    {
       inline_keyboard: [
-        [{ text: "👥 Ver clientes", callback_data: `mail_ver_clientes|${plat}|${encodeURIComponent(mail)}` }],
+        [{ text: "👁️ Ver clientes", callback_data: `mail_ver_clientes|${plat}|${encodeURIComponent(mail)}` }],
         [{ text: "➕ Agregar cliente", callback_data: `mail_add_cliente|${plat}|${encodeURIComponent(mail)}` }],
         [{ text: "➖ Quitar cliente", callback_data: `mail_del_cliente|${plat}|${encodeURIComponent(mail)}` }],
         [{ text: "🔐 Editar PIN", callback_data: `mail_edit_pin|${plat}|${encodeURIComponent(mail)}` }],
@@ -1334,7 +1338,8 @@ async function mostrarPanelCorreo(chatId, plataforma, correo) {
         [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
       ],
     },
-  });
+    "Markdown"
+  );
 }
 
 // ===============================
@@ -1827,568 +1832,9 @@ async function enviarTXTATodosHoy(superChatId) {
     superChatId,
     `✅ Enviado TXT HOY (${fecha})\n• Revendedores enviados: ${enviados}\n• Saltados: ${saltados}`
   );
-}
+          }
 
-// ===============================
-// REINDEX + FIX DUPLICADOS
-// ===============================
-bot.onText(/\/reindex_clientes/i, async (msg) => {
-  const chatId = msg.chat.id;
-  const userId = msg.from.id;
-  if (!isSuperAdmin(userId)) return bot.sendMessage(chatId, "⛔ Solo SUPER ADMIN.");
-
-  const snap = await db.collection("clientes").limit(5000).get();
-  let ok = 0;
-
-  for (const d of snap.docs) {
-    const c = d.data() || {};
-    const nombre_norm = normTxt(c.nombrePerfil || c.nombre_norm || "");
-    const telefono_norm = onlyDigits(c.telefono || c.telefono_norm || "");
-    const vendedor_norm = normTxt(c.vendedor || c.vendedor_norm || "");
-
-    await d.ref.set(
-      { nombre_norm, telefono_norm, vendedor_norm, updatedAt: admin.firestore.FieldValue.serverTimestamp() },
-      { merge: true }
-    );
-    ok++;
-  }
-
-  return bot.sendMessage(chatId, `✅ Reindex terminado: ${ok} clientes actualizados.`);
-});
-
-bot.onText(/\/fix_duplicados/i, async (msg) => {
-  const chatId = msg.chat.id;
-  const userId = msg.from.id;
-  if (!isSuperAdmin(userId)) return bot.sendMessage(chatId, "⛔ Solo SUPER ADMIN.");
-
-  const borrados = await borrarDuplicadosClientes();
-  return bot.sendMessage(chatId, `🧹 Limpieza terminada.\nDuplicados eliminados: ${borrados}`);
-});
-
-// ===============================
-// COMANDOS INVENTARIO CRUD
-// ===============================
-bot.onText(/\/add\s+(.+)/i, async (msg, match) => {
-  const chatId = msg.chat.id;
-  const userId = msg.from.id;
-  if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
-
-  const raw = String(match[1] || "").trim();
-  const parts = raw.split(/\s+/);
-
-  if (parts.length < 3) {
-    return bot.sendMessage(chatId, "⚠️ Uso: /add correo CLAVE plataforma disp [activa|llena]\nO: /add correo plataforma disp");
-  }
-
-  let correo = "";
-  let clave = "";
-  let plataforma = "";
-  let dispStr = "";
-  let estadoInput = "";
-
-  if (parts.length >= 3 && parts[0].includes("@") && esPlataformaValida(parts[1]) && /^\d+$/.test(parts[2])) {
-    correo = parts[0];
-    plataforma = parts[1];
-    dispStr = parts[2];
-    estadoInput = parts[3] || "activa";
-    clave = "";
-  } else {
-    correo = parts[0];
-    clave = parts[1];
-    plataforma = parts[2];
-    dispStr = parts[3] || "0";
-    estadoInput = parts[4] || "activa";
-  }
-
-  correo = String(correo).trim().toLowerCase();
-  plataforma = normalizarPlataforma(plataforma);
-  const disp = Number(dispStr);
-
-  estadoInput = String(estadoInput || "activa").toLowerCase();
-  const estado = estadoInput === "llena" || estadoInput === "bloqueada" ? "llena" : "activa";
-
-  if (!correo.includes("@")) return bot.sendMessage(chatId, "⚠️ Correo inválido.");
-  if (!esPlataformaValida(plataforma)) return bot.sendMessage(chatId, "⚠️ Plataforma inválida.");
-  if (!Number.isFinite(disp) || disp < 0) return bot.sendMessage(chatId, "⚠️ disp inválido.");
-
-  const ref = db.collection("inventario").doc(docIdInventario(correo, plataforma));
-  const now = admin.firestore.FieldValue.serverTimestamp();
-
-  const prev = await ref.get();
-  const prevData = prev.exists ? (prev.data() || {}) : {};
-  const capacidad = getCapacidadCorreo(prevData, plataforma);
-
-  const data = {
-    correo,
-    plataforma,
-    disp,
-    clave: clave ? String(clave) : prev.exists ? prev.data()?.clave || "" : "",
-    estado: disp <= 0 ? "llena" : estado,
-    capacidad,
-    updatedAt: now,
-  };
-  if (!prev.exists) data.createdAt = now;
-
-  await ref.set(data, { merge: true });
-
-  const total = await getTotalPorPlataforma(plataforma);
-  const claveOut = data.clave ? data.clave : "-";
-
-  return bot.sendMessage(
-    chatId,
-    `✅ *Agregada*\n📌 ${plataforma.toUpperCase()}\n📧 ${correo}\n🔑 ${claveOut}\n👤 Disponibles: ${disp}/${total ?? "-"}\nEstado: *${fmtEstado(data.estado)}*`,
-    { parse_mode: "Markdown" }
-  );
-});
-
-bot.onText(/\/del\s+(\S+)\s+(\S+)/i, async (msg, match) => {
-  const chatId = msg.chat.id;
-  const userId = msg.from.id;
-  if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
-
-  const correo = String(match[1] || "").trim().toLowerCase();
-  const plataforma = normalizarPlataforma(match[2] || "");
-
-  if (!correo.includes("@")) return bot.sendMessage(chatId, "⚠️ Uso: /del correo plataforma");
-  if (!esPlataformaValida(plataforma)) return bot.sendMessage(chatId, "⚠️ Plataforma inválida.");
-
-  const ref = db.collection("inventario").doc(docIdInventario(correo, plataforma));
-  const doc = await ref.get();
-  if (!doc.exists) return bot.sendMessage(chatId, "⚠️ Cuenta no encontrada.");
-
-  await ref.delete();
-  return bot.sendMessage(chatId, `🗑️ Eliminada: ${plataforma.toUpperCase()} — ${correo}`);
-});
-
-bot.onText(/\/editclave\s+(\S+)\s+(\S+)\s+(.+)/i, async (msg, match) => {
-  const chatId = msg.chat.id;
-  const userId = msg.from.id;
-  if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
-
-  const correo = String(match[1] || "").trim().toLowerCase();
-  const plataforma = normalizarPlataforma(match[2] || "");
-  const nueva = String(match[3] || "").trim();
-
-  if (!correo.includes("@")) return bot.sendMessage(chatId, "⚠️ Uso: /editclave correo plataforma NUEVA_CLAVE");
-  if (!esPlataformaValida(plataforma)) return bot.sendMessage(chatId, "⚠️ Plataforma inválida.");
-  if (!nueva) return bot.sendMessage(chatId, "⚠️ Falta la clave.");
-
-  const ref = db.collection("inventario").doc(docIdInventario(correo, plataforma));
-  const doc = await ref.get();
-  if (!doc.exists) return bot.sendMessage(chatId, "⚠️ Cuenta no encontrada.");
-
-  await ref.set({ clave: nueva, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
-  return bot.sendMessage(chatId, `✅ Clave actualizada\n📌 ${plataforma.toUpperCase()}\n📧 ${correo}\n🔑 ${nueva}`);
-});
-
-// ===============================
-// COMANDOS CLIENTES
-// ===============================
-bot.onText(/\/buscar\s+(.+)/i, async (msg, match) => {
-  const chatId = msg.chat.id;
-  const userId = msg.from.id;
-  if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
-
-  const q = String(match[1] || "").trim();
-  if (!q) return bot.sendMessage(chatId, "⚠️ Uso: /buscar texto");
-
-  if (onlyDigits(q).length >= 7) {
-    const resultados = await buscarPorTelefonoTodos(q);
-    const dedup = dedupeClientes(resultados);
-    if (!dedup.length) return bot.sendMessage(chatId, "⚠️ Sin resultados.");
-    if (dedup.length === 1) return enviarFichaCliente(chatId, dedup[0].id);
-    return enviarListaResultadosClientes(chatId, dedup);
-  }
-
-  const resultados = await buscarClienteRobusto(q);
-  const dedup = dedupeClientes(resultados);
-
-  if (!dedup.length) return bot.sendMessage(chatId, "⚠️ Sin resultados.");
-  if (dedup.length === 1) return enviarFichaCliente(chatId, dedup[0].id);
-
-  return enviarListaResultadosClientes(chatId, dedup);
-});
-
-bot.onText(/\/cliente\s+(\S+)/i, async (msg, match) => {
-  const chatId = msg.chat.id;
-  const userId = msg.from.id;
-  if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
-
-  const tel = String(match[1] || "").trim();
-  const resultados = await buscarPorTelefonoTodos(tel);
-  const dedup = dedupeClientes(resultados);
-
-  if (!dedup.length) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
-  if (dedup.length === 1) return enviarFichaCliente(chatId, dedup[0].id);
-  return enviarListaResultadosClientes(chatId, dedup);
-});
-
-bot.onText(/\/clientes_txt/i, async (msg) => {
-  const chatId = msg.chat.id;
-  const userId = msg.from.id;
-  if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
-  return reporteClientesTXTGeneral(chatId);
-});
-
-bot.onText(/\/vendedores_txt_split/i, async (msg) => {
-  const chatId = msg.chat.id;
-  const userId = msg.from.id;
-  if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
-  return reporteClientesSplitPorVendedorTXT(chatId);
-});
-
-// ===============================
-// COMANDOS RENOVACIONES
-// ===============================
-bot.onText(/\/renovaciones(?:\s+(.+))?/i, async (msg, match) => {
-  const chatId = msg.chat.id;
-  const userId = msg.from.id;
-
-  const adminOk = await isAdmin(userId);
-  const vend = await getRevendedorPorTelegramId(userId);
-
-  if (!adminOk && !(vend && vend.nombre)) {
-    return bot.sendMessage(chatId, "⛔ Acceso denegado");
-  }
-
-  const arg = String(match[1] || "").trim();
-  let fecha = "";
-  let vendedor = "";
-
-  if (!arg || arg.toLowerCase() === "hoy") {
-    fecha = hoyDMY();
-  } else {
-    const parts = arg.split(/\s+/);
-    if (parts.length === 1 && isFechaDMY(parts[0])) {
-      fecha = parts[0];
-    } else if (parts.length >= 2 && isFechaDMY(parts[parts.length - 1])) {
-      fecha = parts[parts.length - 1];
-      vendedor = parts.slice(0, -1).join(" ");
-    } else {
-      return bot.sendMessage(chatId, "⚠️ Uso:\n/renovaciones hoy\n/renovaciones dd/mm/yyyy\n/renovaciones VENDEDOR dd/mm/yyyy");
-    }
-  }
-
-  if (!adminOk && vend?.nombre) vendedor = vend.nombre;
-
-  const list = await obtenerRenovacionesPorFecha(fecha, vendedor || null);
-  const texto = renovacionesTexto(list, fecha, vendedor || null);
-  return bot.sendMessage(chatId, texto, { parse_mode: "Markdown" });
-});
-
-bot.onText(/\/txt(?:\s+(.+))?/i, async (msg, match) => {
-  const chatId = msg.chat.id;
-  const userId = msg.from.id;
-
-  const adminOk = await isAdmin(userId);
-  const vend = await getRevendedorPorTelegramId(userId);
-
-  if (!adminOk && !(vend && vend.nombre)) {
-    return bot.sendMessage(chatId, "⛔ Acceso denegado");
-  }
-
-  const arg = String(match[1] || "").trim();
-  let fecha = "";
-  let vendedor = "";
-
-  if (!arg || arg.toLowerCase() === "hoy") {
-    fecha = hoyDMY();
-  } else {
-    const parts = arg.split(/\s+/);
-    if (parts.length === 1 && isFechaDMY(parts[0])) {
-      fecha = parts[0];
-    } else if (parts.length >= 2 && isFechaDMY(parts[parts.length - 1])) {
-      fecha = parts[parts.length - 1];
-      vendedor = parts.slice(0, -1).join(" ");
-    } else {
-      return bot.sendMessage(chatId, "⚠️ Uso:\n/txt hoy\n/txt dd/mm/yyyy\n/txt VENDEDOR dd/mm/yyyy");
-    }
-  }
-
-  if (!adminOk && vend?.nombre) vendedor = vend.nombre;
-
-  const list = await obtenerRenovacionesPorFecha(fecha, vendedor || null);
-  return enviarTXT(chatId, list, fecha, vendedor || null);
-});
-
-// ===============================
-// IDS / VINCULACIÓN
-// ===============================
-bot.onText(/\/id/i, async (msg) => {
-  const chatId = msg.chat.id;
-  const userId = msg.from.id;
-  return bot.sendMessage(chatId, `🆔 Tu Telegram ID es:\n${userId}\n\n📩 Envíelo al administrador para activarte en el bot.`);
-});
-
-bot.onText(/\/miid/i, async (msg) => {
-  const chatId = msg.chat.id;
-  const userId = msg.from.id;
-  return bot.sendMessage(chatId, `🆔 Tu Telegram ID es:\n${userId}\n\n📩 Envíelo al administrador para activarte en el bot.`);
-});
-
-bot.onText(/\/vincular_vendedor\s+(.+)/i, async (msg, match) => {
-  const chatId = msg.chat.id;
-  const userId = msg.from.id;
-
-  const nombre = String(match[1] || "").trim();
-  if (!nombre) return bot.sendMessage(chatId, "⚠️ Uso: /vincular_vendedor NOMBRE");
-
-  const r = await setTelegramIdToRevendedor(nombre, userId);
-  return bot.sendMessage(chatId, r.msg);
-});
-
-// ===============================
-// REVENDEDORES ADMIN
-// ===============================
-bot.onText(/\/addvendedor\s+(\d+)\s+(.+)/i, async (msg, match) => {
-  const chatId = msg.chat.id;
-  const userId = msg.from.id;
-
-  if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Solo admin puede usar este comando");
-
-  const telegramId = String(match[1] || "").trim();
-  const nombre = String(match[2] || "").trim();
-
-  if (!telegramId || !nombre) return bot.sendMessage(chatId, "⚠️ Uso:\n/addvendedor ID Nombre");
-
-  const docId = normTxt(nombre) || String(Date.now());
-
-  await db.collection("revendedores").doc(docId).set(
-    {
-      nombre,
-      nombre_norm: normTxt(nombre),
-      telegramId: String(telegramId),
-      activo: true,
-      autoLastSent: "",
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    },
-    { merge: true }
-  );
-
-  return bot.sendMessage(chatId, `✅ Revendedor agregado\n\n👤 ${nombre}\n🆔 ${telegramId}\n📌 DocID: ${docId}`);
-});
-
-bot.onText(/\/delvendedor\s+(.+)/i, async (msg, match) => {
-  const chatId = msg.chat.id;
-  const userId = msg.from.id;
-
-  if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Solo admin puede usar este comando");
-
-  const nombre = String(match[1] || "").trim();
-  if (!nombre) return bot.sendMessage(chatId, "⚠️ Uso:\n/delvendedor Nombre");
-
-  const nombreNorm = normTxt(nombre);
-  const snap = await db.collection("revendedores").get();
-
-  let found = null;
-  snap.forEach((d) => {
-    const rev = normalizeRevendedorDoc(d);
-    if (rev.nombre_norm === nombreNorm) found = { ref: d.ref, nombre: rev.nombre };
-  });
-
-  if (!found) return bot.sendMessage(chatId, "⚠️ No encontré ese revendedor.");
-
-  await found.ref.delete();
-  return bot.sendMessage(chatId, `🗑️ Revendedor eliminado:\n${found.nombre}`);
-});
-
-async function listarRevendedores(chatId) {
-  const snap = await db.collection("revendedores").get();
-  if (snap.empty) return bot.sendMessage(chatId, "⚠️ No hay revendedores.");
-
-  const all = snap.docs.map((d) => normalizeRevendedorDoc(d));
-  all.sort((a, b) => normTxt(a.nombre).localeCompare(normTxt(b.nombre)));
-
-  let t = "👤 *REVENDEDORES*\n\n";
-  all.forEach((x) => {
-    t += `• ${x.nombre || x.id} — ${x.activo ? "✅ activo" : "⛔ inactivo"}${x.telegramId ? ` | 🆔 ${x.telegramId}` : ""}\n`;
-  });
-
-  if (t.length > 3800) return enviarTxtComoArchivo(chatId, t, `revendedores_${Date.now()}.txt`);
-  return bot.sendMessage(chatId, t, { parse_mode: "Markdown" });
-}
-
-// ===============================
-// ADMINS
-// ===============================
-bot.onText(/\/adminadd\s+(\d+)/i, async (msg, match) => {
-  const chatId = msg.chat.id;
-  const userId = msg.from.id;
-
-  if (!isSuperAdmin(userId)) return bot.sendMessage(chatId, "⛔ Solo SUPER ADMIN puede agregar admins.");
-
-  const id = String(match[1] || "").trim();
-
-  await db.collection("admins").doc(id).set(
-    {
-      activo: true,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      creadoPor: String(userId),
-    },
-    { merge: true }
-  );
-
-  return bot.sendMessage(chatId, `✅ Admin agregado: ${id}`);
-});
-
-bot.onText(/\/admindel\s+(\d+)/i, async (msg, match) => {
-  const chatId = msg.chat.id;
-  const userId = msg.from.id;
-
-  if (!isSuperAdmin(userId)) return bot.sendMessage(chatId, "⛔ Solo SUPER ADMIN puede eliminar admins.");
-
-  const id = String(match[1] || "").trim();
-
-  await db.collection("admins").doc(id).set(
-    {
-      activo: false,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      desactivadoPor: String(userId),
-    },
-    { merge: true }
-  );
-
-  return bot.sendMessage(chatId, `🗑️ Admin desactivado: ${id}`);
-});
-
-bot.onText(/\/adminlist/i, async (msg) => {
-  const chatId = msg.chat.id;
-  const userId = msg.from.id;
-
-  if (!isSuperAdmin(userId)) return bot.sendMessage(chatId, "⛔ Solo SUPER ADMIN.");
-
-  const snap = await db.collection("admins").get();
-  if (snap.empty) return bot.sendMessage(chatId, "⚠️ No hay admins en colección.");
-
-  let t = `👑 *ADMINS*\nSUPER_ADMIN: ${SUPER_ADMIN || "(no seteado)"}\n\n`;
-  snap.forEach((d) => {
-    const x = d.data() || {};
-    t += `• ${d.id} — ${x.activo ? "✅ activo" : "⛔ inactivo"}\n`;
-  });
-
-  return bot.sendMessage(chatId, t, { parse_mode: "Markdown" });
-});
-
-// ===============================
-// START / MENU BLINDADO
-// ===============================
-bot.onText(/\/start/i, async (msg) => {
-  const chatId = msg.chat.id;
-  const userId = msg.from.id;
-
-  if (await isAdmin(userId)) {
-    const sent = await bot.sendMessage(chatId, "📌 *MENÚ PRINCIPAL*", {
-      parse_mode: "Markdown",
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: "📦 Inventario", callback_data: "menu:inventario" }],
-          [{ text: "👥 Clientes", callback_data: "menu:clientes" }],
-          [{ text: "💳 Pagos", callback_data: "menu:pagos" }],
-          [{ text: "📅 Renovaciones", callback_data: "menu:renovaciones" }],
-          [{ text: "🔎 Buscar", callback_data: "menu:buscar" }],
-        ],
-      },
-    });
-    panelMsgId.set(String(chatId), sent.message_id);
-    return;
-  }
-
-  if (await isVendedor(userId)) {
-    const sent = await bot.sendMessage(
-      chatId,
-      "👤 *MENÚ VENDEDOR*\n\nFunciones disponibles:\n• Mis renovaciones\n• TXT Mis renovaciones\n• Mis clientes\n• TXT Mis clientes\n",
-      {
-        parse_mode: "Markdown",
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: "🧾 Mis renovaciones", callback_data: "ren:mis" }],
-            [{ text: "📄 TXT Mis renovaciones", callback_data: "txt:mis" }],
-            [{ text: "👥 Mis clientes", callback_data: "vend:clientes" }],
-            [{ text: "📄 TXT Mis clientes", callback_data: "vend:clientes:txt" }],
-          ],
-        },
-      }
-    );
-    panelMsgId.set(String(chatId), sent.message_id);
-    return;
-  }
-
-  return bot.sendMessage(chatId, "⛔ Acceso denegado");
-});
-
-bot.onText(/\/menu/i, async (msg) => {
-  const chatId = msg.chat.id;
-  const userId = msg.from.id;
-
-  try {
-    if (await isAdmin(userId)) {
-      const sent = await bot.sendMessage(chatId, "📌 *MENÚ PRINCIPAL*", {
-        parse_mode: "Markdown",
-        reply_to_message_id: msg.message_id,
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: "📦 Inventario", callback_data: "menu:inventario" }],
-            [{ text: "👥 Clientes", callback_data: "menu:clientes" }],
-            [{ text: "💳 Pagos", callback_data: "menu:pagos" }],
-            [{ text: "📅 Renovaciones", callback_data: "menu:renovaciones" }],
-            [{ text: "🔎 Buscar", callback_data: "menu:buscar" }],
-          ],
-        },
-      });
-      panelMsgId.set(String(chatId), sent.message_id);
-      return;
-    }
-
-    if (await isVendedor(userId)) {
-      const sent = await bot.sendMessage(
-        chatId,
-        "👤 *MENÚ VENDEDOR*\n\nFunciones disponibles:\n• Mis renovaciones\n• TXT Mis renovaciones\n• Mis clientes\n• TXT Mis clientes\n",
-        {
-          parse_mode: "Markdown",
-          reply_to_message_id: msg.message_id,
-          reply_markup: {
-            inline_keyboard: [
-              [{ text: "🧾 Mis renovaciones", callback_data: "ren:mis" }],
-              [{ text: "📄 TXT Mis renovaciones", callback_data: "txt:mis" }],
-              [{ text: "👥 Mis clientes", callback_data: "vend:clientes" }],
-              [{ text: "📄 TXT Mis clientes", callback_data: "vend:clientes:txt" }],
-            ],
-          },
-        }
-      );
-      panelMsgId.set(String(chatId), sent.message_id);
-      return;
-    }
-
-    return bot.sendMessage(chatId, "⛔ Acceso denegado", {
-      reply_to_message_id: msg.message_id,
-    });
-  } catch (err) {
-    return bot.sendMessage(chatId, "⚠️ Error interno.");
-  }
-});
-
-// ===============================
-// ATAJOS INVENTARIO
-// ===============================
-PLATAFORMAS.forEach((p) => {
-  bot.onText(new RegExp("^\\/" + p + "(?:@\\w+)?(?:\\s+.*)?$", "i"), async (msg) => {
-    const chatId = msg.chat.id;
-    const userId = msg.from.id;
-    if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
-    return enviarInventarioPlataforma(chatId, p, 0);
-  });
-});
-
-bot.onText(/\/stock/i, async (msg) => {
-  const chatId = msg.chat.id;
-  const userId = msg.from.id;
-  if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
-  return mostrarStockGeneral(chatId);
-});
-
-// ===============================
+ // ===============================
 // CALLBACKS
 // ===============================
 bot.on("callback_query", async (q) => {
@@ -2768,7 +2214,7 @@ bot.on("callback_query", async (q) => {
           "🔐 *Editar PIN*\n\n" +
             `👤 *Cliente:* ${escMD(cliente.nombre || "Sin nombre")}\n` +
             `🔑 *PIN actual:* ${escMD(cliente.pin || "----")}\n\n` +
-            "Escriba el nuevo PIN de 4 dígitos:",
+            "Escriba el nuevo PIN:",
           { parse_mode: "Markdown" }
         );
       }
@@ -2810,13 +2256,13 @@ bot.on("callback_query", async (q) => {
           chatId,
           "⚠️ *Confirmar eliminación*\n\n" +
             `📧 *Correo:* ${escMD(correo)}\n\n` +
-            "Esta acción eliminará la cuenta del inventario.\n\n¿Está seguro que desea borrarla?",
+            "¿Desea borrar este correo del inventario?",
           {
             parse_mode: "Markdown",
             reply_markup: {
               inline_keyboard: [
-                [{ text: "✅ Sí borrar", callback_data: `mail_delete_confirm|${normalizarPlataforma(plataforma)}|${encodeURIComponent(correo)}` }],
-                [{ text: "❌ Cancelar", callback_data: `mail_panel|${normalizarPlataforma(plataforma)}|${encodeURIComponent(correo)}` }],
+                [{ text: "✅ Sí, borrar", callback_data: `mail_delete_confirm|${normalizarPlataforma(plataforma)}|${encodeURIComponent(correo)}` }],
+                [{ text: "❌ No borrar", callback_data: `mail_panel|${normalizarPlataforma(plataforma)}|${encodeURIComponent(correo)}` }],
               ],
             },
           }
@@ -2831,13 +2277,6 @@ bot.on("callback_query", async (q) => {
         if (!found) return mostrarListaCorreosPlataforma(chatId, plataforma);
 
         const ref = found.ref;
-        const correoData = found.data || {};
-        const clientes = Array.isArray(correoData.clientes) ? correoData.clientes : [];
-
-        if (clientes.length > 0) {
-          await bot.sendMessage(chatId, "⚠️ Este correo tenía clientes asignados. Se eliminará igualmente del inventario.");
-        }
-
         await ref.delete();
 
         await bot.sendMessage(
@@ -3863,3 +3302,4 @@ http
   .listen(PORT, () => {
     console.log("🌐 HTTP KEEPALIVE activo en puerto", PORT);
   });
+                                       }
