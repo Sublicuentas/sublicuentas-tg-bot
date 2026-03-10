@@ -11,9 +11,7 @@
  ✅ CRM CLIENTE
  ✅ BLOQUEO DUPLICADOS
  ✅ FIX MARKDOWN EN CORREOS / NOMBRES
- ✅ FIX WIZARD FINALIZAR
- ✅ RENOVAR TODOS +30
- ✅ INVENTARIO REAL POR CLIENTES EN CADA CORREO
+ ✅ WIZARD CLIENTES EN CORREO
 */
 
 const http = require("http");
@@ -109,17 +107,14 @@ const PLATAFORMAS = [
 const PAGE_SIZE = 10;
 
 // ===============================
-// HELPERS
+// HELPERS BASE
 // ===============================
 function stripAcentos(str = "") {
   return String(str).normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 }
 
 function normTxt(str = "") {
-  return stripAcentos(String(str || ""))
-    .toLowerCase()
-    .trim()
-    .replace(/\s+/g, " ");
+  return stripAcentos(String(str || "")).toLowerCase().trim().replace(/\s+/g, " ");
 }
 
 function onlyDigits(str = "") {
@@ -127,11 +122,7 @@ function onlyDigits(str = "") {
 }
 
 function normalizarPlataforma(txt = "") {
-  return String(txt)
-    .toLowerCase()
-    .trim()
-    .replace(/\s+/g, "")
-    .replace(/[\.\-_/]+/g, "");
+  return String(txt).toLowerCase().trim().replace(/\s+/g, "").replace(/[\.\-_/]+/g, "");
 }
 
 function esPlataformaValida(p) {
@@ -170,11 +161,7 @@ function esTelefono(txt) {
 }
 
 function limpiarQuery(txt) {
-  return String(txt || "")
-    .trim()
-    .replace(/^\/+/, "")
-    .replace(/\s+/g, " ")
-    .toLowerCase();
+  return String(txt || "").trim().replace(/^\/+/, "").replace(/\s+/g, " ").toLowerCase();
 }
 
 function isEmailLike(s) {
@@ -204,6 +191,10 @@ function addDaysDMY(dmy, days) {
 }
 
 function escMD(text = "") {
+  return String(text || "").replace(/([_*\[\]()~`>#+\-=|{}.!\\])/g, "\\$1");
+}
+
+function escapeMarkdown(text = "") {
   return String(text || "").replace(/([_*\[\]()~`>#+\-=|{}.!\\])/g, "\\$1");
 }
 
@@ -671,7 +662,7 @@ function clienteResumenTXT(c) {
 }
 
 // ===============================
-// HELPERS INVENTARIO
+// HELPERS INVENTARIO GENERAL
 // ===============================
 async function buscarInventarioPorCorreo(correo) {
   const mail = String(correo || "").trim().toLowerCase();
@@ -711,7 +702,6 @@ async function inventarioPlataformaTexto(plataforma, page) {
     .collection("inventario")
     .where("plataforma", "==", p)
     .where("disp", ">=", 1)
-    .where("estado", "==", "activa")
     .get();
 
   const docs = snap.docs
@@ -795,8 +785,6 @@ async function mostrarStockGeneral(chatId) {
     const snap = await db
       .collection("inventario")
       .where("plataforma", "==", p)
-      .where("disp", ">=", 1)
-      .where("estado", "==", "activa")
       .get();
 
     let libres = 0;
@@ -807,46 +795,184 @@ async function mostrarStockGeneral(chatId) {
   return bot.sendMessage(chatId, texto, { parse_mode: "Markdown" });
 }
 
-async function enviarSubmenuInventario(chatId, plataforma, correo) {
+// ===============================
+// WIZARD CORREO / CLIENTES EN CORREO
+// ===============================
+async function buscarCorreoInventarioPorPlatCorreo(plataforma, correo) {
   const plat = normalizarPlataforma(plataforma);
   const mail = String(correo || "").trim().toLowerCase();
 
-  const ref = db.collection("inventario").doc(docIdInventario(mail, plat));
-  const doc = await ref.get();
+  const directRef = db.collection("inventario").doc(docIdInventario(mail, plat));
+  const directSnap = await directRef.get();
 
-  if (!doc.exists) {
-    return upsertPanel(
+  if (directSnap.exists) {
+    return {
+      id: directSnap.id,
+      ref: directRef,
+      data: directSnap.data() || {},
+    };
+  }
+
+  const snap = await db
+    .collection("inventario")
+    .where("plataforma", "==", plat)
+    .where("correo", "==", mail)
+    .limit(1)
+    .get();
+
+  if (!snap.empty) {
+    const d = snap.docs[0];
+    return {
+      id: d.id,
+      ref: d.ref,
+      data: d.data() || {},
+    };
+  }
+
+  return null;
+}
+
+function getCapacidadCorreo(data = {}, plataforma = "") {
+  const desdeData = Number(data.capacidad || data.total || 0);
+  if (Number.isFinite(desdeData) && desdeData > 0) return desdeData;
+
+  const plat = normalizarPlataforma(plataforma);
+  const mapa = {
+    netflix: 5,
+    vipnetflix: 1,
+    disney: 6,
+    disneyp: 6,
+    disneyplus: 6,
+    disneys: 5,
+    max: 5,
+    hbomax: 5,
+    primevideo: 5,
+    prime: 5,
+    paramount: 5,
+    vix: 4,
+    crunchyroll: 5,
+    spotify: 1,
+    youtube: 1,
+    canva: 1,
+    appletv: 4,
+    universal: 4,
+    oleadatv1: 1,
+    oleadatv3: 3,
+    iptv1: 1,
+    iptv3: 3,
+    iptv4: 4,
+  };
+
+  return mapa[plat] || 5;
+}
+
+async function mostrarListaCorreosPlataforma(chatId, plataforma) {
+  const plat = normalizarPlataforma(plataforma);
+
+  const snap = await db
+    .collection("inventario")
+    .where("plataforma", "==", plat)
+    .limit(500)
+    .get();
+
+  if (snap.empty) {
+    return bot.sendMessage(
       chatId,
-      "⚠️ Ese correo no existe en inventario.",
-      { inline_keyboard: [[{ text: "🏠 Inicio", callback_data: "go:inicio" }]] },
-      "Markdown"
+      `📭 *${escMD(String(plat).toUpperCase())}*\n\nNo hay correos registrados en esta plataforma.`,
+      {
+        parse_mode: "Markdown",
+        reply_markup: {
+          inline_keyboard: [[{ text: "🏠 Inicio", callback_data: "go:inicio" }]],
+        },
+      }
     );
   }
 
-  const item = doc.data() || {};
-  const total = await getTotalPorPlataforma(plat);
+  const docs = snap.docs.map((d) => ({
+    id: d.id,
+    ...(d.data() || {}),
+  }));
 
-  const t =
-    `📧 *${escMD(mail)}*\n` +
-    `📌 *${escMD(plat.toUpperCase())}*\n` +
-    `👤 Disp: *${Number(item.disp || 0)}*/${total ?? "-"}\n` +
-    `Estado: *${escMD(fmtEstado(item.estado))}*`;
+  docs.sort((a, b) => {
+    const aCorreo = String(a.correo || "").toLowerCase();
+    const bCorreo = String(b.correo || "").toLowerCase();
+    return aCorreo.localeCompare(bCorreo);
+  });
+
+  let txt = `📂 *${escMD(String(plat).toUpperCase())}*\n\n`;
+  txt += `Seleccione un correo:\n`;
+
+  const kb = docs.map((item) => {
+    const clientes = Array.isArray(item.clientes) ? item.clientes : [];
+    const capacidad = getCapacidadCorreo(item, plat);
+    const ocupados = clientes.length;
+    const disponibles = Math.max(0, capacidad - ocupados);
+    const estado = disponibles === 0 ? "LLENA" : "CON ESPACIO";
+
+    return [{
+      text: `${item.correo || "correo"} | ${ocupados}/${capacidad} | ${estado}`,
+      callback_data: `mail_panel|${plat}|${encodeURIComponent(item.correo || "")}`,
+    }];
+  });
+
+  kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
+
+  return bot.sendMessage(chatId, txt, {
+    parse_mode: "Markdown",
+    reply_markup: {
+      inline_keyboard: kb,
+    },
+  });
+}
+
+async function mostrarPanelCorreo(chatId, plataforma, correo) {
+  const plat = normalizarPlataforma(plataforma);
+  const mail = String(correo || "").trim().toLowerCase();
+
+  const found = await buscarCorreoInventarioPorPlatCorreo(plat, mail);
+  if (!found) {
+    return bot.sendMessage(chatId, "❌ Este correo no existe.");
+  }
+
+  const data = found.data || {};
+  const clientes = Array.isArray(data.clientes) ? data.clientes : [];
+  const capacidad = getCapacidadCorreo(data, plat);
+
+  const ocupados = clientes.length;
+  const disponibles = Math.max(0, capacidad - ocupados);
+  const estado = disponibles === 0 ? "LLENA" : "CON ESPACIO";
+
+  let txt = "";
+  txt += `📧 *${escMD(mail)}*\n`;
+  txt += `📌 *${escMD(String(plat).toUpperCase())}*\n\n`;
+  txt += `👤 *Ocupados:* ${ocupados}/${capacidad}\n`;
+  txt += `✅ *Disponibles:* ${disponibles}\n`;
+  txt += `📊 *Estado:* ${escMD(estado)}`;
 
   return upsertPanel(
     chatId,
-    t,
+    txt,
     {
       inline_keyboard: [
-        [{ text: "➕ Agregar perfil", callback_data: `inv:menu:sumar:${plat}:${mail}` }],
-        [{ text: "➖ Quitar perfil", callback_data: `inv:menu:restar:${plat}:${mail}` }],
-        [{ text: "✏️ Editar clave", callback_data: `inv:menu:clave:${plat}:${mail}` }],
-        [{ text: "🗑️ Borrar correo", callback_data: `inv:menu:borrar:${plat}:${mail}` }],
-        [{ text: "⬅️ Volver Inventario", callback_data: "menu:inventario" }],
+        [{ text: "👁️ Ver clientes", callback_data: `mail_ver_clientes|${plat}|${encodeURIComponent(mail)}` }],
+        [{ text: "➕ Agregar cliente", callback_data: `mail_add_cliente|${plat}|${encodeURIComponent(mail)}` }],
+        [{ text: "➖ Quitar cliente", callback_data: `mail_del_cliente|${plat}|${encodeURIComponent(mail)}` }],
+        [{ text: "🔐 Editar PIN", callback_data: `mail_edit_pin|${plat}|${encodeURIComponent(mail)}` }],
+        [{ text: "✏️ Editar clave del correo", callback_data: `mail_edit_clave|${plat}|${encodeURIComponent(mail)}` }],
+        [{ text: "🗑️ Borrar correo", callback_data: `mail_delete|${plat}|${encodeURIComponent(mail)}` }],
+        [{ text: "⬅️ Volver Inventario", callback_data: `inv:${plat}:0` }],
         [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
       ],
     },
     "Markdown"
   );
+}
+
+// ===============================
+// SUBMENU INVENTARIO => PANEL NUEVO
+// ===============================
+async function enviarSubmenuInventario(chatId, plataforma, correo) {
+  return mostrarPanelCorreo(chatId, plataforma, correo);
 }
 
 // ===============================
@@ -1026,8 +1152,8 @@ function kbPlataformasWiz(prefix, clientId, idxOpt) {
     ],
     [{ text: "📡 iptv (4)", callback_data: cb("iptv4") }],
   ];
-
- // ===============================
+ }
+// ===============================
 // FICHA CLIENTE / CRM / EDICIÓN
 // ===============================
 async function enviarFichaCliente(chatId, clientId) {
@@ -1159,182 +1285,6 @@ async function menuServicio(chatId, clientId, idx) {
         [{ text: "📅 Cambiar fecha", callback_data: `cli:serv:edit:fecha:${clientId}:${idx}` }],
         [{ text: "🗑️ Eliminar perfil", callback_data: `cli:serv:del:ask:${clientId}:${idx}` }],
         [{ text: "⬅️ Volver lista", callback_data: `cli:serv:list:${clientId}` }],
-        [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
-      ],
-    },
-    "Markdown"
-  );
-}
-
-// ===============================
-// WIZARD CORREO / CLIENTES EN CORREO
-// ===============================
-function escapeMarkdown(text = "") {
-  return String(text).replace(/([_*\[\]()~`>#+\-=|{}.!\\])/g, "\\$1");
-}
-
-async function buscarCorreoInventarioPorPlatCorreo(plataforma, correo) {
-  const plat = normalizarPlataforma(plataforma);
-  const mail = String(correo || "").trim().toLowerCase();
-
-  const directRef = db.collection("inventario").doc(docIdInventario(mail, plat));
-  const directSnap = await directRef.get();
-
-  if (directSnap.exists) {
-    return {
-      id: directSnap.id,
-      ref: directRef,
-      data: directSnap.data() || {},
-    };
-  }
-
-  const snap = await db
-    .collection("inventario")
-    .where("plataforma", "==", plat)
-    .where("correo", "==", mail)
-    .limit(1)
-    .get();
-
-  if (!snap.empty) {
-    const d = snap.docs[0];
-    return {
-      id: d.id,
-      ref: d.ref,
-      data: d.data() || {},
-    };
-  }
-
-  return null;
-}
-
-function getCapacidadCorreo(data = {}, plataforma = "") {
-  const desdeData = Number(data.capacidad || data.total || 0);
-  if (Number.isFinite(desdeData) && desdeData > 0) return desdeData;
-
-  const plat = normalizarPlataforma(plataforma);
-  const mapa = {
-    netflix: 5,
-    vipnetflix: 1,
-    disney: 6,
-    disneyp: 6,
-    disneyplus: 6,
-    max: 5,
-    hbomax: 5,
-    primevideo: 6,
-    prime: 6,
-    paramount: 6,
-    vix: 5,
-    crunchyroll: 5,
-    spotify: 1,
-    youtube: 1,
-    canva: 1,
-    appletv: 6,
-    universal: 6,
-    oleadatv1: 1,
-    oleadatv3: 3,
-    iptv1: 1,
-    iptv3: 3,
-    iptv4: 4,
-  };
-
-  return mapa[plat] || 6;
-}
-
-async function mostrarListaCorreosPlataforma(chatId, plataforma) {
-  const plat = normalizarPlataforma(plataforma);
-
-  const snap = await db
-    .collection("inventario")
-    .where("plataforma", "==", plat)
-    .limit(500)
-    .get();
-
-  if (snap.empty) {
-    return bot.sendMessage(
-      chatId,
-      `📭 *${escMD(String(plat).toUpperCase())}*\n\nNo hay correos registrados en esta plataforma.`,
-      {
-        parse_mode: "Markdown",
-        reply_markup: {
-          inline_keyboard: [[{ text: "🏠 Inicio", callback_data: "go:inicio" }]],
-        },
-      }
-    );
-  }
-
-  const docs = snap.docs.map((d) => ({
-    id: d.id,
-    ...(d.data() || {}),
-  }));
-
-  docs.sort((a, b) => {
-    const aCorreo = String(a.correo || "").toLowerCase();
-    const bCorreo = String(b.correo || "").toLowerCase();
-    return aCorreo.localeCompare(bCorreo);
-  });
-
-  let txt = `📂 *${escMD(String(plat).toUpperCase())}*\n\n`;
-  txt += `Seleccione un correo:\n`;
-
-  const kb = docs.map((item) => {
-    const clientes = Array.isArray(item.clientes) ? item.clientes : [];
-    const capacidad = getCapacidadCorreo(item, plat);
-    const ocupados = clientes.length;
-    const disponibles = Math.max(0, capacidad - ocupados);
-    const estado = disponibles === 0 ? "LLENA" : "CON ESPACIO";
-
-    return [{
-      text: `${item.correo || "correo"} | ${ocupados}/${capacidad} | ${estado}`,
-      callback_data: `mail_panel|${plat}|${encodeURIComponent(item.correo || "")}`,
-    }];
-  });
-
-  kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
-
-  return bot.sendMessage(chatId, txt, {
-    parse_mode: "Markdown",
-    reply_markup: {
-      inline_keyboard: kb,
-    },
-  });
-}
-
-async function mostrarPanelCorreo(chatId, plataforma, correo) {
-  const plat = normalizarPlataforma(plataforma);
-  const mail = String(correo || "").trim().toLowerCase();
-
-  const found = await buscarCorreoInventarioPorPlatCorreo(plat, mail);
-  if (!found) {
-    return bot.sendMessage(chatId, "❌ Este correo no existe.");
-  }
-
-  const data = found.data || {};
-  const clientes = Array.isArray(data.clientes) ? data.clientes : [];
-  const capacidad = getCapacidadCorreo(data, plat);
-
-  const ocupados = clientes.length;
-  const disponibles = Math.max(0, capacidad - ocupados);
-  const estado = disponibles === 0 ? "LLENA" : "CON ESPACIO";
-
-  let txt = "";
-  txt += `📧 *${escMD(mail)}*\n`;
-  txt += `📌 *${escMD(String(plat).toUpperCase())}*\n\n`;
-  txt += `👤 *Ocupados:* ${ocupados}/${capacidad}\n`;
-  txt += `✅ *Disponibles:* ${disponibles}\n`;
-  txt += `📊 *Estado:* ${escMD(estado)}`;
-
-  return upsertPanel(
-    chatId,
-    txt,
-    {
-      inline_keyboard: [
-        [{ text: "👁️ Ver clientes", callback_data: `mail_ver_clientes|${plat}|${encodeURIComponent(mail)}` }],
-        [{ text: "➕ Agregar cliente", callback_data: `mail_add_cliente|${plat}|${encodeURIComponent(mail)}` }],
-        [{ text: "➖ Quitar cliente", callback_data: `mail_del_cliente|${plat}|${encodeURIComponent(mail)}` }],
-        [{ text: "🔐 Editar PIN", callback_data: `mail_edit_pin|${plat}|${encodeURIComponent(mail)}` }],
-        [{ text: "✏️ Editar clave del correo", callback_data: `mail_edit_clave|${plat}|${encodeURIComponent(mail)}` }],
-        [{ text: "🗑️ Borrar correo", callback_data: `mail_delete|${plat}|${encodeURIComponent(mail)}` }],
-        [{ text: "⬅️ Volver Inventario", callback_data: `inv:${plat}:0` }],
         [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
       ],
     },
@@ -1832,9 +1782,9 @@ async function enviarTXTATodosHoy(superChatId) {
     superChatId,
     `✅ Enviado TXT HOY (${fecha})\n• Revendedores enviados: ${enviados}\n• Saltados: ${saltados}`
   );
-          }
+                      }
 
- // ===============================
+// ===============================
 // CALLBACKS
 // ===============================
 bot.on("callback_query", async (q) => {
@@ -2322,6 +2272,7 @@ bot.on("callback_query", async (q) => {
             vendedor: "",
             servicio: {},
             servStep: 1,
+            data: {},
           };
         }
 
@@ -2338,13 +2289,12 @@ bot.on("callback_query", async (q) => {
 
       if (data.startsWith("wiz:addmore:")) {
         const clientId = data.split(":")[2];
+        const stPrev = w(chatId);
 
         const nuevoState = {
           step: 4,
           clientId,
-          nombre: "",
-          telefono: "",
-          vendedor: "",
+          data: stPrev?.data || {},
           servicio: {},
           servStep: 1,
         };
@@ -3302,4 +3252,3 @@ http
   .listen(PORT, () => {
     console.log("🌐 HTTP KEEPALIVE activo en puerto", PORT);
   });
-                                       }
