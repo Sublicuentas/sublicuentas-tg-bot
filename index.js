@@ -14,7 +14,7 @@
  ✅ FIX WIZARD FINALIZAR
  ✅ RENOVAR TODOS +30
  ✅ INVENTARIO REAL POR CLIENTES EN CADA CORREO
- ✅ WIZARD CORREO CON CLIENTES / PIN / CLAVE / BORRADO
+ ✅ FIX CORREOS SIN \\.COM
 */
 
 const http = require("http");
@@ -205,7 +205,7 @@ function addDaysDMY(dmy, days) {
 }
 
 function escMD(text = "") {
-  return String(text || "").replace(/([_*\[\]()~`>#+\-=|{}.!\\])/g, "\\$1");
+  return String(text || "").replace(/([_*\[\]()~`>#+\-=|{}!\\])/g, "\\$1");
 }
 
 async function enviarTxtComoArchivo(chatId, contenido, filename = "reporte.txt") {
@@ -706,17 +706,41 @@ async function aplicarAutoLleno(chatId, ref, dataAntes, dataDespues) {
 
 async function inventarioPlataformaTexto(plataforma, page) {
   const p = normalizarPlataforma(plataforma);
-  const total = await getTotalPorPlataforma(p);
+  const totalDefault = await getTotalPorPlataforma(p);
 
   const snap = await db
     .collection("inventario")
     .where("plataforma", "==", p)
-    .where("disp", ">=", 1)
-    .where("estado", "==", "activa")
+    .limit(500)
     .get();
 
   const docs = snap.docs
-    .map((d) => ({ id: d.id, ...d.data() }))
+    .map((d) => {
+      const data = d.data() || {};
+      const clientes = Array.isArray(data.clientes) ? data.clientes : [];
+      const capacidad = Number(data.capacidad || data.total || totalDefault || 0);
+      const ocupados = clientes.length;
+
+      let disponibles = 0;
+      if (capacidad > 0) {
+        disponibles = Math.max(0, capacidad - ocupados);
+      } else {
+        disponibles = Number(data.disp || 0);
+      }
+
+      let estado = "activa";
+      if (disponibles <= 0) estado = "llena";
+
+      return {
+        id: d.id,
+        ...data,
+        capacidad,
+        ocupados,
+        disp: disponibles,
+        estado,
+      };
+    })
+    .filter((x) => Number(x.disp || 0) >= 1)
     .sort((a, b) => Number(b.disp || 0) - Number(a.disp || 0));
 
   const totalItems = docs.length;
@@ -738,7 +762,8 @@ async function inventarioPlataformaTexto(plataforma, page) {
     docs.forEach((x) => (libresTotal += Number(x.disp || 0)));
 
     for (const d of slice) {
-      texto += `${i}) ${d.correo} — 🔑 ${d?.clave ? d.clave : "-"} — ${d.disp}/${total ?? "-"}\n`;
+      const capacidad = Number(d.capacidad || totalDefault || "-");
+      texto += `${i}) ${d.correo} — 🔑 ${d?.clave ? d.clave : "-"} — ${d.disp}/${capacidad}\n`;
       i++;
     }
 
@@ -796,12 +821,23 @@ async function mostrarStockGeneral(chatId) {
     const snap = await db
       .collection("inventario")
       .where("plataforma", "==", p)
-      .where("disp", ">=", 1)
-      .where("estado", "==", "activa")
+      .limit(500)
       .get();
 
     let libres = 0;
-    snap.forEach((d) => (libres += Number(d.data().disp || 0)));
+
+    snap.forEach((d) => {
+      const data = d.data() || {};
+      const clientes = Array.isArray(data.clientes) ? data.clientes : [];
+      const capacidad = Number(data.capacidad || data.total || totals?.[p] || 0);
+
+      if (capacidad > 0) {
+        libres += Math.max(0, capacidad - clientes.length);
+      } else {
+        libres += Number(data.disp || 0);
+      }
+    });
+
     texto += `✅ *${p}*: ${libres} libres (/${totals?.[p] ?? "-"})\n`;
   }
 
@@ -809,45 +845,7 @@ async function mostrarStockGeneral(chatId) {
 }
 
 async function enviarSubmenuInventario(chatId, plataforma, correo) {
-  const plat = normalizarPlataforma(plataforma);
-  const mail = String(correo || "").trim().toLowerCase();
-
-  const ref = db.collection("inventario").doc(docIdInventario(mail, plat));
-  const doc = await ref.get();
-
-  if (!doc.exists) {
-    return upsertPanel(
-      chatId,
-      "⚠️ Ese correo no existe en inventario.",
-      { inline_keyboard: [[{ text: "🏠 Inicio", callback_data: "go:inicio" }]] },
-      "Markdown"
-    );
-  }
-
-  const item = doc.data() || {};
-  const total = await getTotalPorPlataforma(plat);
-
-  const t =
-    `📧 *${escMD(mail)}*\n` +
-    `📌 *${escMD(plat.toUpperCase())}*\n` +
-    `👤 Disp: *${Number(item.disp || 0)}*/${total ?? "-"}\n` +
-    `Estado: *${escMD(fmtEstado(item.estado))}*`;
-
-  return upsertPanel(
-    chatId,
-    t,
-    {
-      inline_keyboard: [
-        [{ text: "➕ Agregar perfil", callback_data: `inv:menu:sumar:${plat}:${mail}` }],
-        [{ text: "➖ Quitar perfil", callback_data: `inv:menu:restar:${plat}:${mail}` }],
-        [{ text: "✏️ Editar clave", callback_data: `inv:menu:clave:${plat}:${mail}` }],
-        [{ text: "🗑️ Borrar correo", callback_data: `inv:menu:borrar:${plat}:${mail}` }],
-        [{ text: "⬅️ Volver Inventario", callback_data: "menu:inventario" }],
-        [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
-      ],
-    },
-    "Markdown"
-  );
+  return mostrarPanelCorreo(chatId, plataforma, correo);
 }
 
 // ===============================
@@ -1027,7 +1025,7 @@ function kbPlataformasWiz(prefix, clientId, idxOpt) {
     ],
     [{ text: "📡 iptv (4)", callback_data: cb("iptv4") }],
   ];
-      }
+   }
 
 // ===============================
 // FICHA CLIENTE / CRM / EDICIÓN
@@ -1055,7 +1053,7 @@ async function enviarFichaCliente(chatId, clientId) {
   } else {
     servicios.forEach((s, i) => {
       txt += `\n*${i + 1})* ${escMD(labelPlataforma(s.plataforma))}\n`;
-      txt += `📧 ${escMD(s.correo || "-")}\n`;
+      txt += `📧 ${s.correo || "-"}\n`;
       txt += `🔐 ${escMD(s.pin || "-")}\n`;
       txt += `💵 ${Number(s.precio || 0)} Lps\n`;
       txt += `📆 ${escMD(s.fechaRenovacion || "-")} — ${escMD(estadoServicioLabel(s.fechaRenovacion))}\n`;
@@ -1143,7 +1141,7 @@ async function menuServicio(chatId, clientId, idx) {
   const t =
     `🧩 *SERVICIO #${idx + 1}*\n\n` +
     `📌 Plataforma: *${escMD(labelPlataforma(s.plataforma || "-"))}*\n` +
-    `📧 Correo: *${escMD(s.correo || "-")}*\n` +
+    `📧 Correo: *${s.correo || "-"}*\n` +
     `🔐 Pin: *${escMD(s.pin || "-")}*\n` +
     `💰 Precio: *${Number(s.precio || 0)}* Lps\n` +
     `📅 Renovación: *${escMD(s.fechaRenovacion || "-")}*\n` +
@@ -1172,7 +1170,7 @@ async function menuServicio(chatId, clientId, idx) {
 // WIZARD CORREO / CLIENTES EN CORREO
 // ===============================
 function escapeMarkdown(text = "") {
-  return String(text).replace(/([_*\[\]()~`>#+\-=|{}.!\\])/g, "\\$1");
+  return String(text).replace(/([_*\[\]()~`>#+\-=|{}!\\])/g, "\\$1");
 }
 
 async function buscarCorreoInventarioPorPlatCorreo(plataforma, correo) {
@@ -1240,7 +1238,7 @@ function getCapacidadCorreo(data = {}, plataforma = "") {
     iptv4: 4,
   };
 
-  return mapa[plat] || 6;
+  return mapa[plat] || 1;
 }
 
 async function mostrarListaCorreosPlataforma(chatId, plataforma) {
@@ -1319,9 +1317,29 @@ async function mostrarPanelCorreo(chatId, plataforma, correo) {
   const disponibles = Math.max(0, capacidad - ocupados);
   const estado = disponibles === 0 ? "LLENA" : "CON ESPACIO";
 
+  if (
+    Number(data.disp || 0) !== disponibles ||
+    String(data.estado || "") !== (disponibles === 0 ? "llena" : "activa") ||
+    Number(data.ocupados || 0) !== ocupados ||
+    Number(data.disponibles || 0) !== disponibles ||
+    Number(data.capacidad || 0) !== capacidad
+  ) {
+    await found.ref.set(
+      {
+        ocupados,
+        disponibles,
+        disp: disponibles,
+        estado: disponibles === 0 ? "llena" : "activa",
+        capacidad,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+  }
+
   let txt = "";
-  txt += `📧 *${escMD(mail)}*\n`;
-  txt += `📌 *${escMD(String(plat).toUpperCase())}*\n\n`;
+  txt += `📧 *${mail}*\n`;
+  txt += `${escMD(String(plat).toUpperCase())}\n\n`;
   txt += `👤 *Ocupados:* ${ocupados}/${capacidad}\n`;
   txt += `✅ *Disponibles:* ${disponibles}\n`;
   txt += `📊 *Estado:* ${escMD(estado)}`;
@@ -1336,7 +1354,7 @@ async function mostrarPanelCorreo(chatId, plataforma, correo) {
         [{ text: "🔐 Editar PIN", callback_data: `mail_edit_pin|${plat}|${encodeURIComponent(mail)}` }],
         [{ text: "✏️ Editar clave del correo", callback_data: `mail_edit_clave|${plat}|${encodeURIComponent(mail)}` }],
         [{ text: "🗑️ Borrar correo", callback_data: `mail_delete|${plat}|${encodeURIComponent(mail)}` }],
-        [{ text: "⬅️ Volver Inventario", callback_data: `/${plat}` }],
+        [{ text: "⬅️ Volver Inventario", callback_data: `inv:${plat}:0` }],
         [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
       ],
     },
@@ -1598,7 +1616,7 @@ async function enviarListaResultadosClientes(chatId, resultados) {
   let txt = `📱 *RESULTADOS*\nSe encontraron *${dedup.length}* clientes.\n\n`;
 
   dedup.forEach((c, i) => {
-    txt += `*${i + 1})* ${c.nombrePerfil || "-"} | ${c.telefono || "-"} | ${c.vendedor || "-"}\n`;
+    txt += `*${i + 1})* ${escMD(c.nombrePerfil || "-")} | ${escMD(c.telefono || "-")} | ${escMD(c.vendedor || "-")}\n`;
   });
 
   if (txt.length > 3800) {
@@ -1690,10 +1708,10 @@ async function enviarMisClientes(chatId, vendedorNombre) {
     return bot.sendMessage(chatId, `⚠️ No hay clientes para ${vendedorNombre}.`);
   }
 
-  let txt = `👥 *MIS CLIENTES — ${vendedorNombre}*\n\n`;
+  let txt = `👥 *MIS CLIENTES — ${escMD(vendedorNombre)}*\n\n`;
   arr.forEach((c, i) => {
     const servicios = Array.isArray(c.servicios) ? c.servicios.length : 0;
-    txt += `${i + 1}) ${c.nombrePerfil || "-"} | ${c.telefono || "-"} | Servicios: ${servicios}\n`;
+    txt += `${i + 1}) ${escMD(c.nombrePerfil || "-")} | ${escMD(c.telefono || "-")} | Servicios: ${servicios}\n`;
   });
 
   if (txt.length > 3800) {
@@ -1764,7 +1782,7 @@ function renovacionesTexto(list, fechaDMY, vendedorOpt) {
     ? `RENOVACIONES ${fechaDMY} — ${vendedorOpt}`
     : `RENOVACIONES ${fechaDMY} — GENERAL`;
 
-  let t = `📅 *${titulo}*\n\n`;
+  let t = `📅 *${escMD(titulo)}*\n\n`;
 
   if (!list || list.length === 0) {
     t += "⚠️ No hay renovaciones.\n";
@@ -1774,7 +1792,7 @@ function renovacionesTexto(list, fechaDMY, vendedorOpt) {
   let suma = 0;
   list.forEach((x, i) => {
     suma += Number(x.precio || 0);
-    t += `${i + 1}) ${x.nombrePerfil} — ${x.plataforma} — ${x.precio} Lps — ${x.telefono} — ${x.vendedor}\n`;
+    t += `${i + 1}) ${escMD(x.nombrePerfil)} — ${escMD(x.plataforma)} — ${x.precio} Lps — ${escMD(x.telefono)} — ${escMD(x.vendedor)}\n`;
   });
 
   t += `\n━━━━━━━━━━━━━━\n`;
@@ -1833,7 +1851,8 @@ async function enviarTXTATodosHoy(superChatId) {
     superChatId,
     `✅ Enviado TXT HOY (${fecha})\n• Revendedores enviados: ${enviados}\n• Saltados: ${saltados}`
   );
-                                                       }
+              }
+
 // ===============================
 // REINDEX + FIX DUPLICADOS
 // ===============================
@@ -2495,10 +2514,10 @@ bot.on("callback_query", async (q) => {
         const capacidad = getCapacidadCorreo(correoData, plataforma);
         const ocupados = clientes.length;
         const disponibles = Math.max(0, capacidad - ocupados);
-        const estado = disponibles === 0 ? "LLENA" : "CON ESPACIO";
+        const estadoLabel = disponibles === 0 ? "LLENA" : "CON ESPACIO";
 
         let txt = "👥 *CLIENTES EN ESTE CORREO*\n\n";
-        txt += `📧 *${escMD(correo)}*\n`;
+        txt += `📧 *${correo}*\n`;
         txt += `${escMD(String(plataforma).toUpperCase())}\n\n`;
 
         if (!clientes.length) {
@@ -2512,7 +2531,7 @@ bot.on("callback_query", async (q) => {
 
         txt += `👤 *Ocupados:* ${ocupados}/${capacidad}\n`;
         txt += `✅ *Disponibles:* ${disponibles}\n`;
-        txt += `📊 *Estado:* ${escMD(estado)}`;
+        txt += `📊 *Estado:* ${escMD(estadoLabel)}`;
 
         return bot.sendMessage(chatId, txt, {
           parse_mode: "Markdown",
@@ -2581,7 +2600,7 @@ bot.on("callback_query", async (q) => {
 
         return bot.sendMessage(
           chatId,
-          `➖ *Quitar cliente*\n\n📧 *${escMD(correo)}*\n\nSeleccione el cliente que desea quitar:`,
+          `➖ *Quitar cliente*\n\n📧 *${correo}*\n\nSeleccione el cliente que desea quitar:`,
           {
             parse_mode: "Markdown",
             reply_markup: { inline_keyboard: kb },
@@ -2615,7 +2634,8 @@ bot.on("callback_query", async (q) => {
         const capacidad = getCapacidadCorreo(correoData, plataforma);
         const ocupados = clientes.length;
         const disponibles = Math.max(0, capacidad - ocupados);
-        const estado = disponibles === 0 ? "LLENA" : "CON ESPACIO";
+        const estado = disponibles === 0 ? "llena" : "activa";
+        const estadoLabel = disponibles === 0 ? "LLENA" : "CON ESPACIO";
 
         await ref.set(
           {
@@ -2637,7 +2657,7 @@ bot.on("callback_query", async (q) => {
             `🔐 *PIN:* ${escMD(cliente.pin || "----")}\n\n` +
             `👤 *Ocupados:* ${ocupados}/${capacidad}\n` +
             `✅ *Disponibles:* ${disponibles}\n` +
-            `📊 *Estado:* ${escMD(estado)}`,
+            `📊 *Estado:* ${escMD(estadoLabel)}`,
           { parse_mode: "Markdown" }
         );
 
@@ -2667,7 +2687,7 @@ bot.on("callback_query", async (q) => {
 
         return bot.sendMessage(
           chatId,
-          `🔐 *Editar PIN*\n\n📧 *${escMD(correo)}*\n\nSeleccione el cliente:`,
+          `🔐 *Editar PIN*\n\n📧 *${correo}*\n\nSeleccione el cliente:`,
           {
             parse_mode: "Markdown",
             reply_markup: { inline_keyboard: kb },
@@ -2729,7 +2749,7 @@ bot.on("callback_query", async (q) => {
         return bot.sendMessage(
           chatId,
           "✏️ *Editar clave del correo*\n\n" +
-            `📧 *Correo:* ${escMD(correo)}\n` +
+            `📧 *${correo}*\n` +
             `🔑 *Clave actual:* ${escMD(claveActual)}\n\n` +
             "Escriba la nueva clave del correo:",
           { parse_mode: "Markdown" }
@@ -2746,7 +2766,7 @@ bot.on("callback_query", async (q) => {
         return bot.sendMessage(
           chatId,
           "⚠️ *Confirmar eliminación*\n\n" +
-            `📧 *Correo:* ${escMD(correo)}\n\n` +
+            `📧 *${correo}*\n\n` +
             "Esta acción eliminará la cuenta del inventario.\n\n¿Está seguro que desea borrarla?",
           {
             parse_mode: "Markdown",
@@ -2779,7 +2799,7 @@ bot.on("callback_query", async (q) => {
 
         await bot.sendMessage(
           chatId,
-          `🗑️ *Correo eliminado*\n\n📧 ${escMD(correo)}`,
+          `🗑️ *Correo eliminado*\n\n📧 ${correo}`,
           { parse_mode: "Markdown" }
         );
 
@@ -3373,7 +3393,8 @@ bot.on("message", async (msg) => {
 
         const ocupados = clientes.length;
         const disponibles = Math.max(0, capacidad - ocupados);
-        const estado = disponibles === 0 ? "LLENA" : "CON ESPACIO";
+        const estado = disponibles === 0 ? "llena" : "activa";
+        const estadoLabel = disponibles === 0 ? "LLENA" : "CON ESPACIO";
 
         await ref.set(
           {
@@ -3395,7 +3416,7 @@ bot.on("message", async (msg) => {
             `🔐 *PIN:* ${escMD(t)}\n\n` +
             `👤 *Ocupados:* ${ocupados}/${capacidad}\n` +
             `✅ *Disponibles:* ${disponibles}\n` +
-            `📊 *Estado:* ${escMD(estado)}`,
+            `📊 *Estado:* ${escMD(estadoLabel)}`,
           { parse_mode: "Markdown" }
         );
 
