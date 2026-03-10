@@ -1833,8 +1833,7 @@ async function enviarTXTATodosHoy(superChatId) {
     superChatId,
     `✅ Enviado TXT HOY (${fecha})\n• Revendedores enviados: ${enviados}\n• Saltados: ${saltados}`
   );
-   }
-
+                                                       }
 // ===============================
 // REINDEX + FIX DUPLICADOS
 // ===============================
@@ -2473,17 +2472,11 @@ bot.on("callback_query", async (q) => {
         return enviarInventarioPlataforma(chatId, plat, Number(pageStr || 0));
       }
 
-      // ==============================
-      // NUEVO MENÚ CORREO: abrir correo
-      // ==============================
       if (data.startsWith("inv:open:")) {
         const [, , plat, correo] = data.split(":");
         return mostrarPanelCorreo(chatId, plat, correo);
       }
 
-      // ==============================
-      // MENÚ NUEVO DEL CORREO / WIZARD CLIENTES EN CORREO
-      // ==============================
       if (data.startsWith("mail_panel|")) {
         const [, plataforma, correoEnc] = data.split("|");
         const correo = decodeURIComponent(correoEnc || "");
@@ -2506,7 +2499,7 @@ bot.on("callback_query", async (q) => {
 
         let txt = "👥 *CLIENTES EN ESTE CORREO*\n\n";
         txt += `📧 *${escMD(correo)}*\n`;
-        txt += `📌 *${escMD(String(plataforma).toUpperCase())}*\n\n`;
+        txt += `${escMD(String(plataforma).toUpperCase())}\n\n`;
 
         if (!clientes.length) {
           txt += "_No hay clientes asignados._\n\n";
@@ -2791,42 +2784,6 @@ bot.on("callback_query", async (q) => {
         );
 
         return mostrarListaCorreosPlataforma(chatId, plataforma);
-      }
-
-      // ==============================
-      // MENÚ INVENTARIO VIEJO (LEGACY)
-      // ==============================
-      if (data.startsWith("inv:menu:sumar:")) {
-        const [, , , plat, correo] = data.split(":");
-        pending.set(String(chatId), { mode: "invSumarQty", plat, correo });
-        return upsertPanel(
-          chatId,
-          `➕ *Agregar perfil*\n📌 ${String(plat).toUpperCase()}\n📧 ${correo}\n\nEscriba cantidad a *SUMAR* (ej: 1):`,
-          { inline_keyboard: [[{ text: "↩️ Cancelar", callback_data: `mail_panel|${normalizarPlataforma(plat)}|${encodeURIComponent(correo)}` }]] },
-          "Markdown"
-        );
-      }
-
-      if (data.startsWith("inv:menu:restar:")) {
-        const [, , , plat, correo] = data.split(":");
-        pending.set(String(chatId), { mode: "invRestarQty", plat, correo });
-        return upsertPanel(
-          chatId,
-          `➖ *Quitar perfil*\n📌 ${String(plat).toUpperCase()}\n📧 ${correo}\n\nEscriba cantidad a *RESTAR* (ej: 1):`,
-          { inline_keyboard: [[{ text: "↩️ Cancelar", callback_data: `mail_panel|${normalizarPlataforma(plat)}|${encodeURIComponent(correo)}` }]] },
-          "Markdown"
-        );
-      }
-
-      if (data.startsWith("inv:menu:clave:")) {
-        const [, , , plat, correo] = data.split(":");
-        pending.set(String(chatId), { mode: "invEditClave", plat, correo });
-        return upsertPanel(
-          chatId,
-          `✏️ *Editar clave*\n📌 ${String(plat).toUpperCase()}\n📧 ${correo}\n\nEscriba la nueva clave:`,
-          { inline_keyboard: [[{ text: "↩️ Cancelar", callback_data: `mail_panel|${normalizarPlataforma(plat)}|${encodeURIComponent(correo)}` }]] },
-          "Markdown"
-        );
       }
 
       if (data === "cli:txt:general") return reporteClientesTXTGeneral(chatId);
@@ -3498,72 +3455,6 @@ bot.on("message", async (msg) => {
         return mostrarPanelCorreo(chatId, p.plataforma, p.correo);
       }
 
-      if (p.mode === "invSumarQty") {
-        const qty = Number(t);
-        if (!Number.isFinite(qty) || qty <= 0) return bot.sendMessage(chatId, "⚠️ Cantidad inválida. Escriba un número (ej: 1)");
-
-        pending.delete(String(chatId));
-
-        const correo = String(p.correo).toLowerCase();
-        const plat = normalizarPlataforma(p.plat);
-
-        const ref = db.collection("inventario").doc(docIdInventario(correo, plat));
-        const doc = await ref.get();
-        if (!doc.exists) return bot.sendMessage(chatId, "⚠️ Ese correo no existe en inventario.");
-
-        const d = doc.data() || {};
-        const nuevoDisp = Number(d.disp || 0) + qty;
-
-        await ref.set(
-          { disp: nuevoDisp, estado: "activa", updatedAt: admin.firestore.FieldValue.serverTimestamp() },
-          { merge: true }
-        );
-
-        return mostrarPanelCorreo(chatId, plat, correo);
-      }
-
-      if (p.mode === "invRestarQty") {
-        const qty = Number(t);
-        if (!Number.isFinite(qty) || qty <= 0) return bot.sendMessage(chatId, "⚠️ Cantidad inválida. Escriba un número (ej: 1)");
-
-        pending.delete(String(chatId));
-
-        const correo = String(p.correo).toLowerCase();
-        const plat = normalizarPlataforma(p.plat);
-
-        const ref = db.collection("inventario").doc(docIdInventario(correo, plat));
-        const doc = await ref.get();
-        if (!doc.exists) return bot.sendMessage(chatId, "⚠️ Ese correo no existe en inventario.");
-
-        const d = doc.data() || {};
-        const antes = { ...d };
-        const nuevoDisp = Math.max(0, Number(d.disp || 0) - qty);
-
-        await ref.set({ disp: nuevoDisp, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
-
-        const despues = { ...d, disp: nuevoDisp, plataforma: plat, correo };
-        await aplicarAutoLleno(chatId, ref, antes, despues);
-
-        return mostrarPanelCorreo(chatId, plat, correo);
-      }
-
-      if (p.mode === "invEditClave") {
-        if (!t) return bot.sendMessage(chatId, "⚠️ Clave vacía.");
-
-        pending.delete(String(chatId));
-
-        const correo = String(p.correo).toLowerCase();
-        const plat = normalizarPlataforma(p.plat);
-
-        const ref = db.collection("inventario").doc(docIdInventario(correo, plat));
-        const doc = await ref.get();
-        if (!doc.exists) return bot.sendMessage(chatId, "⚠️ Ese correo no existe en inventario.");
-
-        await ref.set({ clave: t, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
-
-        return mostrarPanelCorreo(chatId, plat, correo);
-      }
-
       if (p.mode === "cliRenovarFechaManual") {
         const fecha = String(t || "").trim();
         if (!isFechaDMY(fecha)) return bot.sendMessage(chatId, "⚠️ Formato inválido. Use dd/mm/yyyy");
@@ -3835,4 +3726,3 @@ http
   .listen(PORT, () => {
     console.log("🌐 HTTP KEEPALIVE activo en puerto", PORT);
   });
-
