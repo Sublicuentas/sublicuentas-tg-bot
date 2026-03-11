@@ -1,281 +1,258 @@
-const { ImapFlow } = require("imapflow");
-const { simpleParser } = require("mailparser");
 const admin = require("firebase-admin");
-
-// ===============================
-// ENV / FIREBASE
-// ===============================
-const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID;
-const FIREBASE_CLIENT_EMAIL = process.env.FIREBASE_CLIENT_EMAIL;
-const FIREBASE_PRIVATE_KEY = process.env.FIREBASE_PRIVATE_KEY;
-const TZ = process.env.TZ || "America/Tegucigalpa";
-
-if (!FIREBASE_PROJECT_ID || !FIREBASE_CLIENT_EMAIL || !FIREBASE_PRIVATE_KEY) {
-  throw new Error("Faltan variables FIREBASE_*");
-}
-
-if (!admin.apps.length) {
-  admin.initializeApp({
-    credential: admin.credential.cert({
-      projectId: FIREBASE_PROJECT_ID,
-      clientEmail: FIREBASE_CLIENT_EMAIL,
-      privateKey: String(FIREBASE_PRIVATE_KEY || "").replace(/\\n/g, "\n"),
-    }),
-  });
-}
+const { ImapFlow } = require("imapflow");
 
 const db = admin.firestore();
+const TZ = process.env.TZ || "America/Tegucigalpa";
 
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function log(...args) {
+  console.log(...args);
 }
 
-// ===============================
-// CARGA AUTOMÁTICA CUENTAS IMAP
-// ===============================
-function loadImapAccounts(max = 30) {
-  const arr = [];
+function logErr(...args) {
+  console.error(...args);
+}
 
-  for (let i = 1; i <= max; i++) {
+function norm(v = "") {
+  return String(v || "").trim();
+}
+
+function lower(v = "") {
+  return String(v || "").trim().toLowerCase();
+}
+
+function boolEnv(v) {
+  return String(v || "").toLowerCase() === "true";
+}
+
+function buildImapAccountsFromEnv() {
+  const accounts = [];
+  let i = 1;
+
+  while (true) {
+    const alias = process.env[`IMAP_ALIAS_${i}`];
+    const host = process.env[`IMAP_HOST_${i}`];
+    const port = process.env[`IMAP_PORT_${i}`];
+    const secure = process.env[`IMAP_SECURE_${i}`];
     const user = process.env[`IMAP_USER_${i}`];
     const pass = process.env[`IMAP_PASS_${i}`];
-    const host = process.env[`IMAP_HOST_${i}`];
-    const alias = process.env[`IMAP_ALIAS_${i}`] || `imap_${i}`;
-    const source = process.env[`IMAP_SOURCE_${i}`] || "gmail";
-    const port = Number(process.env[`IMAP_PORT_${i}`] || 993);
-    const secure = String(process.env[`IMAP_SECURE_${i}`] || "true") === "true";
+    const source = process.env[`IMAP_SOURCE_${i}`];
 
-    if (!user || !pass || !host) continue;
+    if (!alias && !host && !port && !user && !pass) break;
 
-    arr.push({
-      alias,
-      source,
-      host,
-      port,
-      secure,
-      user,
-      pass,
-    });
+    if (alias && host && port && user && pass) {
+      accounts.push({
+        idx: i,
+        alias: norm(alias),
+        host: norm(host),
+        port: Number(port),
+        secure: boolEnv(secure),
+        user: norm(user),
+        pass: norm(pass),
+        source: lower(source || "imap"),
+      });
+    }
+
+    i++;
   }
 
-  return arr;
+  return accounts;
 }
 
-const IMAP_ACCOUNTS = loadImapAccounts(30);
-console.log(`📬 Cuentas IMAP cargadas: ${IMAP_ACCOUNTS.length}`);
+function extraerCodigo(texto = "") {
+  const raw = String(texto || "");
 
-// ===============================
-// HELPERS
-// ===============================
-function norm(s = "") {
-  return String(s || "").toLowerCase().trim();
-}
+  const patrones = [
+    /\b(\d{4})\b/g,
+    /\b(\d{6})\b/g,
+    /code[^0-9]{0,20}(\d{4,8})/gi,
+    /codigo[^0-9]{0,20}(\d{4,8})/gi,
+    /verification[^0-9]{0,20}(\d{4,8})/gi,
+    /confirm[^0-9]{0,20}(\d{4,8})/gi,
+    /netflix[^0-9]{0,40}(\d{4,8})/gi,
+  ];
 
-function cleanText(s = "") {
-  return String(s || "").replace(/\s+/g, " ").trim();
-}
-
-function detectNetflixEmail(parsed) {
-  const fromText = norm(parsed.from?.text || "");
-  const subject = norm(parsed.subject || "");
-  const text = norm(parsed.text || "");
-  const html = norm(parsed.html || "");
-  const joined = `${fromText} ${subject} ${text} ${html}`;
-
-  return (
-    joined.includes("netflix") ||
-    fromText.includes("info@account.netflix.com") ||
-    fromText.includes("netflix")
-  );
-}
-
-function detectarTipoCorreo(subject = "", body = "") {
-  const s = norm(subject);
-  const b = norm(body);
-
-  if (
-    s.includes("inicio de sesión") ||
-    b.includes("ingresa este código para iniciar sesión") ||
-    b.includes("tu código de inicio de sesión")
-  ) {
-    return "signin";
-  }
-
-  if (
-    s.includes("acceso temporal") ||
-    b.includes("código de acceso temporal") ||
-    b.includes("tu código de acceso temporal")
-  ) {
-    return "temporal";
-  }
-
-  if (
-    s.includes("verificación") ||
-    b.includes("confirma el cambio en tu cuenta con este código") ||
-    b.includes("tu código de verificación")
-  ) {
-    return "verification";
-  }
-
-  if (
-    b.includes("obtener código") ||
-    b.includes("solicitud desde") ||
-    b.includes("smart tv") ||
-    b.includes("código hogar") ||
-    s.includes("hogar")
-  ) {
-    return "hogar";
+  for (const regex of patrones) {
+    const matches = [...raw.matchAll(regex)];
+    if (matches.length) {
+      const last = matches[matches.length - 1];
+      const codigo = last?.[1];
+      if (codigo) return codigo;
+    }
   }
 
   return null;
 }
 
-function extraerCodigo(tipo, subject = "", body = "") {
-  const full = `${subject}\n${body}`;
+function detectarTipo(subject = "", body = "") {
+  const txt = `${subject}\n${body}`.toLowerCase();
 
-  if (tipo === "signin") {
-    const m = full.match(/\b\d{4}\b/);
-    return m ? m[0] : null;
+  if (
+    txt.includes("temporary access code") ||
+    txt.includes("temporary code") ||
+    txt.includes("código temporal") ||
+    txt.includes("codigo temporal")
+  ) {
+    return "temporal";
   }
 
-  if (tipo === "verification") {
-    const m = full.match(/\b\d{6}\b/);
-    return m ? m[0] : null;
+  if (
+    txt.includes("verify your device") ||
+    txt.includes("verification code") ||
+    txt.includes("código de verificación") ||
+    txt.includes("codigo de verificacion") ||
+    txt.includes("verify it was you")
+  ) {
+    return "verification";
   }
 
-  if (tipo === "temporal") {
-    const m = full.match(/\b\d{4,6}\b/);
-    return m ? m[0] : null;
+  if (
+    txt.includes("update netflix household") ||
+    txt.includes("netflix household") ||
+    txt.includes("hogar con netflix") ||
+    txt.includes("código de hogar") ||
+    txt.includes("codigo de hogar")
+  ) {
+    return "hogar";
   }
 
-  if (tipo === "hogar") {
-    const m = full.match(/\b\d{4,6}\b/);
-    return m ? m[0] : null;
-  }
-
-  const m = full.match(/\b\d{4,6}\b/);
-  return m ? m[0] : null;
+  return "signin";
 }
 
-function obtenerCorreoDestino(parsed) {
-  const toValues = parsed.to?.value || [];
-  if (toValues.length > 0 && toValues[0]?.address) {
-    return norm(toValues[0].address);
-  }
+async function guardarCodigo({
+  alias,
+  correo,
+  subject,
+  from,
+  body,
+  tipo,
+  codigo,
+  uid,
+  messageId,
+  source,
+}) {
+  if (!codigo) return false;
 
-  const delivered = parsed.headers?.get?.("delivered-to");
-  if (delivered) return norm(delivered);
+  const mail = lower(correo);
+  const docId = `${mail}__${tipo}__${Date.now()}`;
 
-  const originalTo = parsed.headers?.get?.("x-original-to");
-  if (originalTo) return norm(originalTo);
+  await db.collection("codigos_netflix").doc(docId).set({
+    alias: norm(alias),
+    correo: mail,
+    tipo: norm(tipo),
+    codigo: norm(codigo),
+    asunto: norm(subject),
+    from: norm(from),
+    body: String(body || "").slice(0, 4000),
+    uid: String(uid || ""),
+    messageId: String(messageId || ""),
+    fuente: norm(source || "imap"),
+    usado: false,
+    fecha: admin.firestore.FieldValue.serverTimestamp(),
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
 
-  return "";
-}
-
-function makeUniqueId(correo, tipo, codigo, fecha) {
-  const base = `${correo}__${tipo}__${codigo}__${fecha}`;
-  return Buffer.from(base).toString("base64").replace(/[=+/]/g, "_").slice(0, 180);
-}
-
-async function guardarCodigoNetflix(data) {
-  const correo = norm(data.correo);
-  const tipo = norm(data.tipo);
-  const codigo = String(data.codigo || "").trim();
-  const fecha = data.fecha || new Date().toISOString();
-
-  if (!correo || !tipo || !codigo) return false;
-
-  const docId = makeUniqueId(correo, tipo, codigo, fecha);
-  const ref = db.collection("codigos_netflix").doc(docId);
-  const existing = await ref.get();
-
-  if (existing.exists) return false;
-
-  await ref.set(
-    {
-      correo,
-      codigo,
-      tipo,
-      fecha,
-      usado: false,
-      fuente: data.fuente || "-",
-      alias: data.alias || "-",
-      subject: data.subject || "",
-      from: data.from || "",
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-    },
-    { merge: true }
-  );
-
-  console.log(`✅ Guardado [${tipo}] ${correo} => ${codigo}`);
+  log(`✅ Código guardado [${alias}] ${mail} | ${tipo} | ${codigo}`);
   return true;
 }
 
-// ===============================
-// PROCESAMIENTO MENSAJES
-// ===============================
-async function procesarMensaje(account, msg) {
+async function obtenerTextoMensaje(client, seq) {
   try {
-    if (!account.client || !account.client.usable) {
-      console.log(`⚠️ Cliente IMAP no disponible [${account.alias}]`);
-      return;
-    }
-
-    const source = await account.client.download(msg.uid);
-    const parsed = await simpleParser(source);
-
-    if (!detectNetflixEmail(parsed)) return;
-
-    const subject = cleanText(parsed.subject || "");
-    const body = cleanText(parsed.text || parsed.html || "");
-    const fromText = cleanText(parsed.from?.text || "");
-    const correoDestino = obtenerCorreoDestino(parsed);
-
-    if (!correoDestino) {
-      console.log(`⚠️ Sin correo destino [${account.alias}]`);
-      return;
-    }
-
-    const tipo = detectarTipoCorreo(subject, body);
-    if (!tipo) {
-      console.log(`⚠️ No clasificado [${account.alias}] ${subject}`);
-      return;
-    }
-
-    const codigo = extraerCodigo(tipo, subject, body);
-
-    if (!codigo && tipo !== "hogar") {
-      console.log(`⚠️ Sin código [${account.alias}] ${correoDestino} | ${tipo}`);
-      return;
-    }
-
-    await guardarCodigoNetflix({
-      correo: correoDestino,
-      codigo: codigo || "LINK_ONLY",
-      tipo,
-      fecha: new Date(msg.internalDate || Date.now()).toISOString(),
-      fuente: account.source,
-      alias: account.alias,
-      subject,
-      from: fromText,
+    const msg = await client.fetchOne(seq, {
+      uid: true,
+      envelope: true,
+      source: true,
+      bodyStructure: true,
     });
 
-    try {
-      if (account.client.usable) {
-        await account.client.messageFlagsAdd(msg.uid, ["\\Seen"]);
-      }
-    } catch (e) {
-      console.log(`⚠️ No se pudo marcar como leído [${account.alias}] UID=${msg.uid}`);
-    }
-  } catch (err) {
-    console.error(`❌ Error procesando mensaje [${account.alias}]`, err?.message || err);
+    if (!msg) return null;
+
+    const envelope = msg.envelope || {};
+    const from = Array.isArray(envelope.from) && envelope.from.length
+      ? `${envelope.from[0].name || ""} <${envelope.from[0].address || ""}>`.trim()
+      : "";
+
+    const subject = envelope.subject || "";
+    const sourceText = msg.source ? msg.source.toString("utf8") : "";
+
+    return {
+      uid: msg.uid,
+      messageId: envelope.messageId || "",
+      subject,
+      from,
+      raw: sourceText,
+    };
+  } catch (e) {
+    logErr("❌ Error obteniendo mensaje:", e?.message || e);
+    return null;
   }
 }
 
-// ===============================
-// IMAP CUENTA
-// ===============================
-async function revisarCuenta(account) {
+function esCorreoNetflix(subject = "", from = "", raw = "") {
+  const txt = `${subject}\n${from}\n${raw}`.toLowerCase();
+
+  return (
+    txt.includes("netflix") ||
+    txt.includes("info@account.netflix.com") ||
+    txt.includes("account.netflix.com") ||
+    txt.includes("messages.netflix.com")
+  );
+}
+
+async function procesarUltimosCorreos(client, account, max = 8) {
+  if (!client || client.closed) return;
+
+  let lock = null;
+
+  try {
+    lock = await client.getMailboxLock("INBOX");
+
+    const status = await client.status("INBOX", { messages: true });
+    const total = Number(status.messages || 0);
+    if (!total) return;
+
+    const start = Math.max(1, total - max + 1);
+
+    for (let seq = start; seq <= total; seq++) {
+      const info = await obtenerTextoMensaje(client, seq);
+      if (!info) continue;
+
+      const subject = info.subject || "";
+      const from = info.from || "";
+      const raw = info.raw || "";
+
+      if (!esCorreoNetflix(subject, from, raw)) continue;
+
+      const codigo = extraerCodigo(`${subject}\n${raw}`);
+      const tipo = detectarTipo(subject, raw);
+
+      if (!codigo) continue;
+
+      await guardarCodigo({
+        alias: account.alias,
+        correo: account.user,
+        subject,
+        from,
+        body: raw,
+        tipo,
+        codigo,
+        uid: info.uid,
+        messageId: info.messageId,
+        source: account.source,
+      });
+    }
+  } catch (e) {
+    logErr(`❌ Error procesando mensajes [${account.alias}]:`, e?.message || e);
+  } finally {
+    if (lock) {
+      try {
+        lock.release();
+      } catch (_) {}
+    }
+  }
+}
+
+async function conectarCuenta(account) {
   const client = new ImapFlow({
     host: account.host,
     port: account.port,
@@ -285,85 +262,92 @@ async function revisarCuenta(account) {
       pass: account.pass,
     },
     logger: false,
-    connectionTimeout: 30000,
+    emitLogs: false,
+    disableAutoEnable: true,
+    clientInfo: {
+      name: "SublicuentasBot",
+      version: "1.0.0",
+    },
+    socketTimeout: 60000,
     greetingTimeout: 30000,
-    socketTimeout: 120000,
-    disableAutoIdle: true,
+    connectionTimeout: 30000,
   });
 
-  account.client = client;
+  client._sc_alias = account.alias;
+  client._sc_user = account.user;
 
-  try {
-    client.on("error", (err) => {
-      console.error(`❌ IMAP event error [${account.alias}]`, err?.message || err);
-    });
+  client.on("error", (err) => {
+    logErr(`❌ IMAP event error [${account.alias}]`, err?.message || err);
+  });
 
-    await client.connect();
-    console.log(`✅ IMAP conectado: ${account.alias}`);
+  client.on("close", () => {
+    log(`⚠️ IMAP cerrado [${account.alias}]`);
+  });
 
-    const lock = await client.getMailboxLock("INBOX");
-    try {
-      let processed = 0;
+  await client.connect();
+  log(`✅ IMAP conectado: ${account.alias}`);
 
-      for await (const msg of client.fetch({ seen: false }, { uid: true, envelope: true, internalDate: true })) {
-        try {
-          await procesarMensaje(account, msg);
-        } catch (err) {
-          console.error(`❌ Error procesando mensaje [${account.alias}]`, err?.message || err);
-        }
-
-        processed++;
-        if (processed >= 5) break;
-      }
-    } finally {
-      try {
-        lock.release();
-      } catch (_) {}
-    }
-  } catch (err) {
-    console.error(`❌ Error cuenta ${account.alias}:`, err?.message || err);
-  } finally {
-    try {
-      if (client.usable) {
-        await client.logout();
-      } else {
-        await client.close();
-      }
-    } catch (_) {}
-  }
+  return client;
 }
 
-// ===============================
-// CICLO GENERAL
-// ===============================
-async function cicloGeneral() {
-  for (const account of IMAP_ACCOUNTS) {
-    await revisarCuenta(account);
-  }
-}
-
-process.on("uncaughtException", (err) => {
-  console.error("❌ uncaughtException controlada:", err?.message || err);
-});
-
-process.on("unhandledRejection", (reason) => {
-  console.error("❌ unhandledRejection controlada:", reason?.message || reason);
-});
-
-async function main() {
-  console.log("🚀 Netflix Codes Listener iniciado...");
+async function cicloCuenta(account) {
+  let client = null;
 
   while (true) {
     try {
-      await cicloGeneral();
-    } catch (err) {
-      console.error("❌ Error en ciclo general:", err?.message || err);
+      client = await conectarCuenta(account);
+
+      await procesarUltimosCorreos(client, account, 10);
+
+      while (client && !client.closed) {
+        try {
+          await client.noop().catch(() => {});
+          await procesarUltimosCorreos(client, account, 4);
+        } catch (e) {
+          logErr(`❌ Error procesando mensaje [${account.alias}]`, e?.message || e);
+        }
+
+        await new Promise((r) => setTimeout(r, 45000));
+      }
+    } catch (e) {
+      logErr(`❌ Error cuenta ${account.alias}:`, e?.message || e);
+    } finally {
+      if (client && !client.closed) {
+        try {
+          await client.logout();
+        } catch (_) {}
+      }
     }
 
-    await sleep(60000);
+    log(`🔄 Reintentando IMAP [${account.alias}] en 20s...`);
+    await new Promise((r) => setTimeout(r, 20000));
   }
 }
 
-main().catch((err) => {
-  console.error("❌ Error fatal:", err?.message || err);
+async function iniciarNetflixListener() {
+  const enabled = String(process.env.ENABLE_NETFLIX_LISTENER || "").toLowerCase() === "true";
+  if (!enabled) {
+    log("⏸️ Netflix listener desactivado por ENV");
+    return;
+  }
+
+  const accounts = buildImapAccountsFromEnv();
+  log(`📬 Cuentas IMAP cargadas: ${accounts.length}`);
+
+  if (!accounts.length) {
+    log("⚠️ No hay cuentas IMAP configuradas");
+    return;
+  }
+
+  log("🚀 Netflix Codes Listener iniciado...");
+
+  for (const acc of accounts) {
+    cicloCuenta(acc).catch((e) => {
+      logErr(`❌ Fallo ciclo cuenta ${acc.alias}:`, e?.message || e);
+    });
+  }
+}
+
+iniciarNetflixListener().catch((e) => {
+  logErr("❌ No se pudo iniciar netflix listener:", e?.message || e);
 });
