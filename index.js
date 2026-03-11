@@ -81,6 +81,15 @@ async function startBotSafe() {
   }
 }
 
+if (process.env.ENABLE_NETFLIX_LISTENER === "true") {
+  try {
+    require("./netflix_codes_listener");
+    console.log("🎬 Netflix listener activo");
+  } catch (e) {
+    console.error("❌ No se pudo iniciar netflix listener:", e);
+  }
+}
+
 startBotSafe();
 
 // ===============================
