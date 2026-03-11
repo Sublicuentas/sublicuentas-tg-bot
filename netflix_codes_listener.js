@@ -37,7 +37,7 @@ function loadImapAccounts(max = 30) {
     const pass = process.env[`IMAP_PASS_${i}`];
     const host = process.env[`IMAP_HOST_${i}`];
     const alias = process.env[`IMAP_ALIAS_${i}`] || `imap_${i}`;
-    const source = process.env[`IMAP_SOURCE_${i}`] || "hosting";
+    const source = process.env[`IMAP_SOURCE_${i}`] || "gmail";
     const port = Number(process.env[`IMAP_PORT_${i}`] || 993);
     const secure = String(process.env[`IMAP_SECURE_${i}`] || "true") === "true";
 
@@ -76,7 +76,6 @@ function detectNetflixEmail(parsed) {
   const subject = norm(parsed.subject || "");
   const text = norm(parsed.text || "");
   const html = norm(parsed.html || "");
-
   const joined = `${fromText} ${subject} ${text} ${html}`;
 
   return (
@@ -92,28 +91,32 @@ function detectarTipoCorreo(subject = "", body = "") {
 
   if (
     s.includes("inicio de sesión") ||
-    b.includes("ingresa este código para iniciar sesión")
+    b.includes("ingresa este código para iniciar sesión") ||
+    b.includes("tu código de inicio de sesión")
   ) {
     return "signin";
   }
 
   if (
     s.includes("acceso temporal") ||
-    b.includes("código de acceso temporal")
+    b.includes("código de acceso temporal") ||
+    b.includes("tu código de acceso temporal")
   ) {
     return "temporal";
   }
 
   if (
     s.includes("verificación") ||
-    b.includes("confirma el cambio en tu cuenta con este código")
+    b.includes("confirma el cambio en tu cuenta con este código") ||
+    b.includes("tu código de verificación")
   ) {
     return "verification";
   }
 
   if (
     b.includes("obtener código") ||
-    b.includes("solicitud desde smart tv") ||
+    b.includes("solicitud desde") ||
+    b.includes("smart tv") ||
     b.includes("código hogar") ||
     s.includes("hogar")
   ) {
@@ -204,8 +207,13 @@ async function guardarCodigoNetflix(data) {
   return true;
 }
 
+// ===============================
+// PROCESAMIENTO MENSAJES
+// ===============================
 async function procesarMensaje(account, msg) {
   try {
+    if (!account.client) return;
+
     const source = await account.client.download(msg.uid);
     const parsed = await simpleParser(source);
 
@@ -245,12 +253,19 @@ async function procesarMensaje(account, msg) {
       from: fromText,
     });
 
-    await account.client.messageFlagsAdd(msg.uid, ["\\Seen"]);
+    try {
+      await account.client.messageFlagsAdd(msg.uid, ["\\Seen"]);
+    } catch (e) {
+      console.log(`⚠️ No se pudo marcar como leído [${account.alias}] UID=${msg.uid}`);
+    }
   } catch (err) {
     console.error(`❌ Error procesando mensaje [${account.alias}]`, err?.message || err);
   }
 }
 
+// ===============================
+// IMAP CUENTA
+// ===============================
 async function revisarCuenta(account) {
   const client = new ImapFlow({
     host: account.host,
@@ -261,6 +276,10 @@ async function revisarCuenta(account) {
       pass: account.pass,
     },
     logger: false,
+    connectionTimeout: 30000,
+    greetingTimeout: 30000,
+    socketTimeout: 90000,
+    disableAutoIdle: true,
   });
 
   account.client = client;
@@ -271,14 +290,25 @@ async function revisarCuenta(account) {
 
     const lock = await client.getMailboxLock("INBOX");
     try {
+      let processed = 0;
+
       for await (const msg of client.fetch({ seen: false }, { uid: true, envelope: true, internalDate: true })) {
-        await procesarMensaje(account, msg);
+        try {
+          await procesarMensaje(account, msg);
+        } catch (err) {
+          console.error(`❌ Error procesando mensaje [${account.alias}]`, err?.message || err);
+        }
+
+        processed++;
+        if (processed >= 10) break;
       }
     } finally {
       lock.release();
     }
 
-    await client.logout();
+    try {
+      await client.logout();
+    } catch (_) {}
   } catch (err) {
     console.error(`❌ Error cuenta ${account.alias}:`, err?.message || err);
     try {
@@ -287,6 +317,9 @@ async function revisarCuenta(account) {
   }
 }
 
+// ===============================
+// CICLO GENERAL
+// ===============================
 async function cicloGeneral() {
   for (const account of IMAP_ACCOUNTS) {
     await revisarCuenta(account);
@@ -303,7 +336,7 @@ async function main() {
     } catch (err) {
       console.error("❌ Error en ciclo general:", err?.message || err);
     }
-  }, 15000);
+  }, 45000);
 }
 
 main().catch((err) => {
