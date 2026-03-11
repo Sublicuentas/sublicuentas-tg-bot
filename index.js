@@ -1,5 +1,5 @@
 /*
- ✅ SUBLICUENTAS TG BOT — INDEX FINAL (BLINDADO v10)
+ ✅ SUBLICUENTAS TG BOT — INDEX FINAL (BLINDADO v11)
  ✅ FIX 409 menú / editMessageText
  ✅ FIX crash por archivo cortado
  ✅ FIX http duplicado
@@ -17,6 +17,7 @@
  ✅ FIX CORREOS SIN \\.COM
  ✅ FIX CORREOS CON _ Y SUBDOMINIOS
  ✅ BOT ULTRA BLINDADO CONTRA 409
+ ✅ LOCK GLOBAL FIRESTORE CONTRA DOBLE INSTANCIA
 */
 
 const http = require("http");
@@ -55,6 +56,127 @@ const db = admin.firestore();
 console.log("✅ FIREBASE PROJECT:", FIREBASE_PROJECT_ID);
 
 // ===============================
+// LOCK GLOBAL DE INSTANCIA
+// ===============================
+const INSTANCE_ID = `${process.env.RENDER_INSTANCE_ID || "inst"}_${process.pid}_${Date.now()}`;
+const LOCK_DOC_REF = db.collection("config").doc("bot_runtime_lock");
+const LOCK_TTL_MS = 90 * 1000;
+
+let LOCK_HEARTBEAT = null;
+let HAS_RUNTIME_LOCK = false;
+
+async function acquireRuntimeLock() {
+  try {
+    const now = Date.now();
+
+    const ok = await db.runTransaction(async (tx) => {
+      const snap = await tx.get(LOCK_DOC_REF);
+      const data = snap.exists ? snap.data() || {} : {};
+
+      const holder = String(data.holder || "");
+      const expiresAt = Number(data.expiresAt || 0);
+
+      const libre = !holder || expiresAt < now || holder === INSTANCE_ID;
+      if (!libre) return false;
+
+      tx.set(
+        LOCK_DOC_REF,
+        {
+          holder: INSTANCE_ID,
+          pid: process.pid,
+          startedAt: admin.firestore.FieldValue.serverTimestamp(),
+          heartbeatAt: admin.firestore.FieldValue.serverTimestamp(),
+          expiresAt: now + LOCK_TTL_MS,
+        },
+        { merge: true }
+      );
+
+      return true;
+    });
+
+    HAS_RUNTIME_LOCK = !!ok;
+
+    if (HAS_RUNTIME_LOCK) {
+      console.log(`🔒 Lock tomado por ${INSTANCE_ID}`);
+    } else {
+      console.log(`⛔ Lock ocupado por otra instancia. Esta instancia queda pasiva: ${INSTANCE_ID}`);
+    }
+
+    return HAS_RUNTIME_LOCK;
+  } catch (e) {
+    console.error("❌ Error acquireRuntimeLock:", e?.message || e);
+    HAS_RUNTIME_LOCK = false;
+    return false;
+  }
+}
+
+async function refreshRuntimeLock() {
+  if (!HAS_RUNTIME_LOCK) return false;
+
+  try {
+    const now = Date.now();
+
+    await db.runTransaction(async (tx) => {
+      const snap = await tx.get(LOCK_DOC_REF);
+      const data = snap.exists ? snap.data() || {} : {};
+
+      if (String(data.holder || "") !== INSTANCE_ID) {
+        throw new Error("Lock perdido");
+      }
+
+      tx.set(
+        LOCK_DOC_REF,
+        {
+          heartbeatAt: admin.firestore.FieldValue.serverTimestamp(),
+          expiresAt: now + LOCK_TTL_MS,
+        },
+        { merge: true }
+      );
+    });
+
+    return true;
+  } catch (e) {
+    HAS_RUNTIME_LOCK = false;
+    console.error("❌ Error refreshRuntimeLock:", e?.message || e);
+    return false;
+  }
+}
+
+async function releaseRuntimeLock() {
+  try {
+    if (LOCK_HEARTBEAT) {
+      clearInterval(LOCK_HEARTBEAT);
+      LOCK_HEARTBEAT = null;
+    }
+
+    const snap = await LOCK_DOC_REF.get();
+    const data = snap.exists ? snap.data() || {} : {};
+
+    if (String(data.holder || "") === INSTANCE_ID) {
+      await LOCK_DOC_REF.set(
+        {
+          holder: "",
+          expiresAt: 0,
+          releasedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+      console.log(`🔓 Lock liberado por ${INSTANCE_ID}`);
+    }
+  } catch (e) {
+    console.error("❌ Error releaseRuntimeLock:", e?.message || e);
+  }
+}
+
+function startRuntimeHeartbeat() {
+  if (LOCK_HEARTBEAT) clearInterval(LOCK_HEARTBEAT);
+
+  LOCK_HEARTBEAT = setInterval(async () => {
+    await refreshRuntimeLock();
+  }, 30 * 1000);
+}
+
+// ===============================
 // BOT ULTRA BLINDADO
 // ===============================
 const bot = new TelegramBot(BOT_TOKEN, {
@@ -69,6 +191,11 @@ let BOT_START_TIMEOUT = null;
 bot.on("polling_error", async (err) => {
   const msg = String(err?.message || err || "");
   console.error("❌ polling_error:", msg);
+
+  if (!HAS_RUNTIME_LOCK) {
+    console.log("⛔ polling_error ignorado: esta instancia no tiene lock");
+    return;
+  }
 
   if (msg.includes("409") || msg.toLowerCase().includes("terminated by other getupdates request")) {
     BOT_POLLING_ACTIVE = false;
@@ -104,6 +231,11 @@ async function hardStopBot() {
 }
 
 async function startBotSafe(force = false) {
+  if (!HAS_RUNTIME_LOCK) {
+    console.log("⛔ Esta instancia no tiene lock. Bot no inicia.");
+    return;
+  }
+
   const now = Date.now();
 
   if (BOT_IS_STARTING && !force) {
@@ -128,7 +260,6 @@ async function startBotSafe(force = false) {
     console.log("🔄 Iniciando bot limpio...");
 
     await hardStopBot();
-
     await new Promise((r) => setTimeout(r, 3000));
 
     await bot.startPolling({
@@ -149,6 +280,11 @@ async function startBotSafe(force = false) {
 }
 
 function scheduleBotRestart(delayMs = 15000) {
+  if (!HAS_RUNTIME_LOCK) {
+    console.log("⛔ scheduleBotRestart ignorado: esta instancia no tiene lock");
+    return;
+  }
+
   if (BOT_START_TIMEOUT) {
     clearTimeout(BOT_START_TIMEOUT);
     BOT_START_TIMEOUT = null;
@@ -164,12 +300,19 @@ function scheduleBotRestart(delayMs = 15000) {
 // ===============================
 // LISTENER NETFLIX
 // ===============================
-if (process.env.ENABLE_NETFLIX_LISTENER === "true") {
-  try {
-    require("./netflix_codes_listener");
-    console.log("🎬 Netflix listener activo");
-  } catch (e) {
-    console.error("❌ No se pudo iniciar netflix listener:", e);
+function startNetflixListenerIfLeader() {
+  if (!HAS_RUNTIME_LOCK) {
+    console.log("⏸️ Netflix listener no inicia: otra instancia tiene el lock");
+    return;
+  }
+
+  if (process.env.ENABLE_NETFLIX_LISTENER === "true") {
+    try {
+      require("./netflix_codes_listener");
+      console.log("🎬 Netflix listener activo");
+    } catch (e) {
+      console.error("❌ No se pudo iniciar netflix listener:", e);
+    }
   }
 }
 
@@ -180,6 +323,16 @@ if (process.env.ENABLE_NETFLIX_LISTENER === "true") {
   try {
     await hardStopBot();
   } catch (_) {}
+
+  const lockOk = await acquireRuntimeLock();
+
+  if (!lockOk) {
+    console.log("⛔ Esta instancia quedó pasiva. No inicia bot ni listener.");
+    return;
+  }
+
+  startRuntimeHeartbeat();
+  startNetflixListenerIfLeader();
 
   // Espera a que Render termine deploy y libere sesiones previas
   scheduleBotRestart(15000);
@@ -1131,7 +1284,7 @@ function kbPlataformasWiz(prefix, clientId, idxOpt) {
     ],
     [{ text: "📡 iptv (4)", callback_data: cb("iptv4") }],
   ];
-      }
+       }
 
 // ===============================
 // FICHA CLIENTE / CRM / EDICIÓN
@@ -2193,12 +2346,14 @@ async function responderMenuCodigosNetflix(chatId, plataforma, correo) {
       ],
     },
   });
-   }
+}
 
 // ===============================
 // COMANDOS CLIENTES
 // ===============================
 bot.onText(/\/buscar\s+(.+)/i, async (msg, match) => {
+  if (!HAS_RUNTIME_LOCK) return;
+
   const chatId = msg.chat.id;
   const userId = msg.from.id;
   if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
@@ -2224,6 +2379,8 @@ bot.onText(/\/buscar\s+(.+)/i, async (msg, match) => {
 });
 
 bot.onText(/\/cliente\s+(\S+)/i, async (msg, match) => {
+  if (!HAS_RUNTIME_LOCK) return;
+
   const chatId = msg.chat.id;
   const userId = msg.from.id;
   if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
@@ -2238,6 +2395,8 @@ bot.onText(/\/cliente\s+(\S+)/i, async (msg, match) => {
 });
 
 bot.onText(/\/clientes_txt/i, async (msg) => {
+  if (!HAS_RUNTIME_LOCK) return;
+
   const chatId = msg.chat.id;
   const userId = msg.from.id;
   if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
@@ -2245,6 +2404,8 @@ bot.onText(/\/clientes_txt/i, async (msg) => {
 });
 
 bot.onText(/\/vendedores_txt_split/i, async (msg) => {
+  if (!HAS_RUNTIME_LOCK) return;
+
   const chatId = msg.chat.id;
   const userId = msg.from.id;
   if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
@@ -2255,6 +2416,8 @@ bot.onText(/\/vendedores_txt_split/i, async (msg) => {
 // COMANDOS RENOVACIONES
 // ===============================
 bot.onText(/\/renovaciones(?:\s+(.+))?/i, async (msg, match) => {
+  if (!HAS_RUNTIME_LOCK) return;
+
   const chatId = msg.chat.id;
   const userId = msg.from.id;
 
@@ -2291,6 +2454,8 @@ bot.onText(/\/renovaciones(?:\s+(.+))?/i, async (msg, match) => {
 });
 
 bot.onText(/\/txt(?:\s+(.+))?/i, async (msg, match) => {
+  if (!HAS_RUNTIME_LOCK) return;
+
   const chatId = msg.chat.id;
   const userId = msg.from.id;
 
@@ -2329,18 +2494,24 @@ bot.onText(/\/txt(?:\s+(.+))?/i, async (msg, match) => {
 // IDS / VINCULACIÓN
 // ===============================
 bot.onText(/\/id/i, async (msg) => {
+  if (!HAS_RUNTIME_LOCK) return;
+
   const chatId = msg.chat.id;
   const userId = msg.from.id;
   return bot.sendMessage(chatId, `🆔 Tu Telegram ID es:\n${userId}\n\n📩 Envíelo al administrador para activarte en el bot.`);
 });
 
 bot.onText(/\/miid/i, async (msg) => {
+  if (!HAS_RUNTIME_LOCK) return;
+
   const chatId = msg.chat.id;
   const userId = msg.from.id;
   return bot.sendMessage(chatId, `🆔 Tu Telegram ID es:\n${userId}\n\n📩 Envíelo al administrador para activarte en el bot.`);
 });
 
 bot.onText(/\/vincular_vendedor\s+(.+)/i, async (msg, match) => {
+  if (!HAS_RUNTIME_LOCK) return;
+
   const chatId = msg.chat.id;
   const userId = msg.from.id;
 
@@ -2355,6 +2526,8 @@ bot.onText(/\/vincular_vendedor\s+(.+)/i, async (msg, match) => {
 // REVENDEDORES ADMIN
 // ===============================
 bot.onText(/\/addvendedor\s+(\d+)\s+(.+)/i, async (msg, match) => {
+  if (!HAS_RUNTIME_LOCK) return;
+
   const chatId = msg.chat.id;
   const userId = msg.from.id;
 
@@ -2384,6 +2557,8 @@ bot.onText(/\/addvendedor\s+(\d+)\s+(.+)/i, async (msg, match) => {
 });
 
 bot.onText(/\/delvendedor\s+(.+)/i, async (msg, match) => {
+  if (!HAS_RUNTIME_LOCK) return;
+
   const chatId = msg.chat.id;
   const userId = msg.from.id;
 
@@ -2427,6 +2602,8 @@ async function listarRevendedores(chatId) {
 // ADMINS
 // ===============================
 bot.onText(/\/adminadd\s+(\d+)/i, async (msg, match) => {
+  if (!HAS_RUNTIME_LOCK) return;
+
   const chatId = msg.chat.id;
   const userId = msg.from.id;
 
@@ -2447,6 +2624,8 @@ bot.onText(/\/adminadd\s+(\d+)/i, async (msg, match) => {
 });
 
 bot.onText(/\/admindel\s+(\d+)/i, async (msg, match) => {
+  if (!HAS_RUNTIME_LOCK) return;
+
   const chatId = msg.chat.id;
   const userId = msg.from.id;
 
@@ -2467,6 +2646,8 @@ bot.onText(/\/admindel\s+(\d+)/i, async (msg, match) => {
 });
 
 bot.onText(/\/adminlist/i, async (msg) => {
+  if (!HAS_RUNTIME_LOCK) return;
+
   const chatId = msg.chat.id;
   const userId = msg.from.id;
 
@@ -2488,6 +2669,8 @@ bot.onText(/\/adminlist/i, async (msg) => {
 // START / MENU BLINDADO
 // ===============================
 bot.onText(/\/start/i, async (msg) => {
+  if (!HAS_RUNTIME_LOCK) return;
+
   const chatId = msg.chat.id;
   const userId = msg.from.id;
 
@@ -2532,6 +2715,8 @@ bot.onText(/\/start/i, async (msg) => {
 });
 
 bot.onText(/\/menu/i, async (msg) => {
+  if (!HAS_RUNTIME_LOCK) return;
+
   const chatId = msg.chat.id;
   const userId = msg.from.id;
 
@@ -2588,6 +2773,8 @@ bot.onText(/\/menu/i, async (msg) => {
 // ===============================
 PLATAFORMAS.forEach((p) => {
   bot.onText(new RegExp("^\\/" + p + "(?:@\\w+)?(?:\\s+.*)?$", "i"), async (msg) => {
+    if (!HAS_RUNTIME_LOCK) return;
+
     const chatId = msg.chat.id;
     const userId = msg.from.id;
     if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
@@ -2596,6 +2783,8 @@ PLATAFORMAS.forEach((p) => {
 });
 
 bot.onText(/\/stock/i, async (msg) => {
+  if (!HAS_RUNTIME_LOCK) return;
+
   const chatId = msg.chat.id;
   const userId = msg.from.id;
   if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
@@ -2606,6 +2795,8 @@ bot.onText(/\/stock/i, async (msg) => {
 // CALLBACKS
 // ===============================
 bot.on("callback_query", async (q) => {
+  if (!HAS_RUNTIME_LOCK) return;
+
   const chatId = q.message?.chat?.id;
   const userId = q.from?.id;
   const data = q.data || "";
@@ -3514,6 +3705,8 @@ bot.on("callback_query", async (q) => {
 // MESSAGE HANDLER
 // ===============================
 bot.on("message", async (msg) => {
+  if (!HAS_RUNTIME_LOCK) return;
+
   const chatId = msg.chat?.id;
   const userId = msg.from?.id;
   const text = msg.text || "";
@@ -4039,6 +4232,8 @@ function getTimePartsNow() {
 }
 
 async function enviarTxtRenovacionesDiariasPorVendedor() {
+  if (!HAS_RUNTIME_LOCK) return;
+
   const { dmy } = getTimePartsNow();
 
   const snap = await db.collection("revendedores").get();
@@ -4063,6 +4258,8 @@ async function enviarTxtRenovacionesDiariasPorVendedor() {
 }
 
 setInterval(async () => {
+  if (!HAS_RUNTIME_LOCK) return;
+
   try {
     const { dmy, hh, mm } = getTimePartsNow();
 
@@ -4096,6 +4293,7 @@ process.on("SIGINT", async () => {
   console.log("⚠️ SIGINT recibido, cerrando polling...");
   try {
     await hardStopBot().catch(() => {});
+    await releaseRuntimeLock().catch(() => {});
   } catch (_) {}
   process.exit(0);
 });
@@ -4104,8 +4302,15 @@ process.on("SIGTERM", async () => {
   console.log("⚠️ SIGTERM recibido, cerrando polling...");
   try {
     await hardStopBot().catch(() => {});
+    await releaseRuntimeLock().catch(() => {});
   } catch (_) {}
   process.exit(0);
+});
+
+process.on("exit", async () => {
+  try {
+    await releaseRuntimeLock().catch(() => {});
+  } catch (_) {}
 });
 
 // ===============================
@@ -4122,6 +4327,7 @@ http
           ok: true,
           botPollingActive: BOT_POLLING_ACTIVE,
           botIsStarting: BOT_IS_STARTING,
+          hasRuntimeLock: HAS_RUNTIME_LOCK,
           tz: TZ,
           ts: new Date().toISOString(),
         })
