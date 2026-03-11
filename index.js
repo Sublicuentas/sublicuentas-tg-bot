@@ -1,5 +1,5 @@
 /*
- ✅ SUBLICUENTAS TG BOT — INDEX FINAL (BLINDADO v9)
+ ✅ SUBLICUENTAS TG BOT — INDEX FINAL (BLINDADO v10)
  ✅ FIX 409 menú / editMessageText
  ✅ FIX crash por archivo cortado
  ✅ FIX http duplicado
@@ -16,6 +16,7 @@
  ✅ INVENTARIO REAL POR CLIENTES EN CADA CORREO
  ✅ FIX CORREOS SIN \\.COM
  ✅ FIX CORREOS CON _ Y SUBDOMINIOS
+ ✅ BOT ULTRA BLINDADO CONTRA 409
 */
 
 const http = require("http");
@@ -54,33 +55,110 @@ const db = admin.firestore();
 console.log("✅ FIREBASE PROJECT:", FIREBASE_PROJECT_ID);
 
 // ===============================
-// BOT BLINDADO
+// BOT ULTRA BLINDADO
 // ===============================
 const bot = new TelegramBot(BOT_TOKEN, {
-  polling: {
-    autoStart: false,
-    interval: 300,
-    params: { timeout: 10 },
-  },
+  polling: false,
 });
 
-bot.on("polling_error", (err) => {
-  console.error("❌ polling_error:", err?.message || err);
+let BOT_IS_STARTING = false;
+let BOT_POLLING_ACTIVE = false;
+let BOT_LAST_START_AT = 0;
+let BOT_START_TIMEOUT = null;
+
+bot.on("polling_error", async (err) => {
+  const msg = String(err?.message || err || "");
+  console.error("❌ polling_error:", msg);
+
+  if (msg.includes("409") || msg.toLowerCase().includes("terminated by other getupdates request")) {
+    BOT_POLLING_ACTIVE = false;
+    scheduleBotRestart(15000);
+    return;
+  }
+
+  if (
+    msg.toLowerCase().includes("etelegram") ||
+    msg.toLowerCase().includes("network") ||
+    msg.toLowerCase().includes("timeout") ||
+    msg.toLowerCase().includes("socket")
+  ) {
+    BOT_POLLING_ACTIVE = false;
+    scheduleBotRestart(10000);
+  }
 });
 
 bot.on("webhook_error", (err) => {
   console.error("❌ webhook_error:", err?.message || err);
 });
 
-async function startBotSafe() {
+async function hardStopBot() {
   try {
     await bot.stopPolling().catch(() => {});
+  } catch (_) {}
+
+  try {
     await bot.deleteWebHook().catch(() => {});
-    await bot.startPolling();
-    console.log("✅ Bot iniciado (polling blindado)");
-  } catch (err) {
-    console.error("❌ Error iniciando polling:", err?.message || err);
+  } catch (_) {}
+
+  BOT_POLLING_ACTIVE = false;
+}
+
+async function startBotSafe(force = false) {
+  const now = Date.now();
+
+  if (BOT_IS_STARTING && !force) {
+    console.log("ℹ️ Bot ya está iniciando, salto start duplicado");
+    return;
   }
+
+  if (!force && BOT_POLLING_ACTIVE) {
+    console.log("ℹ️ Bot ya está activo, no reinicio");
+    return;
+  }
+
+  if (!force && now - BOT_LAST_START_AT < 8000) {
+    console.log("ℹ️ Start bloqueado por ventana anti-duplicado");
+    return;
+  }
+
+  BOT_IS_STARTING = true;
+  BOT_LAST_START_AT = now;
+
+  try {
+    console.log("🔄 Iniciando bot limpio...");
+
+    await hardStopBot();
+
+    await new Promise((r) => setTimeout(r, 3000));
+
+    await bot.startPolling({
+      restart: true,
+      interval: 300,
+      params: { timeout: 10 },
+    });
+
+    BOT_POLLING_ACTIVE = true;
+    console.log("✅ Bot iniciado (polling ultra blindado)");
+  } catch (err) {
+    BOT_POLLING_ACTIVE = false;
+    console.error("❌ Error iniciando polling:", err?.message || err);
+    scheduleBotRestart(15000);
+  } finally {
+    BOT_IS_STARTING = false;
+  }
+}
+
+function scheduleBotRestart(delayMs = 15000) {
+  if (BOT_START_TIMEOUT) {
+    clearTimeout(BOT_START_TIMEOUT);
+    BOT_START_TIMEOUT = null;
+  }
+
+  BOT_START_TIMEOUT = setTimeout(() => {
+    startBotSafe(true).catch((e) => {
+      console.error("❌ scheduleBotRestart error:", e?.message || e);
+    });
+  }, delayMs);
 }
 
 // ===============================
@@ -96,17 +174,15 @@ if (process.env.ENABLE_NETFLIX_LISTENER === "true") {
 }
 
 // ===============================
-// ARRANQUE BLINDADO
+// ARRANQUE ULTRA BLINDADO
 // ===============================
 (async () => {
   try {
-    await bot.stopPolling().catch(() => {});
-    await bot.deleteWebHook().catch(() => {});
+    await hardStopBot();
   } catch (_) {}
 
-  setTimeout(() => {
-    startBotSafe();
-  }, 15000);
+  // Espera a que Render termine deploy y libere sesiones previas
+  scheduleBotRestart(15000);
 })();
 
 // ===============================
@@ -1055,7 +1131,7 @@ function kbPlataformasWiz(prefix, clientId, idxOpt) {
     ],
     [{ text: "📡 iptv (4)", callback_data: cb("iptv4") }],
   ];
-         }
+      }
 
 // ===============================
 // FICHA CLIENTE / CRM / EDICIÓN
@@ -1200,7 +1276,7 @@ async function menuServicio(chatId, clientId, idx) {
 // WIZARD CORREO / CLIENTES EN CORREO
 // ===============================
 function escapeMarkdown(text = "") {
-  return String(text).replace(/([_*\[\]()~`>#+\-=|{}!\\])/g, "\\$1");
+  return String(text || "").replace(/([_*\[\]()~`>#+\-=|{}!\\])/g, "\\$1");
 }
 
 async function buscarCorreoInventarioPorPlatCorreo(plataforma, correo) {
@@ -1314,10 +1390,12 @@ async function mostrarListaCorreosPlataforma(chatId, plataforma) {
     const disponibles = Math.max(0, capacidad - ocupados);
     const estado = disponibles === 0 ? "LLENA" : "CON ESPACIO";
 
-    return [{
-      text: `${item.correo || "correo"} | ${ocupados}/${capacidad} | ${estado}`,
-      callback_data: `mail_panel|${plat}|${encodeURIComponent(item.correo || "")}`,
-    }];
+    return [
+      {
+        text: `${item.correo || "correo"} | ${ocupados}/${capacidad} | ${estado}`,
+        callback_data: `mail_panel|${plat}|${encodeURIComponent(item.correo || "")}`,
+      },
+    ];
   });
 
   kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
@@ -1913,6 +1991,18 @@ async function enviarTXTATodosHoy(superChatId) {
 // ===============================
 // HELPERS CODIGOS NETFLIX
 // ===============================
+function tsToMillisNetflix(v) {
+  try {
+    if (!v) return 0;
+    if (typeof v?.toDate === "function") return v.toDate().getTime();
+    if (v instanceof Date) return v.getTime();
+    const t = new Date(v).getTime();
+    return Number.isFinite(t) ? t : 0;
+  } catch (_) {
+    return 0;
+  }
+}
+
 async function obtenerUltimoCodigoNetflix(correo, tipo) {
   const mail = String(correo || "").trim().toLowerCase();
   if (!mail || !tipo) return null;
@@ -1938,8 +2028,8 @@ async function obtenerUltimoCodigoNetflix(correo, tipo) {
     const docs = alt.docs
       .map((d) => ({ id: d.id, ...(d.data() || {}) }))
       .sort((a, b) => {
-        const fa = new Date(a.fecha || a.createdAt || 0).getTime();
-        const fb = new Date(b.fecha || b.createdAt || 0).getTime();
+        const fa = tsToMillisNetflix(a.fecha || a.createdAt || a.updatedAt);
+        const fb = tsToMillisNetflix(b.fecha || b.createdAt || b.updatedAt);
         return fb - fa;
       });
 
@@ -1974,8 +2064,8 @@ async function obtenerUltimoCodigoNetflixGeneral(correo) {
     const docs = alt.docs
       .map((d) => ({ id: d.id, ...(d.data() || {}) }))
       .sort((a, b) => {
-        const fa = new Date(a.fecha || a.createdAt || 0).getTime();
-        const fb = new Date(b.fecha || b.createdAt || 0).getTime();
+        const fa = tsToMillisNetflix(a.fecha || a.createdAt || a.updatedAt);
+        const fb = tsToMillisNetflix(b.fecha || b.createdAt || b.updatedAt);
         return fb - fa;
       });
 
@@ -4002,6 +4092,22 @@ process.on("uncaughtException", (err) => {
   console.error("❌ uncaughtException:", err);
 });
 
+process.on("SIGINT", async () => {
+  console.log("⚠️ SIGINT recibido, cerrando polling...");
+  try {
+    await hardStopBot().catch(() => {});
+  } catch (_) {}
+  process.exit(0);
+});
+
+process.on("SIGTERM", async () => {
+  console.log("⚠️ SIGTERM recibido, cerrando polling...");
+  try {
+    await hardStopBot().catch(() => {});
+  } catch (_) {}
+  process.exit(0);
+});
+
 // ===============================
 // HTTP KEEPALIVE FINAL
 // ===============================
@@ -4009,10 +4115,22 @@ const PORT = process.env.PORT || 10000;
 
 http
   .createServer((req, res) => {
-    res.writeHead(200);
+    if (req.url === "/health") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      return res.end(
+        JSON.stringify({
+          ok: true,
+          botPollingActive: BOT_POLLING_ACTIVE,
+          botIsStarting: BOT_IS_STARTING,
+          tz: TZ,
+          ts: new Date().toISOString(),
+        })
+      );
+    }
+
+    res.writeHead(200, { "Content-Type": "text/plain" });
     res.end("OK");
   })
   .listen(PORT, () => {
     console.log("🌐 HTTP KEEPALIVE activo en puerto", PORT);
   });
-
