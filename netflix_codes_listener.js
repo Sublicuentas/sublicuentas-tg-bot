@@ -26,6 +26,10 @@ if (!admin.apps.length) {
 
 const db = admin.firestore();
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 // ===============================
 // CARGA AUTOMÁTICA CUENTAS IMAP
 // ===============================
@@ -212,7 +216,10 @@ async function guardarCodigoNetflix(data) {
 // ===============================
 async function procesarMensaje(account, msg) {
   try {
-    if (!account.client) return;
+    if (!account.client || !account.client.usable) {
+      console.log(`⚠️ Cliente IMAP no disponible [${account.alias}]`);
+      return;
+    }
 
     const source = await account.client.download(msg.uid);
     const parsed = await simpleParser(source);
@@ -254,7 +261,9 @@ async function procesarMensaje(account, msg) {
     });
 
     try {
-      await account.client.messageFlagsAdd(msg.uid, ["\\Seen"]);
+      if (account.client.usable) {
+        await account.client.messageFlagsAdd(msg.uid, ["\\Seen"]);
+      }
     } catch (e) {
       console.log(`⚠️ No se pudo marcar como leído [${account.alias}] UID=${msg.uid}`);
     }
@@ -278,13 +287,17 @@ async function revisarCuenta(account) {
     logger: false,
     connectionTimeout: 30000,
     greetingTimeout: 30000,
-    socketTimeout: 90000,
+    socketTimeout: 120000,
     disableAutoIdle: true,
   });
 
   account.client = client;
 
   try {
+    client.on("error", (err) => {
+      console.error(`❌ IMAP event error [${account.alias}]`, err?.message || err);
+    });
+
     await client.connect();
     console.log(`✅ IMAP conectado: ${account.alias}`);
 
@@ -300,19 +313,22 @@ async function revisarCuenta(account) {
         }
 
         processed++;
-        if (processed >= 10) break;
+        if (processed >= 5) break;
       }
     } finally {
-      lock.release();
+      try {
+        lock.release();
+      } catch (_) {}
     }
-
-    try {
-      await client.logout();
-    } catch (_) {}
   } catch (err) {
     console.error(`❌ Error cuenta ${account.alias}:`, err?.message || err);
+  } finally {
     try {
-      await client.logout();
+      if (client.usable) {
+        await client.logout();
+      } else {
+        await client.close();
+      }
     } catch (_) {}
   }
 }
@@ -326,17 +342,26 @@ async function cicloGeneral() {
   }
 }
 
+process.on("uncaughtException", (err) => {
+  console.error("❌ uncaughtException controlada:", err?.message || err);
+});
+
+process.on("unhandledRejection", (reason) => {
+  console.error("❌ unhandledRejection controlada:", reason?.message || reason);
+});
+
 async function main() {
   console.log("🚀 Netflix Codes Listener iniciado...");
-  await cicloGeneral();
 
-  setInterval(async () => {
+  while (true) {
     try {
       await cicloGeneral();
     } catch (err) {
       console.error("❌ Error en ciclo general:", err?.message || err);
     }
-  }, 45000);
+
+    await sleep(60000);
+  }
 }
 
 main().catch((err) => {
