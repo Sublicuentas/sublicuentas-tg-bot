@@ -83,6 +83,36 @@ function extraerCodigo(texto = "") {
   return null;
 }
 
+function extraerCorreoDestino(subject = "", body = "", fallback = "") {
+  const txt = `${subject}\n${body}`;
+
+  const candidatos = [...txt.matchAll(/[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}/gi)]
+    .map((m) => String(m[0] || "").trim().toLowerCase())
+    .filter(Boolean);
+
+  if (!candidatos.length) {
+    return String(fallback || "").trim().toLowerCase();
+  }
+
+  const ignorar = new Set([
+    "info@account.netflix.com",
+    "account@netflix.com",
+    "no-reply@netflix.com",
+    "noreply@netflix.com",
+    "support@netflix.com",
+    "privacy@netflix.com",
+    lower(fallback),
+  ]);
+
+  const limpios = candidatos.filter((x) => !ignorar.has(x));
+
+  if (!limpios.length) {
+    return String(fallback || "").trim().toLowerCase();
+  }
+
+  return limpios[limpios.length - 1];
+}
+
 function detectarTipo(subject = "", body = "") {
   const txt = `${subject}\n${body}`.toLowerCase();
 
@@ -170,6 +200,7 @@ async function yaExisteCodigo({ correo, tipo, codigo, messageId, uid }) {
 async function guardarCodigo({
   alias,
   correo,
+  correoRaiz,
   subject,
   from,
   body,
@@ -182,6 +213,7 @@ async function guardarCodigo({
   if (!codigo) return false;
 
   const mail = lower(correo);
+  const raiz = lower(correoRaiz);
 
   const existe = await yaExisteCodigo({
     correo: mail,
@@ -206,6 +238,7 @@ async function guardarCodigo({
   await db.collection("codigos_netflix").doc(docId).set({
     alias: norm(alias),
     correo: mail,
+    correoRaiz: raiz,
     tipo: norm(tipo),
     codigo: norm(codigo),
     asunto: norm(subject),
@@ -220,7 +253,7 @@ async function guardarCodigo({
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
   });
 
-  log(`✅ Código guardado [${alias}] ${mail} | ${tipo} | ${codigo}`);
+  log(`✅ Código guardado [${alias}] destino=${mail} raiz=${raiz} | ${tipo} | ${codigo}`);
   return true;
 }
 
@@ -315,11 +348,13 @@ async function procesarCorreosNuevos(client, account, maxBackfill = 10) {
 
       const codigo = extraerCodigo(`${subject}\n${raw}`);
       const tipo = detectarTipo(subject, raw);
+      const correoDestino = extraerCorreoDestino(subject, raw, account.user);
 
       if (codigo) {
         await guardarCodigo({
           alias: account.alias,
-          correo: account.user,
+          correo: correoDestino,
+          correoRaiz: account.user,
           subject,
           from,
           body: raw,
