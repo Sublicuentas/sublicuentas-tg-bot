@@ -66,7 +66,14 @@ function extraerCodigo(texto = "") {
   const raw = String(texto || "");
 
   const patrones = [
-    /(?:code|codigo|verification|confirm|netflix)[^0-9]{0,30}(\d{4,8})/gi,
+    /(?:código|codigo|code)[^0-9]{0,25}(\d{6})/gi,
+    /(?:código|codigo|code)[^0-9]{0,25}(\d{4})/gi,
+    /(?:verificación|verificacion|verification|confirma el cambio)[^0-9]{0,35}(\d{6})/gi,
+    /(?:verificación|verificacion|verification|confirma el cambio)[^0-9]{0,35}(\d{4})/gi,
+    /(?:inicio de sesión|inicio de sesion|iniciar sesión|iniciar sesion|sign in|sign-in)[^0-9]{0,35}(\d{6})/gi,
+    /(?:inicio de sesión|inicio de sesion|iniciar sesión|iniciar sesion|sign in|sign-in)[^0-9]{0,35}(\d{4})/gi,
+    /(?:acceso temporal|temporary access|temporary code)[^0-9]{0,35}(\d{6})/gi,
+    /(?:acceso temporal|temporary access|temporary code)[^0-9]{0,35}(\d{4})/gi,
     /\b(\d{6})\b/g,
     /\b(\d{4})\b/g,
   ];
@@ -85,6 +92,11 @@ function extraerCodigo(texto = "") {
 
 function extraerCorreoDestino(subject = "", body = "", fallback = "") {
   const txt = `${subject}\n${body}`;
+
+  const mPara = txt.match(/para:\s*([a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,})/i);
+  if (mPara?.[1]) {
+    return String(mPara[1]).trim().toLowerCase();
+  }
 
   const candidatos = [...txt.matchAll(/[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}/gi)]
     .map((m) => String(m[0] || "").trim().toLowerCase())
@@ -110,29 +122,43 @@ function extraerCorreoDestino(subject = "", body = "", fallback = "") {
     return String(fallback || "").trim().toLowerCase();
   }
 
-  return limpios[limpios.length - 1];
+  return limpios[0];
 }
 
 function detectarTipo(subject = "", body = "") {
   const txt = `${subject}\n${body}`.toLowerCase();
 
   if (
+    txt.includes("acceso temporal") ||
     txt.includes("temporary access code") ||
-    txt.includes("temporary code") ||
-    txt.includes("código temporal") ||
-    txt.includes("codigo temporal")
+    txt.includes("temporary code")
   ) {
     return "temporal";
   }
 
   if (
-    txt.includes("verify your device") ||
-    txt.includes("verification code") ||
     txt.includes("código de verificación") ||
     txt.includes("codigo de verificacion") ||
+    txt.includes("verification code") ||
+    txt.includes("confirma el cambio") ||
+    txt.includes("confirm the change") ||
+    txt.includes("verify your device") ||
     txt.includes("verify it was you")
   ) {
     return "verification";
+  }
+
+  if (
+    txt.includes("inicio de sesión") ||
+    txt.includes("inicio de sesion") ||
+    txt.includes("iniciar sesión") ||
+    txt.includes("iniciar sesion") ||
+    txt.includes("tu código de inicio de sesión") ||
+    txt.includes("tu codigo de inicio de sesion") ||
+    txt.includes("sign-in code") ||
+    txt.includes("sign in code")
+  ) {
+    return "signin";
   }
 
   if (
@@ -364,6 +390,8 @@ async function procesarCorreosNuevos(client, account, maxBackfill = 10) {
           messageId: info.messageId,
           source: account.source,
         });
+      } else {
+        log(`ℹ️ Correo Netflix sin código detectable [${account.alias}] destino=${correoDestino} asunto=${subject}`);
       }
 
       if (uid > maxUidProcesado) maxUidProcesado = uid;
