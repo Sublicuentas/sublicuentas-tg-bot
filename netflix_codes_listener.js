@@ -309,5 +309,3 @@ async function main() {
 main().catch((err) => {
   console.error("❌ Error fatal:", err?.message || err);
 });
-
-add netflix listener
