@@ -49,7 +49,7 @@ admin.initializeApp({
 });
 
 const db = admin.firestore();
-console.log("✅ FIREBASE PROJECT:", admin.app().options.projectId);
+console.log("✅ FIREBASE PROJECT:", FIREBASE_PROJECT_ID);
 
 // ===============================
 // BOT BLINDADO
