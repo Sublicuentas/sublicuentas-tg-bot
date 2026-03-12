@@ -242,4 +242,255 @@ async function guardarCodigo({
     return false;
   }
 
-  const safeMsgId = String(messageId || "").replace(/[^\w.-]+/g, "_").slice(
+  const safeMsgId = String(messageId || "").replace(/[^\w.-]+/g, "_").slice(0, 120);
+  const safeUid = String(uid || "").replace(/[^\w.-]+/g, "_").slice(0, 60);
+  const docId = `${mail}__${norm(tipo)}__${safeUid || Date.now()}__${safeMsgId || Date.now()}`
+    .replace(/[\/#?[\]]+/g, "_")
+    .slice(0, 300);
+
+  await db.collection("codigos_netflix").doc(docId).set({
+    alias: norm(alias),
+    correo: mail,
+    correoRaiz: raiz,
+    tipo: norm(tipo),
+    codigo: norm(codigo),
+    asunto: norm(subject),
+    from: norm(from),
+    body: String(body || "").slice(0, 4000),
+    uid: String(uid || ""),
+    messageId: String(messageId || ""),
+    fuente: norm(source || "imap"),
+    usado: false,
+    fecha: admin.firestore.FieldValue.serverTimestamp(),
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+
+  log(`✅ Código guardado [${alias}] destino=${mail} raiz=${raiz} | ${tipo} | ${codigo}`);
+  return true;
+}
+
+async function getLastUid(alias) {
+  const ref = db.collection("config").doc(`netflix_listener_${alias}`);
+  const doc = await ref.get();
+  if (!doc.exists) return 0;
+  return Number(doc.data()?.lastUid || 0);
+}
+
+async function setLastUid(alias, uid) {
+  const ref = db.collection("config").doc(`netflix_listener_${alias}`);
+  await ref.set(
+    {
+      lastUid: Number(uid || 0),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    },
+    { merge: true }
+  );
+}
+
+async function procesarRangoUIDs(client, account, startUid, endUid) {
+  let maxUidProcesado = startUid - 1;
+
+  for await (const msg of client.fetch(`${startUid}:${endUid}`, {
+    uid: true,
+    envelope: true,
+    source: true,
+  })) {
+    const uid = Number(msg.uid || 0);
+    if (!uid) continue;
+
+    try {
+      const envelope = msg.envelope || {};
+      const subject = envelope.subject || "";
+
+      const from = Array.isArray(envelope.from) && envelope.from.length
+        ? `${envelope.from[0].name || ""} <${envelope.from[0].address || ""}>`.trim()
+        : "";
+
+      const raw = msg.source ? msg.source.toString("utf8") : "";
+      const messageId = envelope.messageId || "";
+
+      if (!esCorreoNetflix(subject, from, raw)) {
+        maxUidProcesado = Math.max(maxUidProcesado, uid);
+        continue;
+      }
+
+      const codigo = extraerCodigo(`${subject}\n${raw}`);
+      const tipo = detectarTipo(subject, raw);
+      const correoDestino = extraerCorreoDestino(subject, raw, account.user);
+
+      log(`📨 Netflix detectado [${account.alias}] uid=${uid} destino=${correoDestino} tipo=${tipo}`);
+
+      if (codigo) {
+        await guardarCodigo({
+          alias: account.alias,
+          correo: correoDestino,
+          correoRaiz: account.user,
+          subject,
+          from,
+          body: raw,
+          tipo,
+          codigo,
+          uid,
+          messageId,
+          source: account.source,
+        });
+      } else {
+        log(`ℹ️ Correo Netflix sin código detectable [${account.alias}] uid=${uid} asunto=${subject}`);
+      }
+
+      maxUidProcesado = Math.max(maxUidProcesado, uid);
+    } catch (e) {
+      logErr(`❌ Error procesando uid ${uid} [${account.alias}]:`, e?.message || e);
+      maxUidProcesado = Math.max(maxUidProcesado, uid);
+    }
+  }
+
+  return maxUidProcesado;
+}
+
+async function procesarCorreosNuevos(client, account, maxBackfill = 15) {
+  if (!client || client.closed) return;
+
+  let lock = null;
+
+  try {
+    lock = await client.getMailboxLock("INBOX");
+
+    const status = await client.status("INBOX", { uidNext: true, messages: true });
+    const uidNext = Number(status.uidNext || 0);
+    const total = Number(status.messages || 0);
+
+    if (!uidNext || !total) {
+      log(`ℹ️ INBOX vacío o sin uidNext [${account.alias}]`);
+      return;
+    }
+
+    let lastUid = await getLastUid(account.alias);
+
+    if (!lastUid || lastUid <= 0) {
+      lastUid = Math.max(0, uidNext - maxBackfill - 1);
+      log(`ℹ️ Backfill inicial [${account.alias}] desde UID ${lastUid + 1}`);
+    }
+
+    const startUid = Math.max(1, lastUid + 1);
+    const endUid = Math.max(startUid, uidNext - 1);
+
+    if (startUid > endUid) return;
+
+    const maxUidProcesado = await procesarRangoUIDs(client, account, startUid, endUid);
+
+    if (maxUidProcesado > lastUid) {
+      await setLastUid(account.alias, maxUidProcesado);
+      log(`✅ lastUid actualizado [${account.alias}] => ${maxUidProcesado}`);
+    }
+  } catch (e) {
+    logErr(`❌ Error procesando mensajes [${account.alias}]:`, e?.message || e);
+    throw e;
+  } finally {
+    if (lock) {
+      try {
+        lock.release();
+      } catch (_) {}
+    }
+  }
+}
+
+async function conectarCuenta(account) {
+  const client = new ImapFlow({
+    host: account.host,
+    port: account.port,
+    secure: account.secure,
+    auth: {
+      user: account.user,
+      pass: account.pass,
+    },
+    logger: false,
+    emitLogs: false,
+    disableAutoEnable: true,
+    clientInfo: {
+      name: "SublicuentasBot",
+      version: "3.0.0",
+    },
+    socketTimeout: 120000,
+    greetingTimeout: 30000,
+    connectionTimeout: 30000,
+    authTimeout: 30000,
+  });
+
+  client.on("error", (err) => {
+    logErr(`❌ IMAP event error [${account.alias}]`, err?.message || err);
+  });
+
+  client.on("close", () => {
+    log(`⚠️ IMAP cerrado [${account.alias}]`);
+  });
+
+  await client.connect();
+  log(`✅ IMAP conectado: ${account.alias}`);
+
+  return client;
+}
+
+async function cicloCuenta(account) {
+  while (true) {
+    let client = null;
+
+    try {
+      client = await conectarCuenta(account);
+
+      await procesarCorreosNuevos(client, account, 20);
+
+      while (client && !client.closed) {
+        try {
+          await client.noop();
+          await procesarCorreosNuevos(client, account, 5);
+        } catch (e) {
+          logErr(`❌ Error cuenta ${account.alias}:`, e?.message || e);
+          break;
+        }
+
+        await sleep(8000);
+      }
+    } catch (e) {
+      logErr(`❌ Error cuenta ${account.alias}:`, e?.message || e);
+    } finally {
+      if (client) {
+        try {
+          await client.logout().catch(() => {});
+        } catch (_) {}
+      }
+    }
+
+    log(`🔄 Reintentando IMAP [${account.alias}] en 10s...`);
+    await sleep(10000);
+  }
+}
+
+async function iniciarNetflixListener() {
+  const enabled = String(process.env.ENABLE_NETFLIX_LISTENER || "").toLowerCase() === "true";
+  if (!enabled) {
+    log("⏸️ Netflix listener desactivado por ENV");
+    return;
+  }
+
+  const accounts = buildImapAccountsFromEnv();
+  log(`📬 Cuentas IMAP cargadas: ${accounts.length}`);
+
+  if (!accounts.length) {
+    log("⚠️ No hay cuentas IMAP configuradas");
+    return;
+  }
+
+  log("🚀 Netflix Codes Listener iniciado...");
+
+  for (const acc of accounts) {
+    cicloCuenta(acc).catch((e) => {
+      logErr(`❌ Fallo ciclo cuenta ${acc.alias}:`, e?.message || e);
+    });
+  }
+}
+
+iniciarNetflixListener().catch((e) => {
+  logErr("❌ No se pudo iniciar netflix listener:", e?.message || e);
+});
