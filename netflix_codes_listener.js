@@ -28,32 +28,6 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function stripHtml(html = "") {
-  return String(html || "")
-    .replace(/<style[\s\S]*?<\/style>/gi, " ")
-    .replace(/<script[\s\S]*?<\/script>/gi, " ")
-    .replace(/<br\s*\/?>/gi, "\n")
-    .replace(/<\/p>/gi, "\n")
-    .replace(/<\/div>/gi, "\n")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;/gi, " ")
-    .replace(/&amp;/gi, "&")
-    .replace(/&lt;/gi, "<")
-    .replace(/&gt;/gi, ">")
-    .replace(/\s+\n/g, "\n")
-    .replace(/\n\s+/g, "\n")
-    .replace(/[ \t]{2,}/g, " ")
-    .trim();
-}
-
-function limpiarTextoPlano(texto = "") {
-  return String(texto || "")
-    .replace(/\r/g, "")
-    .replace(/[ \t]{2,}/g, " ")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-}
-
 function buildImapAccountsFromEnv() {
   const accounts = [];
   let i = 1;
@@ -88,42 +62,60 @@ function buildImapAccountsFromEnv() {
   return accounts;
 }
 
-function esCorreoNetflix(subject = "", from = "", raw = "") {
-  const txt = `${subject}\n${from}\n${raw}`.toLowerCase();
+function extraerCodigo(texto = "") {
+  const raw = String(texto || "");
 
-  return (
-    txt.includes("netflix") ||
-    txt.includes("info@account.netflix.com") ||
-    txt.includes("account.netflix.com") ||
-    txt.includes("messages.netflix.com")
-  );
+  const patrones = [
+    /confirma el cambio en tu cuenta con este código[^0-9]{0,40}(\d{6})/gi,
+    /confirma el cambio en tu cuenta con este código[^0-9]{0,40}(\d{4})/gi,
+    /ingresa este código para iniciar sesión[^0-9]{0,40}(\d{6})/gi,
+    /ingresa este código para iniciar sesión[^0-9]{0,40}(\d{4})/gi,
+    /tu código de acceso temporal de netflix[^0-9]{0,40}(\d{6})/gi,
+    /tu código de acceso temporal de netflix[^0-9]{0,40}(\d{4})/gi,
+    /(?:código|codigo|code)[^0-9]{0,25}(\d{6})/gi,
+    /(?:código|codigo|code)[^0-9]{0,25}(\d{4})/gi,
+    /\b(\d{6})\b/g,
+    /\b(\d{4})\b/g,
+  ];
+
+  for (const regex of patrones) {
+    const matches = [...raw.matchAll(regex)];
+    if (matches.length) {
+      const last = matches[matches.length - 1];
+      const codigo = last?.[1];
+      if (codigo) return codigo;
+    }
+  }
+
+  return null;
 }
 
-function contieneIndicadorDeCodigo(subject = "", body = "") {
-  const txt = `${subject}\n${body}`.toLowerCase();
+function extraerCorreoDestino(subject = "", body = "", fallback = "") {
+  const txt = `${subject}\n${body}`;
 
-  return (
-    txt.includes("código") ||
-    txt.includes("codigo") ||
-    txt.includes("code") ||
-    txt.includes("verification") ||
-    txt.includes("verificación") ||
-    txt.includes("verificacion") ||
-    txt.includes("sign-in") ||
-    txt.includes("sign in") ||
-    txt.includes("inicio de sesión") ||
-    txt.includes("inicio de sesion") ||
-    txt.includes("iniciar sesión") ||
-    txt.includes("iniciar sesion") ||
-    txt.includes("temporary access") ||
-    txt.includes("acceso temporal") ||
-    txt.includes("netflix household") ||
-    txt.includes("hogar con netflix") ||
-    txt.includes("confirma el cambio") ||
-    txt.includes("confirm the change") ||
-    txt.includes("verify your device") ||
-    txt.includes("verify it was you")
-  );
+  const mPara = txt.match(/para:\s*([a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,})/i);
+  if (mPara?.[1]) return lower(mPara[1]);
+
+  const candidatos = [...txt.matchAll(/[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}/gi)]
+    .map((m) => lower(m[0]))
+    .filter(Boolean);
+
+  if (!candidatos.length) return lower(fallback);
+
+  const ignorar = new Set([
+    "info@account.netflix.com",
+    "account@netflix.com",
+    "no-reply@netflix.com",
+    "noreply@netflix.com",
+    "support@netflix.com",
+    "privacy@netflix.com",
+    lower(fallback),
+  ]);
+
+  const limpios = candidatos.filter((x) => !ignorar.has(x));
+  if (!limpios.length) return lower(fallback);
+
+  return limpios[0];
 }
 
 function detectarTipo(subject = "", body = "") {
@@ -132,7 +124,6 @@ function detectarTipo(subject = "", body = "") {
   if (
     txt.includes("acceso temporal") ||
     txt.includes("temporary access code") ||
-    txt.includes("temporary access") ||
     txt.includes("temporary code")
   ) {
     return "temporal";
@@ -176,84 +167,21 @@ function detectarTipo(subject = "", body = "") {
   return "signin";
 }
 
-function extraerCodigo(texto = "") {
-  const raw = String(texto || "");
+function esCorreoNetflix(subject = "", from = "", raw = "") {
+  const txt = `${subject}\n${from}\n${raw}`.toLowerCase();
 
-  const patrones = [
-    /confirma el cambio[^\d]{0,80}(\d{6})/i,
-    /confirm the change[^\d]{0,80}(\d{6})/i,
-
-    /código de verificación[^\d]{0,80}(\d{6})/i,
-    /codigo de verificacion[^\d]{0,80}(\d{6})/i,
-    /verification code[^\d]{0,80}(\d{6})/i,
-
-    /tu código de inicio de sesión[^\d]{0,80}(\d{4})/i,
-    /tu codigo de inicio de sesion[^\d]{0,80}(\d{4})/i,
-    /inicio de sesión[^\d]{0,80}(\d{4})/i,
-    /inicio de sesion[^\d]{0,80}(\d{4})/i,
-    /sign[\s-]?in code[^\d]{0,80}(\d{4})/i,
-
-    /acceso temporal[^\d]{0,120}(\d{6})/i,
-    /acceso temporal[^\d]{0,120}(\d{4})/i,
-    /temporary access[^\d]{0,120}(\d{6})/i,
-    /temporary access[^\d]{0,120}(\d{4})/i,
-    /temporary code[^\d]{0,120}(\d{6})/i,
-    /temporary code[^\d]{0,120}(\d{4})/i,
-
-    /código de hogar[^\d]{0,120}(\d{6})/i,
-    /codigo de hogar[^\d]{0,120}(\d{6})/i,
-    /netflix household[^\d]{0,120}(\d{6})/i,
-
-    /\b(\d{6})\b/g,
-    /\b(\d{4})\b/g,
-  ];
-
-  for (const regex of patrones) {
-    const all = [...raw.matchAll(regex)];
-    if (all.length) {
-      const m = all[all.length - 1];
-      const codigo = m?.[1];
-      if (codigo) return codigo;
-    }
-  }
-
-  return null;
-}
-
-function extraerCorreoDestino(subject = "", body = "", fallback = "") {
-  const txt = `${subject}\n${body}`;
-
-  const mPara = txt.match(/para:\s*<?([a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,})>?/i);
-  if (mPara?.[1]) {
-    return lower(mPara[1]);
-  }
-
-  const candidatos = [...txt.matchAll(/[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}/gi)]
-    .map((m) => lower(m[0]))
-    .filter(Boolean);
-
-  if (!candidatos.length) return lower(fallback);
-
-  const ignorar = new Set([
-    "info@account.netflix.com",
-    "account@netflix.com",
-    "no-reply@netflix.com",
-    "noreply@netflix.com",
-    "support@netflix.com",
-    "privacy@netflix.com",
-    lower(fallback),
-  ]);
-
-  const limpios = candidatos.filter((x) => !ignorar.has(x));
-  if (!limpios.length) return lower(fallback);
-
-  return limpios[0];
+  return (
+    txt.includes("netflix") ||
+    txt.includes("info@account.netflix.com") ||
+    txt.includes("account.netflix.com") ||
+    txt.includes("messages.netflix.com")
+  );
 }
 
 async function yaExisteCodigo({ correo, tipo, codigo, messageId, uid }) {
   const mail = lower(correo);
-  const kind = norm(tipo);
   const cod = norm(codigo);
+  const kind = norm(tipo);
 
   if (messageId) {
     const byMsg = await db
@@ -362,16 +290,12 @@ async function obtenerMensajePorUid(client, uid) {
       ? `${envelope.from[0].name || ""} <${envelope.from[0].address || ""}>`.trim()
       : "";
 
-    const rawSource = msg.source ? msg.source.toString("utf8") : "";
-    const rawLimpio = limpiarTextoPlano(stripHtml(rawSource));
-
     return {
       uid: msg.uid,
       messageId: envelope.messageId || "",
       subject: envelope.subject || "",
       from,
-      raw: rawLimpio,
-      rawOriginal: rawSource,
+      raw: msg.source ? msg.source.toString("utf8") : "",
     };
   } catch (e) {
     logErr("❌ Error obteniendo mensaje:", e?.message || e);
@@ -397,7 +321,44 @@ async function setLastUid(alias, uid) {
   );
 }
 
-async function procesarCorreosNuevos(client, account, maxBackfill = 100) {
+async function procesarUid(client, account, uid) {
+  const info = await obtenerMensajePorUid(client, uid);
+  if (!info) return false;
+
+  const subject = info.subject || "";
+  const from = info.from || "";
+  const raw = info.raw || "";
+
+  if (!esCorreoNetflix(subject, from, raw)) return false;
+
+  const codigo = extraerCodigo(`${subject}\n${raw}`);
+  const tipo = detectarTipo(subject, raw);
+  const correoDestino = extraerCorreoDestino(subject, raw, account.user);
+
+  log(`📨 Netflix detectado [${account.alias}] uid=${uid} destino=${correoDestino} tipo=${tipo}`);
+
+  if (codigo) {
+    await guardarCodigo({
+      alias: account.alias,
+      correo: correoDestino,
+      correoRaiz: account.user,
+      subject,
+      from,
+      body: raw,
+      tipo,
+      codigo,
+      uid: info.uid,
+      messageId: info.messageId,
+      source: account.source,
+    });
+    return true;
+  }
+
+  log(`ℹ️ Correo Netflix sin código detectable [${account.alias}] destino=${correoDestino} asunto=${subject}`);
+  return false;
+}
+
+async function procesarCorreosNuevos(client, account, maxBackfill = 10) {
   if (!client || client.closed) return;
 
   let lock = null;
@@ -414,7 +375,7 @@ async function procesarCorreosNuevos(client, account, maxBackfill = 100) {
     let lastUid = await getLastUid(account.alias);
 
     if (!lastUid || lastUid <= 0) {
-      lastUid = Math.max(0, uidNext - maxBackfill);
+      lastUid = Math.max(0, uidNext - maxBackfill - 1);
     }
 
     const startUid = Math.max(1, lastUid + 1);
@@ -424,54 +385,12 @@ async function procesarCorreosNuevos(client, account, maxBackfill = 100) {
 
     let maxUidProcesado = lastUid;
 
-    for await (const item of client.fetch(`${startUid}:${endUid}`, { uid: true })) {
-      const uid = Number(item.uid || 0);
-      if (!uid) continue;
-
-      const info = await obtenerMensajePorUid(client, uid);
-      if (!info) continue;
-
-      const subject = info.subject || "";
-      const from = info.from || "";
-      const raw = info.raw || "";
-
-      if (!esCorreoNetflix(subject, from, raw)) {
-        if (uid > maxUidProcesado) maxUidProcesado = uid;
-        continue;
+    for (let uid = startUid; uid <= endUid; uid++) {
+      try {
+        await procesarUid(client, account, uid);
+      } catch (e) {
+        logErr(`❌ Error procesando uid=${uid} [${account.alias}]:`, e?.message || e);
       }
-
-      if (!contieneIndicadorDeCodigo(subject, raw)) {
-        log(`ℹ️ Netflix ignorado sin patrón de código [${account.alias}] asunto=${subject}`);
-        if (uid > maxUidProcesado) maxUidProcesado = uid;
-        continue;
-      }
-
-      const codigo = extraerCodigo(`${subject}\n${raw}`);
-      const tipo = detectarTipo(subject, raw);
-      const correoDestino = extraerCorreoDestino(subject, raw, account.user);
-
-      if (!codigo) {
-        log(`ℹ️ Netflix con pinta de código pero no detectable [${account.alias}] destino=${correoDestino} asunto=${subject}`);
-        if (uid > maxUidProcesado) maxUidProcesado = uid;
-        continue;
-      }
-
-      log(`📨 Netflix detectado [${account.alias}] destino=${correoDestino} tipo=${tipo} codigo=${codigo} asunto=${subject}`);
-
-      await guardarCodigo({
-        alias: account.alias,
-        correo: correoDestino,
-        correoRaiz: account.user,
-        subject,
-        from,
-        body: raw,
-        tipo,
-        codigo,
-        uid: info.uid,
-        messageId: info.messageId,
-        source: account.source,
-      });
-
       if (uid > maxUidProcesado) maxUidProcesado = uid;
     }
 
@@ -504,9 +423,9 @@ async function conectarCuenta(account) {
     disableAutoEnable: true,
     clientInfo: {
       name: "SublicuentasBot",
-      version: "1.0.0",
+      version: "2.0.0",
     },
-    socketTimeout: 60000,
+    socketTimeout: 120000,
     greetingTimeout: 30000,
     connectionTimeout: 30000,
     authTimeout: 30000,
@@ -522,8 +441,18 @@ async function conectarCuenta(account) {
 
   await client.connect();
   log(`✅ IMAP conectado: ${account.alias}`);
-
   return client;
+}
+
+async function esperarCambiosIDLE(client, timeoutMs = 240000) {
+  try {
+    await Promise.race([
+      client.idle(),
+      sleep(timeoutMs),
+    ]);
+  } catch (e) {
+    logErr("❌ IDLE error:", e?.message || e);
+  }
 }
 
 async function cicloCuenta(account) {
@@ -533,18 +462,20 @@ async function cicloCuenta(account) {
     try {
       client = await conectarCuenta(account);
 
-      await procesarCorreosNuevos(client, account, 100);
+      await procesarCorreosNuevos(client, account, 15);
 
       while (client && !client.closed) {
+        await esperarCambiosIDLE(client, 240000);
+        if (client.closed) break;
+
         try {
-          await client.noop();
-          await procesarCorreosNuevos(client, account, 30);
+          await procesarCorreosNuevos(client, account, 5);
         } catch (e) {
           logErr(`❌ Error cuenta ${account.alias}:`, e?.message || e);
           break;
         }
 
-        await sleep(45000);
+        await sleep(1500);
       }
     } catch (e) {
       logErr(`❌ Error cuenta ${account.alias}:`, e?.message || e);
@@ -556,13 +487,13 @@ async function cicloCuenta(account) {
       }
     }
 
-    log(`🔄 Reintentando IMAP [${account.alias}] en 20s...`);
-    await sleep(20000);
+    log(`🔄 Reintentando IMAP [${account.alias}] en 10s...`);
+    await sleep(10000);
   }
 }
 
 async function iniciarNetflixListener() {
-  const enabled = lower(process.env.ENABLE_NETFLIX_LISTENER || "") === "true";
+  const enabled = String(process.env.ENABLE_NETFLIX_LISTENER || "").toLowerCase() === "true";
   if (!enabled) {
     log("⏸️ Netflix listener desactivado por ENV");
     return;
