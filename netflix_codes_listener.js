@@ -2,7 +2,6 @@ const admin = require("firebase-admin");
 const { ImapFlow } = require("imapflow");
 
 const db = admin.firestore();
-const TZ = process.env.TZ || "America/Tegucigalpa";
 
 function log(...args) {
   console.log(...args);
@@ -66,25 +65,21 @@ function extraerCodigo(texto = "") {
   const raw = String(texto || "");
 
   const patrones = [
-    /confirma el cambio en tu cuenta con este código[^0-9]{0,40}(\d{6})/gi,
-    /confirma el cambio en tu cuenta con este código[^0-9]{0,40}(\d{4})/gi,
-    /ingresa este código para iniciar sesión[^0-9]{0,40}(\d{6})/gi,
-    /ingresa este código para iniciar sesión[^0-9]{0,40}(\d{4})/gi,
-    /tu código de acceso temporal de netflix[^0-9]{0,40}(\d{6})/gi,
-    /tu código de acceso temporal de netflix[^0-9]{0,40}(\d{4})/gi,
-    /(?:código|codigo|code)[^0-9]{0,25}(\d{6})/gi,
-    /(?:código|codigo|code)[^0-9]{0,25}(\d{4})/gi,
-    /\b(\d{6})\b/g,
-    /\b(\d{4})\b/g,
+    /confirma el cambio en tu cuenta con este código[^0-9]{0,80}(\d{6})/i,
+    /confirma el cambio en tu cuenta con este código[^0-9]{0,80}(\d{4})/i,
+    /ingresa este código para iniciar sesión[^0-9]{0,80}(\d{6})/i,
+    /ingresa este código para iniciar sesión[^0-9]{0,80}(\d{4})/i,
+    /tu código de acceso temporal de netflix[^0-9]{0,80}(\d{6})/i,
+    /tu código de acceso temporal de netflix[^0-9]{0,80}(\d{4})/i,
+    /(?:código|codigo|code)[^0-9]{0,40}(\d{6})/i,
+    /(?:código|codigo|code)[^0-9]{0,40}(\d{4})/i,
+    /\b(\d{6})\b/,
+    /\b(\d{4})\b/,
   ];
 
   for (const regex of patrones) {
-    const matches = [...raw.matchAll(regex)];
-    if (matches.length) {
-      const last = matches[matches.length - 1];
-      const codigo = last?.[1];
-      if (codigo) return codigo;
-    }
+    const m = raw.match(regex);
+    if (m?.[1]) return m[1];
   }
 
   return null;
@@ -247,275 +242,4 @@ async function guardarCodigo({
     return false;
   }
 
-  const safeMsgId = String(messageId || "").replace(/[^\w.-]+/g, "_").slice(0, 120);
-  const safeUid = String(uid || "").replace(/[^\w.-]+/g, "_").slice(0, 60);
-  const docId = `${mail}__${norm(tipo)}__${safeUid || Date.now()}__${safeMsgId || Date.now()}`
-    .replace(/[\/#?[\]]+/g, "_")
-    .slice(0, 300);
-
-  await db.collection("codigos_netflix").doc(docId).set({
-    alias: norm(alias),
-    correo: mail,
-    correoRaiz: raiz,
-    tipo: norm(tipo),
-    codigo: norm(codigo),
-    asunto: norm(subject),
-    from: norm(from),
-    body: String(body || "").slice(0, 4000),
-    uid: String(uid || ""),
-    messageId: String(messageId || ""),
-    fuente: norm(source || "imap"),
-    usado: false,
-    fecha: admin.firestore.FieldValue.serverTimestamp(),
-    createdAt: admin.firestore.FieldValue.serverTimestamp(),
-    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-  });
-
-  log(`✅ Código guardado [${alias}] destino=${mail} raiz=${raiz} | ${tipo} | ${codigo}`);
-  return true;
-}
-
-async function obtenerMensajePorUid(client, uid) {
-  try {
-    const msg = await client.fetchOne(String(uid), {
-      uid: true,
-      envelope: true,
-      source: true,
-    });
-
-    if (!msg) return null;
-
-    const envelope = msg.envelope || {};
-    const from = Array.isArray(envelope.from) && envelope.from.length
-      ? `${envelope.from[0].name || ""} <${envelope.from[0].address || ""}>`.trim()
-      : "";
-
-    return {
-      uid: msg.uid,
-      messageId: envelope.messageId || "",
-      subject: envelope.subject || "",
-      from,
-      raw: msg.source ? msg.source.toString("utf8") : "",
-    };
-  } catch (e) {
-    logErr("❌ Error obteniendo mensaje:", e?.message || e);
-    return null;
-  }
-}
-
-async function getLastUid(alias) {
-  const ref = db.collection("config").doc(`netflix_listener_${alias}`);
-  const doc = await ref.get();
-  if (!doc.exists) return 0;
-  return Number(doc.data()?.lastUid || 0);
-}
-
-async function setLastUid(alias, uid) {
-  const ref = db.collection("config").doc(`netflix_listener_${alias}`);
-  await ref.set(
-    {
-      lastUid: Number(uid || 0),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    },
-    { merge: true }
-  );
-}
-
-async function procesarUid(client, account, uid) {
-  const info = await obtenerMensajePorUid(client, uid);
-  if (!info) return false;
-
-  const subject = info.subject || "";
-  const from = info.from || "";
-  const raw = info.raw || "";
-
-  if (!esCorreoNetflix(subject, from, raw)) return false;
-
-  const codigo = extraerCodigo(`${subject}\n${raw}`);
-  const tipo = detectarTipo(subject, raw);
-  const correoDestino = extraerCorreoDestino(subject, raw, account.user);
-
-  log(`📨 Netflix detectado [${account.alias}] uid=${uid} destino=${correoDestino} tipo=${tipo}`);
-
-  if (codigo) {
-    await guardarCodigo({
-      alias: account.alias,
-      correo: correoDestino,
-      correoRaiz: account.user,
-      subject,
-      from,
-      body: raw,
-      tipo,
-      codigo,
-      uid: info.uid,
-      messageId: info.messageId,
-      source: account.source,
-    });
-    return true;
-  }
-
-  log(`ℹ️ Correo Netflix sin código detectable [${account.alias}] destino=${correoDestino} asunto=${subject}`);
-  return false;
-}
-
-async function procesarCorreosNuevos(client, account, maxBackfill = 10) {
-  if (!client || client.closed) return;
-
-  let lock = null;
-
-  try {
-    lock = await client.getMailboxLock("INBOX");
-
-    const status = await client.status("INBOX", { uidNext: true, messages: true });
-    const uidNext = Number(status.uidNext || 0);
-    const total = Number(status.messages || 0);
-
-    if (!uidNext || !total) return;
-
-    let lastUid = await getLastUid(account.alias);
-
-    if (!lastUid || lastUid <= 0) {
-      lastUid = Math.max(0, uidNext - maxBackfill - 1);
-    }
-
-    const startUid = Math.max(1, lastUid + 1);
-    const endUid = Math.max(startUid, uidNext - 1);
-
-    if (startUid > endUid) return;
-
-    let maxUidProcesado = lastUid;
-
-    for (let uid = startUid; uid <= endUid; uid++) {
-      try {
-        await procesarUid(client, account, uid);
-      } catch (e) {
-        logErr(`❌ Error procesando uid=${uid} [${account.alias}]:`, e?.message || e);
-      }
-      if (uid > maxUidProcesado) maxUidProcesado = uid;
-    }
-
-    if (maxUidProcesado > lastUid) {
-      await setLastUid(account.alias, maxUidProcesado);
-    }
-  } catch (e) {
-    logErr(`❌ Error procesando mensajes [${account.alias}]:`, e?.message || e);
-    throw e;
-  } finally {
-    if (lock) {
-      try {
-        lock.release();
-      } catch (_) {}
-    }
-  }
-}
-
-async function conectarCuenta(account) {
-  const client = new ImapFlow({
-    host: account.host,
-    port: account.port,
-    secure: account.secure,
-    auth: {
-      user: account.user,
-      pass: account.pass,
-    },
-    logger: false,
-    emitLogs: false,
-    disableAutoEnable: true,
-    clientInfo: {
-      name: "SublicuentasBot",
-      version: "2.0.0",
-    },
-    socketTimeout: 120000,
-    greetingTimeout: 30000,
-    connectionTimeout: 30000,
-    authTimeout: 30000,
-  });
-
-  client.on("error", (err) => {
-    logErr(`❌ IMAP event error [${account.alias}]`, err?.message || err);
-  });
-
-  client.on("close", () => {
-    log(`⚠️ IMAP cerrado [${account.alias}]`);
-  });
-
-  await client.connect();
-  log(`✅ IMAP conectado: ${account.alias}`);
-  return client;
-}
-
-async function esperarCambiosIDLE(client, timeoutMs = 240000) {
-  try {
-    await Promise.race([
-      client.idle(),
-      sleep(timeoutMs),
-    ]);
-  } catch (e) {
-    logErr("❌ IDLE error:", e?.message || e);
-  }
-}
-
-async function cicloCuenta(account) {
-  while (true) {
-    let client = null;
-
-    try {
-      client = await conectarCuenta(account);
-
-      await procesarCorreosNuevos(client, account, 15);
-
-      while (client && !client.closed) {
-        await esperarCambiosIDLE(client, 240000);
-        if (client.closed) break;
-
-        try {
-          await procesarCorreosNuevos(client, account, 5);
-        } catch (e) {
-          logErr(`❌ Error cuenta ${account.alias}:`, e?.message || e);
-          break;
-        }
-
-        await sleep(1500);
-      }
-    } catch (e) {
-      logErr(`❌ Error cuenta ${account.alias}:`, e?.message || e);
-    } finally {
-      if (client) {
-        try {
-          await client.logout().catch(() => {});
-        } catch (_) {}
-      }
-    }
-
-    log(`🔄 Reintentando IMAP [${account.alias}] en 10s...`);
-    await sleep(10000);
-  }
-}
-
-async function iniciarNetflixListener() {
-  const enabled = String(process.env.ENABLE_NETFLIX_LISTENER || "").toLowerCase() === "true";
-  if (!enabled) {
-    log("⏸️ Netflix listener desactivado por ENV");
-    return;
-  }
-
-  const accounts = buildImapAccountsFromEnv();
-  log(`📬 Cuentas IMAP cargadas: ${accounts.length}`);
-
-  if (!accounts.length) {
-    log("⚠️ No hay cuentas IMAP configuradas");
-    return;
-  }
-
-  log("🚀 Netflix Codes Listener iniciado...");
-
-  for (const acc of accounts) {
-    cicloCuenta(acc).catch((e) => {
-      logErr(`❌ Fallo ciclo cuenta ${acc.alias}:`, e?.message || e);
-    });
-  }
-}
-
-iniciarNetflixListener().catch((e) => {
-  logErr("❌ No se pudo iniciar netflix listener:", e?.message || e);
-});
+  const safeMsgId = String(messageId || "").replace(/[^\w.-]+/g, "_").slice(
