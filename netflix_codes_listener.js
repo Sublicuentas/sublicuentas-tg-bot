@@ -65,21 +65,21 @@ function extraerCodigo(texto = "") {
   const raw = String(texto || "");
 
   const patrones = [
-    /confirma el cambio en tu cuenta con este código[^0-9]{0,80}(\d{6})/i,
-    /confirma el cambio en tu cuenta con este código[^0-9]{0,80}(\d{4})/i,
-    /ingresa este código para iniciar sesión[^0-9]{0,80}(\d{6})/i,
-    /ingresa este código para iniciar sesión[^0-9]{0,80}(\d{4})/i,
-    /tu código de acceso temporal de netflix[^0-9]{0,80}(\d{6})/i,
-    /tu código de acceso temporal de netflix[^0-9]{0,80}(\d{4})/i,
-    /(?:código|codigo|code)[^0-9]{0,40}(\d{6})/i,
-    /(?:código|codigo|code)[^0-9]{0,40}(\d{4})/i,
+    /confirma el cambio en tu cuenta con este código[^0-9]{0,120}(\d{6})/i,
+    /confirma el cambio en tu cuenta con este código[^0-9]{0,120}(\d{4})/i,
+    /ingresa este código para iniciar sesión[^0-9]{0,120}(\d{6})/i,
+    /ingresa este código para iniciar sesión[^0-9]{0,120}(\d{4})/i,
+    /tu código de acceso temporal de netflix[^0-9]{0,120}(\d{6})/i,
+    /tu código de acceso temporal de netflix[^0-9]{0,120}(\d{4})/i,
+    /(?:código|codigo|code)[^0-9]{0,60}(\d{6})/i,
+    /(?:código|codigo|code)[^0-9]{0,60}(\d{4})/i,
     /\b(\d{6})\b/,
     /\b(\d{4})\b/,
   ];
 
   for (const regex of patrones) {
     const m = raw.match(regex);
-    if (m?.[1]) return m[1];
+    if (m && m[1]) return m[1];
   }
 
   return null;
@@ -89,7 +89,7 @@ function extraerCorreoDestino(subject = "", body = "", fallback = "") {
   const txt = `${subject}\n${body}`;
 
   const mPara = txt.match(/para:\s*([a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,})/i);
-  if (mPara?.[1]) return lower(mPara[1]);
+  if (mPara && mPara[1]) return lower(mPara[1]);
 
   const candidatos = [...txt.matchAll(/[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}/gi)]
     .map((m) => lower(m[0]))
@@ -439,12 +439,12 @@ async function cicloCuenta(account) {
     try {
       client = await conectarCuenta(account);
 
-      await procesarCorreosNuevos(client, account, 20);
+      await procesarCorreosNuevos(client, account, 50);
 
       while (client && !client.closed) {
         try {
           await client.noop();
-          await procesarCorreosNuevos(client, account, 5);
+          await procesarCorreosNuevos(client, account, 10);
         } catch (e) {
           logErr(`❌ Error cuenta ${account.alias}:`, e?.message || e);
           break;
@@ -491,6 +491,12 @@ async function iniciarNetflixListener() {
   }
 }
 
-iniciarNetflixListener().catch((e) => {
-  logErr("❌ No se pudo iniciar netflix listener:", e?.message || e);
-});
+module.exports = {
+  iniciarNetflixListener,
+};
+
+if (require.main === module) {
+  iniciarNetflixListener().catch((e) => {
+    logErr("❌ No se pudo iniciar netflix listener:", e?.message || e);
+  });
+}
