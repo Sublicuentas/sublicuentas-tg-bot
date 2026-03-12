@@ -92,19 +92,7 @@ function extraerCodigo(texto = "") {
 
 function extraerCorreoDestino(subject = "", body = "", fallback = "") {
   const txt = `${subject}\n${body}`;
-
-  const mPara = txt.match(/para:\s*([a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,})/i);
-  if (mPara?.[1]) {
-    return String(mPara[1]).trim().toLowerCase();
-  }
-
-  const candidatos = [...txt.matchAll(/[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}/gi)]
-    .map((m) => String(m[0] || "").trim().toLowerCase())
-    .filter(Boolean);
-
-  if (!candidatos.length) {
-    return String(fallback || "").trim().toLowerCase();
-  }
+  const fallbackMail = lower(fallback);
 
   const ignorar = new Set([
     "info@account.netflix.com",
@@ -113,16 +101,38 @@ function extraerCorreoDestino(subject = "", body = "", fallback = "") {
     "noreply@netflix.com",
     "support@netflix.com",
     "privacy@netflix.com",
-    lower(fallback),
+    "messages@netflix.com",
+    "messages.netflix.com",
+    fallbackMail,
   ]);
 
-  const limpios = candidatos.filter((x) => !ignorar.has(x));
+  const todos = [...txt.matchAll(/[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}/gi)]
+    .map((m) => lower(m[0]))
+    .filter(Boolean);
 
-  if (!limpios.length) {
-    return String(fallback || "").trim().toLowerCase();
+  const unicos = [...new Set(todos)];
+
+  const utiles = unicos.filter((mail) => !ignorar.has(mail));
+
+  const candidatosFuertes = utiles.filter((mail) => {
+    return !mail.includes("netflix") && !mail.includes("google.com");
+  });
+
+  if (candidatosFuertes.length) {
+    return candidatosFuertes[candidatosFuertes.length - 1];
   }
 
-  return limpios[0];
+  if (utiles.length) {
+    return utiles[utiles.length - 1];
+  }
+
+  const mPara = txt.match(/para:\s*([a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,})/i);
+  if (mPara?.[1]) {
+    const paraMail = lower(mPara[1]);
+    if (!ignorar.has(paraMail)) return paraMail;
+  }
+
+  return fallbackMail;
 }
 
 function detectarTipo(subject = "", body = "") {
@@ -375,6 +385,14 @@ async function procesarCorreosNuevos(client, account, maxBackfill = 10) {
       const codigo = extraerCodigo(`${subject}\n${raw}`);
       const tipo = detectarTipo(subject, raw);
       const correoDestino = extraerCorreoDestino(subject, raw, account.user);
+
+      log(
+        `📨 Netflix detectado [${account.alias}]`,
+        `destino=${correoDestino}`,
+        `tipo=${tipo}`,
+        `codigo=${codigo || "-"}`,
+        `asunto=${subject}`
+      );
 
       if (codigo) {
         await guardarCodigo({
