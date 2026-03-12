@@ -1,5 +1,5 @@
 /*
- ✅ SUBLICUENTAS TG BOT — INDEX FINAL (BLINDADO v11)
+ ✅ SUBLICUENTAS TG BOT — INDEX FINAL (BLINDADO v12)
  ✅ FIX 409 menú / editMessageText
  ✅ FIX crash por archivo cortado
  ✅ FIX http duplicado
@@ -18,6 +18,7 @@
  ✅ FIX CORREOS CON _ Y SUBDOMINIOS
  ✅ BOT ULTRA BLINDADO CONTRA 409
  ✅ LOCK GLOBAL FIRESTORE CONTRA DOBLE INSTANCIA
+ ✅ REINTENTO AUTOMÁTICO DE LIDERAZGO
 */
 
 const http = require("http");
@@ -35,6 +36,7 @@ const SUPER_ADMIN = String(process.env.SUPER_ADMIN || "").trim();
 const TZ = process.env.TZ || "America/Tegucigalpa";
 
 if (!BOT_TOKEN) throw new Error("Falta BOT_TOKEN");
+
 if (!FIREBASE_PROJECT_ID || !FIREBASE_CLIENT_EMAIL || !FIREBASE_PRIVATE_KEY) {
   throw new Error("Faltan variables Firebase");
 }
@@ -63,20 +65,31 @@ const LOCK_DOC_REF = db.collection("config").doc("bot_runtime_lock");
 const LOCK_TTL_MS = 90 * 1000;
 
 let LOCK_HEARTBEAT = null;
+let LEADER_RETRY_TIMEOUT = null;
 let HAS_RUNTIME_LOCK = false;
+let NETFLIX_LISTENER_STARTED = false;
 
+// ===============================
+// LOCK ACQUIRE
+// ===============================
 async function acquireRuntimeLock() {
   try {
+
     const now = Date.now();
 
     const ok = await db.runTransaction(async (tx) => {
+
       const snap = await tx.get(LOCK_DOC_REF);
       const data = snap.exists ? snap.data() || {} : {};
 
       const holder = String(data.holder || "");
       const expiresAt = Number(data.expiresAt || 0);
 
-      const libre = !holder || expiresAt < now || holder === INSTANCE_ID;
+      const libre =
+        !holder ||
+        expiresAt < now ||
+        holder === INSTANCE_ID;
+
       if (!libre) return false;
 
       tx.set(
@@ -99,24 +112,33 @@ async function acquireRuntimeLock() {
     if (HAS_RUNTIME_LOCK) {
       console.log(`🔒 Lock tomado por ${INSTANCE_ID}`);
     } else {
-      console.log(`⛔ Lock ocupado por otra instancia. Esta instancia queda pasiva: ${INSTANCE_ID}`);
+      console.log(`⛔ Lock ocupado por otra instancia. Esta instancia queda pasiva por ahora.`);
     }
 
     return HAS_RUNTIME_LOCK;
+
   } catch (e) {
+
     console.error("❌ Error acquireRuntimeLock:", e?.message || e);
     HAS_RUNTIME_LOCK = false;
     return false;
+
   }
 }
 
+// ===============================
+// REFRESH LOCK
+// ===============================
 async function refreshRuntimeLock() {
+
   if (!HAS_RUNTIME_LOCK) return false;
 
   try {
+
     const now = Date.now();
 
     await db.runTransaction(async (tx) => {
+
       const snap = await tx.get(LOCK_DOC_REF);
       const data = snap.exists ? snap.data() || {} : {};
 
@@ -135,24 +157,42 @@ async function refreshRuntimeLock() {
     });
 
     return true;
+
   } catch (e) {
-    HAS_RUNTIME_LOCK = false;
+
     console.error("❌ Error refreshRuntimeLock:", e?.message || e);
+
+    HAS_RUNTIME_LOCK = false;
+
+    startLeaderRetryLoop(15000);
+
     return false;
+
   }
 }
 
+// ===============================
+// RELEASE LOCK
+// ===============================
 async function releaseRuntimeLock() {
+
   try {
+
     if (LOCK_HEARTBEAT) {
       clearInterval(LOCK_HEARTBEAT);
       LOCK_HEARTBEAT = null;
+    }
+
+    if (LEADER_RETRY_TIMEOUT) {
+      clearTimeout(LEADER_RETRY_TIMEOUT);
+      LEADER_RETRY_TIMEOUT = null;
     }
 
     const snap = await LOCK_DOC_REF.get();
     const data = snap.exists ? snap.data() || {} : {};
 
     if (String(data.holder || "") === INSTANCE_ID) {
+
       await LOCK_DOC_REF.set(
         {
           holder: "",
@@ -161,19 +201,72 @@ async function releaseRuntimeLock() {
         },
         { merge: true }
       );
+
       console.log(`🔓 Lock liberado por ${INSTANCE_ID}`);
     }
+
+    HAS_RUNTIME_LOCK = false;
+
   } catch (e) {
+
     console.error("❌ Error releaseRuntimeLock:", e?.message || e);
+
   }
 }
 
+// ===============================
+// HEARTBEAT
+// ===============================
 function startRuntimeHeartbeat() {
+
   if (LOCK_HEARTBEAT) clearInterval(LOCK_HEARTBEAT);
 
   LOCK_HEARTBEAT = setInterval(async () => {
+
     await refreshRuntimeLock();
-  }, 30 * 1000);
+
+  }, 30000);
+}
+
+// ===============================
+// REINTENTO DE LIDERAZGO
+// ===============================
+function startLeaderRetryLoop(delay = 15000) {
+
+  if (LEADER_RETRY_TIMEOUT) return;
+
+  LEADER_RETRY_TIMEOUT = setTimeout(async () => {
+
+    LEADER_RETRY_TIMEOUT = null;
+
+    const ok = await acquireRuntimeLock();
+
+    if (ok) {
+
+      await onBecameLeader();
+
+    } else {
+
+      startLeaderRetryLoop(delay);
+
+    }
+
+  }, delay);
+}
+
+// ===============================
+// AL TOMAR LIDERAZGO
+// ===============================
+async function onBecameLeader() {
+
+  console.log(`👑 Esta instancia ahora es líder: ${INSTANCE_ID}`);
+
+  startRuntimeHeartbeat();
+
+  startNetflixListenerIfLeader();
+
+  scheduleBotRestart(6000);
+
 }
 
 // ===============================
@@ -189,36 +282,27 @@ let BOT_LAST_START_AT = 0;
 let BOT_START_TIMEOUT = null;
 
 bot.on("polling_error", async (err) => {
+
   const msg = String(err?.message || err || "");
   console.error("❌ polling_error:", msg);
 
-  if (!HAS_RUNTIME_LOCK) {
-    console.log("⛔ polling_error ignorado: esta instancia no tiene lock");
-    return;
-  }
+  if (!HAS_RUNTIME_LOCK) return;
 
-  if (msg.includes("409") || msg.toLowerCase().includes("terminated by other getupdates request")) {
+  if (msg.includes("409")) {
+
     BOT_POLLING_ACTIVE = false;
     scheduleBotRestart(15000);
     return;
+
   }
 
-  if (
-    msg.toLowerCase().includes("etelegram") ||
-    msg.toLowerCase().includes("network") ||
-    msg.toLowerCase().includes("timeout") ||
-    msg.toLowerCase().includes("socket")
-  ) {
-    BOT_POLLING_ACTIVE = false;
-    scheduleBotRestart(10000);
-  }
-});
+  BOT_POLLING_ACTIVE = false;
+  scheduleBotRestart(10000);
 
-bot.on("webhook_error", (err) => {
-  console.error("❌ webhook_error:", err?.message || err);
 });
 
 async function hardStopBot() {
+
   try {
     await bot.stopPolling().catch(() => {});
   } catch (_) {}
@@ -228,38 +312,33 @@ async function hardStopBot() {
   } catch (_) {}
 
   BOT_POLLING_ACTIVE = false;
+
 }
 
+// ===============================
+// START BOT SEGURO
+// ===============================
 async function startBotSafe(force = false) {
-  if (!HAS_RUNTIME_LOCK) {
-    console.log("⛔ Esta instancia no tiene lock. Bot no inicia.");
-    return;
-  }
+
+  if (!HAS_RUNTIME_LOCK) return;
 
   const now = Date.now();
 
-  if (BOT_IS_STARTING && !force) {
-    console.log("ℹ️ Bot ya está iniciando, salto start duplicado");
-    return;
-  }
+  if (BOT_IS_STARTING && !force) return;
 
-  if (!force && BOT_POLLING_ACTIVE) {
-    console.log("ℹ️ Bot ya está activo, no reinicio");
-    return;
-  }
+  if (!force && BOT_POLLING_ACTIVE) return;
 
-  if (!force && now - BOT_LAST_START_AT < 8000) {
-    console.log("ℹ️ Start bloqueado por ventana anti-duplicado");
-    return;
-  }
+  if (!force && now - BOT_LAST_START_AT < 8000) return;
 
   BOT_IS_STARTING = true;
   BOT_LAST_START_AT = now;
 
   try {
+
     console.log("🔄 Iniciando bot limpio...");
 
     await hardStopBot();
+
     await new Promise((r) => setTimeout(r, 3000));
 
     await bot.startPolling({
@@ -269,31 +348,42 @@ async function startBotSafe(force = false) {
     });
 
     BOT_POLLING_ACTIVE = true;
+
     console.log("✅ Bot iniciado (polling ultra blindado)");
+
   } catch (err) {
+
     BOT_POLLING_ACTIVE = false;
+
     console.error("❌ Error iniciando polling:", err?.message || err);
+
     scheduleBotRestart(15000);
+
   } finally {
+
     BOT_IS_STARTING = false;
+
   }
 }
 
+// ===============================
+// REINICIO PROGRAMADO
+// ===============================
 function scheduleBotRestart(delayMs = 15000) {
-  if (!HAS_RUNTIME_LOCK) {
-    console.log("⛔ scheduleBotRestart ignorado: esta instancia no tiene lock");
-    return;
-  }
+
+  if (!HAS_RUNTIME_LOCK) return;
 
   if (BOT_START_TIMEOUT) {
+
     clearTimeout(BOT_START_TIMEOUT);
     BOT_START_TIMEOUT = null;
+
   }
 
   BOT_START_TIMEOUT = setTimeout(() => {
-    startBotSafe(true).catch((e) => {
-      console.error("❌ scheduleBotRestart error:", e?.message || e);
-    });
+
+    startBotSafe(true).catch(() => {});
+
   }, delayMs);
 }
 
@@ -301,990 +391,53 @@ function scheduleBotRestart(delayMs = 15000) {
 // LISTENER NETFLIX
 // ===============================
 function startNetflixListenerIfLeader() {
-  if (!HAS_RUNTIME_LOCK) {
-    console.log("⏸️ Netflix listener no inicia: otra instancia tiene el lock");
-    return;
-  }
+
+  if (!HAS_RUNTIME_LOCK) return;
+
+  if (NETFLIX_LISTENER_STARTED) return;
 
   if (process.env.ENABLE_NETFLIX_LISTENER === "true") {
+
     try {
+
       require("./netflix_codes_listener");
+
+      NETFLIX_LISTENER_STARTED = true;
+
       console.log("🎬 Netflix listener activo");
+
     } catch (e) {
+
       console.error("❌ No se pudo iniciar netflix listener:", e);
+
     }
   }
 }
 
 // ===============================
-// ARRANQUE ULTRA BLINDADO
+// ARRANQUE
 // ===============================
 (async () => {
+
   try {
     await hardStopBot();
   } catch (_) {}
 
   const lockOk = await acquireRuntimeLock();
 
-  if (!lockOk) {
-    console.log("⛔ Esta instancia quedó pasiva. No inicia bot ni listener.");
-    return;
+  if (lockOk) {
+
+    await onBecameLeader();
+
+  } else {
+
+    console.log("⏳ Instancia pasiva por ahora. Reintentará tomar lock.");
+
+    startLeaderRetryLoop(15000);
+
   }
 
-  startRuntimeHeartbeat();
-  startNetflixListenerIfLeader();
-
-  // Espera a que Render termine deploy y libere sesiones previas
-  scheduleBotRestart(15000);
 })();
-
-// ===============================
-// CONSTANTES
-// ===============================
-const PLATAFORMAS = [
-  "netflix",
-  "vipnetflix",
-  "disneyp",
-  "disneys",
-  "hbomax",
-  "primevideo",
-  "paramount",
-  "crunchyroll",
-  "vix",
-  "appletv",
-  "universal",
-  "youtube",
-  "spotify",
-  "canva",
-  "oleadatv1",
-  "oleadatv3",
-  "iptv1",
-  "iptv3",
-  "iptv4",
-];
-
-const PAGE_SIZE = 10;
-
-// ===============================
-// HELPERS
-// ===============================
-function stripAcentos(str = "") {
-  return String(str).normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-}
-
-function normTxt(str = "") {
-  return stripAcentos(String(str || ""))
-    .toLowerCase()
-    .trim()
-    .replace(/\s+/g, " ");
-}
-
-function onlyDigits(str = "") {
-  return String(str || "").replace(/\D/g, "");
-}
-
-function normalizarPlataforma(txt = "") {
-  return String(txt)
-    .toLowerCase()
-    .trim()
-    .replace(/\s+/g, "")
-    .replace(/[\.\-_/]+/g, "");
-}
-
-function esPlataformaValida(p) {
-  return PLATAFORMAS.includes(normalizarPlataforma(p));
-}
-
-function safeMail(correo) {
-  return String(correo || "")
-    .trim()
-    .toLowerCase()
-    .replace(/[\/#?&\s]+/g, "_");
-}
-
-function docIdInventario(correo, plataforma) {
-  return `${normalizarPlataforma(plataforma)}__${safeMail(correo)}`;
-}
-
-function fmtEstado(estado) {
-  const e = String(estado || "").toLowerCase();
-  if (e === "bloqueada" || e === "llena") return "LLENA";
-  return "ACTIVA";
-}
-
-function isFechaDMY(s) {
-  return /^\d{2}\/\d{2}\/\d{4}$/.test(String(s || "").trim());
-}
-
-function hoyDMY() {
-  const d = new Date();
-  const dd = String(d.getDate()).padStart(2, "0");
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const yyyy = String(d.getFullYear());
-  return `${dd}/${mm}/${yyyy}`;
-}
-
-function esTelefono(txt) {
-  const t = onlyDigits(String(txt || "").trim());
-  return /^[0-9]{7,15}$/.test(t);
-}
-
-function limpiarQuery(txt) {
-  return String(txt || "")
-    .trim()
-    .replace(/^\/+/, "")
-    .replace(/\s+/g, " ")
-    .toLowerCase();
-}
-
-function isEmailLike(s) {
-  const x = String(s || "").trim().toLowerCase();
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(x);
-}
-
-function parseDMYtoTS(dmy) {
-  const s = String(dmy || "").trim();
-  const m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
-  if (!m) return Number.POSITIVE_INFINITY;
-  return new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1])).getTime();
-}
-
-function serviciosOrdenados(servicios = []) {
-  const arr = Array.isArray(servicios) ? servicios.slice() : [];
-  arr.sort((a, b) => parseDMYtoTS(a.fechaRenovacion) - parseDMYtoTS(b.fechaRenovacion));
-  return arr;
-}
-
-function addDaysDMY(dmy, days) {
-  if (!isFechaDMY(dmy)) return null;
-  const [dd, mm, yyyy] = dmy.split("/").map(Number);
-  const dt = new Date(yyyy, mm - 1, dd);
-  dt.setDate(dt.getDate() + Number(days || 0));
-  return `${String(dt.getDate()).padStart(2, "0")}/${String(dt.getMonth() + 1).padStart(2, "0")}/${dt.getFullYear()}`;
-}
-
-function escMD(text = "") {
-  return String(text || "").replace(/([_*\[\]()~`>#+\-=|{}!\\])/g, "\\$1");
-}
-
-async function enviarTxtComoArchivo(chatId, contenido, filename = "reporte.txt") {
-  const limpio = stripAcentos(String(contenido || "")).replace(/[^\x00-\x7F]/g, "");
-  const buffer = Buffer.from(limpio, "utf8");
-  return bot.sendDocument(chatId, buffer, {}, { filename, contentType: "text/plain" });
-}
-
-function logInfo(...args) {
-  console.log("ℹ️", ...args);
-}
-
-function logErr(...args) {
-  console.log("❌", ...args);
-}
-
-// ===============================
-// HELPERS REVENDEDORES
-// ===============================
-function getSafeRevNombre(r = {}, fallbackId = "") {
-  return String(r.nombre || r.Nombre || fallbackId || "").trim();
-}
-
-function getSafeRevActivo(r = {}) {
-  return r.activo === true || r.Activo === true;
-}
-
-function getSafeRevTelegramId(r = {}) {
-  return String(r.telegramId ?? r.TelegramId ?? "").trim();
-}
-
-function normalizeRevendedorDoc(doc) {
-  const data = doc.data() || {};
-  const nombre = getSafeRevNombre(data, doc.id);
-  const activo = getSafeRevActivo(data);
-  const telegramId = getSafeRevTelegramId(data);
-
-  return {
-    id: doc.id,
-    ...data,
-    nombre,
-    activo,
-    telegramId,
-    nombre_norm: normTxt(nombre),
-  };
-}
-
-// ===============================
-// CONFIG TOTALES
-// ===============================
-async function getTotalPorPlataforma(plataforma) {
-  const cfg = await db.collection("config").doc("totales_plataforma").get();
-  const p = normalizarPlataforma(plataforma);
-  if (!cfg.exists) return null;
-  return cfg.data()?.[p] ?? null;
-}
-
-async function asegurarTotalesDefault() {
-  const ref = db.collection("config").doc("totales_plataforma");
-  const doc = await ref.get();
-
-  const defaults = {
-    netflix: 5,
-    vipnetflix: 1,
-    disneyp: 6,
-    disneys: 5,
-    hbomax: 5,
-    primevideo: 5,
-    paramount: 5,
-    crunchyroll: 5,
-    vix: 4,
-    appletv: 4,
-    universal: 4,
-    youtube: 1,
-    spotify: 1,
-    canva: 1,
-    oleadatv1: 1,
-    oleadatv3: 3,
-    iptv1: 1,
-    iptv3: 3,
-    iptv4: 4,
-  };
-
-  if (!doc.exists) {
-    await ref.set(defaults);
-    logInfo("✅ Totales default creados");
-    return;
-  }
-
-  await ref.set(defaults, { merge: true });
-}
-asegurarTotalesDefault().catch(logErr);
-
-// ===============================
-// RATE LIMIT
-// ===============================
-const rate = new Map();
-
-function allowMsg(chatId, userId, limit = 10, windowMs = 5000) {
-  const k = `${chatId}:${userId}`;
-  const now = Date.now();
-  const cur = rate.get(k) || { t: now, count: 0 };
-
-  if (now - cur.t > windowMs) {
-    cur.t = now;
-    cur.count = 0;
-  }
-
-  cur.count++;
-  rate.set(k, cur);
-  return cur.count <= limit;
-}
-
-// ===============================
-// ADMIN / ROLES
-// ===============================
-function isSuperAdmin(userId) {
-  return !!SUPER_ADMIN && String(userId) === String(SUPER_ADMIN);
-}
-
-async function isAdmin(userId) {
-  if (isSuperAdmin(userId)) return true;
-  const doc = await db.collection("admins").doc(String(userId)).get();
-  return doc.exists && doc.data().activo === true;
-}
-
-async function getRevendedorPorTelegramId(userId) {
-  const uid = String(userId).trim();
-  const snap = await db.collection("revendedores").get();
-  if (snap.empty) return null;
-
-  let found = null;
-  snap.forEach((doc) => {
-    const r = normalizeRevendedorDoc(doc);
-    if (r.telegramId === uid && r.activo === true) found = r;
-  });
-
-  return found;
-}
-
-async function setTelegramIdToRevendedor(nombre, userId) {
-  const nombreNorm = normTxt(nombre);
-  const snap = await db.collection("revendedores").get();
-  if (snap.empty) return { ok: false, msg: "⚠️ No hay revendedores en la colección." };
-
-  let found = null;
-  snap.forEach((doc) => {
-    const r = normalizeRevendedorDoc(doc);
-    if (r.nombre_norm === nombreNorm) found = { ref: doc.ref, data: r };
-  });
-
-  if (!found) return { ok: false, msg: "⚠️ No encontré ese revendedor por nombre." };
-
-  await found.ref.set(
-    {
-      nombre: found.data.nombre,
-      nombre_norm: normTxt(found.data.nombre),
-      telegramId: String(userId),
-      activo: true,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    },
-    { merge: true }
-  );
-
-  return { ok: true, msg: `✅ Vinculado: ${found.data.nombre} => telegramId ${String(userId)}` };
-}
-
-async function isVendedor(userId) {
-  if (await isAdmin(userId)) return false;
-  const rev = await getRevendedorPorTelegramId(userId);
-  return !!(rev && rev.nombre && rev.telegramId === String(userId));
-}
-
-// ===============================
-// PANEL BLINDADO
-// ===============================
-const panelMsgId = new Map();
-
-function bindPanelFromCallback(q) {
-  const chatId = q.message?.chat?.id;
-  const mid = q.message?.message_id;
-  if (chatId && mid) panelMsgId.set(String(chatId), mid);
-}
-
-async function sendFreshPanel(chatId, text, replyMarkup, parseMode = "Markdown", extraOpts = {}) {
-  const sent = await bot.sendMessage(chatId, text, {
-    parse_mode: parseMode,
-    reply_markup: replyMarkup,
-    disable_web_page_preview: true,
-    ...extraOpts,
-  });
-  panelMsgId.set(String(chatId), sent.message_id);
-  return sent;
-}
-
-async function upsertPanel(chatId, text, replyMarkup, parseMode = "Markdown") {
-  const key = String(chatId);
-  const mid = panelMsgId.get(key);
-
-  if (mid) {
-    try {
-      await bot.editMessageText(text, {
-        chat_id: chatId,
-        message_id: mid,
-        parse_mode: parseMode,
-        reply_markup: replyMarkup,
-        disable_web_page_preview: true,
-      });
-      return;
-    } catch (e) {
-      const msg = String(e?.message || "").toLowerCase();
-
-      if (
-        msg.includes("message is not modified") ||
-        msg.includes("message to edit not found") ||
-        msg.includes("message can't be edited") ||
-        msg.includes("message_id_invalid") ||
-        msg.includes("400") ||
-        msg.includes("409")
-      ) {
-        panelMsgId.delete(key);
-        return sendFreshPanel(chatId, text, replyMarkup, parseMode);
-      }
-
-      throw e;
-    }
-  }
-
-  return sendFreshPanel(chatId, text, replyMarkup, parseMode);
-}
-
-// ===============================
-// MEMORIAS DE FLUJO
-// ===============================
-const wizard = new Map();
-const pending = new Map();
-
-// ===============================
-// HELPERS CLIENTES / DUPLICADOS
-// ===============================
-function dedupeClientes(arr = []) {
-  const map = new Map();
-
-  for (const c of Array.isArray(arr) ? arr : []) {
-    const tel = String(c.telefono_norm || onlyDigits(c.telefono || "") || "").trim();
-    const nom = String(c.nombre_norm || normTxt(c.nombrePerfil || "") || "").trim();
-    const key = `${tel}__${nom}`;
-    if (!map.has(key)) map.set(key, c);
-  }
-
-  return Array.from(map.values());
-}
-
-async function clienteDuplicado(nombre, telefono, excludeId = "") {
-  const nombreN = normTxt(nombre);
-  const telN = onlyDigits(telefono);
-  if (!nombreN || !telN) return null;
-
-  const snap = await db.collection("clientes").limit(5000).get();
-  let duplicado = null;
-
-  snap.forEach((doc) => {
-    if (excludeId && String(doc.id) === String(excludeId)) return;
-
-    const c = doc.data() || {};
-    const dbNombre = normTxt(c.nombrePerfil || "");
-    const dbTel = onlyDigits(c.telefono || "");
-
-    if (dbNombre === nombreN && dbTel === telN && !duplicado) {
-      duplicado = { id: doc.id, ...c };
-    }
-  });
-
-  return duplicado;
-}
-
-async function borrarDuplicadosClientes() {
-  const snap = await db.collection("clientes").limit(5000).get();
-  const mapa = new Map();
-  const batch = db.batch();
-  let borrados = 0;
-
-  snap.forEach((doc) => {
-    const c = doc.data() || {};
-    const key = `${normTxt(c.nombrePerfil || "")}|${onlyDigits(c.telefono || "")}`;
-    if (!key || key === "|") return;
-
-    if (mapa.has(key)) {
-      batch.delete(doc.ref);
-      borrados++;
-    } else {
-      mapa.set(key, doc.id);
-    }
-  });
-
-  if (borrados > 0) await batch.commit();
-  return borrados;
-}
-
-async function getCliente(clientId) {
-  const ref = db.collection("clientes").doc(String(clientId));
-  const doc = await ref.get();
-  if (!doc.exists) return null;
-  return { id: doc.id, ...(doc.data() || {}) };
-}
-
-async function patchServicio(clientId, idx, patch) {
-  const ref = db.collection("clientes").doc(String(clientId));
-  const doc = await ref.get();
-  if (!doc.exists) return false;
-
-  const c = doc.data() || {};
-  const servicios = Array.isArray(c.servicios) ? c.servicios : [];
-  if (idx < 0 || idx >= servicios.length) return false;
-
-  servicios[idx] = { ...(servicios[idx] || {}), ...patch };
-  await ref.set(
-    {
-      servicios,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    },
-    { merge: true }
-  );
-
-  return true;
-}
-
-async function addServicioTx(clientId, servicio) {
-  const ref = db.collection("clientes").doc(String(clientId));
-
-  return db.runTransaction(async (tx) => {
-    const doc = await tx.get(ref);
-    if (!doc.exists) throw new Error("Cliente no existe en TX");
-
-    const cur = doc.data() || {};
-    const arr = Array.isArray(cur.servicios) ? cur.servicios.slice() : [];
-    arr.push(servicio);
-
-    tx.set(
-      ref,
-      {
-        servicios: arr,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      },
-      { merge: true }
-    );
-
-    return { cliente: cur, servicios: arr };
-  });
-}
-
-// ===============================
-// HELPERS CRM
-// ===============================
-function daysUntilDMY(dmy) {
-  if (!isFechaDMY(dmy)) return null;
-
-  const [dd, mm, yyyy] = String(dmy).split("/").map(Number);
-  const target = new Date(yyyy, mm - 1, dd);
-  const now = new Date();
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-
-  return Math.round((target.getTime() - today.getTime()) / 86400000);
-}
-
-function estadoServicioLabel(fechaRenovacion) {
-  const d = daysUntilDMY(fechaRenovacion);
-  if (d === null) return "⚪ Sin fecha";
-  if (d < 0) return "⚫ Vencido";
-  if (d === 0) return "🔴 Vence hoy";
-  if (d >= 1 && d <= 3) return "🟡 Próximo";
-  return "🟢 Activo";
-}
-
-function emojiPlataforma(plataforma = "") {
-  const p = normalizarPlataforma(plataforma);
-  const map = {
-    netflix: "📺",
-    vipnetflix: "🔥",
-    disneyp: "🏰",
-    disneys: "🎞️",
-    hbomax: "🍿",
-    primevideo: "🎥",
-    paramount: "📀",
-    crunchyroll: "🍥",
-    vix: "🎬",
-    appletv: "🍎",
-    universal: "🌎",
-    youtube: "▶️",
-    spotify: "🎵",
-    canva: "🎨",
-    oleadatv1: "🌊",
-    oleadatv3: "🌊",
-    iptv1: "📡",
-    iptv3: "📡",
-    iptv4: "📡",
-  };
-  return map[p] || "📦";
-}
-
-function labelPlataforma(plataforma = "") {
-  return `${emojiPlataforma(plataforma)} ${normalizarPlataforma(plataforma)}`;
-}
-
-function resumenClienteCRM(cliente) {
-  const servicios = serviciosOrdenados(Array.isArray(cliente?.servicios) ? cliente.servicios : []);
-  let totalMensual = 0;
-  let proxFecha = "";
-  let venceHoy = 0;
-  let vencidos = 0;
-  let proximos = 0;
-
-  for (const s of servicios) {
-    totalMensual += Number(s.precio || 0);
-    const d = daysUntilDMY(s.fechaRenovacion);
-
-    if (proxFecha === "" && isFechaDMY(s.fechaRenovacion)) proxFecha = s.fechaRenovacion;
-    if (d === 0) venceHoy++;
-    if (d !== null && d < 0) vencidos++;
-    if (d !== null && d >= 1 && d <= 3) proximos++;
-  }
-
-  let estadoGeneral = "🟢 Estable";
-  if (vencidos > 0 || venceHoy > 0) estadoGeneral = "🔴 Atención";
-  else if (proximos > 0) estadoGeneral = "🟡 Seguimiento";
-
-  return {
-    servicios,
-    totalMensual,
-    proxFecha: proxFecha || "-",
-    venceHoy,
-    vencidos,
-    proximos,
-    estadoGeneral,
-  };
-}
-
-function clienteResumenTXT(c) {
-  const r = resumenClienteCRM(c);
-
-  let body = "";
-  body += `CLIENTE CRM\n\n`;
-  body += `NOMBRE: ${stripAcentos(c.nombrePerfil || "-")}\n`;
-  body += `TELEFONO: ${onlyDigits(c.telefono || "") || "-"}\n`;
-  body += `VENDEDOR: ${stripAcentos(c.vendedor || "-")}\n\n`;
-  body += `SERVICIOS ACTIVOS: ${r.servicios.length}\n`;
-  body += `TOTAL MENSUAL: ${r.totalMensual} Lps\n`;
-  body += `PROXIMA RENOVACION: ${r.proxFecha}\n`;
-  body += `VENCE HOY: ${r.venceHoy}\n`;
-  body += `VENCIDOS: ${r.vencidos}\n`;
-  body += `PROXIMOS: ${r.proximos}\n`;
-  body += `ESTADO GENERAL: ${stripAcentos(r.estadoGeneral)}\n\n`;
-  body += `SERVICIOS\n\n`;
-
-  if (!r.servicios.length) {
-    body += "SIN SERVICIOS\n";
-  } else {
-    r.servicios.forEach((s, i) => {
-      body += `${i + 1}) ${normalizarPlataforma(s.plataforma)} | ${s.correo || "-"} | ${Number(s.precio || 0)} Lps | ${s.fechaRenovacion || "-"} | ${stripAcentos(estadoServicioLabel(s.fechaRenovacion))}\n`;
-    });
-  }
-
-  return body;
-}
-
-// ===============================
-// HELPERS INVENTARIO
-// ===============================
-async function buscarInventarioPorCorreo(correo) {
-  const mail = String(correo || "").trim().toLowerCase();
-  const snap = await db.collection("inventario").where("correo", "==", mail).limit(20).get();
-  return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-}
-
-async function aplicarAutoLleno(chatId, ref, dataAntes, dataDespues) {
-  const antes = Number(dataAntes?.disp ?? 0);
-  const despues = Number(dataDespues?.disp ?? 0);
-
-  if (despues <= 0) {
-    await ref.set(
-      {
-        disp: 0,
-        estado: "llena",
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      },
-      { merge: true }
-    );
-
-    if (antes > 0) {
-      return bot.sendMessage(
-        chatId,
-        `🚨 *ALERTA STOCK*\n${String(dataDespues.plataforma).toUpperCase()} quedó en *0*.\n📧 ${dataDespues.correo}\n✅ Estado: *LLENA*`,
-        { parse_mode: "Markdown" }
-      );
-    }
-  }
-}
-
-async function inventarioPlataformaTexto(plataforma, page) {
-  const p = normalizarPlataforma(plataforma);
-  const totalDefault = await getTotalPorPlataforma(p);
-
-  const snap = await db
-    .collection("inventario")
-    .where("plataforma", "==", p)
-    .limit(500)
-    .get();
-
-  const docs = snap.docs
-    .map((d) => {
-      const data = d.data() || {};
-      const clientes = Array.isArray(data.clientes) ? data.clientes : [];
-      const capacidad = Number(data.capacidad || data.total || totalDefault || 0);
-      const ocupados = clientes.length;
-
-      let disponibles = 0;
-      if (capacidad > 0) {
-        disponibles = Math.max(0, capacidad - ocupados);
-      } else {
-        disponibles = Number(data.disp || 0);
-      }
-
-      let estado = "activa";
-      if (disponibles <= 0) estado = "llena";
-
-      return {
-        id: d.id,
-        ...data,
-        capacidad,
-        ocupados,
-        disp: disponibles,
-        estado,
-      };
-    })
-    .filter((x) => Number(x.disp || 0) >= 1)
-    .sort((a, b) => Number(b.disp || 0) - Number(a.disp || 0));
-
-  const totalItems = docs.length;
-  const totalPages = Math.max(1, Math.ceil(totalItems / PAGE_SIZE));
-  const safePage = Math.min(Math.max(Number(page) || 0, 0), totalPages - 1);
-
-  const start = safePage * PAGE_SIZE;
-  const end = Math.min(start + PAGE_SIZE, totalItems);
-  const slice = docs.slice(start, end);
-
-  let texto = `📌 *${p.toUpperCase()} — STOCK DISPONIBLE*\n`;
-  texto += `Mostrando ${totalItems === 0 ? 0 : start + 1}-${end} de ${totalItems}\n\n`;
-
-  if (slice.length === 0) {
-    texto += `⚠️ ${p.toUpperCase()} SIN PERFILES DISPONIBLES\n`;
-  } else {
-    let i = start + 1;
-    let libresTotal = 0;
-    docs.forEach((x) => (libresTotal += Number(x.disp || 0)));
-
-    for (const d of slice) {
-      const capacidad = Number(d.capacidad || totalDefault || "-");
-      texto += `${i}) ${d.correo} — 🔑 ${d?.clave ? d.clave : "-"} — ${d.disp}/${capacidad}\n`;
-      i++;
-    }
-
-    texto += `\n━━━━━━━━━━━━━━\n`;
-    texto += `📊 Correos con stock: ${totalItems}\n`;
-    texto += `👤 Perfiles/Pantallas libres totales: ${libresTotal}\n\n`;
-    texto += `👉 Para abrir submenu: escriba /correo (ej: /mail@gmail.com)\n`;
-  }
-
-  texto += `\n📄 Página: ${safePage + 1}/${totalPages}`;
-  return { texto, safePage, totalPages };
-}
-
-async function enviarInventarioPlataforma(chatId, plataforma, page) {
-  const p = normalizarPlataforma(plataforma);
-
-  if (!esPlataformaValida(p)) {
-    return upsertPanel(
-      chatId,
-      "⚠️ Plataforma inválida.",
-      { inline_keyboard: [[{ text: "🏠 Inicio", callback_data: "go:inicio" }]] },
-      "Markdown"
-    );
-  }
-
-  const { texto, safePage, totalPages } = await inventarioPlataformaTexto(p, page);
-
-  const canBack = safePage > 0;
-  const canNext = safePage < totalPages - 1;
-
-  return upsertPanel(
-    chatId,
-    texto,
-    {
-      inline_keyboard: [
-        [
-          { text: "⬅️ Atrás", callback_data: canBack ? `inv:${p}:${safePage - 1}` : "noop" },
-          { text: "🏠 Inicio", callback_data: "go:inicio" },
-          { text: "➡️ Siguiente", callback_data: canNext ? `inv:${p}:${safePage + 1}` : "noop" },
-        ],
-        [{ text: "🔄 Actualizar", callback_data: `inv:${p}:${safePage}` }],
-        [{ text: "⬅️ Volver Inventario", callback_data: "menu:inventario" }],
-      ],
-    },
-    "Markdown"
-  );
-}
-
-async function mostrarStockGeneral(chatId) {
-  const cfg = await db.collection("config").doc("totales_plataforma").get();
-  const totals = cfg.exists ? cfg.data() : {};
-  let texto = "📦 *STOCK GENERAL*\n\n";
-
-  for (const p of PLATAFORMAS) {
-    const snap = await db
-      .collection("inventario")
-      .where("plataforma", "==", p)
-      .limit(500)
-      .get();
-
-    let libres = 0;
-
-    snap.forEach((d) => {
-      const data = d.data() || {};
-      const clientes = Array.isArray(data.clientes) ? data.clientes : [];
-      const capacidad = Number(data.capacidad || data.total || totals?.[p] || 0);
-
-      if (capacidad > 0) {
-        libres += Math.max(0, capacidad - clientes.length);
-      } else {
-        libres += Number(data.disp || 0);
-      }
-    });
-
-    texto += `✅ *${p}*: ${libres} libres (/${totals?.[p] ?? "-"})\n`;
-  }
-
-  return bot.sendMessage(chatId, texto, { parse_mode: "Markdown" });
-}
-
-async function enviarSubmenuInventario(chatId, plataforma, correo) {
-  return mostrarPanelCorreo(chatId, plataforma, correo);
-}
-
-// ===============================
-// MENÚS
-// ===============================
-async function menuPrincipal(chatId) {
-  return upsertPanel(chatId, "📌 *MENÚ PRINCIPAL*", {
-    inline_keyboard: [
-      [{ text: "📦 Inventario", callback_data: "menu:inventario" }],
-      [{ text: "👥 Clientes", callback_data: "menu:clientes" }],
-      [{ text: "💳 Pagos", callback_data: "menu:pagos" }],
-      [{ text: "📅 Renovaciones", callback_data: "menu:renovaciones" }],
-      [{ text: "🔎 Buscar", callback_data: "menu:buscar" }],
-    ],
-  });
-}
-
-async function menuVendedor(chatId) {
-  return upsertPanel(
-    chatId,
-    "👤 *MENÚ VENDEDOR*\n\nFunciones disponibles:\n• Mis renovaciones\n• TXT Mis renovaciones\n• Mis clientes\n• TXT Mis clientes\n",
-    {
-      inline_keyboard: [
-        [{ text: "🧾 Mis renovaciones", callback_data: "ren:mis" }],
-        [{ text: "📄 TXT Mis renovaciones", callback_data: "txt:mis" }],
-        [{ text: "👥 Mis clientes", callback_data: "vend:clientes" }],
-        [{ text: "📄 TXT Mis clientes", callback_data: "vend:clientes:txt" }],
-      ],
-    }
-  );
-}
-
-async function menuInventario(chatId) {
-  return upsertPanel(chatId, "📦 *INVENTARIO* (elija plataforma)", {
-    inline_keyboard: [
-      [
-        { text: "📺 Netflix", callback_data: "inv:netflix:0" },
-        { text: "🔥 VIP Netflix", callback_data: "inv:vipnetflix:0" },
-      ],
-      [
-        { text: "🏰 Disney Premium", callback_data: "inv:disneyp:0" },
-        { text: "🎞️ Disney Standard", callback_data: "inv:disneys:0" },
-      ],
-      [
-        { text: "🍿 HBO Max", callback_data: "inv:hbomax:0" },
-        { text: "🎥 Prime Video", callback_data: "inv:primevideo:0" },
-      ],
-      [
-        { text: "📀 Paramount+", callback_data: "inv:paramount:0" },
-        { text: "🍥 Crunchyroll", callback_data: "inv:crunchyroll:0" },
-      ],
-      [
-        { text: "🎬 Vix", callback_data: "inv:vix:0" },
-        { text: "🍎 Apple TV", callback_data: "inv:appletv:0" },
-      ],
-      [
-        { text: "🌎 Universal", callback_data: "inv:universal:0" },
-        { text: "▶️ YouTube", callback_data: "inv:youtube:0" },
-      ],
-      [
-        { text: "🎵 Spotify", callback_data: "inv:spotify:0" },
-        { text: "🎨 Canva", callback_data: "inv:canva:0" },
-      ],
-      [
-        { text: "🌊 OleadaTV (1)", callback_data: "inv:oleadatv1:0" },
-        { text: "🌊 OleadaTV (3)", callback_data: "inv:oleadatv3:0" },
-      ],
-      [
-        { text: "📡 IPTV (1)", callback_data: "inv:iptv1:0" },
-        { text: "📡 IPTV (3)", callback_data: "inv:iptv3:0" },
-      ],
-      [{ text: "📡 IPTV (4)", callback_data: "inv:iptv4:0" }],
-      [{ text: "📦 Stock General", callback_data: "inv:general" }],
-      [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
-    ],
-  });
-}
-
-async function menuClientes(chatId) {
-  return upsertPanel(
-    chatId,
-    "👥 *CLIENTES*\n\n• Nuevo cliente (wizard)\n• Buscar (abre ficha)\n• TXT General (Nombre | Tel)\n• TXT 1 por vendedor\n\n💡 Tip:\nEscriba: */NOMBRE* o */TELEFONO* para abrir listado.",
-    {
-      inline_keyboard: [
-        [{ text: "➕ Nuevo cliente", callback_data: "cli:wiz:start" }],
-        [{ text: "🔎 Buscar", callback_data: "menu:buscar" }],
-        [{ text: "📄 TXT General", callback_data: "cli:txt:general" }],
-        [{ text: "📄 TXT 1 por vendedor", callback_data: "cli:txt:vendedores_split" }],
-        [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
-      ],
-    }
-  );
-}
-
-async function menuPagos(chatId) {
-  return upsertPanel(chatId, "💳 *PAGOS*\n\n(Reservado para wizard después)", {
-    inline_keyboard: [[{ text: "🏠 Inicio", callback_data: "go:inicio" }]],
-  });
-}
-
-async function menuRenovaciones(chatId, userIdOpt) {
-  const isSA = userIdOpt ? isSuperAdmin(userIdOpt) : false;
-
-  const kb = [
-    [{ text: "📅 Renovaciones hoy", callback_data: "ren:hoy" }],
-    [{ text: "📄 TXT hoy", callback_data: "txt:hoy" }],
-    [{ text: "🧾 Mis renovaciones", callback_data: "ren:mis" }],
-    [{ text: "📄 TXT Mis renovaciones", callback_data: "txt:mis" }],
-    [{ text: "👤 Revendedores (lista)", callback_data: "rev:lista" }],
-  ];
-
-  if (isSA) kb.push([{ text: "📬 Enviar TXT a TODOS (HOY)", callback_data: "txt:todos:hoy" }]);
-  kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
-
-  return upsertPanel(
-    chatId,
-    "📅 *RENOVACIONES*\n\nComandos:\n• /renovaciones hoy\n• /renovaciones dd/mm/yyyy\n• /renovaciones VENDEDOR dd/mm/yyyy\n\nTXT:\n• /txt hoy\n• /txt dd/mm/yyyy\n• /txt VENDEDOR dd/mm/yyyy\n\n✅ Nota:\n• *Enviar TXT a TODOS (HOY)* solo SUPERADMIN.\n",
-    { inline_keyboard: kb }
-  );
-}
-
-// ===============================
-// WIZARD HELPERS
-// ===============================
-function w(chatId) {
-  return wizard.get(String(chatId));
-}
-
-function wset(chatId, state) {
-  wizard.set(String(chatId), state);
-}
-
-function wclear(chatId) {
-  wizard.delete(String(chatId));
-}
-
-function kbPlataformasWiz(prefix, clientId, idxOpt) {
-  const cb = (plat) =>
-    idxOpt !== undefined ? `${prefix}:${plat}:${clientId}:${idxOpt}` : `${prefix}:${plat}:${clientId}`;
-
-  return [
-    [
-      { text: "📺 netflix", callback_data: cb("netflix") },
-      { text: "🔥 vipnetflix", callback_data: cb("vipnetflix") },
-    ],
-    [
-      { text: "🏰 disneyp", callback_data: cb("disneyp") },
-      { text: "🎞️ disneys", callback_data: cb("disneys") },
-    ],
-    [
-      { text: "🍿 hbomax", callback_data: cb("hbomax") },
-      { text: "🎥 primevideo", callback_data: cb("primevideo") },
-    ],
-    [
-      { text: "📀 paramount", callback_data: cb("paramount") },
-      { text: "🍥 crunchyroll", callback_data: cb("crunchyroll") },
-    ],
-    [
-      { text: "🎬 vix", callback_data: cb("vix") },
-      { text: "🍎 appletv", callback_data: cb("appletv") },
-    ],
-    [
-      { text: "🌎 universal", callback_data: cb("universal") },
-      { text: "▶️ youtube", callback_data: cb("youtube") },
-    ],
-    [
-      { text: "🎵 spotify", callback_data: cb("spotify") },
-      { text: "🎨 canva", callback_data: cb("canva") },
-    ],
-    [
-      { text: "🌊 oleadatv (1)", callback_data: cb("oleadatv1") },
-      { text: "🌊 oleadatv (3)", callback_data: cb("oleadatv3") },
-    ],
-    [
-      { text: "📡 iptv (1)", callback_data: cb("iptv1") },
-      { text: "📡 iptv (3)", callback_data: cb("iptv3") },
-    ],
-    [{ text: "📡 iptv (4)", callback_data: cb("iptv4") }],
-  ];
-       }
 
 // ===============================
 // FICHA CLIENTE / CRM / EDICIÓN
@@ -2802,7 +1955,10 @@ bot.on("callback_query", async (q) => {
   const data = q.data || "";
 
   try {
-    await bot.answerCallbackQuery(q.id);
+    try {
+      await bot.answerCallbackQuery(q.id);
+    } catch (_) {}
+
     if (!chatId) return;
     if (!allowMsg(chatId, userId)) return;
 
@@ -4183,7 +3339,11 @@ bot.on("message", async (msg) => {
     }
   } catch (err) {
     logErr("❌ message handler error:", err?.message || err);
-    bot.sendMessage(chatId, "⚠️ Error interno (revise logs).");
+    if (chatId) {
+      try {
+        await bot.sendMessage(chatId, "⚠️ Error interno (revise logs).");
+      } catch (_) {}
+    }
   }
 });
 
@@ -4305,12 +3465,6 @@ process.on("SIGTERM", async () => {
     await releaseRuntimeLock().catch(() => {});
   } catch (_) {}
   process.exit(0);
-});
-
-process.on("exit", async () => {
-  try {
-    await releaseRuntimeLock().catch(() => {});
-  } catch (_) {}
 });
 
 // ===============================
