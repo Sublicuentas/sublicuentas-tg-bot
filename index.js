@@ -3762,6 +3762,66 @@ bot.onText(/\/stock/i, async (msg) => {
 });
 
 // ===============================
+// AGREGAR NUEVO CORREO AL INVENTARIO
+// ===============================
+bot.onText(/\/addcorreo\s+(\S+)\s+(\S+)(?:\s+(\d+))?/i, async (msg, match) => {
+  if (!HAS_RUNTIME_LOCK) return;
+
+  const chatId = msg.chat.id;
+  const userId = msg.from.id;
+
+  if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado. Solo admins pueden agregar inventario.");
+
+  const platRaw = match[1];
+  const correoRaw = match[2];
+  const capacidadRaw = match[3];
+
+  const plat = normalizarPlataforma(platRaw);
+  if (!esPlataformaValida(plat)) {
+    return bot.sendMessage(chatId, `⚠️ *Plataforma no válida.*\nEjemplos válidos: netflix, disneyp, hbomax...`, { parse_mode: "Markdown" });
+  }
+
+  const mail = String(correoRaw).toLowerCase().trim();
+  if (!isEmailLike(mail)) {
+    return bot.sendMessage(chatId, "⚠️ *Formato de correo inválido.* Asegúrese de que lleve el @.", { parse_mode: "Markdown" });
+  }
+
+  const docId = docIdInventario(mail, plat);
+  const ref = db.collection("inventario").doc(docId);
+  const doc = await ref.get();
+
+  if (doc.exists) {
+    return bot.sendMessage(chatId, "⚠️ *Este correo ya existe* en el inventario para esta plataforma.", { parse_mode: "Markdown" });
+  }
+
+  let capacidad = Number(capacidadRaw);
+  if (!capacidadRaw || isNaN(capacidad) || capacidad <= 0) {
+    const totales = await getTotalPorPlataforma(plat);
+    capacidad = totales || 5; 
+  }
+
+  await ref.set({
+    plataforma: plat,
+    correo: mail,
+    capacidad: capacidad,
+    clientes: [],
+    ocupados: 0,
+    disponibles: capacidad,
+    disp: capacidad,
+    estado: "activa",
+    clave: "Sin clave",
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    updatedAt: admin.firestore.FieldValue.serverTimestamp()
+  });
+
+  return bot.sendMessage(
+    chatId, 
+    `✅ *NUEVA CUENTA AGREGADA AL INVENTARIO*\n\n📌 *Plataforma:* ${plat.toUpperCase()}\n📧 *Correo:* ${mail}\n👥 *Pantallas totales:* ${capacidad}\n\n_💡 Ya puede asignarle clientes a este correo desde el Wizard._`, 
+    { parse_mode: "Markdown" }
+  );
+});
+
+// ===============================
 // CALLBACKS
 // ===============================
 bot.on("callback_query", async (q) => {
@@ -4815,6 +4875,7 @@ bot.on("message", async (msg) => {
         "miid",
         "vincular_vendedor",
         "sincronizar_todo",
+        "addcorreo",
         ...PLATAFORMAS,
       ]);
 
