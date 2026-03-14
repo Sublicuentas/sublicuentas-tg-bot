@@ -32,6 +32,39 @@ if (!admin.apps.length) {
 }
 const db = admin.firestore();
 console.log("✅ FIREBASE PROJECT:", FIREBASE_PROJECT_ID);
+// ==============================================================================
+// CONFIGURACIÓN FINANCIERA (NUEVA V12)
+// ==============================================================================
+const colFinanciero = db.collection("financiero");
+
+const BANCOS = [
+  "Atlántida",
+  "Bac",
+  "Ficohsa",
+  "Tigo Money",
+  "Davivienda",
+  "Tengo",
+  "Banpais",
+  "Occidente"
+];
+
+const MOTIVOS_GASTO = [
+  "Renovaciones",
+  "Nuevas cuentas",
+  "Otros",
+];
+
+const rateFinanciero = new Map();
+function allowMsgFinanciero(chatId, userId, limit = 5, windowMs = 3000) {
+  const k = `fin:${chatId}:${userId}`; 
+  const now = Date.now();
+  const cur = rateFinanciero.get(k) || { t: now, count: 0 };
+  if (now - cur.t > windowMs) { cur.t = now; cur.count = 0; }
+  cur.count++;
+  rateFinanciero.set(k, cur);
+  return cur.count <= limit;
+}
+// ==============================================================================
 
 // ===============================
 // COMPATIBILIDAD CON PARTE 3
@@ -936,6 +969,167 @@ async function enviarSubmenuInventario(chatId, plataforma, correo) {
   return mostrarPanelCorreo(chatId, plataforma, correo);
 }
 
+// ==============================================================================
+// HELPERS MÓDULO FINANZAS V12 (NUEVAS)
+// ==============================================================================
+
+function horaFmt() {
+  const now = new Date();
+  return new Intl.DateTimeFormat("es-HN", {
+    timeZone: TZ,
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: true,
+  }).format(now);
+}
+
+async function registrarIngresoTx(monto, banco, clienteRef = null, nota = "") {
+  if (!BANCOS.includes(banco)) throw new Error("Banco inválido");
+  const nMont = Number(monto);
+  if (!Number.isFinite(nMont) || nMont <= 0) throw new Error("Monto inválido");
+
+  return db.runTransaction(async (tx) => {
+    const refFin = colFinanciero.doc();
+    const dataFin = {
+      timestamp: admin.firestore.FieldValue.serverTimestamp(),
+      tipo: "INGRESO",
+      monto: nMont,
+      banco: banco,
+      nota: nota,
+      creadoPor: "casandra_bot"
+    };
+
+    if (clienteRef) dataFin.clienteRef = clienteRef;
+    tx.set(refFin, dataFin);
+
+    if (clienteRef) {
+      const refCli = db.collection("clientes").doc(String(clienteRef));
+      const docCli = await tx.get(refCli);
+      if (docCli.exists) {
+        const cData = docCli.data();
+        let pagos = Array.isArray(cData.pagos) ? cData.pagos.slice() : [];
+        pagos.push({
+          fechaFmt: hoyDMY(),
+          horaFmt: horaFmt(),
+          monto: nMont,
+          banco: banco,
+          nota: nota,
+          financieroRef: refFin.id
+        });
+        tx.update(refCli, {
+          pagos,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+      }
+    }
+    return { finId: refFin.id, clienteRef };
+  });
+}
+
+async function registrarEgresoTx(monto, motivo, nota = "") {
+  if (!MOTIVOS_GASTO.includes(motivo)) throw new Error("Motivo inválido");
+  const nMont = Number(monto);
+  if (!Number.isFinite(nMont) || nMont <= 0) throw new Error("Monto inválido");
+
+  const refFin = colFinanciero.doc();
+  const dataFin = {
+    timestamp: admin.firestore.FieldValue.serverTimestamp(),
+    tipo: "EGRESO",
+    monto: nMont,
+    motivo: motivo,
+    nota: nota,
+    creadoPor: "casandra_bot"
+  };
+
+  await refFin.set(dataFin);
+  return { finId: refFin.id };
+}
+
+async function generarResumenFinancieroHoy() {
+  const dmy = hoyDMY();
+  const parts = dmy.split("/");
+  const startDay = Number(parts[0]);
+  const startMonth = Number(parts[1]);
+  const startYear = Number(parts[2]);
+  
+  const start = new Date(startYear, startMonth - 1, startDay);
+  const end = new Date(startYear, startMonth - 1, startDay + 1);
+
+  const snap = await colFinanciero
+    .where("timestamp", ">=", start)
+    .where("timestamp", "<", end)
+    .get();
+
+  if (snap.empty) {
+    return { exito: false, msg: `⚠️ *No hay registros financieros para hoy* (${escMD(dmy)}).` };
+  }
+
+  let totalIngresos = 0;
+  let totalEgresos = 0;
+  const desgloseIngresos = {};
+  const desgloseEgresos = {};
+  const detallesRenovaciones = [];
+
+  BANCOS.forEach((b) => desgloseIngresos[b] = { total: 0, count: 0 });
+  MOTIVOS_GASTO.forEach((m) => desgloseEgresos[m] = { total: 0, count: 0 });
+
+  snap.forEach((doc) => {
+    const data = doc.data();
+    const monto = Number(data.monto || 0);
+
+    if (data.tipo === "INGRESO") {
+      totalIngresos += monto;
+      if (desgloseIngresos[data.banco]) {
+        desgloseIngresos[data.banco].total += monto;
+        desgloseIngresos[data.banco].count += 1;
+      }
+    } else if (data.tipo === "EGRESO") {
+      totalEgresos += monto;
+      if (desgloseEgresos[data.motivo]) {
+        desgloseEgresos[data.motivo].total += monto;
+        desgloseEgresos[data.motivo].count += 1;
+      }
+      if (data.motivo === "Renovaciones") {
+        detallesRenovaciones.push({
+          monto: monto,
+          nota: data.nota || "-",
+          hora: data.timestamp ? new Intl.DateTimeFormat("es-HN", { timeZone: TZ, hour: "2-digit", minute: "2-digit", hour12: true }).format(data.timestamp.toDate()) : "-",
+        });
+      }
+    }
+  });
+
+  const ganancias = totalIngresos - totalEgresos;
+
+  let txt = `📊 *ESTADO DE RESULTADOS DIARIO*\nHoy ${escMD(dmy)}\n\n`;
+  txt += `💰 *TOTAL INGRESOS:* ${totalIngresos.toFixed(2)} Lps\n`;
+  for (const b of BANCOS) {
+    if (desgloseIngresos[b].total > 0) txt += `➕ *${b}:* ${desgloseIngresos[b].total.toFixed(2)} Lps (${desgloseIngresos[b].count} trans)\n`;
+  }
+  txt += "\n";
+
+  txt += `🛠️ *TOTAL GASTOS (EGRESOS):* ${totalEgresos.toFixed(2)} Lps\n`;
+  for (const m of MOTIVOS_GASTO) {
+    if (desgloseEgresos[m].total > 0) {
+      txt += `➖ *${m}:* ${desgloseEgresos[m].total.toFixed(2)} Lps (${desgloseEgresos[m].count} reg)\n`;
+      if (m === "Renovaciones" && detallesRenovaciones.length > 0) {
+        detallesRenovaciones.sort((a, b) => (a.hora > b.hora) ? 1 : -1);
+        for (const r of detallesRenovaciones) txt += `    - ${r.monto.toFixed(2)} Lps (${escMD(r.nota)}) a las ${r.hora}\n`;
+      }
+    }
+  }
+  txt += "\n";
+
+  const signo = ganancias >= 0 ? "+" : "";
+  const label = ganancias >= 0 ? "🟢" : "🔴";
+  txt += `📈 *${label} GANANCIAS DEL DÍA:* ${signo}${ganancias.toFixed(2)} Lps`;
+
+  return { exito: true, texto: txt };
+}
+// ==============================================================================
+
+
+
 // ===============================
 // MENÚS
 // ===============================
@@ -1029,8 +1223,21 @@ async function menuClientes(chatId) {
 }
 
 async function menuPagos(chatId) {
-  return upsertPanel(chatId, "💳 *PAGOS*\n\n(Reservado para wizard después)", {
-    inline_keyboard: [[{ text: "🏠 Inicio", callback_data: "go:inicio" }]],
+  return upsertPanel(
+    chatId,
+    "💳 *MÓDULO FINANZAS V12*\n\nGestione sus ingresos y egresos diarios aquí:",
+    {
+      inline_keyboard: [
+        [{ text: "➕ Registrar Ingreso", callback_data: "fin:ingreso:start" }],
+        [{ text: "➖ Registrar Egreso", callback_data: "fin:egreso:start" }],
+        [{ text: "📊 Ver Resumen (Hoy)", callback_data: "fin:resumen:hoy" }],
+        [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
+      ],
+    },
+    "Markdown"
+  );
+}
+
   });
 }
 
@@ -1110,2127 +1317,1066 @@ function kbPlataformasWiz(prefix, clientId, idxOpt) {
 }
 
 // ===============================
-
 // FICHA CLIENTE / CRM / EDICIÓN
-
 // ===============================
-
 async function enviarFichaCliente(chatId, clientId) {
-
   const c = await getCliente(clientId);
-
   if (!c) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
-
-
 
   const r = resumenClienteCRM(c);
-
   const servicios = r.servicios;
 
-
-
   let txt = `👤 *CRM CLIENTE*\n\n`;
-
   txt += `🧑 *Nombre:* ${escMD(c.nombrePerfil || "-")}\n`;
-
   txt += `📱 *Teléfono:* ${escMD(c.telefono || "-")}\n`;
-
   txt += `🧾 *Vendedor:* ${escMD(c.vendedor || "-")}\n`;
-
   txt += `📊 *Estado general:* ${escMD(r.estadoGeneral)}\n`;
-
   txt += `💰 *Total mensual:* ${r.totalMensual} Lps\n`;
-
   txt += `📅 *Próxima renovación:* ${escMD(r.proxFecha)}\n`;
-
   txt += `🧩 *Servicios activos:* ${servicios.length}\n`;
-
   txt += `🔴 *Vence hoy:* ${r.venceHoy}   ⚫ *Vencidos:* ${r.vencidos}   🟡 *Próximos:* ${r.proximos}\n\n`;
 
-
-
   txt += `*SERVICIOS*\n`;
-
   if (!servicios.length) {
-
     txt += `— Sin servicios —\n`;
-
   } else {
-
     servicios.forEach((s, i) => {
-
       txt += `\n*${i + 1})* ${escMD(labelPlataforma(s.plataforma))}\n`;
-
       txt += `📧 ${escMD(s.correo || "-")}\n`;
-
       txt += `🔐 ${escMD(s.pin || "-")}\n`;
-
       txt += `💵 ${Number(s.precio || 0)} Lps\n`;
-
       txt += `📆 ${escMD(s.fechaRenovacion || "-")} — ${escMD(estadoServicioLabel(s.fechaRenovacion))}\n`;
-
     });
-
   }
-
-
 
   const kb = [];
-
   kb.push([{ text: "✏️ Editar cliente", callback_data: `cli:edit:menu:${clientId}` }]);
 
-
-
   if (servicios.length > 0) {
-
     kb.push([{ text: "🧩 Editar servicios", callback_data: `cli:serv:list:${clientId}` }]);
-
     kb.push([{ text: "🔄 Renovar servicio", callback_data: `cli:ren:list:${clientId}` }]);
-
     kb.push([{ text: "⏫ Renovar TODOS +30 días", callback_data: `cli:ren:all:ask:${clientId}` }]);
-
   }
-
-
 
   kb.push([{ text: "➕ Agregar servicio", callback_data: `cli:serv:add:${clientId}` }]);
-
   kb.push([{ text: "📄 TXT de este cliente", callback_data: `cli:txt:one:${clientId}` }]);
-
   kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
 
-
-
   return bot.sendMessage(chatId, txt, {
-
     parse_mode: "Markdown",
-
     reply_markup: { inline_keyboard: kb },
-
   });
-
 }
-
-
 
 async function menuEditarCliente(chatId, clientId) {
-
   const c = await getCliente(clientId);
-
   if (!c) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
 
-
-
   const t =
-
     `✏️ *EDITAR CLIENTE*\n\n` +
-
     `👤 Nombre: *${escMD(c.nombrePerfil || "-")}*\n` +
-
     `📱 Tel: *${escMD(c.telefono || "-")}*\n` +
-
     `🧑‍💼 Vendedor: *${escMD(c.vendedor || "-")}*`;
 
-
-
   return upsertPanel(
-
     chatId,
-
     t,
-
     {
-
       inline_keyboard: [
-
         [{ text: "👤 Editar nombre", callback_data: `cli:edit:nombre:${clientId}` }],
-
         [{ text: "📱 Editar teléfono", callback_data: `cli:edit:tel:${clientId}` }],
-
         [{ text: "🧑‍💼 Editar vendedor", callback_data: `cli:edit:vend:${clientId}` }],
-
         [{ text: "⬅️ Volver", callback_data: `cli:view:${clientId}` }],
-
         [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
-
       ],
-
     },
-
     "Markdown"
-
   );
-
 }
-
-
 
 async function menuListaServicios(chatId, clientId) {
-
   const c = await getCliente(clientId);
-
   if (!c) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
-
-
 
   const servicios = serviciosOrdenados(Array.isArray(c.servicios) ? c.servicios : []);
-
   if (!servicios.length) return bot.sendMessage(chatId, "⚠️ Este cliente no tiene servicios.");
 
-
-
   const kb = servicios.map((s, i) => [
-
     {
-
       text: `${i + 1}) ${labelPlataforma(s.plataforma)} — ${s.correo}`,
-
       callback_data: `cli:serv:menu:${clientId}:${i}`,
-
     },
-
   ]);
 
-
-
   kb.push([{ text: "⬅️ Volver", callback_data: `cli:view:${clientId}` }]);
-
   kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
 
-
-
   return upsertPanel(
-
     chatId,
-
     "🧩 *EDITAR SERVICIOS*\nSeleccione un servicio:",
-
     { inline_keyboard: kb },
-
     "Markdown"
-
   );
-
 }
-
-
 
 async function menuServicio(chatId, clientId, idx) {
-
   const c = await getCliente(clientId);
-
   if (!c) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
 
-
-
   const servicios = Array.isArray(c.servicios) ? c.servicios : [];
-
   if (idx < 0 || idx >= servicios.length) return bot.sendMessage(chatId, "⚠️ Servicio inválido.");
 
-
-
   const s = servicios[idx] || {};
-
   const t =
-
     `🧩 *SERVICIO #${idx + 1}*\n\n` +
-
     `📌 Plataforma: *${escMD(labelPlataforma(s.plataforma || "-"))}*\n` +
-
     `📧 Correo: *${escMD(s.correo || "-")}*\n` +
-
     `🔐 Pin: *${escMD(s.pin || "-")}*\n` +
-
     `💰 Precio: *${Number(s.precio || 0)}* Lps\n` +
-
     `📅 Renovación: *${escMD(s.fechaRenovacion || "-")}*\n` +
-
     `📊 Estado: *${escMD(estadoServicioLabel(s.fechaRenovacion))}*`;
 
-
-
   return upsertPanel(
-
     chatId,
-
     t,
-
     {
-
       inline_keyboard: [
-
         [{ text: "📌 Cambiar plataforma", callback_data: `cli:serv:edit:plat:${clientId}:${idx}` }],
-
         [{ text: "📧 Cambiar correo", callback_data: `cli:serv:edit:mail:${clientId}:${idx}` }],
-
         [{ text: "🔐 Cambiar pin", callback_data: `cli:serv:edit:pin:${clientId}:${idx}` }],
-
         [{ text: "💰 Cambiar precio", callback_data: `cli:serv:edit:precio:${clientId}:${idx}` }],
-
         [{ text: "📅 Cambiar fecha", callback_data: `cli:serv:edit:fecha:${clientId}:${idx}` }],
-
         [{ text: "🗑️ Eliminar perfil", callback_data: `cli:serv:del:ask:${clientId}:${idx}` }],
-
         [{ text: "⬅️ Volver lista", callback_data: `cli:serv:list:${clientId}` }],
-
         [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
-
       ],
-
     },
-
     "Markdown"
-
   );
-
 }
 
-
-
 // ===============================
-
 // WIZARD CORREO / CLIENTES EN CORREO
-
 // ===============================
-
 function escapeMarkdown(text = "") {
-
   return String(text || "").replace(/([_*\[\]()~`>#+\-=|{}!\\])/g, "\\$1");
-
 }
-
-
 
 async function buscarCorreoInventarioPorPlatCorreo(plataforma, correo) {
-
   const plat = normalizarPlataforma(plataforma);
-
   const mail = String(correo || "").trim().toLowerCase();
-
-
 
   const directRef = db.collection("inventario").doc(docIdInventario(mail, plat));
-
   const directSnap = await directRef.get();
 
-
-
   if (directSnap.exists) {
-
     return {
-
       id: directSnap.id,
-
       ref: directRef,
-
       data: directSnap.data() || {},
-
     };
-
   }
 
-
-
   const snap = await db
-
     .collection("inventario")
-
     .where("plataforma", "==", plat)
-
     .where("correo", "==", mail)
-
     .limit(1)
-
     .get();
-
-
 
   if (!snap.empty) {
-
     const d = snap.docs[0];
-
     return {
-
       id: d.id,
-
       ref: d.ref,
-
       data: d.data() || {},
-
     };
-
   }
-
-
 
   return null;
-
 }
-
-
 
 function getCapacidadCorreo(data = {}, plataforma = "") {
-
   const desdeData = Number(data.capacidad || data.total || 0);
-
   if (Number.isFinite(desdeData) && desdeData > 0) return desdeData;
 
-
-
   const plat = normalizarPlataforma(plataforma);
-
   const mapa = {
-
     netflix: 5,
-
     vipnetflix: 1,
-
     disney: 6,
-
     disneyp: 6,
-
     disneyplus: 6,
-
     disneys: 5,
-
     max: 5,
-
     hbomax: 5,
-
     primevideo: 5,
-
     prime: 5,
-
     paramount: 5,
-
     vix: 4,
-
     crunchyroll: 5,
-
     spotify: 1,
-
     youtube: 1,
-
     canva: 1,
-
     appletv: 4,
-
     universal: 4,
-
     oleadatv1: 1,
-
     oleadatv3: 3,
-
     iptv1: 1,
-
     iptv3: 3,
-
     iptv4: 4,
-
   };
 
-
-
   return mapa[plat] || 1;
-
 }
-
-
 
 async function mostrarListaCorreosPlataforma(chatId, plataforma) {
-
   const plat = normalizarPlataforma(plataforma);
-
-
 
   const snap = await db
-
     .collection("inventario")
-
     .where("plataforma", "==", plat)
-
     .limit(500)
-
     .get();
 
-
-
   if (snap.empty) {
-
     return bot.sendMessage(
-
       chatId,
-
       `📭 *${escMD(String(plat).toUpperCase())}*\n\nNo hay correos registrados en esta plataforma.`,
-
       {
-
         parse_mode: "Markdown",
-
         reply_markup: {
-
           inline_keyboard: [[{ text: "🏠 Inicio", callback_data: "go:inicio" }]],
-
         },
-
       }
-
     );
-
   }
-
-
 
   const docs = snap.docs.map((d) => ({
-
     id: d.id,
-
     ...(d.data() || {}),
-
   }));
 
-
-
   docs.sort((a, b) => {
-
     const aCorreo = String(a.correo || "").toLowerCase();
-
     const bCorreo = String(b.correo || "").toLowerCase();
-
     return aCorreo.localeCompare(bCorreo);
-
   });
-
-
 
   let txt = `📂 *${escMD(String(plat).toUpperCase())}*\n\n`;
-
   txt += `Seleccione un correo:\n`;
 
-
-
   const kb = docs.map((item) => {
-
     const clientes = Array.isArray(item.clientes) ? item.clientes : [];
-
     const capacidad = getCapacidadCorreo(item, plat);
-
     const ocupados = clientes.length;
-
     const disponibles = Math.max(0, capacidad - ocupados);
-
     const estado = disponibles === 0 ? "LLENA" : "CON ESPACIO";
 
-
-
     return [
-
       {
-
         text: `${item.correo || "correo"} | ${ocupados}/${capacidad} | ${estado}`,
-
         callback_data: `mail_panel|${plat}|${encodeURIComponent(item.correo || "")}`,
-
       },
-
     ];
-
   });
-
-
 
   kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
 
-
-
   return bot.sendMessage(chatId, txt, {
-
     parse_mode: "Markdown",
-
     reply_markup: {
-
       inline_keyboard: kb,
-
     },
-
   });
-
 }
-
-
 
 async function mostrarMenuClientesCorreo(chatId, plataforma, correo) {
-
   const plat = normalizarPlataforma(plataforma);
-
   const mail = String(correo || "").trim().toLowerCase();
-
-
 
   return bot.sendMessage(chatId, "👥 *CLIENTES*\n\nSeleccione una opción:", {
-
     parse_mode: "Markdown",
-
     reply_markup: {
-
       inline_keyboard: [
-
         [{ text: "👥 Ver clientes", callback_data: `mail_ver_clientes|${plat}|${encodeURIComponent(mail)}` }],
-
         [{ text: "➕ Agregar cliente", callback_data: `mail_add_cliente|${plat}|${encodeURIComponent(mail)}` }],
-
         [{ text: "➖ Quitar cliente", callback_data: `mail_del_cliente|${plat}|${encodeURIComponent(mail)}` }],
-
         [{ text: "🔐 Editar PIN", callback_data: `mail_edit_pin|${plat}|${encodeURIComponent(mail)}` }],
-
         [{ text: "✏️ Editar clave del correo", callback_data: `mail_edit_clave|${plat}|${encodeURIComponent(mail)}` }],
-
         [{ text: "⬅️ Volver al correo", callback_data: `mail_panel|${plat}|${encodeURIComponent(mail)}` }],
-
         [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
-
       ],
-
     },
-
   });
-
 }
-
-
 
 async function mostrarMenuCodigosNetflix(chatId, plataforma, correo) {
-
   return responderMenuCodigosNetflix(chatId, plataforma, correo);
-
 }
-
-
 
 async function mostrarPanelCorreo(chatId, plataforma, correo) {
-
   const plat = normalizarPlataforma(plataforma);
-
   const mail = String(correo || "").trim().toLowerCase();
 
-
-
   const found = await buscarCorreoInventarioPorPlatCorreo(plat, mail);
-
   if (!found) {
-
     return bot.sendMessage(chatId, "❌ Este correo no existe.");
-
   }
-
-
 
   const data = found.data || {};
-
   const clientes = Array.isArray(data.clientes) ? data.clientes : [];
-
   const capacidad = getCapacidadCorreo(data, plat);
 
-
-
   const ocupados = clientes.length;
-
   const disponibles = Math.max(0, capacidad - ocupados);
-
   const estado = disponibles === 0 ? "LLENA" : "CON ESPACIO";
 
-
-
   if (
-
     Number(data.disp || 0) !== disponibles ||
-
     String(data.estado || "") !== (disponibles === 0 ? "llena" : "activa") ||
-
     Number(data.ocupados || 0) !== ocupados ||
-
     Number(data.disponibles || 0) !== disponibles ||
-
     Number(data.capacidad || 0) !== capacidad
-
   ) {
-
     await found.ref.set(
-
       {
-
         ocupados,
-
         disponibles,
-
         disp: disponibles,
-
         estado: disponibles === 0 ? "llena" : "activa",
-
         capacidad,
-
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-
       },
-
       { merge: true }
-
     );
-
   }
-
-
 
   let txt = "";
-
   txt += `📧 *${escMD(mail)}*\n`;
-
   txt += `${escMD(String(plat).toUpperCase())}\n\n`;
-
   txt += `👤 *Ocupados:* ${ocupados}/${capacidad}\n`;
-
   txt += `✅ *Disponibles:* ${disponibles}\n`;
-
   txt += `📊 *Estado:* ${escMD(estado)}`;
 
-
-
   const kb = [
-
     [{ text: "👥 CLIENTES", callback_data: `mail_menu_clientes|${plat}|${encodeURIComponent(mail)}` }],
-
   ];
 
-
-
   if (plat === "netflix" || plat === "vipnetflix") {
-
     kb.push([{ text: "🎬 CÓDIGOS NETFLIX", callback_data: `mail_menu_codigos|${plat}|${encodeURIComponent(mail)}` }]);
-
   }
-
-
 
   kb.push([{ text: "🗑️ Borrar correo", callback_data: `mail_delete|${plat}|${encodeURIComponent(mail)}` }]);
-
   kb.push([{ text: "⬅️ Volver Inventario", callback_data: `inv:${plat}:0` }]);
-
   kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
 
-
-
   return bot.sendMessage(chatId, txt, {
-
     parse_mode: "Markdown",
-
     reply_markup: {
-
       inline_keyboard: kb,
-
     },
-
   });
-
 }
 
-
-
 // ===============================
-
 // WIZARD NUEVO CLIENTE
-
 // ===============================
-
 async function wizardStart(chatId) {
-
   wset(chatId, {
-
     step: 1,
-
     data: {},
-
     clientId: null,
-
     servStep: 0,
-
     servicio: {},
-
   });
-
-
 
   return bot.sendMessage(chatId, "👥 *NUEVO CLIENTE*\n\n(1/3) Escriba *Nombre*:", {
-
     parse_mode: "Markdown",
-
   });
-
 }
 
-
-
 async function wizardNext(chatId, text) {
-
   const st = w(chatId);
-
   if (!st) return;
 
-
-
   const t = String(text || "").trim();
-
   const d = st.data || {};
 
-
-
   if (st.step === 1) {
-
     d.nombrePerfil = t;
-
     st.data = d;
-
     st.step = 2;
-
     wset(chatId, st);
-
     return bot.sendMessage(chatId, "(2/3) Escriba *Teléfono*:", { parse_mode: "Markdown" });
-
   }
-
-
 
   if (st.step === 2) {
-
     d.telefono = t;
-
     st.data = d;
-
     st.step = 3;
-
     wset(chatId, st);
-
     return bot.sendMessage(chatId, "(3/3) Escriba *Vendedor*:", { parse_mode: "Markdown" });
-
   }
-
-
 
   if (st.step === 3) {
-
     d.vendedor = t;
 
-
-
     const dup = await clienteDuplicado(d.nombrePerfil || "", d.telefono || "");
-
     if (dup) {
-
       wclear(chatId);
-
       return bot.sendMessage(
-
         chatId,
-
         `⚠️ Cliente duplicado detectado.\nYa existe:\n${dup.nombrePerfil || "-"} | ${dup.telefono || "-"}`
-
       );
-
     }
-
-
 
     const clientRef = db.collection("clientes").doc();
-
     st.clientId = clientRef.id;
 
-
-
     await clientRef.set(
-
       {
-
         nombrePerfil: d.nombrePerfil,
-
         telefono: String(d.telefono || "").trim(),
-
         vendedor: d.vendedor,
-
         servicios: [],
-
         nombre_norm: normTxt(d.nombrePerfil),
-
         telefono_norm: onlyDigits(d.telefono),
-
         vendedor_norm: normTxt(d.vendedor),
-
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
-
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-
       },
-
       { merge: true }
-
     );
-
-
 
     st.step = 4;
-
     st.servStep = 1;
-
     st.servicio = {};
-
     st.data = d;
-
     wset(chatId, st);
 
-
-
     return bot.sendMessage(
-
       chatId,
-
       "✅ Cliente creado.\n\n📌 Ahora agreguemos el servicio.\n(Servicio 1/5) Plataforma:",
-
       { reply_markup: { inline_keyboard: kbPlataformasWiz("wiz:plat", st.clientId) } }
-
     );
-
   }
 
-
-
   if (st.step === 4) {
-
     const s = st.servicio || {};
 
-
-
     if (st.servStep === 1) {
-
       return bot.sendMessage(chatId, "📌 Seleccione la plataforma con los botones.");
-
     }
-
-
 
     if (st.servStep === 2) {
-
       if (!t.includes("@")) return bot.sendMessage(chatId, "⚠️ Correo inválido. Escriba el correo:");
-
       s.correo = t.toLowerCase();
-
       st.servStep = 3;
-
       st.servicio = s;
-
       wset(chatId, st);
-
       return bot.sendMessage(chatId, "(Servicio 3/5) Pin/Clave:");
-
     }
-
-
 
     if (st.servStep === 3) {
-
       s.pin = t;
-
       st.servStep = 4;
-
       st.servicio = s;
-
       wset(chatId, st);
-
       return bot.sendMessage(chatId, "(Servicio 4/5) Precio (solo número, Lps):");
-
     }
-
-
 
     if (st.servStep === 4) {
-
       const n = Number(t);
-
       if (!Number.isFinite(n) || n <= 0) {
-
         return bot.sendMessage(chatId, "⚠️ Precio inválido. Escriba solo número:");
-
       }
-
       s.precio = n;
-
       st.servStep = 5;
-
       st.servicio = s;
-
       wset(chatId, st);
-
       return bot.sendMessage(chatId, "(Servicio 5/5) Fecha renovación (dd/mm/yyyy):");
-
     }
 
-
-
     if (st.servStep === 5) {
-
       if (!isFechaDMY(t)) return bot.sendMessage(chatId, "⚠️ Formato inválido. Use dd/mm/yyyy:");
-
-
 
       s.fechaRenovacion = String(t).trim();
 
-
-
       const { cliente, servicios } = await addServicioTx(String(st.clientId), {
-
         plataforma: String(s.plataforma || "").trim(),
-
         correo: String(s.correo || "").trim().toLowerCase(),
-
         pin: String(s.pin || "").trim(),
-
         precio: Number(s.precio || 0),
-
         fechaRenovacion: s.fechaRenovacion,
-
       });
 
-
-
       st.servicio = {};
-
       st.servStep = 1;
-
       st.step = 4;
-
       wset(chatId, st);
-
-
 
       const ordenados = serviciosOrdenados(servicios);
 
-
-
       let resumen =
-
         `✅ Servicio agregado.\n¿Desea agregar otra plataforma a este cliente?\n\n` +
-
         `Cliente:\n${cliente?.nombrePerfil || st.data?.nombrePerfil || "-"}\n` +
-
         `${cliente?.telefono || st.data?.telefono || "-"}\n` +
-
         `${cliente?.vendedor || st.data?.vendedor || "-"}\n\n` +
-
         `SERVICIOS (ordenados por fecha):\n` +
-
         ordenados
-
           .map((x, i) => `${i + 1}) ${x.plataforma} — ${x.correo} — ${x.precio} Lps — Renueva: ${x.fechaRenovacion}`)
-
           .join("\n");
 
-
-
       const kb = {
-
         inline_keyboard: [
-
           [{ text: "➕ Agregar otra", callback_data: `wiz:addmore:${st.clientId}` }],
-
           [{ text: "✅ Finalizar", callback_data: `wiz:finish:${st.clientId}` }],
-
         ],
-
       };
 
-
-
       if (resumen.length > 3800) {
-
         await enviarTxtComoArchivo(chatId, resumen, `resumen_servicios_${Date.now()}.txt`);
-
         return bot.sendMessage(chatId, "📄 Te mandé el resumen en TXT.\n¿Deseas agregar otra plataforma?", {
-
           reply_markup: kb,
-
         });
-
       }
 
-
-
       return bot.sendMessage(chatId, resumen, { reply_markup: kb });
-
     }
-
   }
-
 }
 
-
-
 // ===============================
-
 // BÚSQUEDA CLIENTES
-
 // ===============================
-
 async function buscarPorTelefonoTodos(telInput) {
-
   const tnorm = onlyDigits(telInput);
-
   if (!tnorm) return [];
 
-
-
   const all = [];
-
   const seen = new Set();
 
-
-
   const snapNorm = await db.collection("clientes").where("telefono_norm", "==", tnorm).limit(50).get();
-
   snapNorm.forEach((d) => {
-
     if (!seen.has(d.id)) {
-
       seen.add(d.id);
-
       all.push({ id: d.id, ...d.data() });
-
     }
-
   });
-
-
 
   const snapTel = await db.collection("clientes").where("telefono", "==", tnorm).limit(50).get();
-
   snapTel.forEach((d) => {
-
     if (!seen.has(d.id)) {
-
       seen.add(d.id);
-
       all.push({ id: d.id, ...d.data() });
-
     }
-
   });
 
-
-
   const legacy = await db.collection("clientes").doc(tnorm).get();
-
   if (legacy.exists && !seen.has(legacy.id)) {
-
     all.push({ id: legacy.id, ...legacy.data() });
-
   }
-
-
 
   if (all.length) return all;
 
-
-
   const scan = await db.collection("clientes").limit(5000).get();
-
   scan.forEach((doc) => {
-
     const c = doc.data() || {};
-
     const tel = onlyDigits(c.telefono || "");
-
     if (tel.includes(tnorm) && !seen.has(doc.id)) {
-
       seen.add(doc.id);
-
       all.push({ id: doc.id, ...c });
-
     }
-
   });
 
-
-
   return all.slice(0, 50);
-
 }
 
-
-
 async function buscarClienteRobusto(queryLower) {
-
   const qRaw = String(queryLower || "").trim();
-
   const q = normTxt(qRaw);
-
   const qTel = onlyDigits(qRaw);
-
-
 
   if (qTel && qTel.length >= 7) return await buscarPorTelefonoTodos(qTel);
 
-
-
   try {
-
     const snapName = await db
-
       .collection("clientes")
-
       .orderBy("nombre_norm")
-
       .startAt(q)
-
       .endAt(q + "\uf8ff")
-
       .limit(25)
-
       .get();
 
-
-
     if (!snapName.empty) return snapName.docs.map((d) => ({ id: d.id, ...d.data() }));
-
   } catch (e) {}
 
-
-
   const snap = await db.collection("clientes").limit(5000).get();
-
   const encontrados = [];
-
   snap.forEach((doc) => {
-
     const c = doc.data() || {};
-
     const nombre = normTxt(c.nombrePerfil || "");
-
     const vendedor = normTxt(c.vendedor || "");
-
     const tel = onlyDigits(c.telefono || "");
 
-
-
     if (nombre.includes(q) || vendedor.includes(q) || (qTel && tel.includes(qTel))) {
-
       encontrados.push({ id: doc.id, ...c });
-
     }
-
   });
 
-
-
   return encontrados.slice(0, 50);
-
 }
 
-
-
 async function enviarListaResultadosClientes(chatId, resultados) {
-
   const dedup = dedupeClientes(resultados);
-
-
 
   let txt = `📱 *RESULTADOS*\nSe encontraron *${dedup.length}* clientes.\n\n`;
 
-
-
   dedup.forEach((c, i) => {
-
     txt += `*${i + 1})* ${escMD(c.nombrePerfil || "-")} | ${escMD(c.telefono || "-")} | ${escMD(c.vendedor || "-")}\n`;
-
   });
 
-
-
   if (txt.length > 3800) {
-
     return enviarTxtComoArchivo(chatId, txt, `clientes_resultados_${Date.now()}.txt`);
-
   }
-
-
 
   const kb = dedup.map((c, i) => [
-
     { text: `👤 ${i + 1}) ${c.nombrePerfil || "-"} (${c.telefono || "-"})`, callback_data: `cli:view:${c.id}` },
-
   ]);
-
   kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
 
-
-
   return bot.sendMessage(chatId, txt, {
-
     parse_mode: "Markdown",
-
     reply_markup: { inline_keyboard: kb },
-
   });
-
 }
 
-
-
 // ===============================
-
 // TXT CLIENTES
-
 // ===============================
-
 async function reporteClientesTXTGeneral(chatId) {
-
   const snap = await db.collection("clientes").limit(5000).get();
-
   if (snap.empty) return bot.sendMessage(chatId, "⚠️ No hay clientes.");
 
-
-
   const arr = snap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
-
   arr.sort((a, b) => normTxt(a.nombrePerfil).localeCompare(normTxt(b.nombrePerfil)));
 
-
-
   let body = "CLIENTES (NOMBRE | TELEFONO)\n\n";
-
   arr.forEach((c, i) => {
-
     body += `${String(i + 1).padStart(3, "0")}) ${stripAcentos(c.nombrePerfil || "-")} | ${onlyDigits(c.telefono || "")}\n`;
-
   });
-
-
 
   body += `\n--------------------\nTOTAL CLIENTES: ${arr.length}\n`;
-
   return enviarTxtComoArchivo(chatId, body, `clientes_${Date.now()}.txt`);
-
 }
-
-
 
 async function reporteClientesSplitPorVendedorTXT(chatId) {
-
   const snap = await db.collection("clientes").limit(5000).get();
-
   if (snap.empty) return bot.sendMessage(chatId, "⚠️ No hay clientes.");
 
-
-
   const arr = snap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
-
   const map = new Map();
 
-
-
   for (const c of arr) {
-
     const vend = String(c.vendedor || "SIN VENDEDOR").trim() || "SIN VENDEDOR";
-
     if (!map.has(vend)) map.set(vend, []);
-
     map.get(vend).push(c);
-
   }
-
-
 
   const vendedores = Array.from(map.keys()).sort((a, b) => normTxt(a).localeCompare(normTxt(b)));
-
   await bot.sendMessage(chatId, `📄 Generando ${vendedores.length} TXT (1 por vendedor)...`);
 
-
-
   for (const vend of vendedores) {
-
     const lista = map.get(vend) || [];
-
     lista.sort((a, b) => normTxt(a.nombrePerfil).localeCompare(normTxt(b.nombrePerfil)));
 
-
-
     let body = `VENDEDOR: ${stripAcentos(vend)}\n`;
-
     body += `TOTAL CLIENTES: ${lista.length}\n\n`;
-
     body += "CLIENTES (NOMBRE | TELEFONO)\n\n";
 
-
-
     lista.forEach((c, i) => {
-
       body += `${String(i + 1).padStart(3, "0")}) ${stripAcentos(c.nombrePerfil || "-")} | ${onlyDigits(c.telefono || "")}\n`;
-
     });
-
-
 
     const fileSafe = stripAcentos(vend).replace(/[^\w\-]+/g, "_").slice(0, 40) || "VENDEDOR";
-
     await enviarTxtComoArchivo(chatId, body, `clientes_${fileSafe}_${Date.now()}.txt`);
-
   }
-
-
 
   return bot.sendMessage(chatId, "✅ Listo: enviados los TXT por vendedor.");
-
 }
-
-
 
 async function obtenerClientesPorVendedor(vendedorNombre) {
-
   const snap = await db.collection("clientes").limit(5000).get();
-
   const out = [];
 
-
-
   snap.forEach((doc) => {
-
     const c = doc.data() || {};
-
     if (normTxt(c.vendedor || "") === normTxt(vendedorNombre || "")) out.push({ id: doc.id, ...c });
-
   });
-
-
 
   out.sort((a, b) => normTxt(a.nombrePerfil).localeCompare(normTxt(b.nombrePerfil)));
-
   return out;
-
 }
-
-
 
 async function enviarMisClientes(chatId, vendedorNombre) {
-
   const arr = await obtenerClientesPorVendedor(vendedorNombre);
 
-
-
   if (!arr.length) {
-
     return bot.sendMessage(chatId, `⚠️ No hay clientes para ${vendedorNombre}.`);
-
   }
-
-
 
   let txt = `👥 *MIS CLIENTES — ${escMD(vendedorNombre)}*\n\n`;
-
   arr.forEach((c, i) => {
-
     const servicios = Array.isArray(c.servicios) ? c.servicios.length : 0;
-
     txt += `${i + 1}) ${escMD(c.nombrePerfil || "-")} | ${escMD(c.telefono || "-")} | Servicios: ${servicios}\n`;
-
   });
-
-
 
   if (txt.length > 3800) {
-
     return enviarTxtComoArchivo(chatId, txt, `mis_clientes_${Date.now()}.txt`);
-
   }
-
-
 
   return bot.sendMessage(chatId, txt, { parse_mode: "Markdown" });
-
 }
-
-
 
 async function enviarMisClientesTXT(chatId, vendedorNombre) {
-
   const arr = await obtenerClientesPorVendedor(vendedorNombre);
 
-
-
   let body = `MIS CLIENTES - ${stripAcentos(vendedorNombre)}\n\n`;
-
   if (!arr.length) {
-
     body += "SIN CLIENTES\n";
-
   } else {
-
     arr.forEach((c, i) => {
-
       const servicios = Array.isArray(c.servicios) ? c.servicios.length : 0;
-
       body += `${String(i + 1).padStart(3, "0")}) ${stripAcentos(c.nombrePerfil || "-")} | ${onlyDigits(c.telefono || "")} | SERVICIOS: ${servicios}\n`;
-
     });
-
     body += `\n--------------------\nTOTAL CLIENTES: ${arr.length}\n`;
-
   }
 
-
-
   return enviarTxtComoArchivo(chatId, body, `mis_clientes_${Date.now()}.txt`);
-
 }
 
-
-
 // ===============================
-
 // RENOVACIONES
-
 // ===============================
-
 async function obtenerRenovacionesPorFecha(fechaDMY, vendedorOpt) {
-
   const snap = await db.collection("clientes").limit(5000).get();
-
   const out = [];
 
-
-
   snap.forEach((doc) => {
-
     const c = doc.data() || {};
-
     const vendedor = String(c.vendedor || "").trim();
-
     const servicios = Array.isArray(c.servicios) ? c.servicios : [];
 
-
-
     for (const s of servicios) {
-
       if (String(s.fechaRenovacion || "") === fechaDMY) {
-
         const okVend = !vendedorOpt || normTxt(vendedor) === normTxt(vendedorOpt);
-
         if (okVend) {
-
           out.push({
-
             nombrePerfil: c.nombrePerfil || "-",
-
             plataforma: s.plataforma || "-",
-
             precio: Number(s.precio || 0),
-
             telefono: c.telefono || "-",
-
             vendedor: vendedor || "-",
-
             fechaRenovacion: fechaDMY,
-
           });
-
         }
-
       }
-
     }
-
   });
-
-
 
   out.sort((a, b) => {
-
     const va = normTxt(a.vendedor);
-
     const vb = normTxt(b.vendedor);
-
     if (va !== vb) return va.localeCompare(vb);
-
     return normTxt(a.nombrePerfil).localeCompare(normTxt(b.nombrePerfil));
-
   });
 
-
-
   return out;
-
 }
 
-
-
 function renovacionesTexto(list, fechaDMY, vendedorOpt) {
-
   const titulo = vendedorOpt
-
     ? `RENOVACIONES ${fechaDMY} — ${vendedorOpt}`
-
     : `RENOVACIONES ${fechaDMY} — GENERAL`;
-
-
 
   let t = `📅 *${escMD(titulo)}*\n\n`;
 
-
-
   if (!list || list.length === 0) {
-
     t += "⚠️ No hay renovaciones.\n";
-
     return t;
-
   }
 
-
-
   let suma = 0;
-
   list.forEach((x, i) => {
-
     suma += Number(x.precio || 0);
-
     t += `${i + 1}) ${escMD(x.nombrePerfil)} — ${escMD(x.plataforma)} — ${x.precio} Lps — ${escMD(x.telefono)} — ${escMD(x.vendedor)}\n`;
-
   });
 
-
-
   t += `\n━━━━━━━━━━━━━━\n`;
-
   t += `Clientes: ${list.length}\n`;
-
   t += `Total a cobrar: ${suma} Lps\n`;
-
   return t;
-
 }
 
-
-
 async function enviarTXT(chatId, list, fechaDMY, vendedorOpt) {
-
   const titulo = vendedorOpt
-
     ? `renovaciones_${stripAcentos(vendedorOpt)}_${fechaDMY}`
-
     : `renovaciones_general_${fechaDMY}`;
-
-
 
   const fileSafe = titulo.replace(/[^\w\-]+/g, "_");
 
-
-
   let body = vendedorOpt
-
     ? `RENOVACIONES ${fechaDMY} - ${stripAcentos(vendedorOpt)}\n\n`
-
     : `RENOVACIONES ${fechaDMY} - GENERAL\n\n`;
 
-
-
   if (!list || list.length === 0) {
-
     body += "SIN RENOVACIONES\n";
-
   } else {
-
     let suma = 0;
-
     list.forEach((x, i) => {
-
       suma += Number(x.precio || 0);
-
       body += `${String(i + 1).padStart(2, "0")}) ${stripAcentos(x.nombrePerfil)} | ${x.plataforma} | ${x.precio} Lps | ${x.telefono} | ${stripAcentos(x.vendedor)}\n`;
-
     });
-
     body += `\n--------------------\nCLIENTES: ${list.length}\nTOTAL: ${suma} Lps\n`;
-
   }
-
-
 
   return enviarTxtComoArchivo(chatId, body, `${fileSafe}.txt`);
-
 }
-
-
 
 async function enviarTXTATodosHoy(superChatId) {
-
   const fecha = hoyDMY();
-
   const snap = await db.collection("revendedores").get();
-
   if (snap.empty) return bot.sendMessage(superChatId, "⚠️ No hay revendedores.");
 
-
-
   let enviados = 0;
-
   let saltados = 0;
 
-
-
   for (const d of snap.docs) {
-
     const rev = normalizeRevendedorDoc(d);
 
-
-
     if (!rev.activo || !rev.telegramId || !rev.nombre) {
-
       saltados++;
-
       continue;
-
     }
-
-
 
     const list = await obtenerRenovacionesPorFecha(fecha, rev.nombre);
-
     await enviarTXT(rev.telegramId, list, fecha, rev.nombre);
-
     enviados++;
-
   }
-
-
 
   return bot.sendMessage(
-
     superChatId,
-
     `✅ Enviado TXT HOY (${fecha})\n• Revendedores enviados: ${enviados}\n• Saltados: ${saltados}`
-
   );
-
 }
 
-
-
 // ===============================
-
 // HELPERS CODIGOS NETFLIX
-
 // ===============================
-
 function tsToMillisNetflix(v) {
-
   try {
-
     if (!v) return 0;
-
     if (typeof v?.toDate === "function") return v.toDate().getTime();
-
     if (v instanceof Date) return v.getTime();
-
     const t = new Date(v).getTime();
-
     return Number.isFinite(t) ? t : 0;
-
   } catch (_) {
-
     return 0;
-
   }
-
 }
-
-
 
 async function obtenerUltimoCodigoNetflix(correo, tipo) {
-
   const mail = String(correo || "").trim().toLowerCase();
-
   if (!mail || !tipo) return null;
 
-
-
   let snap = null;
 
-
-
   try {
-
     snap = await db
-
       .collection("codigos_netflix")
-
       .where("correo", "==", mail)
-
       .where("tipo", "==", tipo)
-
       .orderBy("fecha", "desc")
-
       .limit(1)
-
       .get();
-
   } catch (e) {
-
     const alt = await db
-
       .collection("codigos_netflix")
-
       .where("correo", "==", mail)
-
       .where("tipo", "==", tipo)
-
       .limit(50)
-
       .get();
-
-
 
     const docs = alt.docs
-
       .map((d) => ({ id: d.id, ...(d.data() || {}) }))
-
       .sort((a, b) => {
-
         const fa = tsToMillisNetflix(a.fecha || a.createdAt || a.updatedAt);
-
         const fb = tsToMillisNetflix(b.fecha || b.createdAt || b.updatedAt);
-
         return fb - fa;
-
       });
 
-
-
     return docs.length ? docs[0] : null;
-
   }
 
-
-
   if (snap.empty) return null;
-
   const d = snap.docs[0];
-
   return { id: d.id, ...(d.data() || {}) };
-
 }
-
-
 
 async function obtenerUltimoCodigoNetflixGeneral(correo) {
-
   const mail = String(correo || "").trim().toLowerCase();
-
   if (!mail) return null;
-
-
 
   let snap = null;
 
-
-
   try {
-
     snap = await db
-
       .collection("codigos_netflix")
-
       .where("correo", "==", mail)
-
       .orderBy("fecha", "desc")
-
       .limit(1)
-
       .get();
-
   } catch (e) {
-
     const alt = await db
-
       .collection("codigos_netflix")
-
       .where("correo", "==", mail)
-
       .limit(50)
-
       .get();
-
-
 
     const docs = alt.docs
-
       .map((d) => ({ id: d.id, ...(d.data() || {}) }))
-
       .sort((a, b) => {
-
         const fa = tsToMillisNetflix(a.fecha || a.createdAt || a.updatedAt);
-
         const fb = tsToMillisNetflix(b.fecha || b.createdAt || b.updatedAt);
-
         return fb - fa;
-
       });
 
-
-
     return docs.length ? docs[0] : null;
-
   }
 
-
-
   if (snap.empty) return null;
-
   const d = snap.docs[0];
-
   return { id: d.id, ...(d.data() || {}) };
-
 }
-
-
 
 function labelTipoCodigoNetflix(tipo = "") {
-
   const t = String(tipo || "").toLowerCase();
-
   if (t === "signin") return "🔐 Inicio sesión";
-
   if (t === "temporal") return "⏳ Código temporal";
-
   if (t === "hogar") return "🏠 Código hogar";
-
   if (t === "verification") return "✅ Verificación";
-
   return "📩 Código";
-
 }
 
-
-
 function fmtFechaCodigoNetflix(fecha) {
-
   if (!fecha) return "-";
 
-
-
   try {
-
     let dt = null;
 
-
-
     if (typeof fecha?.toDate === "function") {
-
       dt = fecha.toDate();
-
     } else if (fecha instanceof Date) {
-
       dt = fecha;
-
     } else {
-
       dt = new Date(fecha);
-
     }
-
-
 
     if (isNaN(dt.getTime())) return String(fecha);
 
-
-
     return new Intl.DateTimeFormat("es-HN", {
-
       timeZone: TZ,
-
       year: "numeric",
-
       month: "2-digit",
-
       day: "2-digit",
-
       hour: "2-digit",
-
       minute: "2-digit",
-
       second: "2-digit",
-
       hour12: false,
-
     }).format(dt);
-
   } catch (e) {
-
     return String(fecha);
-
   }
-
 }
-
-
 
 async function marcarCodigoNetflixUsado(docId) {
-
   if (!docId) return;
-
   try {
-
     await db.collection("codigos_netflix").doc(String(docId)).set(
-
       {
-
         usado: true,
-
         usadoAt: admin.firestore.FieldValue.serverTimestamp(),
-
       },
-
       { merge: true }
-
     );
-
   } catch (e) {
-
     logErr("❌ Error marcando codigo usado:", e?.message || e);
-
   }
-
 }
 
-
-
 async function responderCodigoNetflix(chatId, correo, tipo) {
-
   const mail = String(correo || "").trim().toLowerCase();
 
-
-
   let data = null;
-
   if (tipo === "ultimo") {
-
     data = await obtenerUltimoCodigoNetflixGeneral(mail);
-
   } else {
-
     data = await obtenerUltimoCodigoNetflix(mail, tipo);
-
   }
-
-
 
   if (!data) {
-
     return bot.sendMessage(
-
       chatId,
-
       `🎬 *CÓDIGOS NETFLIX*\n\n📧 *${escMD(mail)}*\n🧩 *Tipo:* ${escMD(tipo === "ultimo" ? "último disponible" : tipo)}\n\n⚠️ No encontré códigos disponibles.`,
-
       { parse_mode: "Markdown" }
-
     );
-
   }
 
-
-
   const tipoReal = String(data.tipo || tipo || "ultimo").toLowerCase();
-
   const codigo = String(data.codigo || "").trim();
-
   const fuente = String(data.fuente || "-").trim();
-
   const fechaFmt = fmtFechaCodigoNetflix(data.fecha || data.createdAt || data.updatedAt);
-
   const usado = data.usado === true ? "Sí" : "No";
 
-
-
   let txt = `🎬 *CÓDIGOS NETFLIX*\n\n`;
-
   txt += `📧 *${escMD(mail)}*\n`;
-
   txt += `🧩 *Tipo:* ${escMD(labelTipoCodigoNetflix(tipoReal))}\n`;
-
   txt += `🔢 *Código:* \`${codigo || "-"}\`\n`;
-
   txt += `🕒 *Fecha:* ${escMD(fechaFmt)}\n`;
-
   txt += `📥 *Fuente:* ${escMD(fuente || "-")}\n`;
-
   txt += `✅ *Usado:* ${escMD(usado)}`;
-
-
 
   await bot.sendMessage(chatId, txt, { parse_mode: "Markdown" });
 
-
-
   if (data.id) {
-
     await marcarCodigoNetflixUsado(data.id);
-
   }
-
 }
-
-
 
 async function responderMenuCodigosNetflix(chatId, plataforma, correo) {
-
   const plat = normalizarPlataforma(plataforma);
-
   const mail = String(correo || "").trim().toLowerCase();
 
-
-
   if (plat !== "netflix" && plat !== "vipnetflix") {
-
     return bot.sendMessage(chatId, "⚠️ Este menú de códigos solo aplica para Netflix.");
-
   }
 
-
-
   return bot.sendMessage(chatId, "🎬 *CÓDIGOS NETFLIX*\n\nSeleccione una opción:", {
-
     parse_mode: "Markdown",
-
     reply_markup: {
-
       inline_keyboard: [
-
         [{ text: "📩 Último código", callback_data: `nf_code|ultimo|${encodeURIComponent(mail)}|${plat}` }],
-
         [{ text: "🔐 Inicio sesión", callback_data: `nf_code|signin|${encodeURIComponent(mail)}|${plat}` }],
-
         [{ text: "⏳ Código temporal", callback_data: `nf_code|temporal|${encodeURIComponent(mail)}|${plat}` }],
-
         [{ text: "🏠 Código hogar", callback_data: `nf_code|hogar|${encodeURIComponent(mail)}|${plat}` }],
-
         [{ text: "✅ Verificación", callback_data: `nf_code|verification|${encodeURIComponent(mail)}|${plat}` }],
-
         [{ text: "⬅️ Volver al correo", callback_data: `mail_panel|${plat}|${encodeURIComponent(mail)}` }],
-
         [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
-
       ],
-
     },
-
   });
-
 }
-
 // ===============================
 // COMANDOS CLIENTES
 // ===============================
@@ -3876,6 +3022,81 @@ bot.on("callback_query", async (q) => {
       if (data === "menu:inventario") return menuInventario(chatId);
       if (data === "menu:clientes") return menuClientes(chatId);
       if (data === "menu:pagos") return menuPagos(chatId);
+
+      // === INICIO BOTONES FINANZAS (3.2 V12.1 ACTUALIZADO) ===
+      if (data === "fin:ingreso:start") {
+        pending.set(String(chatId), { mode: "finIngresoMonto" });
+        return upsertPanel(chatId, "➕ *REGISTRAR INGRESO*\n\n¿Cuál es el monto en Lps? (Solo números):", {
+          inline_keyboard: [[{ text: "⬅️ Cancelar", callback_data: "menu:pagos" }]]
+        }, "Markdown");
+      }
+
+      if (data.startsWith("fin:ingreso:banco:")) {
+        const banco = data.split(":")[3];
+        const p = pending.get(String(chatId));
+        if (!p || p.mode !== "finIngresoBanco") return;
+        p.banco = banco;
+        p.mode = "finElegirFecha"; 
+        pending.set(String(chatId), p);
+
+        return upsertPanel(chatId, `🏦 Banco: *${banco}*\n\n¿Para qué fecha es este ingreso?`, {
+          inline_keyboard: [
+            [{ text: "📅 Hoy", callback_data: "fin:fecha:hoy" }],
+            [{ text: "⏳ Fecha Anterior", callback_data: "fin:fecha:manual" }],
+            [{ text: "⬅️ Cancelar", callback_data: "menu:pagos" }]
+          ]
+        }, "Markdown");
+      }
+
+      if (data === "fin:egreso:start") {
+        pending.set(String(chatId), { mode: "finEgresoMonto" });
+        return upsertPanel(chatId, "➖ *REGISTRAR EGRESO*\n\n¿Cuál es el monto del gasto en Lps?:", {
+          inline_keyboard: [[{ text: "⬅️ Cancelar", callback_data: "menu:pagos" }]]
+        }, "Markdown");
+      }
+
+      if (data.startsWith("fin:egreso:motivo:")) {
+        const motivo = data.split(":")[3];
+        const p = pending.get(String(chatId));
+        if (!p || p.mode !== "finEgresoMotivo") return;
+        p.motivo = motivo;
+        p.mode = "finElegirFecha"; 
+        pending.set(String(chatId), p);
+
+        return upsertPanel(chatId, `🛠️ Motivo: *${motivo}*\n\n¿Para qué fecha es este gasto?`, {
+          inline_keyboard: [
+            [{ text: "📅 Hoy", callback_data: "fin:fecha:hoy" }],
+            [{ text: "⏳ Fecha Anterior", callback_data: "fin:fecha:manual" }],
+            [{ text: "⬅️ Cancelar", callback_data: "menu:pagos" }]
+          ]
+        }, "Markdown");
+      }
+
+      if (data === "fin:fecha:hoy") {
+        const p = pending.get(String(chatId));
+        if (!p) return;
+        p.fecha = null; 
+        p.mode = p.banco ? "finIngresoCliente" : "finEgresoDetalle";
+        pending.set(String(chatId), p);
+        const msg = p.banco ? "¿Vincular a cliente? (Nombre o NO)" : "Escriba los detalles del gasto:";
+        return bot.sendMessage(chatId, msg);
+      }
+
+      if (data === "fin:fecha:manual") {
+        const p = pending.get(String(chatId));
+        if (!p) return;
+        p.mode = "finEsperarFechaManual";
+        pending.set(String(chatId), p);
+        return bot.sendMessage(chatId, "🗓️ Escriba la fecha en formato: *dd/mm/yyyy*\n(Ejemplo: 15/01/2026)", { parse_mode: "Markdown" });
+      }
+
+      if (data === "fin:resumen:hoy") {
+        const res = await generarResumenFinancieroHoy();
+        if (!res.exito) return bot.sendMessage(chatId, res.msg, { parse_mode: "Markdown" });
+        return bot.sendMessage(chatId, res.texto, { parse_mode: "Markdown" });
+      }
+      // === FIN BOTONES FINANZAS ===
+
       if (data === "menu:renovaciones") return menuRenovaciones(chatId, userId);
 
       if (data === "menu:buscar") {
@@ -3936,7 +3157,7 @@ bot.on("callback_query", async (q) => {
         return upsertPanel(
           chatId,
           `✏️ *Editar clave*\n📌 ${String(plat).toUpperCase()}\n📧 ${escMD(correo)}\n\nEscriba la nueva clave:`,
-          { inline_keyboard: [[{ text: "↩️ Cancelar", callback_data: `inv:menu:cancel:${plat}:${encodeURIComponent(correo)}` }]] },
+          { inline_keyboard: [[{ text: "⬅️ Cancelar", callback_data: `inv:menu:cancel:${plat}:${encodeURIComponent(correo)}` }]] },
           "Markdown"
         );
       }
@@ -4913,6 +4134,55 @@ bot.on("message", async (msg) => {
       const p = pending.get(String(chatId));
       const t = String(text || "").trim();
 
+      // === INICIO WIZARD FINANZAS (3.3 V12.1 ACTUALIZADO) ===
+      if (p.mode === "finIngresoMonto") {
+        const monto = Number(t);
+        if (isNaN(monto) || monto <= 0) return bot.sendMessage(chatId, "⚠️ Monto inválido. Escriba solo números:");
+        pending.set(String(chatId), { mode: "finIngresoBanco", monto });
+        const kb = BANCOS.map(b => [{ text: `🏦 ${b}`, callback_data: `fin:ingreso:banco:${b}` }]);
+        kb.push([{ text: "⬅️ Cancelar", callback_data: "menu:pagos" }]);
+        return bot.sendMessage(chatId, "💵 *Seleccione el banco:*", {
+          parse_mode: "Markdown", reply_markup: { inline_keyboard: kb }
+        });
+      }
+
+      if (p.mode === "finEsperarFechaManual") {
+        if (!isFechaDMY(t)) return bot.sendMessage(chatId, "⚠️ Formato inválido. Use dd/mm/yyyy (Ej: 01/01/2026):");
+        p.fecha = t;
+        p.mode = p.banco ? "finIngresoCliente" : "finEgresoDetalle"; 
+        pending.set(String(chatId), p);
+        const msg = p.banco ? "✅ Fecha capturada.\n\n¿Vincular a cliente? (Escriba nombre o NO):" : "✅ Fecha capturada.\n\nEscriba los detalles del gasto:";
+        return bot.sendMessage(chatId, msg);
+      }
+
+      if (p.mode === "finIngresoCliente") {
+        let nota = "Ingreso sin vincular";
+        if (t.toUpperCase() !== "NO") nota = `Vinculado a: ${t}`;
+        pending.delete(String(chatId));
+        await registrarIngresoTx(p.monto, p.banco, null, nota, p.fecha);
+        const fFmt = p.fecha || "Hoy";
+        return bot.sendMessage(chatId, `✅ *INGRESO REGISTRADO*\n\n📅 Fecha: ${fFmt}\n💰 Monto: ${p.monto} Lps\n🏦 Banco: ${p.banco}\n📝 ${nota}`, { parse_mode: "Markdown" });
+      }
+
+      if (p.mode === "finEgresoMonto") {
+        const monto = Number(t);
+        if (isNaN(monto) || monto <= 0) return bot.sendMessage(chatId, "⚠️ Monto inválido. Escriba solo números:");
+        pending.set(String(chatId), { mode: "finEgresoMotivo", monto });
+        const kb = MOTIVOS_GASTO.map(m => [{ text: `🛠️ ${m}`, callback_data: `fin:egreso:motivo:${m}` }]);
+        kb.push([{ text: "⬅️ Cancelar", callback_data: "menu:pagos" }]);
+        return bot.sendMessage(chatId, "🛠️ *Seleccione el motivo:*", {
+          parse_mode: "Markdown", reply_markup: { inline_keyboard: kb }
+        });
+      }
+
+      if (p.mode === "finEgresoDetalle") {
+        pending.delete(String(chatId));
+        await registrarEgresoTx(p.monto, p.motivo, t, p.fecha);
+        const fFmt = p.fecha || "Hoy";
+        return bot.sendMessage(chatId, `✅ *EGRESO REGISTRADO*\n\n📅 Fecha: ${fFmt}\n💸 Monto: ${p.monto} Lps\n🛠️ Motivo: ${p.motivo}\n📝 Detalles: ${t}`, { parse_mode: "Markdown" });
+      }
+      // === FIN WIZARD FINANZAS ===
+
       if (p.mode === "mailAddClienteNombre") {
         if (!t) return bot.sendMessage(chatId, "⚠️ Escriba el nombre del cliente.");
 
@@ -5416,3 +4686,4 @@ http
   .listen(PORT, () => {
     console.log("🌐 HTTP KEEPALIVE activo en puerto", PORT);
   });
+
