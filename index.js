@@ -32,39 +32,6 @@ if (!admin.apps.length) {
 }
 const db = admin.firestore();
 console.log("✅ FIREBASE PROJECT:", FIREBASE_PROJECT_ID);
-// ==============================================================================
-// CONFIGURACIÓN FINANCIERA (NUEVA V12)
-// ==============================================================================
-const colFinanciero = db.collection("financiero");
-
-const BANCOS = [
-  "Atlántida",
-  "Bac",
-  "Ficohsa",
-  "Tigo Money",
-  "Davivienda",
-  "Tengo",
-  "Banpais",
-  "Occidente"
-];
-
-const MOTIVOS_GASTO = [
-  "Renovaciones",
-  "Nuevas cuentas",
-  "Otros",
-];
-
-const rateFinanciero = new Map();
-function allowMsgFinanciero(chatId, userId, limit = 5, windowMs = 3000) {
-  const k = `fin:${chatId}:${userId}`; 
-  const now = Date.now();
-  const cur = rateFinanciero.get(k) || { t: now, count: 0 };
-  if (now - cur.t > windowMs) { cur.t = now; cur.count = 0; }
-  cur.count++;
-  rateFinanciero.set(k, cur);
-  return cur.count <= limit;
-}
-// ==============================================================================
 
 // ===============================
 // COMPATIBILIDAD CON PARTE 3
@@ -969,167 +936,6 @@ async function enviarSubmenuInventario(chatId, plataforma, correo) {
   return mostrarPanelCorreo(chatId, plataforma, correo);
 }
 
-// ==============================================================================
-// HELPERS MÓDULO FINANZAS V12 (NUEVAS)
-// ==============================================================================
-
-function horaFmt() {
-  const now = new Date();
-  return new Intl.DateTimeFormat("es-HN", {
-    timeZone: TZ,
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: true,
-  }).format(now);
-}
-
-async function registrarIngresoTx(monto, banco, clienteRef = null, nota = "") {
-  if (!BANCOS.includes(banco)) throw new Error("Banco inválido");
-  const nMont = Number(monto);
-  if (!Number.isFinite(nMont) || nMont <= 0) throw new Error("Monto inválido");
-
-  return db.runTransaction(async (tx) => {
-    const refFin = colFinanciero.doc();
-    const dataFin = {
-      timestamp: admin.firestore.FieldValue.serverTimestamp(),
-      tipo: "INGRESO",
-      monto: nMont,
-      banco: banco,
-      nota: nota,
-      creadoPor: "casandra_bot"
-    };
-
-    if (clienteRef) dataFin.clienteRef = clienteRef;
-    tx.set(refFin, dataFin);
-
-    if (clienteRef) {
-      const refCli = db.collection("clientes").doc(String(clienteRef));
-      const docCli = await tx.get(refCli);
-      if (docCli.exists) {
-        const cData = docCli.data();
-        let pagos = Array.isArray(cData.pagos) ? cData.pagos.slice() : [];
-        pagos.push({
-          fechaFmt: hoyDMY(),
-          horaFmt: horaFmt(),
-          monto: nMont,
-          banco: banco,
-          nota: nota,
-          financieroRef: refFin.id
-        });
-        tx.update(refCli, {
-          pagos,
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        });
-      }
-    }
-    return { finId: refFin.id, clienteRef };
-  });
-}
-
-async function registrarEgresoTx(monto, motivo, nota = "") {
-  if (!MOTIVOS_GASTO.includes(motivo)) throw new Error("Motivo inválido");
-  const nMont = Number(monto);
-  if (!Number.isFinite(nMont) || nMont <= 0) throw new Error("Monto inválido");
-
-  const refFin = colFinanciero.doc();
-  const dataFin = {
-    timestamp: admin.firestore.FieldValue.serverTimestamp(),
-    tipo: "EGRESO",
-    monto: nMont,
-    motivo: motivo,
-    nota: nota,
-    creadoPor: "casandra_bot"
-  };
-
-  await refFin.set(dataFin);
-  return { finId: refFin.id };
-}
-
-async function generarResumenFinancieroHoy() {
-  const dmy = hoyDMY();
-  const parts = dmy.split("/");
-  const startDay = Number(parts[0]);
-  const startMonth = Number(parts[1]);
-  const startYear = Number(parts[2]);
-  
-  const start = new Date(startYear, startMonth - 1, startDay);
-  const end = new Date(startYear, startMonth - 1, startDay + 1);
-
-  const snap = await colFinanciero
-    .where("timestamp", ">=", start)
-    .where("timestamp", "<", end)
-    .get();
-
-  if (snap.empty) {
-    return { exito: false, msg: `⚠️ *No hay registros financieros para hoy* (${escMD(dmy)}).` };
-  }
-
-  let totalIngresos = 0;
-  let totalEgresos = 0;
-  const desgloseIngresos = {};
-  const desgloseEgresos = {};
-  const detallesRenovaciones = [];
-
-  BANCOS.forEach((b) => desgloseIngresos[b] = { total: 0, count: 0 });
-  MOTIVOS_GASTO.forEach((m) => desgloseEgresos[m] = { total: 0, count: 0 });
-
-  snap.forEach((doc) => {
-    const data = doc.data();
-    const monto = Number(data.monto || 0);
-
-    if (data.tipo === "INGRESO") {
-      totalIngresos += monto;
-      if (desgloseIngresos[data.banco]) {
-        desgloseIngresos[data.banco].total += monto;
-        desgloseIngresos[data.banco].count += 1;
-      }
-    } else if (data.tipo === "EGRESO") {
-      totalEgresos += monto;
-      if (desgloseEgresos[data.motivo]) {
-        desgloseEgresos[data.motivo].total += monto;
-        desgloseEgresos[data.motivo].count += 1;
-      }
-      if (data.motivo === "Renovaciones") {
-        detallesRenovaciones.push({
-          monto: monto,
-          nota: data.nota || "-",
-          hora: data.timestamp ? new Intl.DateTimeFormat("es-HN", { timeZone: TZ, hour: "2-digit", minute: "2-digit", hour12: true }).format(data.timestamp.toDate()) : "-",
-        });
-      }
-    }
-  });
-
-  const ganancias = totalIngresos - totalEgresos;
-
-  let txt = `📊 *ESTADO DE RESULTADOS DIARIO*\nHoy ${escMD(dmy)}\n\n`;
-  txt += `💰 *TOTAL INGRESOS:* ${totalIngresos.toFixed(2)} Lps\n`;
-  for (const b of BANCOS) {
-    if (desgloseIngresos[b].total > 0) txt += `➕ *${b}:* ${desgloseIngresos[b].total.toFixed(2)} Lps (${desgloseIngresos[b].count} trans)\n`;
-  }
-  txt += "\n";
-
-  txt += `🛠️ *TOTAL GASTOS (EGRESOS):* ${totalEgresos.toFixed(2)} Lps\n`;
-  for (const m of MOTIVOS_GASTO) {
-    if (desgloseEgresos[m].total > 0) {
-      txt += `➖ *${m}:* ${desgloseEgresos[m].total.toFixed(2)} Lps (${desgloseEgresos[m].count} reg)\n`;
-      if (m === "Renovaciones" && detallesRenovaciones.length > 0) {
-        detallesRenovaciones.sort((a, b) => (a.hora > b.hora) ? 1 : -1);
-        for (const r of detallesRenovaciones) txt += `    - ${r.monto.toFixed(2)} Lps (${escMD(r.nota)}) a las ${r.hora}\n`;
-      }
-    }
-  }
-  txt += "\n";
-
-  const signo = ganancias >= 0 ? "+" : "";
-  const label = ganancias >= 0 ? "🟢" : "🔴";
-  txt += `📈 *${label} GANANCIAS DEL DÍA:* ${signo}${ganancias.toFixed(2)} Lps`;
-
-  return { exito: true, texto: txt };
-}
-// ==============================================================================
-
-
-
 // ===============================
 // MENÚS
 // ===============================
@@ -1223,21 +1029,8 @@ async function menuClientes(chatId) {
 }
 
 async function menuPagos(chatId) {
-  return upsertPanel(
-    chatId,
-    "💳 *MÓDULO FINANZAS V12*\n\nGestione sus ingresos y egresos diarios aquí:",
-    {
-      inline_keyboard: [
-        [{ text: "➕ Registrar Ingreso", callback_data: "fin:ingreso:start" }],
-        [{ text: "➖ Registrar Egreso", callback_data: "fin:egreso:start" }],
-        [{ text: "📊 Ver Resumen (Hoy)", callback_data: "fin:resumen:hoy" }],
-        [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
-      ],
-    },
-    "Markdown"
-  );
-}
-
+  return upsertPanel(chatId, "💳 *PAGOS*\n\n(Reservado para wizard después)", {
+    inline_keyboard: [[{ text: "🏠 Inicio", callback_data: "go:inicio" }]],
   });
 }
 
@@ -2377,6 +2170,7 @@ async function responderMenuCodigosNetflix(chatId, plataforma, correo) {
     },
   });
 }
+
 // ===============================
 // COMANDOS CLIENTES
 // ===============================
@@ -3022,81 +2816,6 @@ bot.on("callback_query", async (q) => {
       if (data === "menu:inventario") return menuInventario(chatId);
       if (data === "menu:clientes") return menuClientes(chatId);
       if (data === "menu:pagos") return menuPagos(chatId);
-
-      // === INICIO BOTONES FINANZAS (3.2 V12.1 ACTUALIZADO) ===
-      if (data === "fin:ingreso:start") {
-        pending.set(String(chatId), { mode: "finIngresoMonto" });
-        return upsertPanel(chatId, "➕ *REGISTRAR INGRESO*\n\n¿Cuál es el monto en Lps? (Solo números):", {
-          inline_keyboard: [[{ text: "⬅️ Cancelar", callback_data: "menu:pagos" }]]
-        }, "Markdown");
-      }
-
-      if (data.startsWith("fin:ingreso:banco:")) {
-        const banco = data.split(":")[3];
-        const p = pending.get(String(chatId));
-        if (!p || p.mode !== "finIngresoBanco") return;
-        p.banco = banco;
-        p.mode = "finElegirFecha"; 
-        pending.set(String(chatId), p);
-
-        return upsertPanel(chatId, `🏦 Banco: *${banco}*\n\n¿Para qué fecha es este ingreso?`, {
-          inline_keyboard: [
-            [{ text: "📅 Hoy", callback_data: "fin:fecha:hoy" }],
-            [{ text: "⏳ Fecha Anterior", callback_data: "fin:fecha:manual" }],
-            [{ text: "⬅️ Cancelar", callback_data: "menu:pagos" }]
-          ]
-        }, "Markdown");
-      }
-
-      if (data === "fin:egreso:start") {
-        pending.set(String(chatId), { mode: "finEgresoMonto" });
-        return upsertPanel(chatId, "➖ *REGISTRAR EGRESO*\n\n¿Cuál es el monto del gasto en Lps?:", {
-          inline_keyboard: [[{ text: "⬅️ Cancelar", callback_data: "menu:pagos" }]]
-        }, "Markdown");
-      }
-
-      if (data.startsWith("fin:egreso:motivo:")) {
-        const motivo = data.split(":")[3];
-        const p = pending.get(String(chatId));
-        if (!p || p.mode !== "finEgresoMotivo") return;
-        p.motivo = motivo;
-        p.mode = "finElegirFecha"; 
-        pending.set(String(chatId), p);
-
-        return upsertPanel(chatId, `🛠️ Motivo: *${motivo}*\n\n¿Para qué fecha es este gasto?`, {
-          inline_keyboard: [
-            [{ text: "📅 Hoy", callback_data: "fin:fecha:hoy" }],
-            [{ text: "⏳ Fecha Anterior", callback_data: "fin:fecha:manual" }],
-            [{ text: "⬅️ Cancelar", callback_data: "menu:pagos" }]
-          ]
-        }, "Markdown");
-      }
-
-      if (data === "fin:fecha:hoy") {
-        const p = pending.get(String(chatId));
-        if (!p) return;
-        p.fecha = null; 
-        p.mode = p.banco ? "finIngresoCliente" : "finEgresoDetalle";
-        pending.set(String(chatId), p);
-        const msg = p.banco ? "¿Vincular a cliente? (Nombre o NO)" : "Escriba los detalles del gasto:";
-        return bot.sendMessage(chatId, msg);
-      }
-
-      if (data === "fin:fecha:manual") {
-        const p = pending.get(String(chatId));
-        if (!p) return;
-        p.mode = "finEsperarFechaManual";
-        pending.set(String(chatId), p);
-        return bot.sendMessage(chatId, "🗓️ Escriba la fecha en formato: *dd/mm/yyyy*\n(Ejemplo: 15/01/2026)", { parse_mode: "Markdown" });
-      }
-
-      if (data === "fin:resumen:hoy") {
-        const res = await generarResumenFinancieroHoy();
-        if (!res.exito) return bot.sendMessage(chatId, res.msg, { parse_mode: "Markdown" });
-        return bot.sendMessage(chatId, res.texto, { parse_mode: "Markdown" });
-      }
-      // === FIN BOTONES FINANZAS ===
-
       if (data === "menu:renovaciones") return menuRenovaciones(chatId, userId);
 
       if (data === "menu:buscar") {
@@ -3157,7 +2876,7 @@ bot.on("callback_query", async (q) => {
         return upsertPanel(
           chatId,
           `✏️ *Editar clave*\n📌 ${String(plat).toUpperCase()}\n📧 ${escMD(correo)}\n\nEscriba la nueva clave:`,
-          { inline_keyboard: [[{ text: "⬅️ Cancelar", callback_data: `inv:menu:cancel:${plat}:${encodeURIComponent(correo)}` }]] },
+          { inline_keyboard: [[{ text: "↩️ Cancelar", callback_data: `inv:menu:cancel:${plat}:${encodeURIComponent(correo)}` }]] },
           "Markdown"
         );
       }
@@ -4134,55 +3853,6 @@ bot.on("message", async (msg) => {
       const p = pending.get(String(chatId));
       const t = String(text || "").trim();
 
-      // === INICIO WIZARD FINANZAS (3.3 V12.1 ACTUALIZADO) ===
-      if (p.mode === "finIngresoMonto") {
-        const monto = Number(t);
-        if (isNaN(monto) || monto <= 0) return bot.sendMessage(chatId, "⚠️ Monto inválido. Escriba solo números:");
-        pending.set(String(chatId), { mode: "finIngresoBanco", monto });
-        const kb = BANCOS.map(b => [{ text: `🏦 ${b}`, callback_data: `fin:ingreso:banco:${b}` }]);
-        kb.push([{ text: "⬅️ Cancelar", callback_data: "menu:pagos" }]);
-        return bot.sendMessage(chatId, "💵 *Seleccione el banco:*", {
-          parse_mode: "Markdown", reply_markup: { inline_keyboard: kb }
-        });
-      }
-
-      if (p.mode === "finEsperarFechaManual") {
-        if (!isFechaDMY(t)) return bot.sendMessage(chatId, "⚠️ Formato inválido. Use dd/mm/yyyy (Ej: 01/01/2026):");
-        p.fecha = t;
-        p.mode = p.banco ? "finIngresoCliente" : "finEgresoDetalle"; 
-        pending.set(String(chatId), p);
-        const msg = p.banco ? "✅ Fecha capturada.\n\n¿Vincular a cliente? (Escriba nombre o NO):" : "✅ Fecha capturada.\n\nEscriba los detalles del gasto:";
-        return bot.sendMessage(chatId, msg);
-      }
-
-      if (p.mode === "finIngresoCliente") {
-        let nota = "Ingreso sin vincular";
-        if (t.toUpperCase() !== "NO") nota = `Vinculado a: ${t}`;
-        pending.delete(String(chatId));
-        await registrarIngresoTx(p.monto, p.banco, null, nota, p.fecha);
-        const fFmt = p.fecha || "Hoy";
-        return bot.sendMessage(chatId, `✅ *INGRESO REGISTRADO*\n\n📅 Fecha: ${fFmt}\n💰 Monto: ${p.monto} Lps\n🏦 Banco: ${p.banco}\n📝 ${nota}`, { parse_mode: "Markdown" });
-      }
-
-      if (p.mode === "finEgresoMonto") {
-        const monto = Number(t);
-        if (isNaN(monto) || monto <= 0) return bot.sendMessage(chatId, "⚠️ Monto inválido. Escriba solo números:");
-        pending.set(String(chatId), { mode: "finEgresoMotivo", monto });
-        const kb = MOTIVOS_GASTO.map(m => [{ text: `🛠️ ${m}`, callback_data: `fin:egreso:motivo:${m}` }]);
-        kb.push([{ text: "⬅️ Cancelar", callback_data: "menu:pagos" }]);
-        return bot.sendMessage(chatId, "🛠️ *Seleccione el motivo:*", {
-          parse_mode: "Markdown", reply_markup: { inline_keyboard: kb }
-        });
-      }
-
-      if (p.mode === "finEgresoDetalle") {
-        pending.delete(String(chatId));
-        await registrarEgresoTx(p.monto, p.motivo, t, p.fecha);
-        const fFmt = p.fecha || "Hoy";
-        return bot.sendMessage(chatId, `✅ *EGRESO REGISTRADO*\n\n📅 Fecha: ${fFmt}\n💸 Monto: ${p.monto} Lps\n🛠️ Motivo: ${p.motivo}\n📝 Detalles: ${t}`, { parse_mode: "Markdown" });
-      }
-      // === FIN WIZARD FINANZAS ===
-
       if (p.mode === "mailAddClienteNombre") {
         if (!t) return bot.sendMessage(chatId, "⚠️ Escriba el nombre del cliente.");
 
@@ -4686,4 +4356,5 @@ http
   .listen(PORT, () => {
     console.log("🌐 HTTP KEEPALIVE activo en puerto", PORT);
   });
+
 
