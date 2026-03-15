@@ -12,7 +12,14 @@
 const http = require("http");
 const TelegramBot = require("node-telegram-bot-api");
 const admin = require("firebase-admin");
-const ExcelJS = require("exceljs");
+
+// ✅ ExcelJS PROTEGIDO (si no está instalado, NO tumba el bot)
+let ExcelJS = null;
+try {
+  ExcelJS = require("exceljs");
+} catch (e) {
+  console.log("⚠️ ExcelJS no instalado. (No afecta el bot). Instale: npm i exceljs");
+}
 
 // ===============================
 // ENV
@@ -458,14 +465,33 @@ function parseFechaFinanceInput(txt = "") {
 }
 
 function parseMontoNumber(v) {
-  const clean = String(v || "")
-    .replace(/[^\d.,-]/g, "")
-    .replace(",", ".")
-    .trim();
+  const raw = String(v || "").trim().replace(/[^\d.,-]/g, "");
+  if (!raw) return NaN;
 
-  const n = Number(clean);
-  if (!Number.isFinite(n)) return NaN;
-  return n;
+  const hasComma = raw.includes(",");
+  const hasDot = raw.includes(".");
+
+  let normalized = raw;
+
+  if (hasComma && hasDot) {
+    if (raw.lastIndexOf(".") > raw.lastIndexOf(",")) {
+      normalized = raw.replace(/,/g, "");
+    } else {
+      normalized = raw.replace(/\./g, "").replace(",", ".");
+    }
+  } else if (hasComma && !hasDot) {
+    const parts = raw.split(",");
+    if (parts.length === 2 && parts[1].length <= 2) {
+      normalized = raw.replace(",", ".");
+    } else {
+      normalized = raw.replace(/,/g, "");
+    }
+  } else {
+    normalized = raw;
+  }
+
+  const n = Number(normalized);
+  return Number.isFinite(n) ? n : NaN;
 }
 
 function moneyLps(v) {
@@ -832,9 +858,7 @@ async function addServicioTx(clientId, servicio) {
       const invData = docInv.data() || {};
       const clientesInv = Array.isArray(invData.clientes) ? invData.clientes.slice() : [];
 
-      const yaExiste = clientesInv.some(
-        (c) => c.nombre === curCli.nombrePerfil && c.pin === servicio.pin
-      );
+      const yaExiste = clientesInv.some((c) => c.nombre === curCli.nombrePerfil && c.pin === servicio.pin);
 
       if (!yaExiste) {
         clientesInv.push({
@@ -1263,24 +1287,52 @@ async function menuPagos(chatId) {
   );
 }
 
-async function menuRenovaciones(chatId, userIdOpt) {
-  const isSA = userIdOpt ? isSuperAdmin(userIdOpt) : false;
-
-  const kb = [
-    [{ text: "📅 Renovaciones hoy", callback_data: "ren:hoy" }],
-    [{ text: "📄 TXT hoy", callback_data: "txt:hoy" }],
-    [{ text: "🧾 Mis renovaciones", callback_data: "ren:mis" }],
-    [{ text: "📄 TXT Mis renovaciones", callback_data: "txt:mis" }],
-    [{ text: "👤 Revendedores (lista)", callback_data: "rev:lista" }],
-  ];
-
-  if (isSA) kb.push([{ text: "📬 Enviar TXT a TODOS (HOY)", callback_data: "txt:todos:hoy" }]);
-  kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
-
+async function menuFinRegistro(chatId) {
   return upsertPanel(
     chatId,
-    "📅 *RENOVACIONES*\n\nComandos:\n• /renovaciones hoy\n• /renovaciones dd/mm/yyyy\n• /renovaciones VENDEDOR dd/mm/yyyy\n\nTXT:\n• /txt hoy\n• /txt dd/mm/yyyy\n• /txt VENDEDOR dd/mm/yyyy\n\n✅ Nota:\n• *Enviar TXT a TODOS (HOY)* solo SUPERADMIN.\n",
-    { inline_keyboard: kb }
+    "📝 *REGISTRO FINANCIERO*\n\nSeleccione una opción:",
+    {
+      inline_keyboard: [
+        [{ text: "➕ Registrar ingreso", callback_data: "fin:menu:ingreso" }],
+        [{ text: "➖ Registrar egreso", callback_data: "fin:menu:egreso" }],
+        [{ text: "⬅️ Volver Finanzas", callback_data: "menu:pagos" }],
+        [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
+      ],
+    },
+    "Markdown"
+  );
+}
+
+async function menuFinReportes(chatId) {
+  return upsertPanel(
+    chatId,
+    "📊 *REPORTES FINANCIEROS*\n\nSeleccione una opción:",
+    {
+      inline_keyboard: [
+        [{ text: "📊 Resumen por fecha", callback_data: "fin:menu:resumen_fecha" }],
+        [{ text: "🏦 Resumen por banco del mes", callback_data: "fin:menu:bancos_mes" }],
+        [{ text: "🧾 Cierre de caja", callback_data: "fin:menu:cierre" }],
+        [{ text: "⬅️ Volver Finanzas", callback_data: "menu:pagos" }],
+        [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
+      ],
+    },
+    "Markdown"
+  );
+}
+
+async function menuFinGestion(chatId) {
+  return upsertPanel(
+    chatId,
+    "🛠️ *GESTIÓN FINANCIERA*\n\nSeleccione una opción:",
+    {
+      inline_keyboard: [
+        [{ text: "🗑️ Eliminar movimiento", callback_data: "fin:menu:eliminar" }],
+        [{ text: "📤 Exportar Excel rango", callback_data: "fin:menu:excel_rango" }],
+        [{ text: "⬅️ Volver Finanzas", callback_data: "menu:pagos" }],
+        [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
+      ],
+    },
+    "Markdown"
   );
 }
 
@@ -1406,10 +1458,12 @@ async function enviarFichaCliente(chatId, clientId) {
   kb.push([{ text: "📄 TXT de este cliente", callback_data: `cli:txt:one:${clientId}` }]);
   kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
 
-  return bot.sendMessage(chatId, txt, {
-    parse_mode: "Markdown",
-    reply_markup: { inline_keyboard: kb },
-  });
+  return upsertPanel(
+    chatId,
+    txt,
+    { inline_keyboard: kb },
+    "Markdown"
+  );
 }
 
 async function menuEditarCliente(chatId, clientId) {
@@ -1580,15 +1634,13 @@ async function mostrarListaCorreosPlataforma(chatId, plataforma) {
     .get();
 
   if (snap.empty) {
-    return bot.sendMessage(
+    return upsertPanel(
       chatId,
       `📭 *${escMD(String(plat).toUpperCase())}*\n\nNo hay correos registrados en esta plataforma.`,
       {
-        parse_mode: "Markdown",
-        reply_markup: {
-          inline_keyboard: [[{ text: "🏠 Inicio", callback_data: "go:inicio" }]],
-        },
-      }
+        inline_keyboard: [[{ text: "🏠 Inicio", callback_data: "go:inicio" }]],
+      },
+      "Markdown"
     );
   }
 
@@ -1623,21 +1675,24 @@ async function mostrarListaCorreosPlataforma(chatId, plataforma) {
 
   kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
 
-  return bot.sendMessage(chatId, txt, {
-    parse_mode: "Markdown",
-    reply_markup: {
+  return upsertPanel(
+    chatId,
+    txt,
+    {
       inline_keyboard: kb,
     },
-  });
+    "Markdown"
+  );
 }
 
 async function mostrarMenuClientesCorreo(chatId, plataforma, correo) {
   const plat = normalizarPlataforma(plataforma);
   const mail = String(correo || "").trim().toLowerCase();
 
-  return bot.sendMessage(chatId, "👥 *CLIENTES*\n\nSeleccione una opción:", {
-    parse_mode: "Markdown",
-    reply_markup: {
+  return upsertPanel(
+    chatId,
+    "👥 *CLIENTES*\n\nSeleccione una opción:",
+    {
       inline_keyboard: [
         [{ text: "👥 Ver clientes", callback_data: `mail_ver_clientes|${plat}|${encodeURIComponent(mail)}` }],
         [{ text: "➕ Agregar cliente", callback_data: `mail_add_cliente|${plat}|${encodeURIComponent(mail)}` }],
@@ -1648,7 +1703,8 @@ async function mostrarMenuClientesCorreo(chatId, plataforma, correo) {
         [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
       ],
     },
-  });
+    "Markdown"
+  );
 }
 
 async function mostrarMenuCodigosNetflix(chatId, plataforma, correo) {
@@ -1670,11 +1726,12 @@ async function mostrarPanelCorreo(chatId, plataforma, correo) {
 
   const ocupados = clientes.length;
   const disponibles = Math.max(0, capacidad - ocupados);
-  const estado = disponibles === 0 ? "LLENA" : "CON ESPACIO";
+  const estadoDb = disponibles === 0 ? "llena" : "activa";
+  const estadoView = disponibles === 0 ? "LLENA" : "CON ESPACIO";
 
   if (
     Number(data.disp || 0) !== disponibles ||
-    String(data.estado || "") !== (disponibles === 0 ? "llena" : "activa") ||
+    String(data.estado || "") !== estadoDb ||
     Number(data.ocupados || 0) !== ocupados ||
     Number(data.disponibles || 0) !== disponibles ||
     Number(data.capacidad || 0) !== capacidad
@@ -1684,7 +1741,7 @@ async function mostrarPanelCorreo(chatId, plataforma, correo) {
         ocupados,
         disponibles,
         disp: disponibles,
-        estado: disponibles === 0 ? "llena" : "activa",
+        estado: estadoDb,
         capacidad,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       },
@@ -1697,7 +1754,7 @@ async function mostrarPanelCorreo(chatId, plataforma, correo) {
   txt += `${escMD(String(plat).toUpperCase())}\n\n`;
   txt += `👤 *Ocupados:* ${ocupados}/${capacidad}\n`;
   txt += `✅ *Disponibles:* ${disponibles}\n`;
-  txt += `📊 *Estado:* ${escMD(estado)}`;
+  txt += `📊 *Estado:* ${escMD(estadoView)}`;
 
   const kb = [
     [{ text: "👥 CLIENTES", callback_data: `mail_menu_clientes|${plat}|${encodeURIComponent(mail)}` }],
@@ -1711,12 +1768,14 @@ async function mostrarPanelCorreo(chatId, plataforma, correo) {
   kb.push([{ text: "⬅️ Volver Inventario", callback_data: `inv:${plat}:0` }]);
   kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
 
-  return bot.sendMessage(chatId, txt, {
-    parse_mode: "Markdown",
-    reply_markup: {
+  return upsertPanel(
+    chatId,
+    txt,
+    {
       inline_keyboard: kb,
     },
-  });
+    "Markdown"
+  );
 }
 
 // ===============================
@@ -1998,10 +2057,12 @@ async function enviarListaResultadosClientes(chatId, resultados) {
   ]);
   kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
 
-  return bot.sendMessage(chatId, txt, {
-    parse_mode: "Markdown",
-    reply_markup: { inline_keyboard: kb },
-  });
+  return upsertPanel(
+    chatId,
+    txt,
+    { inline_keyboard: kb },
+    "Markdown"
+  );
 }
 
 // ===============================
@@ -2222,6 +2283,216 @@ async function enviarTXTATodosHoy(superChatId) {
     `✅ Enviado TXT HOY (${fecha})\n• Revendedores enviados: ${enviados}\n• Saltados: ${saltados}`
   );
 }
+
+// ===============================
+// HELPERS CÓDIGOS NETFLIX
+// ===============================
+function tsToMillisNetflix(v) {
+  try {
+    if (!v) return 0;
+    if (typeof v?.toDate === "function") return v.toDate().getTime();
+    if (v instanceof Date) return v.getTime();
+    const t = new Date(v).getTime();
+    return Number.isFinite(t) ? t : 0;
+  } catch (_) {
+    return 0;
+  }
+}
+
+async function obtenerUltimoCodigoNetflix(correo, tipo) {
+  const mail = String(correo || "").trim().toLowerCase();
+  if (!mail || !tipo) return null;
+
+  let snap = null;
+
+  try {
+    snap = await db
+      .collection("codigos_netflix")
+      .where("correo", "==", mail)
+      .where("tipo", "==", tipo)
+      .orderBy("fecha", "desc")
+      .limit(1)
+      .get();
+  } catch (e) {
+    const alt = await db
+      .collection("codigos_netflix")
+      .where("correo", "==", mail)
+      .where("tipo", "==", tipo)
+      .limit(50)
+      .get();
+
+    const docs = alt.docs
+      .map((d) => ({ id: d.id, ...(d.data() || {}) }))
+      .sort((a, b) => {
+        const fa = tsToMillisNetflix(a.fecha || a.createdAt || a.updatedAt);
+        const fb = tsToMillisNetflix(b.fecha || b.createdAt || b.updatedAt);
+        return fb - fa;
+      });
+
+    return docs.length ? docs[0] : null;
+  }
+
+  if (snap.empty) return null;
+  const d = snap.docs[0];
+  return { id: d.id, ...(d.data() || {}) };
+}
+
+async function obtenerUltimoCodigoNetflixGeneral(correo) {
+  const mail = String(correo || "").trim().toLowerCase();
+  if (!mail) return null;
+
+  let snap = null;
+
+  try {
+    snap = await db
+      .collection("codigos_netflix")
+      .where("correo", "==", mail)
+      .orderBy("fecha", "desc")
+      .limit(1)
+      .get();
+  } catch (e) {
+    const alt = await db
+      .collection("codigos_netflix")
+      .where("correo", "==", mail)
+      .limit(50)
+      .get();
+
+    const docs = alt.docs
+      .map((d) => ({ id: d.id, ...(d.data() || {}) }))
+      .sort((a, b) => {
+        const fa = tsToMillisNetflix(a.fecha || a.createdAt || a.updatedAt);
+        const fb = tsToMillisNetflix(b.fecha || b.createdAt || b.updatedAt);
+        return fb - fa;
+      });
+
+    return docs.length ? docs[0] : null;
+  }
+
+  if (snap.empty) return null;
+  const d = snap.docs[0];
+  return { id: d.id, ...(d.data() || {}) };
+}
+
+function labelTipoCodigoNetflix(tipo = "") {
+  const t = String(tipo || "").toLowerCase();
+  if (t === "signin") return "🔐 Inicio sesión";
+  if (t === "temporal") return "⏳ Código temporal";
+  if (t === "hogar") return "🏠 Código hogar";
+  if (t === "verification") return "✅ Verificación";
+  return "📩 Código";
+}
+
+function fmtFechaCodigoNetflix(fecha) {
+  if (!fecha) return "-";
+
+  try {
+    let dt = null;
+
+    if (typeof fecha?.toDate === "function") {
+      dt = fecha.toDate();
+    } else if (fecha instanceof Date) {
+      dt = fecha;
+    } else {
+      dt = new Date(fecha);
+    }
+
+    if (isNaN(dt.getTime())) return String(fecha);
+
+    return new Intl.DateTimeFormat("es-HN", {
+      timeZone: TZ,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+    }).format(dt);
+  } catch (e) {
+    return String(fecha);
+  }
+}
+
+async function marcarCodigoNetflixUsado(docId) {
+  if (!docId) return;
+  try {
+    await db.collection("codigos_netflix").doc(String(docId)).set(
+      {
+        usado: true,
+        usadoAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+  } catch (e) {
+    logErr("❌ Error marcando codigo usado:", e?.message || e);
+  }
+}
+
+async function responderCodigoNetflix(chatId, correo, tipo) {
+  const mail = String(correo || "").trim().toLowerCase();
+
+  let data = null;
+  if (tipo === "ultimo") {
+    data = await obtenerUltimoCodigoNetflixGeneral(mail);
+  } else {
+    data = await obtenerUltimoCodigoNetflix(mail, tipo);
+  }
+
+  if (!data) {
+    return bot.sendMessage(
+      chatId,
+      `🎬 *CÓDIGOS NETFLIX*\n\n📧 *${escMD(mail)}*\n🧩 *Tipo:* ${escMD(tipo === "ultimo" ? "último disponible" : tipo)}\n\n⚠️ No encontré códigos disponibles.`,
+      { parse_mode: "Markdown" }
+    );
+  }
+
+  const tipoReal = String(data.tipo || tipo || "ultimo").toLowerCase();
+  const codigo = String(data.codigo || "").trim();
+  const fuente = String(data.fuente || "-").trim();
+  const fechaFmt = fmtFechaCodigoNetflix(data.fecha || data.createdAt || data.updatedAt);
+  const usado = data.usado === true ? "Sí" : "No";
+
+  let txt = `🎬 *CÓDIGOS NETFLIX*\n\n`;
+  txt += `📧 *${escMD(mail)}*\n`;
+  txt += `🧩 *Tipo:* ${escMD(labelTipoCodigoNetflix(tipoReal))}\n`;
+  txt += `🔢 *Código:* \`${codigo || "-"}\`\n`;
+  txt += `🕒 *Fecha:* ${escMD(fechaFmt)}\n`;
+  txt += `📥 *Fuente:* ${escMD(fuente || "-")}\n`;
+  txt += `✅ *Usado:* ${escMD(usado)}`;
+
+  await bot.sendMessage(chatId, txt, { parse_mode: "Markdown" });
+
+  if (data.id) {
+    await marcarCodigoNetflixUsado(data.id);
+  }
+}
+
+async function responderMenuCodigosNetflix(chatId, plataforma, correo) {
+  const plat = normalizarPlataforma(plataforma);
+  const mail = String(correo || "").trim().toLowerCase();
+
+  if (plat !== "netflix" && plat !== "vipnetflix") {
+    return bot.sendMessage(chatId, "⚠️ Este menú de códigos solo aplica para Netflix.");
+  }
+
+  return upsertPanel(
+    chatId,
+    "🎬 *CÓDIGOS NETFLIX*\n\nSeleccione una opción:",
+    {
+      inline_keyboard: [
+        [{ text: "📩 Último código", callback_data: `nf_code|ultimo|${encodeURIComponent(mail)}|${plat}` }],
+        [{ text: "🔐 Inicio sesión", callback_data: `nf_code|signin|${encodeURIComponent(mail)}|${plat}` }],
+        [{ text: "⏳ Código temporal", callback_data: `nf_code|temporal|${encodeURIComponent(mail)}|${plat}` }],
+        [{ text: "🏠 Código hogar", callback_data: `nf_code|hogar|${encodeURIComponent(mail)}|${plat}` }],
+        [{ text: "✅ Verificación", callback_data: `nf_code|verification|${encodeURIComponent(mail)}|${plat}` }],
+        [{ text: "⬅️ Volver al correo", callback_data: `mail_panel|${plat}|${encodeURIComponent(mail)}` }],
+        [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
+      ],
+    },
+    "Markdown"
+  );
+}
+
 // ===============================
 // COMANDOS CLIENTES
 // ===============================
@@ -2725,40 +2996,11 @@ bot.onText(/\/start/i, async (msg) => {
   const userId = msg.from.id;
 
   if (await isAdmin(userId)) {
-    const sent = await bot.sendMessage(chatId, "📌 *MENÚ PRINCIPAL*", {
-      parse_mode: "Markdown",
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: "📦 Inventario", callback_data: "menu:inventario" }],
-          [{ text: "👥 Clientes", callback_data: "menu:clientes" }],
-          [{ text: "💳 Pagos", callback_data: "menu:pagos" }],
-          [{ text: "📅 Renovaciones", callback_data: "menu:renovaciones" }],
-          [{ text: "🔎 Buscar", callback_data: "menu:buscar" }],
-        ],
-      },
-    });
-    panelMsgId.set(String(chatId), sent.message_id);
-    return;
+    return menuPrincipal(chatId);
   }
 
   if (await isVendedor(userId)) {
-    const sent = await bot.sendMessage(
-      chatId,
-      "👤 *MENÚ VENDEDOR*\n\nFunciones disponibles:\n• Mis renovaciones\n• TXT Mis renovaciones\n• Mis clientes\n• TXT Mis clientes\n",
-      {
-        parse_mode: "Markdown",
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: "🧾 Mis renovaciones", callback_data: "ren:mis" }],
-            [{ text: "📄 TXT Mis renovaciones", callback_data: "txt:mis" }],
-            [{ text: "👥 Mis clientes", callback_data: "vend:clientes" }],
-            [{ text: "📄 TXT Mis clientes", callback_data: "vend:clientes:txt" }],
-          ],
-        },
-      }
-    );
-    panelMsgId.set(String(chatId), sent.message_id);
-    return;
+    return menuVendedor(chatId);
   }
 
   return bot.sendMessage(chatId, "⛔ Acceso denegado");
@@ -2772,42 +3014,11 @@ bot.onText(/\/menu/i, async (msg) => {
 
   try {
     if (await isAdmin(userId)) {
-      const sent = await bot.sendMessage(chatId, "📌 *MENÚ PRINCIPAL*", {
-        parse_mode: "Markdown",
-        reply_to_message_id: msg.message_id,
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: "📦 Inventario", callback_data: "menu:inventario" }],
-            [{ text: "👥 Clientes", callback_data: "menu:clientes" }],
-            [{ text: "💳 Pagos", callback_data: "menu:pagos" }],
-            [{ text: "📅 Renovaciones", callback_data: "menu:renovaciones" }],
-            [{ text: "🔎 Buscar", callback_data: "menu:buscar" }],
-          ],
-        },
-      });
-      panelMsgId.set(String(chatId), sent.message_id);
-      return;
+      return menuPrincipal(chatId);
     }
 
     if (await isVendedor(userId)) {
-      const sent = await bot.sendMessage(
-        chatId,
-        "👤 *MENÚ VENDEDOR*\n\nFunciones disponibles:\n• Mis renovaciones\n• TXT Mis renovaciones\n• Mis clientes\n• TXT Mis clientes\n",
-        {
-          parse_mode: "Markdown",
-          reply_to_message_id: msg.message_id,
-          reply_markup: {
-            inline_keyboard: [
-              [{ text: "🧾 Mis renovaciones", callback_data: "ren:mis" }],
-              [{ text: "📄 TXT Mis renovaciones", callback_data: "txt:mis" }],
-              [{ text: "👥 Mis clientes", callback_data: "vend:clientes" }],
-              [{ text: "📄 TXT Mis clientes", callback_data: "vend:clientes:txt" }],
-            ],
-          },
-        }
-      );
-      panelMsgId.set(String(chatId), sent.message_id);
-      return;
+      return menuVendedor(chatId);
     }
 
     return bot.sendMessage(chatId, "⛔ Acceso denegado", {
@@ -2972,6 +3183,10 @@ bot.on("callback_query", async (q) => {
       if (data === "menu:clientes") return menuClientes(chatId);
       if (data === "menu:pagos") return menuPagos(chatId);
       if (data === "menu:renovaciones") return menuRenovaciones(chatId, userId);
+
+      if (data === "fin:menu:registro") return menuFinRegistro(chatId);
+      if (data === "fin:menu:reportes") return menuFinReportes(chatId);
+      if (data === "fin:menu:gestion") return menuFinGestion(chatId);
 
       // ===============================
       // CALLBACKS FINANZAS
@@ -3262,15 +3477,17 @@ bot.on("callback_query", async (q) => {
         txt += `✅ *Disponibles:* ${disponibles}\n`;
         txt += `📊 *Estado:* ${escMD(estado)}`;
 
-        return bot.sendMessage(chatId, txt, {
-          parse_mode: "Markdown",
-          reply_markup: {
+        return upsertPanel(
+          chatId,
+          txt,
+          {
             inline_keyboard: [
               [{ text: "⬅️ Volver al correo", callback_data: `mail_panel|${normalizarPlataforma(plataforma)}|${encodeURIComponent(correo)}` }],
               [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
             ],
           },
-        });
+          "Markdown"
+        );
       }
 
       if (data.startsWith("mail_add_cliente|")) {
@@ -3327,13 +3544,13 @@ bot.on("callback_query", async (q) => {
 
         kb.push([{ text: "⬅️ Volver", callback_data: `mail_panel|${normalizarPlataforma(plataforma)}|${encodeURIComponent(correo)}` }]);
 
-        return bot.sendMessage(
+        return upsertPanel(
           chatId,
           `➖ *Quitar cliente*\n\n📧 *${escMD(correo)}*\n\nSeleccione el cliente que desea quitar:`,
           {
-            parse_mode: "Markdown",
-            reply_markup: { inline_keyboard: kb },
-          }
+            inline_keyboard: kb,
+          },
+          "Markdown"
         );
       }
 
@@ -3413,13 +3630,13 @@ bot.on("callback_query", async (q) => {
 
         kb.push([{ text: "⬅️ Volver", callback_data: `mail_panel|${normalizarPlataforma(plataforma)}|${encodeURIComponent(correo)}` }]);
 
-        return bot.sendMessage(
+        return upsertPanel(
           chatId,
           `🔐 *Editar PIN*\n\n📧 *${escMD(correo)}*\n\nSeleccione el cliente:`,
           {
-            parse_mode: "Markdown",
-            reply_markup: { inline_keyboard: kb },
-          }
+            inline_keyboard: kb,
+          },
+          "Markdown"
         );
       }
 
@@ -3491,20 +3708,18 @@ bot.on("callback_query", async (q) => {
         const found = await buscarCorreoInventarioPorPlatCorreo(plataforma, correo);
         if (!found) return bot.sendMessage(chatId, "❌ Este correo ya no existe.");
 
-        return bot.sendMessage(
+        return upsertPanel(
           chatId,
           "⚠️ *Confirmar eliminación*\n\n" +
             `📧 *Correo:* ${escMD(correo)}\n\n` +
             "Esta acción eliminará la cuenta del inventario.\n\n¿Está seguro que desea borrarla?",
           {
-            parse_mode: "Markdown",
-            reply_markup: {
-              inline_keyboard: [
-                [{ text: "✅ Sí borrar", callback_data: `mail_delete_confirm|${normalizarPlataforma(plataforma)}|${encodeURIComponent(correo)}` }],
-                [{ text: "❌ Cancelar", callback_data: `mail_panel|${normalizarPlataforma(plataforma)}|${encodeURIComponent(correo)}` }],
-              ],
-            },
-          }
+            inline_keyboard: [
+              [{ text: "✅ Sí borrar", callback_data: `mail_delete_confirm|${normalizarPlataforma(plataforma)}|${encodeURIComponent(correo)}` }],
+              [{ text: "❌ Cancelar", callback_data: `mail_panel|${normalizarPlataforma(plataforma)}|${encodeURIComponent(correo)}` }],
+            ],
+          },
+          "Markdown"
         );
       }
 
@@ -4646,6 +4861,97 @@ bot.on("message", async (msg) => {
 });
 
 // ===============================
+// AUTO TXT 7AM
+// ===============================
+let _lastDailyRun = "";
+
+async function getLastRunDB() {
+  const ref = db.collection("config").doc("dailyRun");
+  const doc = await ref.get();
+  return doc.exists ? String(doc.data()?.lastRun || "") : "";
+}
+
+async function setLastRunDB(dmy) {
+  const ref = db.collection("config").doc("dailyRun");
+  await ref.set(
+    { lastRun: String(dmy), updatedAt: admin.firestore.FieldValue.serverTimestamp() },
+    { merge: true }
+  );
+}
+
+function getTimePartsNow() {
+  const now = new Date();
+  const fmt = new Intl.DateTimeFormat("es-HN", {
+    timeZone: TZ,
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(now);
+
+  const obj = {};
+  fmt.forEach((p) => {
+    if (p.type !== "literal") obj[p.type] = p.value;
+  });
+
+  return {
+    dmy: `${obj.day}/${obj.month}/${obj.year}`,
+    hh: Number(obj.hour),
+    mm: Number(obj.minute),
+  };
+}
+
+async function enviarTxtRenovacionesDiariasPorVendedor() {
+  if (!HAS_RUNTIME_LOCK) return;
+
+  const { dmy } = getTimePartsNow();
+
+  const snap = await db.collection("revendedores").get();
+  if (snap.empty) return;
+
+  for (const doc of snap.docs) {
+    const rev = normalizeRevendedorDoc(doc);
+
+    if (!rev.activo || !rev.nombre || !rev.telegramId) continue;
+
+    const list = await obtenerRenovacionesPorFecha(dmy, rev.nombre);
+    await enviarTXT(rev.telegramId, list, dmy, rev.nombre);
+
+    await doc.ref.set(
+      {
+        autoLastSent: dmy,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+  }
+}
+
+setInterval(async () => {
+  if (!HAS_RUNTIME_LOCK) return;
+
+  try {
+    const { dmy, hh, mm } = getTimePartsNow();
+
+    if (hh === 7 && mm === 0) {
+      const dbLast = await getLastRunDB();
+      if (_lastDailyRun === dmy || dbLast === dmy) return;
+
+      _lastDailyRun = dmy;
+      await setLastRunDB(dmy);
+      await enviarTxtRenovacionesDiariasPorVendedor();
+
+      logInfo(`✅ AutoTXT 7AM enviado (${dmy}) TZ=${TZ}`);
+    }
+  } catch (e) {
+    logErr("❌ AutoTXT error:", e?.message || e);
+  }
+}, 30 * 1000);
+
+// ===============================
 // HARDEN
 // ===============================
 process.on("unhandledRejection", (reason) => {
@@ -4701,4 +5007,3 @@ http
   .listen(PORT, () => {
     console.log("🌐 HTTP KEEPALIVE activo en puerto", PORT);
   });
-
