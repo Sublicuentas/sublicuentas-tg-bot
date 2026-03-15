@@ -1,12 +1,11 @@
-/* ✅ SUBLICUENTAS TG BOT — INDEX FINAL (LIMPIO V12.5)
+/* ✅ SUBLICUENTAS TG BOT — INDEX FINAL (LIMPIO V12.4)
    ✅ ARRANQUE LIMPIO
    ✅ FIX 409 polling
    ✅ SIN LOCK GLOBAL QUE CONGELE EL BOT
-   ✅ COMPATIBLE CON PARTE 2 DEPURADA
-   ✅ COMPATIBLE CON PARTE 3
+   ✅ COMPATIBLE CON PARTE 2 Y PARTE 3
    ✅ NETFLIX LISTENER CARGA NORMAL
    ✅ SINCRONIZACIÓN ESPEJO AL GUARDAR
-   ✅ MÓDULO FINANZAS V12.5 BASE
+   ✅ MÓDULO FINANZAS V12.4 INTEGRADO
 */
 
 const http = require("http");
@@ -45,7 +44,7 @@ const db = admin.firestore();
 console.log("✅ FIREBASE PROJECT:", FIREBASE_PROJECT_ID);
 
 // ===============================
-// COMPATIBILIDAD GLOBAL
+// COMPATIBILIDAD CON PARTE 2/3
 // ===============================
 let HAS_RUNTIME_LOCK = true;
 
@@ -259,7 +258,7 @@ global.FIN_BANCOS = FIN_BANCOS;
 global.FIN_MOTIVOS_EGRESO = FIN_MOTIVOS_EGRESO;
 
 // ===============================
-// HELPERS BASE
+// HELPERS GENERALES
 // ===============================
 function stripAcentos(str = "") {
   return String(str).normalize("NFD").replace(/[\u0300-\u036f]/g, "");
@@ -277,7 +276,7 @@ function onlyDigits(str = "") {
 }
 
 function normalizarPlataforma(txt = "") {
-  return String(txt || "")
+  return String(txt)
     .toLowerCase()
     .trim()
     .replace(/\s+/g, "")
@@ -369,19 +368,31 @@ function escMD(text = "") {
   return String(text || "").replace(/([_*\[\]()~`>#+\-=|{}!\\])/g, "\\$1");
 }
 
-function parseMontoNumber(v) {
-  const n = Number(String(v || "").replace(/,/g, "").trim());
-  return Number.isFinite(n) ? n : NaN;
+async function enviarTxtComoArchivo(chatId, contenido, filename = "reporte.txt") {
+  const limpio = stripAcentos(String(contenido || "")).replace(/[^\x00-\x7F]/g, "");
+  const buffer = Buffer.from(limpio, "utf8");
+  return bot.sendDocument(chatId, buffer, {}, { filename, contentType: "text/plain" });
 }
 
-function moneyLps(v) {
-  const n = Number(v || 0);
-  return `${n.toLocaleString("es-HN", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })} Lps`;
+async function enviarExcelCompatible(chatId, html, filename = "reporte.xls") {
+  const buffer = Buffer.from(String(html || ""), "utf8");
+  return bot.sendDocument(chatId, buffer, {}, {
+    filename,
+    contentType: "application/vnd.ms-excel",
+  });
 }
 
+function logInfo(...args) {
+  console.log("ℹ️", ...args);
+}
+
+function logErr(...args) {
+  console.log("❌", ...args);
+}
+
+// ===============================
+// HELPERS FECHA / MES FINANZAS
+// ===============================
 function isMonthInputMMYYYY(txt = "") {
   return /^(0[1-9]|1[0-2])\/\d{4}$/.test(String(txt || "").trim());
 }
@@ -423,7 +434,6 @@ function ymdFromDMY(dmy = "") {
 
 function parseFechaFinanceInput(txt = "") {
   const s = String(txt || "").trim().toLowerCase();
-
   if (s === "hoy") {
     const fecha = hoyDMY();
     return {
@@ -433,9 +443,7 @@ function parseFechaFinanceInput(txt = "") {
       mesKey: getMonthKeyFromDMY(fecha),
     };
   }
-
   if (!isFechaDMY(s)) return { ok: false };
-
   return {
     ok: true,
     fecha: s,
@@ -444,26 +452,17 @@ function parseFechaFinanceInput(txt = "") {
   };
 }
 
-async function enviarTxtComoArchivo(chatId, contenido, filename = "reporte.txt") {
-  const limpio = stripAcentos(String(contenido || "")).replace(/[^\x00-\x7F]/g, "");
-  const buffer = Buffer.from(limpio, "utf8");
-  return bot.sendDocument(chatId, buffer, {}, { filename, contentType: "text/plain" });
+function parseMontoNumber(v) {
+  const n = Number(String(v || "").replace(/,/g, "").trim());
+  return Number.isFinite(n) ? n : NaN;
 }
 
-async function enviarExcelCompatible(chatId, html, filename = "reporte.xls") {
-  const buffer = Buffer.from(String(html || ""), "utf8");
-  return bot.sendDocument(chatId, buffer, {}, {
-    filename,
-    contentType: "application/vnd.ms-excel",
-  });
-}
-
-function logInfo(...args) {
-  console.log("ℹ️", ...args);
-}
-
-function logErr(...args) {
-  console.log("❌", ...args);
+function moneyLps(v) {
+  const n = Number(v || 0);
+  return `${n.toLocaleString("es-HN", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })} Lps`;
 }
 
 // ===============================
@@ -595,7 +594,9 @@ async function setTelegramIdToRevendedor(nombre, userId) {
   const nombreNorm = normTxt(nombre);
   const snap = await db.collection("revendedores").get();
 
-  if (snap.empty) return { ok: false, msg: "⚠️ No hay revendedores en la colección." };
+  if (snap.empty) {
+    return { ok: false, msg: "⚠️ No hay revendedores en la colección." };
+  }
 
   let found = null;
   snap.forEach((doc) => {
@@ -603,7 +604,9 @@ async function setTelegramIdToRevendedor(nombre, userId) {
     if (r.nombre_norm === nombreNorm) found = { ref: doc.ref, data: r };
   });
 
-  if (!found) return { ok: false, msg: "⚠️ No encontré ese revendedor por nombre." };
+  if (!found) {
+    return { ok: false, msg: "⚠️ No encontré ese revendedor por nombre." };
+  }
 
   await found.ref.set(
     {
@@ -663,6 +666,7 @@ async function upsertPanel(chatId, text, replyMarkup, parseMode = "Markdown") {
       return;
     } catch (e) {
       const msg = String(e?.message || "").toLowerCase();
+
       if (
         msg.includes("message is not modified") ||
         msg.includes("message to edit not found") ||
@@ -674,6 +678,7 @@ async function upsertPanel(chatId, text, replyMarkup, parseMode = "Markdown") {
         panelMsgId.delete(key);
         return sendFreshPanel(chatId, text, replyMarkup, parseMode);
       }
+
       throw e;
     }
   }
@@ -713,9 +718,11 @@ async function clienteDuplicado(nombre, telefono, excludeId = "") {
 
   snap.forEach((doc) => {
     if (excludeId && String(doc.id) === String(excludeId)) return;
+
     const c = doc.data() || {};
     const dbNombre = normTxt(c.nombrePerfil || "");
     const dbTel = onlyDigits(c.telefono || "");
+
     if (dbNombre === nombreN && dbTel === telN && !duplicado) {
       duplicado = { id: doc.id, ...c };
     }
@@ -846,7 +853,10 @@ async function addServicioTx(clientId, servicio) {
       }
     }
 
-    return { cliente: curCli, servicios: arrServ };
+    return {
+      cliente: { id: docCli.id, ...curCli },
+      servicios: arrServ,
+    };
   });
 }
 
@@ -855,12 +865,10 @@ async function addServicioTx(clientId, servicio) {
 // ===============================
 function daysUntilDMY(dmy) {
   if (!isFechaDMY(dmy)) return null;
-
   const [dd, mm, yyyy] = String(dmy).split("/").map(Number);
   const target = new Date(yyyy, mm - 1, dd);
   const now = new Date();
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-
   return Math.round((target.getTime() - today.getTime()) / 86400000);
 }
 
@@ -937,6 +945,7 @@ function resumenClienteCRM(cliente) {
 
 function clienteResumenTXT(c) {
   const r = resumenClienteCRM(c);
+
   let body = "";
   body += `CLIENTE CRM\n\n`;
   body += `NOMBRE: ${stripAcentos(c.nombrePerfil || "-")}\n`;
@@ -1224,7 +1233,7 @@ async function menuClientes(chatId) {
 async function menuPagos(chatId) {
   return upsertPanel(
     chatId,
-    "💳 *FINANZAS V12.5*\n\nSeleccione una opción:",
+    "💳 *FINANZAS V12.4*\n\nSeleccione una opción:",
     {
       inline_keyboard: [
         [
@@ -1240,7 +1249,7 @@ async function menuPagos(chatId) {
           { text: "🗑️ Eliminar movimiento", callback_data: "fin:menu:eliminar" },
         ],
         [
-          { text: "📤 Exportar Excel rango", callback_data: "fin:menu:excel_rango" },
+          { text: "📤 Exportar CSV rango", callback_data: "fin:menu:excel_rango" },
           { text: "🏠 Inicio", callback_data: "go:inicio" },
         ],
       ],
@@ -2464,30 +2473,38 @@ async function eliminarMovimientoFinanzas(id, userId, isSA = false) {
   return data;
 }
 
-async function construirArchivoExcelCompatible(chatId, movs = [], nombre = "reporte_finanzas.xls") {
-  let html = "";
-  html += `<html><head><meta charset="UTF-8"></head><body>`;
-  html += `<table border="1">`;
-  html += `<tr><th>ID</th><th>Fecha</th><th>Tipo</th><th>Monto</th><th>Banco</th><th>Motivo</th><th>Admin</th></tr>`;
+function csvEscape(v) {
+  const s = String(v ?? "");
+  if (s.includes('"') || s.includes(",") || s.includes("\n")) {
+    return `"${s.replace(/"/g, '""')}"`;
+  }
+  return s;
+}
+
+async function construirArchivoCSVFinanzas(chatId, movs = [], nombre = "reporte_finanzas.csv") {
+  const lines = [];
+  lines.push(["ID", "Fecha", "Tipo", "Monto", "Banco", "Motivo", "Admin"].map(csvEscape).join(","));
 
   for (const m of movs) {
-    html += `<tr>`;
-    html += `<td>${String(m.id || "")}</td>`;
-    html += `<td>${String(m.fecha || "")}</td>`;
-    html += `<td>${String(m.tipo || "")}</td>`;
-    html += `<td>${Number(m.monto || 0)}</td>`;
-    html += `<td>${String(m.banco || "")}</td>`;
-    html += `<td>${String(m.motivo || "")}</td>`;
-    html += `<td>${String(m.createdByName || m.createdBy || "")}</td>`;
-    html += `</tr>`;
+    lines.push(
+      [
+        String(m.id || ""),
+        String(m.fecha || ""),
+        String(m.tipo || ""),
+        Number(m.monto || 0),
+        String(m.banco || ""),
+        String(m.motivo || ""),
+        String(m.createdByName || m.createdBy || ""),
+      ].map(csvEscape).join(",")
+    );
   }
 
-  html += `</table></body></html>`;
+  const csv = "\uFEFF" + lines.join("\n");
+  const buffer = Buffer.from(csv, "utf8");
 
-  const buffer = Buffer.from(html, "utf8");
   return bot.sendDocument(chatId, buffer, {}, {
     filename: nombre,
-    contentType: "application/vnd.ms-excel",
+    contentType: "text/csv",
   });
 }
 
@@ -2515,8 +2532,8 @@ async function exportarFinanzasRangoExcel(chatId, fechaInicio, fechaFin, userId,
 
   if (!movs.length) return bot.sendMessage(chatId, "⚠️ No hay movimientos en ese rango.");
 
-  const nombre = `finanzas_${ymdFromDMY(fechaInicio)}_a_${ymdFromDMY(fechaFin)}.xls`;
-  return construirArchivoExcelCompatible(chatId, movs, nombre);
+  const nombre = `finanzas_${ymdFromDMY(fechaInicio)}_a_${ymdFromDMY(fechaFin)}.csv`;
+  return construirArchivoCSVFinanzas(chatId, movs, nombre);
 }
 
 function kbBancosFinanzas() {
@@ -2751,6 +2768,7 @@ async function responderMenuCodigosNetflix(chatId, plataforma, correo) {
     },
   });
 }
+
 // ===============================
 // COMANDOS CLIENTES
 // ===============================
@@ -3013,9 +3031,10 @@ bot.onText(/\/resumen_fecha\s+(.+)/i, async (msg, match) => {
   const userId = msg.from.id;
   if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
 
-  const fecha = String(match[1] || "").trim().toLowerCase() === "hoy"
-    ? hoyDMY()
-    : String(match[1] || "").trim();
+  const fecha =
+    String(match[1] || "").trim().toLowerCase() === "hoy"
+      ? hoyDMY()
+      : String(match[1] || "").trim();
 
   if (!isFechaDMY(fecha)) return bot.sendMessage(chatId, "⚠️ Uso: /resumen_fecha dd/mm/yyyy");
 
@@ -3044,9 +3063,10 @@ bot.onText(/\/cierre_caja\s+(.+)/i, async (msg, match) => {
   const userId = msg.from.id;
   if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
 
-  const fecha = String(match[1] || "").trim().toLowerCase() === "hoy"
-    ? hoyDMY()
-    : String(match[1] || "").trim();
+  const fecha =
+    String(match[1] || "").trim().toLowerCase() === "hoy"
+      ? hoyDMY()
+      : String(match[1] || "").trim();
 
   if (!isFechaDMY(fecha)) return bot.sendMessage(chatId, "⚠️ Uso: /cierre_caja dd/mm/yyyy");
 
@@ -5319,7 +5339,3 @@ http
   .listen(PORT, () => {
     console.log("🌐 HTTP KEEPALIVE activo en puerto", PORT);
   });
-
-      
-
-
