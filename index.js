@@ -1,4 +1,4 @@
-/* ✅ SUBLICUENTAS TG BOT — INDEX FINAL (LIMPIO V13.1)
+/* ✅ SUBLICUENTAS TG BOT — INDEX FINAL (LIMPIO V13.3)
    ✅ ARRANQUE LIMPIO
    ✅ FIX 409 polling
    ✅ SIN LOCK GLOBAL QUE CONGELE EL BOT
@@ -6,8 +6,9 @@
    ✅ NETFLIX LISTENER CARGA NORMAL
    ✅ SINCRONIZACIÓN ESPEJO AL GUARDAR
    ✅ BASE PREPARADA PARA FINANZAS V13
-   ✅ LISTO PARA EXCEL REAL CON GRÁFICOS
    ✅ FIX MENÚ FINANZAS POR SECCIONES
+   ✅ CIERRE DE CAJA EN REGISTRO
+   ✅ EXPORTAR EXCEL EN REPORTES
    ✅ DISNEYS AJUSTADO A 3 PERFILES
 */
 
@@ -385,14 +386,6 @@ async function enviarTxtComoArchivo(chatId, contenido, filename = "reporte.txt")
   return bot.sendDocument(chatId, buffer, {}, { filename, contentType: "text/plain" });
 }
 
-async function enviarExcelCompatible(chatId, html, filename = "reporte.xls") {
-  const buffer = Buffer.from(String(html || ""), "utf8");
-  return bot.sendDocument(chatId, buffer, {}, {
-    filename,
-    contentType: "application/vnd.ms-excel",
-  });
-}
-
 function logInfo(...args) {
   console.log("ℹ️", ...args);
 }
@@ -488,8 +481,6 @@ function parseMontoNumber(v) {
     } else {
       normalized = raw.replace(/,/g, "");
     }
-  } else {
-    normalized = raw;
   }
 
   const n = Number(normalized);
@@ -502,12 +493,6 @@ function moneyLps(v) {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   })} Lps`;
-}
-
-function moneyNumber(v) {
-  const n = Number(v || 0);
-  if (!Number.isFinite(n)) return 0;
-  return Number(n);
 }
 
 // ===============================
@@ -812,42 +797,42 @@ async function menuInventario(chatId) {
   return upsertPanel(chatId, "📦 *INVENTARIO* (elija plataforma)", {
     inline_keyboard: [
       [
-        { text: "📺 netflix", callback_data: "inv:netflix:0" },
-        { text: "🔥 vipnetflix", callback_data: "inv:vipnetflix:0" },
+        { text: "📺 Netflix", callback_data: "inv:netflix:0" },
+        { text: "🔥 VIP Netflix", callback_data: "inv:vipnetflix:0" },
       ],
       [
-        { text: "🏰 disneyp", callback_data: "inv:disneyp:0" },
-        { text: "🎞️ disneys", callback_data: "inv:disneys:0" },
+        { text: "🏰 Disney Premium", callback_data: "inv:disneyp:0" },
+        { text: "🎞️ Disney Standard", callback_data: "inv:disneys:0" },
       ],
       [
-        { text: "🍿 hbomax", callback_data: "inv:hbomax:0" },
-        { text: "🎥 primevideo", callback_data: "inv:primevideo:0" },
+        { text: "🍿 HBO Max", callback_data: "inv:hbomax:0" },
+        { text: "🎥 Prime Video", callback_data: "inv:primevideo:0" },
       ],
       [
-        { text: "📀 paramount", callback_data: "inv:paramount:0" },
-        { text: "🍥 crunchyroll", callback_data: "inv:crunchyroll:0" },
+        { text: "📀 Paramount+", callback_data: "inv:paramount:0" },
+        { text: "🍥 Crunchyroll", callback_data: "inv:crunchyroll:0" },
       ],
       [
-        { text: "🎬 vix", callback_data: "inv:vix:0" },
-        { text: "🍎 appletv", callback_data: "inv:appletv:0" },
+        { text: "🎬 Vix", callback_data: "inv:vix:0" },
+        { text: "🍎 Apple TV", callback_data: "inv:appletv:0" },
       ],
       [
-        { text: "🌎 universal", callback_data: "inv:universal:0" },
-        { text: "▶️ youtube", callback_data: "inv:youtube:0" },
+        { text: "🌎 Universal", callback_data: "inv:universal:0" },
+        { text: "▶️ YouTube", callback_data: "inv:youtube:0" },
       ],
       [
-        { text: "🎵 spotify", callback_data: "inv:spotify:0" },
-        { text: "🎨 canva", callback_data: "inv:canva:0" },
+        { text: "🎵 Spotify", callback_data: "inv:spotify:0" },
+        { text: "🎨 Canva", callback_data: "inv:canva:0" },
       ],
       [
-        { text: "🌊 oleadatv1", callback_data: "inv:oleadatv1:0" },
-        { text: "🌊 oleadatv3", callback_data: "inv:oleadatv3:0" },
+        { text: "🌊 OleadaTV (1)", callback_data: "inv:oleadatv1:0" },
+        { text: "🌊 OleadaTV (3)", callback_data: "inv:oleadatv3:0" },
       ],
       [
-        { text: "📡 iptv1", callback_data: "inv:iptv1:0" },
-        { text: "📡 iptv3", callback_data: "inv:iptv3:0" },
+        { text: "📡 IPTV (1)", callback_data: "inv:iptv1:0" },
+        { text: "📡 IPTV (3)", callback_data: "inv:iptv3:0" },
       ],
-      [{ text: "📡 iptv4", callback_data: "inv:iptv4:0" }],
+      [{ text: "📡 IPTV (4)", callback_data: "inv:iptv4:0" }],
       [{ text: "📦 Stock General", callback_data: "inv:general" }],
       [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
     ],
@@ -894,6 +879,7 @@ async function menuFinRegistro(chatId) {
       inline_keyboard: [
         [{ text: "➕ Registrar ingreso", callback_data: "fin:menu:ingreso" }],
         [{ text: "➖ Registrar egreso", callback_data: "fin:menu:egreso" }],
+        [{ text: "🧾 Cierre de caja", callback_data: "fin:menu:cierre" }],
         [{ text: "⬅️ Volver Finanzas", callback_data: "menu:pagos" }],
         [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
       ],
@@ -910,7 +896,7 @@ async function menuFinReportes(chatId) {
       inline_keyboard: [
         [{ text: "📊 Resumen por fecha", callback_data: "fin:menu:resumen_fecha" }],
         [{ text: "🏦 Resumen por banco del mes", callback_data: "fin:menu:bancos_mes" }],
-        [{ text: "🧾 Cierre de caja", callback_data: "fin:menu:cierre" }],
+        [{ text: "📤 Exportar Excel rango", callback_data: "fin:menu:excel_rango" }],
         [{ text: "⬅️ Volver Finanzas", callback_data: "menu:pagos" }],
         [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
       ],
@@ -926,7 +912,6 @@ async function menuFinGestion(chatId) {
     {
       inline_keyboard: [
         [{ text: "🗑️ Eliminar movimiento", callback_data: "fin:menu:eliminar" }],
-        [{ text: "📤 Exportar Excel rango", callback_data: "fin:menu:excel_rango" }],
         [{ text: "⬅️ Volver Finanzas", callback_data: "menu:pagos" }],
         [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
       ],
@@ -1005,16 +990,17 @@ function kbPlataformasWiz(prefix, clientId, idxOpt) {
       { text: "🎨 canva", callback_data: cb("canva") },
     ],
     [
-      { text: "🌊 oleadatv1", callback_data: cb("oleadatv1") },
-      { text: "🌊 oleadatv3", callback_data: cb("oleadatv3") },
+      { text: "🌊 oleadatv (1)", callback_data: cb("oleadatv1") },
+      { text: "🌊 oleadatv (3)", callback_data: cb("oleadatv3") },
     ],
     [
-      { text: "📡 iptv1", callback_data: cb("iptv1") },
-      { text: "📡 iptv3", callback_data: cb("iptv3") },
+      { text: "📡 iptv (1)", callback_data: cb("iptv1") },
+      { text: "📡 iptv (3)", callback_data: cb("iptv3") },
     ],
-    [{ text: "📡 iptv4", callback_data: cb("iptv4") }],
+    [{ text: "📡 iptv (4)", callback_data: cb("iptv4") }],
   ];
-      }
+}
+
 // ===============================
 // FICHA CLIENTE / CRM / EDICIÓN
 // ===============================
@@ -1078,7 +1064,12 @@ async function enviarFichaCliente(chatId, clientId) {
   kb.push([{ text: "📄 TXT de este cliente", callback_data: `cli:txt:one:${clientId}` }]);
   kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
 
-  return upsertPanel(chatId, txt, { inline_keyboard: kb }, "Markdown");
+  return upsertPanel(
+    chatId,
+    txt,
+    { inline_keyboard: kb },
+    "Markdown"
+  );
 }
 
 async function menuEditarCliente(chatId, clientId) {
@@ -1242,7 +1233,11 @@ function getCapacidadCorreo(data = {}, plataforma = "") {
 async function mostrarListaCorreosPlataforma(chatId, plataforma) {
   const plat = normalizarPlataforma(plataforma);
 
-  const snap = await db.collection("inventario").where("plataforma", "==", plat).limit(500).get();
+  const snap = await db
+    .collection("inventario")
+    .where("plataforma", "==", plat)
+    .limit(500)
+    .get();
 
   if (snap.empty) {
     return upsertPanel(
@@ -1286,7 +1281,14 @@ async function mostrarListaCorreosPlataforma(chatId, plataforma) {
 
   kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
 
-  return upsertPanel(chatId, txt, { inline_keyboard: kb }, "Markdown");
+  return upsertPanel(
+    chatId,
+    txt,
+    {
+      inline_keyboard: kb,
+    },
+    "Markdown"
+  );
 }
 
 async function mostrarMenuClientesCorreo(chatId, plataforma, correo) {
@@ -1372,7 +1374,14 @@ async function mostrarPanelCorreo(chatId, plataforma, correo) {
   kb.push([{ text: "⬅️ Volver Inventario", callback_data: `inv:${plat}:0` }]);
   kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
 
-  return upsertPanel(chatId, txt, { inline_keyboard: kb }, "Markdown");
+  return upsertPanel(
+    chatId,
+    txt,
+    {
+      inline_keyboard: kb,
+    },
+    "Markdown"
+  );
 }
 
 // ===============================
@@ -1654,7 +1663,12 @@ async function enviarListaResultadosClientes(chatId, resultados) {
   ]);
   kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
 
-  return upsertPanel(chatId, txt, { inline_keyboard: kb }, "Markdown");
+  return upsertPanel(
+    chatId,
+    txt,
+    { inline_keyboard: kb },
+    "Markdown"
+  );
 }
 
 // ===============================
@@ -2083,7 +2097,8 @@ async function responderMenuCodigosNetflix(chatId, plataforma, correo) {
     },
     "Markdown"
   );
-}
+           }
+
 // ===============================
 // COMANDOS CLIENTES
 // ===============================
@@ -2201,14 +2216,9 @@ bot.onText(/\/sincronizar_todo/i, async (msg) => {
 
             const capacidad = Number(invData.capacidad || invData.total || 0);
             const ocupados = clientesInv.length;
-
-            let disponibles = 0;
-            if (capacidad > 0) {
-              disponibles = Math.max(0, capacidad - ocupados);
-            } else {
-              disponibles = Math.max(0, Number(invData.disp || 0) - 1);
-            }
-
+            const disponibles = capacidad > 0
+              ? Math.max(0, capacidad - ocupados)
+              : Math.max(0, Number(invData.disp || 0) - 1);
             const estado = disponibles === 0 ? "llena" : "activa";
 
             await refInv.set(
@@ -2218,6 +2228,7 @@ bot.onText(/\/sincronizar_todo/i, async (msg) => {
                 disponibles,
                 disp: disponibles,
                 estado,
+                capacidad,
                 updatedAt: admin.firestore.FieldValue.serverTimestamp(),
               },
               { merge: true }
@@ -2407,6 +2418,7 @@ bot.onText(/\/excel_finanzas\s+(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})/i, 
 // ===============================
 bot.onText(/\/id/i, async (msg) => {
   if (!HAS_RUNTIME_LOCK) return;
+
   const chatId = msg.chat.id;
   const userId = msg.from.id;
   return bot.sendMessage(chatId, `🆔 Tu Telegram ID es:\n${userId}\n\n📩 Envíelo al administrador para activarte en el bot.`);
@@ -2414,6 +2426,7 @@ bot.onText(/\/id/i, async (msg) => {
 
 bot.onText(/\/miid/i, async (msg) => {
   if (!HAS_RUNTIME_LOCK) return;
+
   const chatId = msg.chat.id;
   const userId = msg.from.id;
   return bot.sendMessage(chatId, `🆔 Tu Telegram ID es:\n${userId}\n\n📩 Envíelo al administrador para activarte en el bot.`);
@@ -2424,8 +2437,8 @@ bot.onText(/\/vincular_vendedor\s+(.+)/i, async (msg, match) => {
 
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-  const nombre = String(match[1] || "").trim();
 
+  const nombre = String(match[1] || "").trim();
   if (!nombre) return bot.sendMessage(chatId, "⚠️ Uso: /vincular_vendedor NOMBRE");
 
   const r = await setTelegramIdToRevendedor(nombre, userId);
@@ -2920,6 +2933,81 @@ bot.on("callback_query", async (q) => {
         return enviarSubmenuInventario(chatId, plat, correo);
       }
 
+      if (data.startsWith("inv:menu:sumar:")) {
+        const [, , , plat, correoEnc] = data.split(":");
+        const correo = decodeURIComponent(correoEnc || "");
+        pending.set(String(chatId), { mode: "invSumarQty", plat, correo });
+        return upsertPanel(
+          chatId,
+          `➕ *Agregar perfil*\n📌 ${String(plat).toUpperCase()}\n📧 ${escMD(correo)}\n\nEscriba cantidad a *SUMAR* (ej: 1):`,
+          { inline_keyboard: [[{ text: "↩️ Cancelar", callback_data: `inv:menu:cancel:${plat}:${encodeURIComponent(correo)}` }]] },
+          "Markdown"
+        );
+      }
+
+      if (data.startsWith("inv:menu:restar:")) {
+        const [, , , plat, correoEnc] = data.split(":");
+        const correo = decodeURIComponent(correoEnc || "");
+        pending.set(String(chatId), { mode: "invRestarQty", plat, correo });
+        return upsertPanel(
+          chatId,
+          `➖ *Quitar perfil*\n📌 ${String(plat).toUpperCase()}\n📧 ${escMD(correo)}\n\nEscriba cantidad a *RESTAR* (ej: 1):`,
+          { inline_keyboard: [[{ text: "↩️ Cancelar", callback_data: `inv:menu:cancel:${plat}:${encodeURIComponent(correo)}` }]] },
+          "Markdown"
+        );
+      }
+
+      if (data.startsWith("inv:menu:clave:")) {
+        const [, , , plat, correoEnc] = data.split(":");
+        const correo = decodeURIComponent(correoEnc || "");
+        pending.set(String(chatId), { mode: "invEditClave", plat, correo });
+        return upsertPanel(
+          chatId,
+          `✏️ *Editar clave*\n📌 ${String(plat).toUpperCase()}\n📧 ${escMD(correo)}\n\nEscriba la nueva clave:`,
+          { inline_keyboard: [[{ text: "↩️ Cancelar", callback_data: `inv:menu:cancel:${plat}:${encodeURIComponent(correo)}` }]] },
+          "Markdown"
+        );
+      }
+
+      if (data.startsWith("inv:menu:cancel:")) {
+        const [, , , plat, correoEnc] = data.split(":");
+        const correo = decodeURIComponent(correoEnc || "");
+        pending.delete(String(chatId));
+        pending.set(String(chatId), {
+          mode: "invSubmenuCtx",
+          plat: normalizarPlataforma(plat),
+          correo: String(correo).toLowerCase(),
+        });
+        return enviarSubmenuInventario(chatId, plat, correo);
+      }
+
+      if (data.startsWith("inv:menu:borrar:")) {
+        const [, , , plat, correoEnc] = data.split(":");
+        const correo = decodeURIComponent(correoEnc || "");
+        return upsertPanel(
+          chatId,
+          `🗑️ Confirmar *borrar correo*?\n📌 ${String(plat).toUpperCase()}\n📧 ${escMD(correo)}`,
+          {
+            inline_keyboard: [
+              [{ text: "✅ Confirmar", callback_data: `inv:menu:borrarok:${normalizarPlataforma(plat)}:${encodeURIComponent(String(correo).toLowerCase())}` }],
+              [{ text: "⬅️ Cancelar", callback_data: `inv:menu:cancel:${plat}:${encodeURIComponent(correo)}` }],
+            ],
+          },
+          "Markdown"
+        );
+      }
+
+      if (data.startsWith("inv:menu:borrarok:")) {
+        const [, , , plat, correoEnc] = data.split(":");
+        const correo = decodeURIComponent(correoEnc || "");
+        const ref = db.collection("inventario").doc(docIdInventario(correo, plat));
+        const doc = await ref.get();
+        if (!doc.exists) return bot.sendMessage(chatId, "⚠️ No existe ese correo en inventario.");
+        await ref.delete();
+        pending.delete(String(chatId));
+        return enviarInventarioPlataforma(chatId, plat, 0);
+      }
+
       if (data.startsWith("mail_panel|")) {
         const [, plataforma, correoEnc] = data.split("|");
         const correo = decodeURIComponent(correoEnc || "");
@@ -3046,7 +3134,9 @@ bot.on("callback_query", async (q) => {
         return upsertPanel(
           chatId,
           `➖ *Quitar cliente*\n\n📧 *${escMD(correo)}*\n\nSeleccione el cliente que desea quitar:`,
-          { inline_keyboard: kb },
+          {
+            inline_keyboard: kb,
+          },
           "Markdown"
         );
       }
@@ -3130,7 +3220,9 @@ bot.on("callback_query", async (q) => {
         return upsertPanel(
           chatId,
           `🔐 *Editar PIN*\n\n📧 *${escMD(correo)}*\n\nSeleccione el cliente:`,
-          { inline_keyboard: kb },
+          {
+            inline_keyboard: kb,
+          },
           "Markdown"
         );
       }
@@ -3498,14 +3590,9 @@ bot.on("callback_query", async (q) => {
 
             const capacidad = Number(invData.capacidad || invData.total || 0);
             const ocupados = clientesInv.length;
-
-            let disponibles = 0;
-            if (capacidad > 0) {
-              disponibles = Math.max(0, capacidad - ocupados);
-            } else {
-              disponibles = Number(invData.disp || 0) + 1;
-            }
-
+            const disponibles = capacidad > 0
+              ? Math.max(0, capacidad - ocupados)
+              : Number(invData.disp || 0) + 1;
             const estado = disponibles === 0 ? "llena" : "activa";
 
             await refInv.set(
@@ -3515,6 +3602,7 @@ bot.on("callback_query", async (q) => {
                 disponibles,
                 disp: disponibles,
                 estado,
+                capacidad,
                 updatedAt: admin.firestore.FieldValue.serverTimestamp(),
               },
               { merge: true }
@@ -3534,11 +3622,11 @@ bot.on("callback_query", async (q) => {
         const c = await getCliente(clientId);
         if (!c) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
 
-        const servicios = serviciosOrdenados(Array.isArray(c.servicios) ? c.servicios : []);
+        const servicios = serviciosConIndiceOriginal(Array.isArray(c.servicios) ? c.servicios : []);
         if (!servicios.length) return bot.sendMessage(chatId, "⚠️ Este cliente no tiene servicios.");
 
         const kb = servicios.map((s, i) => [
-          { text: `🔄 ${i + 1}) ${s.plataforma} — ${s.correo} (Ren: ${s.fechaRenovacion || "-"})`, callback_data: `cli:ren:menu:${clientId}:${i}` },
+          { text: safeBtnLabel(`🔄 ${i + 1}) ${s.plataforma} — ${s.correo} (Ren: ${s.fechaRenovacion || "-"})`, 60), callback_data: `cli:ren:menu:${clientId}:${s.idxOriginal}` },
         ]);
         kb.push([{ text: "⬅️ Volver", callback_data: `cli:view:${clientId}` }]);
         kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
@@ -4113,6 +4201,104 @@ bot.on("message", async (msg) => {
         return mostrarPanelCorreo(chatId, p.plataforma, p.correo);
       }
 
+      if (p.mode === "invSumarQty") {
+        const qty = Number(t);
+        if (!Number.isFinite(qty) || qty <= 0) {
+          return bot.sendMessage(chatId, "⚠️ Cantidad inválida. Escriba un número (ej: 1)");
+        }
+
+        pending.delete(String(chatId));
+
+        const correo = String(p.correo).toLowerCase();
+        const plat = normalizarPlataforma(p.plat);
+
+        const ref = db.collection("inventario").doc(docIdInventario(correo, plat));
+        const doc = await ref.get();
+        if (!doc.exists) return bot.sendMessage(chatId, "⚠️ Ese correo no existe en inventario.");
+
+        const d = doc.data() || {};
+        const capacidad = Number(d.capacidad || d.total || getCapacidadCorreo(d, plat) || 0);
+        const clientes = Array.isArray(d.clientes) ? d.clientes : [];
+        const ocupados = clientes.length;
+        const nuevaCapacidad = Math.max(capacidad, ocupados + qty);
+        const disponibles = Math.max(0, nuevaCapacidad - ocupados);
+
+        await ref.set(
+          {
+            capacidad: nuevaCapacidad,
+            ocupados,
+            disponibles,
+            disp: disponibles,
+            estado: disponibles === 0 ? "llena" : "activa",
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        );
+
+        pending.set(String(chatId), { mode: "invSubmenuCtx", plat, correo });
+        return enviarSubmenuInventario(chatId, plat, correo);
+      }
+
+      if (p.mode === "invRestarQty") {
+        const qty = Number(t);
+        if (!Number.isFinite(qty) || qty <= 0) {
+          return bot.sendMessage(chatId, "⚠️ Cantidad inválida. Escriba un número (ej: 1)");
+        }
+
+        pending.delete(String(chatId));
+
+        const correo = String(p.correo).toLowerCase();
+        const plat = normalizarPlataforma(p.plat);
+
+        const ref = db.collection("inventario").doc(docIdInventario(correo, plat));
+        const doc = await ref.get();
+        if (!doc.exists) return bot.sendMessage(chatId, "⚠️ Ese correo no existe en inventario.");
+
+        const d = doc.data() || {};
+        const clientes = Array.isArray(d.clientes) ? d.clientes : [];
+        const ocupados = clientes.length;
+        const capacidadActual = Number(d.capacidad || d.total || getCapacidadCorreo(d, plat) || 0);
+        const nuevaCapacidad = Math.max(ocupados, capacidadActual - qty);
+        const disponibles = Math.max(0, nuevaCapacidad - ocupados);
+
+        const antes = { ...d, disp: Math.max(0, capacidadActual - ocupados), capacidad: capacidadActual };
+        await ref.set(
+          {
+            capacidad: nuevaCapacidad,
+            ocupados,
+            disponibles,
+            disp: disponibles,
+            estado: disponibles === 0 ? "llena" : "activa",
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        );
+
+        const despues = { ...d, disp: disponibles, plataforma: plat, correo, capacidad: nuevaCapacidad };
+        await aplicarAutoLleno(chatId, ref, antes, despues);
+
+        pending.set(String(chatId), { mode: "invSubmenuCtx", plat, correo });
+        return enviarSubmenuInventario(chatId, plat, correo);
+      }
+
+      if (p.mode === "invEditClave") {
+        if (!t) return bot.sendMessage(chatId, "⚠️ Clave vacía.");
+
+        pending.delete(String(chatId));
+
+        const correo = String(p.correo).toLowerCase();
+        const plat = normalizarPlataforma(p.plat);
+
+        const ref = db.collection("inventario").doc(docIdInventario(correo, plat));
+        const doc = await ref.get();
+        if (!doc.exists) return bot.sendMessage(chatId, "⚠️ Ese correo no existe en inventario.");
+
+        await ref.set({ clave: t, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+
+        pending.set(String(chatId), { mode: "invSubmenuCtx", plat, correo });
+        return enviarSubmenuInventario(chatId, plat, correo);
+      }
+
       if (p.mode === "cliRenovarFechaManual") {
         const fecha = String(t || "").trim();
         if (!isFechaDMY(fecha)) return bot.sendMessage(chatId, "⚠️ Formato inválido. Use dd/mm/yyyy");
@@ -4424,6 +4610,3 @@ http
   .listen(PORT, () => {
     console.log("🌐 HTTP KEEPALIVE activo en puerto", PORT);
   });
-
-
-
