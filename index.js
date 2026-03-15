@@ -14,7 +14,14 @@
 const http = require("http");
 const TelegramBot = require("node-telegram-bot-api");
 const admin = require("firebase-admin");
-const ExcelJS = require("exceljs");
+
+let ExcelJS = null;
+try {
+  ExcelJS = require("exceljs");
+  console.log("✅ ExcelJS cargado");
+} catch (e) {
+  console.log("⚠️ ExcelJS no está instalado. El bot iniciará sin exportación Excel.");
+}
 
 // ===============================
 // ENV
@@ -731,452 +738,6 @@ const wizard = new Map();
 const pending = new Map();
 
 // ===============================
-// HELPERS CLIENTES / DUPLICADOS
-// ===============================
-function dedupeClientes(arr = []) {
-  const map = new Map();
-
-  for (const c of Array.isArray(arr) ? arr : []) {
-    const tel = String(c.telefono_norm || onlyDigits(c.telefono || "") || "").trim();
-    const nom = String(c.nombre_norm || normTxt(c.nombrePerfil || "") || "").trim();
-    const key = `${tel}__${nom}`;
-    if (!map.has(key)) map.set(key, c);
-  }
-
-  return Array.from(map.values());
-}
-
-async function clienteDuplicado(nombre, telefono, excludeId = "") {
-  const nombreN = normTxt(nombre);
-  const telN = onlyDigits(telefono);
-  if (!nombreN || !telN) return null;
-
-  const snap = await db.collection("clientes").limit(5000).get();
-  let duplicado = null;
-
-  snap.forEach((doc) => {
-    if (excludeId && String(doc.id) === String(excludeId)) return;
-
-    const c = doc.data() || {};
-    const dbNombre = normTxt(c.nombrePerfil || "");
-    const dbTel = onlyDigits(c.telefono || "");
-
-    if (dbNombre === nombreN && dbTel === telN && !duplicado) {
-      duplicado = { id: doc.id, ...c };
-    }
-  });
-
-  return duplicado;
-}
-
-async function borrarDuplicadosClientes() {
-  const snap = await db.collection("clientes").limit(5000).get();
-  const mapa = new Map();
-  const batch = db.batch();
-  let borrados = 0;
-
-  snap.forEach((doc) => {
-    const c = doc.data() || {};
-    const key = `${normTxt(c.nombrePerfil || "")}|${onlyDigits(c.telefono || "")}`;
-    if (!key || key === "|") return;
-
-    if (mapa.has(key)) {
-      batch.delete(doc.ref);
-      borrados++;
-    } else {
-      mapa.set(key, doc.id);
-    }
-  });
-
-  if (borrados > 0) await batch.commit();
-  return borrados;
-}
-
-async function getCliente(clientId) {
-  const ref = db.collection("clientes").doc(String(clientId));
-  const doc = await ref.get();
-  if (!doc.exists) return null;
-  return { id: doc.id, ...(doc.data() || {}) };
-}
-
-async function patchServicio(clientId, idx, patch) {
-  const ref = db.collection("clientes").doc(String(clientId));
-  const doc = await ref.get();
-  if (!doc.exists) return false;
-
-  const c = doc.data() || {};
-  const servicios = Array.isArray(c.servicios) ? c.servicios : [];
-  if (idx < 0 || idx >= servicios.length) return false;
-
-  servicios[idx] = { ...(servicios[idx] || {}), ...patch };
-
-  await ref.set(
-    {
-      servicios,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    },
-    { merge: true }
-  );
-
-  return true;
-}
-
-// ===============================
-// ADD SERVICIO TX CON ESPEJO
-// ===============================
-async function addServicioTx(clientId, servicio) {
-  const refCliente = db.collection("clientes").doc(String(clientId));
-  const plat = normalizarPlataforma(servicio.plataforma);
-  const mail = String(servicio.correo || "").trim().toLowerCase();
-  const refInv = db.collection("inventario").doc(docIdInventario(mail, plat));
-
-  return db.runTransaction(async (tx) => {
-    const docCli = await tx.get(refCliente);
-    if (!docCli.exists) throw new Error("Cliente no existe en TX");
-
-    const curCli = docCli.data() || {};
-    const docInv = await tx.get(refInv);
-
-    const arrServ = Array.isArray(curCli.servicios) ? curCli.servicios.slice() : [];
-    arrServ.push(servicio);
-
-    tx.set(
-      refCliente,
-      {
-        servicios: arrServ,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      },
-      { merge: true }
-    );
-
-    if (docInv.exists) {
-      const invData = docInv.data() || {};
-      const clientesInv = Array.isArray(invData.clientes) ? invData.clientes.slice() : [];
-
-      const yaExiste = clientesInv.some(
-        (c) => c.nombre === curCli.nombrePerfil && c.pin === servicio.pin
-      );
-
-      if (!yaExiste) {
-        clientesInv.push({
-          nombre: curCli.nombrePerfil || "Sin Nombre",
-          pin: servicio.pin || "0000",
-          slot: clientesInv.length + 1,
-        });
-
-        const capacidad = Number(invData.capacidad || invData.total || 0);
-        const ocupados = clientesInv.length;
-
-        let disponibles = 0;
-        if (capacidad > 0) {
-          disponibles = Math.max(0, capacidad - ocupados);
-        } else {
-          disponibles = Math.max(0, Number(invData.disp || 0) - 1);
-        }
-
-        const estado = disponibles === 0 ? "llena" : "activa";
-
-        tx.set(
-          refInv,
-          {
-            clientes: clientesInv,
-            ocupados,
-            disponibles,
-            disp: disponibles,
-            estado,
-            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-          },
-          { merge: true }
-        );
-      }
-    }
-
-    return {
-      cliente: { id: docCli.id, ...curCli },
-      servicios: arrServ,
-    };
-  });
-}
-
-// ===============================
-// HELPERS CRM
-// ===============================
-function daysUntilDMY(dmy) {
-  if (!isFechaDMY(dmy)) return null;
-  const [dd, mm, yyyy] = String(dmy).split("/").map(Number);
-  const target = new Date(yyyy, mm - 1, dd);
-  const now = new Date();
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  return Math.round((target.getTime() - today.getTime()) / 86400000);
-}
-
-function estadoServicioLabel(fechaRenovacion) {
-  const d = daysUntilDMY(fechaRenovacion);
-  if (d === null) return "⚪ Sin fecha";
-  if (d < 0) return "⚫ Vencido";
-  if (d === 0) return "🔴 Vence hoy";
-  if (d >= 1 && d <= 3) return "🟡 Próximo";
-  return "🟢 Activo";
-}
-
-function emojiPlataforma(plataforma = "") {
-  const p = normalizarPlataforma(plataforma);
-  const map = {
-    netflix: "📺",
-    vipnetflix: "🔥",
-    disneyp: "🏰",
-    disneys: "🎞️",
-    hbomax: "🍿",
-    primevideo: "🎥",
-    paramount: "📀",
-    crunchyroll: "🍥",
-    vix: "🎬",
-    appletv: "🍎",
-    universal: "🌎",
-    youtube: "▶️",
-    spotify: "🎵",
-    canva: "🎨",
-    oleadatv1: "🌊",
-    oleadatv3: "🌊",
-    iptv1: "📡",
-    iptv3: "📡",
-    iptv4: "📡",
-  };
-  return map[p] || "📦";
-}
-
-function labelPlataforma(plataforma = "") {
-  return `${emojiPlataforma(plataforma)} ${normalizarPlataforma(plataforma)}`;
-}
-
-function resumenClienteCRM(cliente) {
-  const servicios = serviciosOrdenados(Array.isArray(cliente?.servicios) ? cliente.servicios : []);
-  let totalMensual = 0;
-  let proxFecha = "";
-  let venceHoy = 0;
-  let vencidos = 0;
-  let proximos = 0;
-
-  for (const s of servicios) {
-    totalMensual += Number(s.precio || 0);
-    const d = daysUntilDMY(s.fechaRenovacion);
-    if (proxFecha === "" && isFechaDMY(s.fechaRenovacion)) proxFecha = s.fechaRenovacion;
-    if (d === 0) venceHoy++;
-    if (d !== null && d < 0) vencidos++;
-    if (d !== null && d >= 1 && d <= 3) proximos++;
-  }
-
-  let estadoGeneral = "🟢 Estable";
-  if (vencidos > 0 || venceHoy > 0) estadoGeneral = "🔴 Atención";
-  else if (proximos > 0) estadoGeneral = "🟡 Seguimiento";
-
-  return {
-    servicios,
-    totalMensual,
-    proxFecha: proxFecha || "-",
-    venceHoy,
-    vencidos,
-    proximos,
-    estadoGeneral,
-  };
-}
-
-function clienteResumenTXT(c) {
-  const r = resumenClienteCRM(c);
-
-  let body = "";
-  body += `CLIENTE CRM\n\n`;
-  body += `NOMBRE: ${stripAcentos(c.nombrePerfil || "-")}\n`;
-  body += `TELEFONO: ${onlyDigits(c.telefono || "") || "-"}\n`;
-  body += `VENDEDOR: ${stripAcentos(c.vendedor || "-")}\n\n`;
-  body += `SERVICIOS ACTIVOS: ${r.servicios.length}\n`;
-  body += `TOTAL MENSUAL: ${r.totalMensual} Lps\n`;
-  body += `PROXIMA RENOVACION: ${r.proxFecha}\n`;
-  body += `VENCE HOY: ${r.venceHoy}\n`;
-  body += `VENCIDOS: ${r.vencidos}\n`;
-  body += `PROXIMOS: ${r.proximos}\n`;
-  body += `ESTADO GENERAL: ${stripAcentos(r.estadoGeneral)}\n\n`;
-  body += `SERVICIOS\n\n`;
-
-  if (!r.servicios.length) {
-    body += "SIN SERVICIOS\n";
-  } else {
-    r.servicios.forEach((s, i) => {
-      body += `${i + 1}) ${normalizarPlataforma(s.plataforma)} | ${s.correo || "-"} | ${Number(s.precio || 0)} Lps | ${s.fechaRenovacion || "-"} | ${stripAcentos(estadoServicioLabel(s.fechaRenovacion))}\n`;
-    });
-  }
-
-  return body;
-}
-
-// ===============================
-// HELPERS INVENTARIO
-// ===============================
-async function buscarInventarioPorCorreo(correo) {
-  const mail = String(correo || "").trim().toLowerCase();
-  const snap = await db.collection("inventario").where("correo", "==", mail).limit(20).get();
-  return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-}
-
-async function aplicarAutoLleno(chatId, ref, dataAntes, dataDespues) {
-  const antes = Number(dataAntes?.disp ?? 0);
-  const despues = Number(dataDespues?.disp ?? 0);
-
-  if (despues <= 0) {
-    await ref.set(
-      {
-        disp: 0,
-        estado: "llena",
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      },
-      { merge: true }
-    );
-
-    if (antes > 0) {
-      return bot.sendMessage(
-        chatId,
-        `🚨 *ALERTA STOCK*\n${String(dataDespues.plataforma).toUpperCase()} quedó en *0*.\n📧 ${dataDespues.correo}\n✅ Estado: *LLENA*`,
-        { parse_mode: "Markdown" }
-      );
-    }
-  }
-}
-
-async function inventarioPlataformaTexto(plataforma, page) {
-  const p = normalizarPlataforma(plataforma);
-  const totalDefault = await getTotalPorPlataforma(p);
-
-  const snap = await db.collection("inventario").where("plataforma", "==", p).limit(500).get();
-
-  const docs = snap.docs
-    .map((d) => {
-      const data = d.data() || {};
-      const clientes = Array.isArray(data.clientes) ? data.clientes : [];
-      const capacidad = Number(data.capacidad || data.total || totalDefault || 0);
-      const ocupados = clientes.length;
-
-      let disponibles = 0;
-      if (capacidad > 0) {
-        disponibles = Math.max(0, capacidad - ocupados);
-      } else {
-        disponibles = Number(data.disp || 0);
-      }
-
-      let estado = "activa";
-      if (disponibles <= 0) estado = "llena";
-
-      return {
-        id: d.id,
-        ...data,
-        capacidad,
-        ocupados,
-        disp: disponibles,
-        estado,
-      };
-    })
-    .filter((x) => Number(x.disp || 0) >= 1)
-    .sort((a, b) => Number(b.disp || 0) - Number(a.disp || 0));
-
-  const totalItems = docs.length;
-  const totalPages = Math.max(1, Math.ceil(totalItems / PAGE_SIZE));
-  const safePage = Math.min(Math.max(Number(page) || 0, 0), totalPages - 1);
-  const start = safePage * PAGE_SIZE;
-  const end = Math.min(start + PAGE_SIZE, totalItems);
-  const slice = docs.slice(start, end);
-
-  let texto = `📌 *${p.toUpperCase()} — STOCK DISPONIBLE*\n`;
-  texto += `Mostrando ${totalItems === 0 ? 0 : start + 1}-${end} de ${totalItems}\n\n`;
-
-  if (slice.length === 0) {
-    texto += `⚠️ ${p.toUpperCase()} SIN PERFILES DISPONIBLES\n`;
-  } else {
-    let i = start + 1;
-    let libresTotal = 0;
-    docs.forEach((x) => (libresTotal += Number(x.disp || 0)));
-
-    for (const d of slice) {
-      const capacidad = Number(d.capacidad || totalDefault || "-");
-      texto += `${i}) ${d.correo} — 🔑 ${d?.clave ? d.clave : "-"} — ${d.disp}/${capacidad}\n`;
-      i++;
-    }
-
-    texto += `\n━━━━━━━━━━━━━━\n`;
-    texto += `📊 Correos con stock: ${totalItems}\n`;
-    texto += `👤 Perfiles/Pantallas libres totales: ${libresTotal}\n\n`;
-    texto += `👉 Para abrir submenu: escriba /correo (ej: /mail@gmail.com)\n`;
-  }
-
-  texto += `\n📄 Página: ${safePage + 1}/${totalPages}`;
-  return { texto, safePage, totalPages };
-}
-
-async function enviarInventarioPlataforma(chatId, plataforma, page) {
-  const p = normalizarPlataforma(plataforma);
-
-  if (!esPlataformaValida(p)) {
-    return upsertPanel(
-      chatId,
-      "⚠️ Plataforma inválida.",
-      { inline_keyboard: [[{ text: "🏠 Inicio", callback_data: "go:inicio" }]] },
-      "Markdown"
-    );
-  }
-
-  const { texto, safePage, totalPages } = await inventarioPlataformaTexto(p, page);
-  const canBack = safePage > 0;
-  const canNext = safePage < totalPages - 1;
-
-  return upsertPanel(
-    chatId,
-    texto,
-    {
-      inline_keyboard: [
-        [
-          { text: "⬅️ Atrás", callback_data: canBack ? `inv:${p}:${safePage - 1}` : "noop" },
-          { text: "🏠 Inicio", callback_data: "go:inicio" },
-          { text: "➡️ Siguiente", callback_data: canNext ? `inv:${p}:${safePage + 1}` : "noop" },
-        ],
-        [{ text: "🔄 Actualizar", callback_data: `inv:${p}:${safePage}` }],
-        [{ text: "⬅️ Volver Inventario", callback_data: "menu:inventario" }],
-      ],
-    },
-    "Markdown"
-  );
-}
-
-async function mostrarStockGeneral(chatId) {
-  const cfg = await db.collection("config").doc("totales_plataforma").get();
-  const totals = cfg.exists ? cfg.data() : {};
-
-  let texto = "📦 *STOCK GENERAL*\n\n";
-
-  for (const p of PLATAFORMAS) {
-    const snap = await db.collection("inventario").where("plataforma", "==", p).limit(500).get();
-    let libres = 0;
-
-    snap.forEach((d) => {
-      const data = d.data() || {};
-      const clientes = Array.isArray(data.clientes) ? data.clientes : [];
-      const capacidad = Number(data.capacidad || data.total || totals?.[p] || 0);
-
-      if (capacidad > 0) {
-        libres += Math.max(0, capacidad - clientes.length);
-      } else {
-        libres += Number(data.disp || 0);
-      }
-    });
-
-    texto += `✅ *${p}*: ${libres} libres (/${totals?.[p] ?? "-"})\n`;
-  }
-
-  return bot.sendMessage(chatId, texto, { parse_mode: "Markdown" });
-}
-
-async function enviarSubmenuInventario(chatId, plataforma, correo) {
-  return mostrarPanelCorreo(chatId, plataforma, correo);
-}
-
-// ===============================
 // HELPERS FINANZAS BASE
 // ===============================
 function getFinBancos() {
@@ -1217,370 +778,6 @@ function kbMotivosFinanzas() {
   return { inline_keyboard: rows };
 }
 
-async function registrarIngresoTx({
-  monto,
-  banco,
-  fecha,
-  userId,
-  userName = "",
-}) {
-  const parsed = parseFechaFinanceInput(fecha);
-  if (!parsed.ok) throw new Error("Fecha inválida");
-
-  const nMonto = parseMontoNumber(monto);
-  if (!Number.isFinite(nMonto) || nMonto <= 0) throw new Error("Monto inválido");
-
-  const ref = db.collection(FINANZAS_COLLECTION).doc();
-
-  await ref.set({
-    tipo: "ingreso",
-    monto: Number(nMonto),
-    banco: String(banco || "Otro").trim(),
-    motivo: "",
-    detalle: "",
-    plataforma: "",
-    vendedor: "",
-    cliente: "",
-    fecha: parsed.fecha,
-    fechaTS: parsed.fechaTS,
-    mesKey: parsed.mesKey,
-    createdBy: String(userId),
-    createdByName: String(userName || "").trim(),
-    createdAt: admin.firestore.FieldValue.serverTimestamp(),
-    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-  });
-
-  return { id: ref.id, fecha: parsed.fecha, monto: nMonto, banco: banco || "Otro" };
-}
-
-async function registrarEgresoTx({
-  monto,
-  motivo,
-  fecha,
-  userId,
-  userName = "",
-}) {
-  const parsed = parseFechaFinanceInput(fecha);
-  if (!parsed.ok) throw new Error("Fecha inválida");
-
-  const nMonto = parseMontoNumber(monto);
-  if (!Number.isFinite(nMonto) || nMonto <= 0) throw new Error("Monto inválido");
-
-  const ref = db.collection(FINANZAS_COLLECTION).doc();
-
-  await ref.set({
-    tipo: "egreso",
-    monto: Number(nMonto),
-    banco: "",
-    motivo: String(motivo || "Otros").trim(),
-    detalle: "",
-    plataforma: "",
-    vendedor: "",
-    cliente: "",
-    fecha: parsed.fecha,
-    fechaTS: parsed.fechaTS,
-    mesKey: parsed.mesKey,
-    createdBy: String(userId),
-    createdByName: String(userName || "").trim(),
-    createdAt: admin.firestore.FieldValue.serverTimestamp(),
-    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-  });
-
-  return { id: ref.id, fecha: parsed.fecha, monto: nMonto, motivo: motivo || "Otros" };
-}
-
-async function getMovimientosPorFecha(fechaDMY, userId, isSA = false) {
-  const ini = startOfDayTS(fechaDMY);
-  const fin = endOfDayTS(fechaDMY);
-
-  const snap = await db
-    .collection(FINANZAS_COLLECTION)
-    .where("fechaTS", ">=", ini)
-    .where("fechaTS", "<=", fin)
-    .get();
-
-  let arr = snap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
-
-  if (!isSA) {
-    arr = arr.filter((x) => String(x.createdBy || "") === String(userId));
-  }
-
-  arr.sort((a, b) => {
-    const ta = Number(a.fechaTS || 0);
-    const tb = Number(b.fechaTS || 0);
-    if (ta !== tb) return ta - tb;
-    return String(a.tipo || "").localeCompare(String(b.tipo || ""));
-  });
-
-  return arr;
-}
-
-async function getMovimientosPorMes(monthKey, userId, isSA = false) {
-  const snap = await db.collection(FINANZAS_COLLECTION).where("mesKey", "==", monthKey).get();
-
-  let arr = snap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
-
-  if (!isSA) {
-    arr = arr.filter((x) => String(x.createdBy || "") === String(userId));
-  }
-
-  arr.sort((a, b) => Number(a.fechaTS || 0) - Number(b.fechaTS || 0));
-  return arr;
-}
-
-function agruparIngresosPorBanco(movs = []) {
-  const map = new Map();
-  for (const m of movs) {
-    if (String(m.tipo || "") !== "ingreso") continue;
-    const banco = String(m.banco || "Otro").trim() || "Otro";
-    map.set(banco, Number(map.get(banco) || 0) + Number(m.monto || 0));
-  }
-  return Array.from(map.entries())
-    .map(([banco, monto]) => ({ banco, monto }))
-    .sort((a, b) => b.monto - a.monto);
-}
-
-function agruparEgresosPorMotivo(movs = []) {
-  const map = new Map();
-  for (const m of movs) {
-    if (String(m.tipo || "") !== "egreso") continue;
-    const motivo = String(m.motivo || "Otros").trim() || "Otros";
-    map.set(motivo, Number(map.get(motivo) || 0) + Number(m.monto || 0));
-  }
-  return Array.from(map.entries())
-    .map(([motivo, monto]) => ({ motivo, monto }))
-    .sort((a, b) => b.monto - a.monto);
-}
-
-function calcularTotalesMovimientos(movs = []) {
-  let ingresos = 0;
-  let egresos = 0;
-  for (const m of movs) {
-    if (String(m.tipo || "") === "ingreso") ingresos += Number(m.monto || 0);
-    if (String(m.tipo || "") === "egreso") egresos += Number(m.monto || 0);
-  }
-  const neta = ingresos - egresos;
-  return { ingresos, egresos, neta };
-}
-
-function resumenFinanzasTextoPorFecha(fechaDMY, movs = []) {
-  const { ingresos, egresos, neta } = calcularTotalesMovimientos(movs);
-  const bancos = agruparIngresosPorBanco(movs);
-  const motivos = agruparEgresosPorMotivo(movs);
-
-  let txt = `📊 *ESTADO DE RESULTADOS (${escMD(fechaDMY)})*\n\n`;
-  txt += `💰 *INGRESOS:* ${moneyLps(ingresos)}\n`;
-  if (!bancos.length) {
-    txt += `➖ Sin ingresos registrados\n`;
-  } else {
-    bancos.forEach((x) => {
-      txt += `➖ ${escMD(x.banco)}: ${moneyLps(x.monto)}\n`;
-    });
-  }
-
-  txt += `\n🛠️ *EGRESOS:* ${moneyLps(egresos)}\n`;
-  if (!motivos.length) {
-    txt += `➖ Sin egresos registrados\n`;
-  } else {
-    motivos.forEach((x) => {
-      txt += `➖ ${escMD(x.motivo)}: ${moneyLps(x.monto)}\n`;
-    });
-  }
-
-  txt += `\n📈 *GANANCIA NETA:* ${neta >= 0 ? "+" : ""}${moneyLps(neta)} ${neta >= 0 ? "🟢" : "🔴"}\n`;
-  txt += `🧾 *Movimientos:* ${movs.length}`;
-  return txt;
-}
-
-function resumenBancosMesTexto(monthKey, movs = []) {
-  const bancos = agruparIngresosPorBanco(movs);
-  const total = bancos.reduce((a, b) => a + Number(b.monto || 0), 0);
-
-  let txt = `🏦 *RESUMEN POR BANCO DEL MES ${escMD(getMonthLabelFromKey(monthKey))}*\n\n`;
-
-  if (!bancos.length) {
-    txt += `⚠️ No hay ingresos registrados en ese mes.`;
-    return txt;
-  }
-
-  bancos.forEach((x, i) => {
-    txt += `${i + 1}) *${escMD(x.banco)}* — ${moneyLps(x.monto)}\n`;
-  });
-
-  txt += `\n━━━━━━━━━━━━━━\n`;
-  txt += `💰 *Total ingresos del mes:* ${moneyLps(total)}`;
-  return txt;
-}
-
-function cierreCajaTexto(fechaDMY, movs = []) {
-  const { ingresos, egresos, neta } = calcularTotalesMovimientos(movs);
-  let txt = `🧾 *CIERRE DE CAJA (${escMD(fechaDMY)})*\n\n`;
-  txt += `💰 Entradas: ${moneyLps(ingresos)}\n`;
-  txt += `💸 Salidas: ${moneyLps(egresos)}\n`;
-  txt += `📦 Caja final: ${neta >= 0 ? "+" : ""}${moneyLps(neta)} ${neta >= 0 ? "🟢" : "🔴"}\n`;
-  txt += `🧮 Movimientos: ${movs.length}`;
-  return txt;
-}
-
-async function eliminarMovimientoFinanzas(id, userId, isSA = false) {
-  const ref = db.collection(FINANZAS_COLLECTION).doc(String(id));
-  const doc = await ref.get();
-  if (!doc.exists) throw new Error("Movimiento no encontrado");
-
-  const data = doc.data() || {};
-  if (!isSA && String(data.createdBy || "") !== String(userId)) {
-    throw new Error("No autorizado para eliminar este movimiento");
-  }
-
-  await ref.delete();
-  return data;
-}
-
-async function exportarFinanzasRangoExcel(chatId, fechaInicio, fechaFin, userId, isSA = false) {
-  if (!isFechaDMY(fechaInicio) || !isFechaDMY(fechaFin)) {
-    return bot.sendMessage(chatId, "⚠️ Formato inválido. Use dd/mm/yyyy");
-  }
-
-  const ini = startOfDayTS(fechaInicio);
-  const fin = endOfDayTS(fechaFin);
-
-  if (ini > fin) {
-    return bot.sendMessage(chatId, "⚠️ El rango es inválido.");
-  }
-
-  const snap = await db
-    .collection(FINANZAS_COLLECTION)
-    .where("fechaTS", ">=", ini)
-    .where("fechaTS", "<=", fin)
-    .get();
-
-  let movs = snap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
-
-  if (!isSA) {
-    movs = movs.filter((x) => String(x.createdBy || "") === String(userId));
-  }
-
-  movs.sort((a, b) => Number(a.fechaTS || 0) - Number(b.fechaTS || 0));
-
-  if (!movs.length) {
-    return bot.sendMessage(chatId, "⚠️ No hay movimientos en ese rango.");
-  }
-
-  const workbook = new ExcelJS.Workbook();
-  workbook.creator = "Sublicuentas Bot";
-  workbook.created = new Date();
-
-  const wsMov = workbook.addWorksheet("Movimientos");
-  wsMov.columns = [
-    { header: "Fecha", key: "fecha", width: 14 },
-    { header: "Tipo", key: "tipo", width: 12 },
-    { header: "Monto", key: "monto", width: 14 },
-    { header: "Banco", key: "banco", width: 18 },
-    { header: "Motivo", key: "motivo", width: 20 },
-    { header: "Detalle", key: "detalle", width: 26 },
-    { header: "Plataforma", key: "plataforma", width: 18 },
-    { header: "Vendedor", key: "vendedor", width: 18 },
-    { header: "Cliente", key: "cliente", width: 22 },
-    { header: "Creado por", key: "createdByName", width: 18 },
-  ];
-
-  wsMov.getRow(1).font = { bold: true };
-  wsMov.getRow(1).alignment = { horizontal: "center", vertical: "middle" };
-
-  for (const m of movs) {
-    wsMov.addRow({
-      fecha: m.fecha || "",
-      tipo: m.tipo || "",
-      monto: Number(m.monto || 0),
-      banco: m.banco || "",
-      motivo: m.motivo || "",
-      detalle: m.detalle || "",
-      plataforma: m.plataforma || "",
-      vendedor: m.vendedor || "",
-      cliente: m.cliente || "",
-      createdByName: m.createdByName || m.createdBy || "",
-    });
-  }
-
-  wsMov.getColumn("monto").numFmt = "#,##0.00";
-
-  wsMov.eachRow((row, rowNumber) => {
-    row.eachCell((cell) => {
-      cell.border = {
-        top: { style: "thin" },
-        left: { style: "thin" },
-        bottom: { style: "thin" },
-        right: { style: "thin" },
-      };
-      if (rowNumber === 1) {
-        cell.font = { bold: true };
-      }
-    });
-  });
-
-  const ingresos = movs
-    .filter((x) => String(x.tipo || "") === "ingreso")
-    .reduce((a, b) => a + Number(b.monto || 0), 0);
-
-  const egresos = movs
-    .filter((x) => String(x.tipo || "") === "egreso")
-    .reduce((a, b) => a + Number(b.monto || 0), 0);
-
-  const neta = ingresos - egresos;
-
-  const wsRes = workbook.addWorksheet("Resumen");
-  wsRes.columns = [
-    { header: "Concepto", key: "concepto", width: 24 },
-    { header: "Monto", key: "monto", width: 18 },
-  ];
-
-  wsRes.getRow(1).font = { bold: true };
-  wsRes.addRow({ concepto: "Ingresos", monto: ingresos });
-  wsRes.addRow({ concepto: "Egresos", monto: egresos });
-  wsRes.addRow({ concepto: "Ganancia neta", monto: neta });
-  wsRes.getColumn("monto").numFmt = "#,##0.00";
-
-  wsRes.eachRow((row) => {
-    row.eachCell((cell) => {
-      cell.border = {
-        top: { style: "thin" },
-        left: { style: "thin" },
-        bottom: { style: "thin" },
-        right: { style: "thin" },
-      };
-    });
-  });
-
-  const porBanco = {};
-  for (const m of movs) {
-    if (String(m.tipo || "") !== "ingreso") continue;
-    const banco = String(m.banco || "Otro").trim() || "Otro";
-    porBanco[banco] = Number(porBanco[banco] || 0) + Number(m.monto || 0);
-  }
-
-  const wsBanco = workbook.addWorksheet("Bancos");
-  wsBanco.columns = [
-    { header: "Banco", key: "banco", width: 22 },
-    { header: "Ingresos", key: "monto", width: 18 },
-  ];
-  wsBanco.getRow(1).font = { bold: true };
-
-  Object.entries(porBanco)
-    .sort((a, b) => Number(b[1]) - Number(a[1]))
-    .forEach(([banco, monto]) => {
-      wsBanco.addRow({ banco, monto });
-    });
-
-  wsBanco.getColumn("monto").numFmt = "#,##0.00";
-
-  const buffer = await workbook.xlsx.writeBuffer();
-
-  return bot.sendDocument(chatId, Buffer.from(buffer), {}, {
-    filename: `finanzas_${ymdFromDMY(fechaInicio)}_a_${ymdFromDMY(fechaFin)}.xlsx`,
-    contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-  });
-}
-
 // ===============================
 // MENÚS
 // ===============================
@@ -1615,42 +812,42 @@ async function menuInventario(chatId) {
   return upsertPanel(chatId, "📦 *INVENTARIO* (elija plataforma)", {
     inline_keyboard: [
       [
-        { text: "📺 Netflix", callback_data: "inv:netflix:0" },
-        { text: "🔥 VIP Netflix", callback_data: "inv:vipnetflix:0" },
+        { text: "📺 netflix", callback_data: "inv:netflix:0" },
+        { text: "🔥 vipnetflix", callback_data: "inv:vipnetflix:0" },
       ],
       [
-        { text: "🏰 Disney Premium", callback_data: "inv:disneyp:0" },
-        { text: "🎞️ Disney Standard", callback_data: "inv:disneys:0" },
+        { text: "🏰 disneyp", callback_data: "inv:disneyp:0" },
+        { text: "🎞️ disneys", callback_data: "inv:disneys:0" },
       ],
       [
-        { text: "🍿 HBO Max", callback_data: "inv:hbomax:0" },
-        { text: "🎥 Prime Video", callback_data: "inv:primevideo:0" },
+        { text: "🍿 hbomax", callback_data: "inv:hbomax:0" },
+        { text: "🎥 primevideo", callback_data: "inv:primevideo:0" },
       ],
       [
-        { text: "📀 Paramount+", callback_data: "inv:paramount:0" },
-        { text: "🍥 Crunchyroll", callback_data: "inv:crunchyroll:0" },
+        { text: "📀 paramount", callback_data: "inv:paramount:0" },
+        { text: "🍥 crunchyroll", callback_data: "inv:crunchyroll:0" },
       ],
       [
-        { text: "🎬 Vix", callback_data: "inv:vix:0" },
-        { text: "🍎 Apple TV", callback_data: "inv:appletv:0" },
+        { text: "🎬 vix", callback_data: "inv:vix:0" },
+        { text: "🍎 appletv", callback_data: "inv:appletv:0" },
       ],
       [
-        { text: "🌎 Universal", callback_data: "inv:universal:0" },
-        { text: "▶️ YouTube", callback_data: "inv:youtube:0" },
+        { text: "🌎 universal", callback_data: "inv:universal:0" },
+        { text: "▶️ youtube", callback_data: "inv:youtube:0" },
       ],
       [
-        { text: "🎵 Spotify", callback_data: "inv:spotify:0" },
-        { text: "🎨 Canva", callback_data: "inv:canva:0" },
+        { text: "🎵 spotify", callback_data: "inv:spotify:0" },
+        { text: "🎨 canva", callback_data: "inv:canva:0" },
       ],
       [
-        { text: "🌊 OleadaTV (1)", callback_data: "inv:oleadatv1:0" },
-        { text: "🌊 OleadaTV (3)", callback_data: "inv:oleadatv3:0" },
+        { text: "🌊 oleadatv1", callback_data: "inv:oleadatv1:0" },
+        { text: "🌊 oleadatv3", callback_data: "inv:oleadatv3:0" },
       ],
       [
-        { text: "📡 IPTV (1)", callback_data: "inv:iptv1:0" },
-        { text: "📡 IPTV (3)", callback_data: "inv:iptv3:0" },
+        { text: "📡 iptv1", callback_data: "inv:iptv1:0" },
+        { text: "📡 iptv3", callback_data: "inv:iptv3:0" },
       ],
-      [{ text: "📡 IPTV (4)", callback_data: "inv:iptv4:0" }],
+      [{ text: "📡 iptv4", callback_data: "inv:iptv4:0" }],
       [{ text: "📦 Stock General", callback_data: "inv:general" }],
       [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
     ],
@@ -1808,16 +1005,16 @@ function kbPlataformasWiz(prefix, clientId, idxOpt) {
       { text: "🎨 canva", callback_data: cb("canva") },
     ],
     [
-      { text: "🌊 oleadatv (1)", callback_data: cb("oleadatv1") },
-      { text: "🌊 oleadatv (3)", callback_data: cb("oleadatv3") },
+      { text: "🌊 oleadatv1", callback_data: cb("oleadatv1") },
+      { text: "🌊 oleadatv3", callback_data: cb("oleadatv3") },
     ],
     [
-      { text: "📡 iptv (1)", callback_data: cb("iptv1") },
-      { text: "📡 iptv (3)", callback_data: cb("iptv3") },
+      { text: "📡 iptv1", callback_data: cb("iptv1") },
+      { text: "📡 iptv3", callback_data: cb("iptv3") },
     ],
-    [{ text: "📡 iptv (4)", callback_data: cb("iptv4") }],
+    [{ text: "📡 iptv4", callback_data: cb("iptv4") }],
   ];
-                                }
+      }
 // ===============================
 // FICHA CLIENTE / CRM / EDICIÓN
 // ===============================
@@ -1881,12 +1078,7 @@ async function enviarFichaCliente(chatId, clientId) {
   kb.push([{ text: "📄 TXT de este cliente", callback_data: `cli:txt:one:${clientId}` }]);
   kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
 
-  return upsertPanel(
-    chatId,
-    txt,
-    { inline_keyboard: kb },
-    "Markdown"
-  );
+  return upsertPanel(chatId, txt, { inline_keyboard: kb }, "Markdown");
 }
 
 async function menuEditarCliente(chatId, clientId) {
@@ -2050,11 +1242,7 @@ function getCapacidadCorreo(data = {}, plataforma = "") {
 async function mostrarListaCorreosPlataforma(chatId, plataforma) {
   const plat = normalizarPlataforma(plataforma);
 
-  const snap = await db
-    .collection("inventario")
-    .where("plataforma", "==", plat)
-    .limit(500)
-    .get();
+  const snap = await db.collection("inventario").where("plataforma", "==", plat).limit(500).get();
 
   if (snap.empty) {
     return upsertPanel(
@@ -2098,14 +1286,7 @@ async function mostrarListaCorreosPlataforma(chatId, plataforma) {
 
   kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
 
-  return upsertPanel(
-    chatId,
-    txt,
-    {
-      inline_keyboard: kb,
-    },
-    "Markdown"
-  );
+  return upsertPanel(chatId, txt, { inline_keyboard: kb }, "Markdown");
 }
 
 async function mostrarMenuClientesCorreo(chatId, plataforma, correo) {
@@ -2191,14 +1372,7 @@ async function mostrarPanelCorreo(chatId, plataforma, correo) {
   kb.push([{ text: "⬅️ Volver Inventario", callback_data: `inv:${plat}:0` }]);
   kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
 
-  return upsertPanel(
-    chatId,
-    txt,
-    {
-      inline_keyboard: kb,
-    },
-    "Markdown"
-  );
+  return upsertPanel(chatId, txt, { inline_keyboard: kb }, "Markdown");
 }
 
 // ===============================
@@ -2480,12 +1654,7 @@ async function enviarListaResultadosClientes(chatId, resultados) {
   ]);
   kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
 
-  return upsertPanel(
-    chatId,
-    txt,
-    { inline_keyboard: kb },
-    "Markdown"
-  );
+  return upsertPanel(chatId, txt, { inline_keyboard: kb }, "Markdown");
 }
 
 // ===============================
@@ -2914,8 +2083,7 @@ async function responderMenuCodigosNetflix(chatId, plataforma, correo) {
     },
     "Markdown"
   );
-                   }
-
+}
 // ===============================
 // COMANDOS CLIENTES
 // ===============================
@@ -3239,7 +2407,6 @@ bot.onText(/\/excel_finanzas\s+(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})/i, 
 // ===============================
 bot.onText(/\/id/i, async (msg) => {
   if (!HAS_RUNTIME_LOCK) return;
-
   const chatId = msg.chat.id;
   const userId = msg.from.id;
   return bot.sendMessage(chatId, `🆔 Tu Telegram ID es:\n${userId}\n\n📩 Envíelo al administrador para activarte en el bot.`);
@@ -3247,7 +2414,6 @@ bot.onText(/\/id/i, async (msg) => {
 
 bot.onText(/\/miid/i, async (msg) => {
   if (!HAS_RUNTIME_LOCK) return;
-
   const chatId = msg.chat.id;
   const userId = msg.from.id;
   return bot.sendMessage(chatId, `🆔 Tu Telegram ID es:\n${userId}\n\n📩 Envíelo al administrador para activarte en el bot.`);
@@ -3258,8 +2424,8 @@ bot.onText(/\/vincular_vendedor\s+(.+)/i, async (msg, match) => {
 
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-
   const nombre = String(match[1] || "").trim();
+
   if (!nombre) return bot.sendMessage(chatId, "⚠️ Uso: /vincular_vendedor NOMBRE");
 
   const r = await setTelegramIdToRevendedor(nombre, userId);
@@ -3779,6 +2945,298 @@ bot.on("callback_query", async (q) => {
         return responderCodigoNetflix(chatId, correo, tipo);
       }
 
+      if (data.startsWith("mail_ver_clientes|")) {
+        const [, plataforma, correoEnc] = data.split("|");
+        const correo = decodeURIComponent(correoEnc || "");
+
+        const found = await buscarCorreoInventarioPorPlatCorreo(plataforma, correo);
+        if (!found) return bot.sendMessage(chatId, "❌ El correo no existe.");
+
+        const correoData = found.data || {};
+        const clientes = Array.isArray(correoData.clientes) ? correoData.clientes : [];
+        const capacidad = getCapacidadCorreo(correoData, plataforma);
+        const ocupados = clientes.length;
+        const disponibles = Math.max(0, capacidad - ocupados);
+        const estado = disponibles === 0 ? "LLENA" : "CON ESPACIO";
+
+        let txt = "👥 *Clientes en este correo*\n\n";
+        txt += `📧 *${escMD(correo)}*\n`;
+        txt += `📌 *${escMD(String(plataforma).toUpperCase())}*\n\n`;
+
+        if (!clientes.length) {
+          txt += "_No hay clientes asignados._\n\n";
+        } else {
+          clientes.forEach((c, i) => {
+            txt += `${i + 1}. ${escMD(c.nombre || "Sin nombre")} — PIN ${escMD(c.pin || "----")}\n`;
+          });
+          txt += "\n";
+        }
+
+        txt += `👤 *Ocupados:* ${ocupados}/${capacidad}\n`;
+        txt += `✅ *Disponibles:* ${disponibles}\n`;
+        txt += `📊 *Estado:* ${escMD(estado)}`;
+
+        return upsertPanel(
+          chatId,
+          txt,
+          {
+            inline_keyboard: [
+              [{ text: "⬅️ Volver al correo", callback_data: `mail_panel|${normalizarPlataforma(plataforma)}|${encodeURIComponent(correo)}` }],
+              [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
+            ],
+          },
+          "Markdown"
+        );
+      }
+
+      if (data.startsWith("mail_add_cliente|")) {
+        const [, plataforma, correoEnc] = data.split("|");
+        const correo = decodeURIComponent(correoEnc || "");
+
+        const found = await buscarCorreoInventarioPorPlatCorreo(plataforma, correo);
+        if (!found) return bot.sendMessage(chatId, "❌ El correo no existe.");
+
+        const correoData = found.data || {};
+        const clientes = Array.isArray(correoData.clientes) ? correoData.clientes : [];
+        const capacidad = getCapacidadCorreo(correoData, plataforma);
+        const ocupados = clientes.length;
+        const disponibles = Math.max(0, capacidad - ocupados);
+
+        if (disponibles <= 0) {
+          return bot.sendMessage(
+            chatId,
+            `❌ Esta cuenta ya está llena.\n\n👤 Ocupados: ${ocupados}/${capacidad}\n✅ Disponibles: 0\n📊 Estado: LLENA`
+          );
+        }
+
+        pending.set(String(chatId), {
+          mode: "mailAddClienteNombre",
+          plataforma: normalizarPlataforma(plataforma),
+          correo: String(correo).toLowerCase(),
+        });
+
+        return bot.sendMessage(chatId, "👤 *Agregar cliente*\n\nEscriba el nombre del cliente:", {
+          parse_mode: "Markdown",
+        });
+      }
+
+      if (data.startsWith("mail_del_cliente|")) {
+        const [, plataforma, correoEnc] = data.split("|");
+        const correo = decodeURIComponent(correoEnc || "");
+
+        const found = await buscarCorreoInventarioPorPlatCorreo(plataforma, correo);
+        if (!found) return bot.sendMessage(chatId, "❌ El correo no existe.");
+
+        const correoData = found.data || {};
+        const clientes = Array.isArray(correoData.clientes) ? correoData.clientes : [];
+
+        if (!clientes.length) {
+          return bot.sendMessage(chatId, "⚠️ Este correo no tiene clientes.");
+        }
+
+        const kb = clientes.map((c, i) => [
+          {
+            text: `${i + 1}. ${c.nombre || "Sin nombre"} — PIN ${c.pin || "----"}`,
+            callback_data: `mail_del_cliente_ok|${normalizarPlataforma(plataforma)}|${encodeURIComponent(correo)}|${i}`,
+          },
+        ]);
+
+        kb.push([{ text: "⬅️ Volver", callback_data: `mail_panel|${normalizarPlataforma(plataforma)}|${encodeURIComponent(correo)}` }]);
+
+        return upsertPanel(
+          chatId,
+          `➖ *Quitar cliente*\n\n📧 *${escMD(correo)}*\n\nSeleccione el cliente que desea quitar:`,
+          { inline_keyboard: kb },
+          "Markdown"
+        );
+      }
+
+      if (data.startsWith("mail_del_cliente_ok|")) {
+        const [, plataforma, correoEnc, indexStr] = data.split("|");
+        const correo = decodeURIComponent(correoEnc || "");
+        const index = Number(indexStr);
+
+        const found = await buscarCorreoInventarioPorPlatCorreo(plataforma, correo);
+        if (!found) return bot.sendMessage(chatId, "❌ El correo no existe.");
+
+        const ref = found.ref;
+        const correoData = found.data || {};
+        let clientes = Array.isArray(correoData.clientes) ? correoData.clientes.slice() : [];
+
+        if (!clientes.length) return bot.sendMessage(chatId, "⚠️ Este correo ya no tiene clientes.");
+        if (isNaN(index) || index < 0 || index >= clientes.length) return bot.sendMessage(chatId, "❌ Cliente inválido.");
+
+        const cliente = clientes[index];
+        clientes.splice(index, 1);
+
+        clientes = clientes.map((c, i) => ({
+          ...c,
+          slot: i + 1,
+        }));
+
+        const capacidad = getCapacidadCorreo(correoData, plataforma);
+        const ocupados = clientes.length;
+        const disponibles = Math.max(0, capacidad - ocupados);
+        const estado = disponibles === 0 ? "LLENA" : "CON ESPACIO";
+
+        await ref.set(
+          {
+            clientes,
+            ocupados,
+            disponibles,
+            disp: disponibles,
+            estado: disponibles === 0 ? "llena" : "activa",
+            capacidad,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        );
+
+        await bot.sendMessage(
+          chatId,
+          "✅ *Cliente quitado correctamente*\n\n" +
+            `👤 *Nombre:* ${escMD(cliente.nombre || "Sin nombre")}\n` +
+            `🔐 *PIN:* ${escMD(cliente.pin || "----")}\n\n` +
+            `👤 *Ocupados:* ${ocupados}/${capacidad}\n` +
+            `✅ *Disponibles:* ${disponibles}\n` +
+            `📊 *Estado:* ${escMD(estado)}`,
+          { parse_mode: "Markdown" }
+        );
+
+        return mostrarPanelCorreo(chatId, plataforma, correo);
+      }
+
+      if (data.startsWith("mail_edit_pin|")) {
+        const [, plataforma, correoEnc] = data.split("|");
+        const correo = decodeURIComponent(correoEnc || "");
+
+        const found = await buscarCorreoInventarioPorPlatCorreo(plataforma, correo);
+        if (!found) return bot.sendMessage(chatId, "❌ El correo no existe.");
+
+        const correoData = found.data || {};
+        const clientes = Array.isArray(correoData.clientes) ? correoData.clientes : [];
+
+        if (!clientes.length) return bot.sendMessage(chatId, "⚠️ Este correo no tiene clientes.");
+
+        const kb = clientes.map((c, i) => [
+          {
+            text: `${i + 1}. ${c.nombre || "Sin nombre"} — PIN ${c.pin || "----"}`,
+            callback_data: `mail_edit_pin_sel|${normalizarPlataforma(plataforma)}|${encodeURIComponent(correo)}|${i}`,
+          },
+        ]);
+
+        kb.push([{ text: "⬅️ Volver", callback_data: `mail_panel|${normalizarPlataforma(plataforma)}|${encodeURIComponent(correo)}` }]);
+
+        return upsertPanel(
+          chatId,
+          `🔐 *Editar PIN*\n\n📧 *${escMD(correo)}*\n\nSeleccione el cliente:`,
+          { inline_keyboard: kb },
+          "Markdown"
+        );
+      }
+
+      if (data.startsWith("mail_edit_pin_sel|")) {
+        const [, plataforma, correoEnc, indexStr] = data.split("|");
+        const correo = decodeURIComponent(correoEnc || "");
+        const clienteIndex = Number(indexStr);
+
+        const found = await buscarCorreoInventarioPorPlatCorreo(plataforma, correo);
+        if (!found) return bot.sendMessage(chatId, "❌ El correo no existe.");
+
+        const correoData = found.data || {};
+        const clientes = Array.isArray(correoData.clientes) ? correoData.clientes : [];
+
+        if (!clientes.length) return bot.sendMessage(chatId, "⚠️ Este correo no tiene clientes.");
+        if (isNaN(clienteIndex) || clienteIndex < 0 || clienteIndex >= clientes.length) {
+          return bot.sendMessage(chatId, "❌ Cliente inválido.");
+        }
+
+        const cliente = clientes[clienteIndex];
+
+        pending.set(String(chatId), {
+          mode: "mailEditPin",
+          plataforma: normalizarPlataforma(plataforma),
+          correo: String(correo).toLowerCase(),
+          clienteIndex,
+        });
+
+        return bot.sendMessage(
+          chatId,
+          "🔐 *Editar PIN*\n\n" +
+            `👤 *Cliente:* ${escMD(cliente.nombre || "Sin nombre")}\n` +
+            `🔑 *PIN actual:* ${escMD(cliente.pin || "----")}\n\n` +
+            "Escriba el nuevo PIN de 4 dígitos:",
+          { parse_mode: "Markdown" }
+        );
+      }
+
+      if (data.startsWith("mail_edit_clave|")) {
+        const [, plataforma, correoEnc] = data.split("|");
+        const correo = decodeURIComponent(correoEnc || "");
+
+        const found = await buscarCorreoInventarioPorPlatCorreo(plataforma, correo);
+        if (!found) return bot.sendMessage(chatId, "❌ El correo no existe.");
+
+        const correoData = found.data || {};
+        const claveActual = correoData.clave || "Sin clave";
+
+        pending.set(String(chatId), {
+          mode: "mailEditClaveCorreo",
+          plataforma: normalizarPlataforma(plataforma),
+          correo: String(correo).toLowerCase(),
+        });
+
+        return bot.sendMessage(
+          chatId,
+          "✏️ *Editar clave del correo*\n\n" +
+            `📧 *Correo:* ${escMD(correo)}\n` +
+            `🔑 *Clave actual:* ${escMD(claveActual)}\n\n` +
+            "Escriba la nueva clave del correo:",
+          { parse_mode: "Markdown" }
+        );
+      }
+
+      if (data.startsWith("mail_delete|")) {
+        const [, plataforma, correoEnc] = data.split("|");
+        const correo = decodeURIComponent(correoEnc || "");
+
+        const found = await buscarCorreoInventarioPorPlatCorreo(plataforma, correo);
+        if (!found) return bot.sendMessage(chatId, "❌ Este correo ya no existe.");
+
+        return upsertPanel(
+          chatId,
+          "⚠️ *Confirmar eliminación*\n\n" +
+            `📧 *Correo:* ${escMD(correo)}\n\n` +
+            "Esta acción eliminará la cuenta del inventario.\n\n¿Está seguro que desea borrarla?",
+          {
+            inline_keyboard: [
+              [{ text: "✅ Sí borrar", callback_data: `mail_delete_confirm|${normalizarPlataforma(plataforma)}|${encodeURIComponent(correo)}` }],
+              [{ text: "❌ Cancelar", callback_data: `mail_panel|${normalizarPlataforma(plataforma)}|${encodeURIComponent(correo)}` }],
+            ],
+          },
+          "Markdown"
+        );
+      }
+
+      if (data.startsWith("mail_delete_confirm|")) {
+        const [, plataforma, correoEnc] = data.split("|");
+        const correo = decodeURIComponent(correoEnc || "");
+
+        const found = await buscarCorreoInventarioPorPlatCorreo(plataforma, correo);
+        if (!found) return mostrarListaCorreosPlataforma(chatId, plataforma);
+
+        const ref = found.ref;
+        const correoData = found.data || {};
+        const clientes = Array.isArray(correoData.clientes) ? correoData.clientes : [];
+
+        if (clientes.length > 0) {
+          await bot.sendMessage(chatId, "⚠️ Este correo tenía clientes asignados. Se eliminará igualmente del inventario.");
+        }
+
+        await ref.delete();
+        return enviarInventarioPlataforma(chatId, plataforma, 0);
+      }
+
       if (data === "cli:txt:general") return reporteClientesTXTGeneral(chatId);
       if (data === "cli:txt:vendedores_split") return reporteClientesSplitPorVendedorTXT(chatId);
 
@@ -4047,6 +3505,7 @@ bot.on("callback_query", async (q) => {
             } else {
               disponibles = Number(invData.disp || 0) + 1;
             }
+
             const estado = disponibles === 0 ? "llena" : "activa";
 
             await refInv.set(
@@ -4965,3 +4424,6 @@ http
   .listen(PORT, () => {
     console.log("🌐 HTTP KEEPALIVE activo en puerto", PORT);
   });
+
+
+
