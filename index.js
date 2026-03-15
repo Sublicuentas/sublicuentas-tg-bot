@@ -2349,480 +2349,6 @@ async function responderMenuCodigosNetflix(chatId, plataforma, correo) {
     },
   });
 }
-
-// ===============================
-// FINANZAS HELPERS OPERATIVOS V12.4
-// ===============================
-const FINANZAS_COLLECTION = "finanzas_movimientos";
-
-const FIN_BANCOS_FALLBACK = [
-  "Bac",
-  "Atlántida",
-  "Ficohsa",
-  "Davivienda",
-  "Banpais",
-  "Occidente",
-  "Lafise",
-  "Tigo Money",
-  "Efectivo",
-  "PayPal",
-  "Binance",
-  "Otro",
-];
-
-const FIN_EGRESOS_FALLBACK = [
-  "Renovaciones",
-  "Nuevas cuentas",
-  "Publicidad",
-  "Comisiones",
-  "Servicios",
-  "Retiro personal",
-  "Otros",
-];
-
-function getFinBancos() {
-  try {
-    if (Array.isArray(global.FIN_BANCOS) && global.FIN_BANCOS.length) return global.FIN_BANCOS;
-  } catch (_) {}
-  return FIN_BANCOS_FALLBACK;
-}
-
-function getFinMotivosEgreso() {
-  try {
-    if (Array.isArray(global.FIN_MOTIVOS_EGRESO) && global.FIN_MOTIVOS_EGRESO.length) return global.FIN_MOTIVOS_EGRESO;
-  } catch (_) {}
-  return FIN_EGRESOS_FALLBACK;
-}
-
-function parseMontoNumber(v) {
-  const n = Number(String(v || "").replace(/,/g, "").trim());
-  return Number.isFinite(n) ? n : NaN;
-}
-
-function moneyLps(v) {
-  const n = Number(v || 0);
-  return `${n.toLocaleString("es-HN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Lps`;
-}
-
-function isMonthInputMMYYYY(txt = "") {
-  return /^(0[1-9]|1[0-2])\/\d{4}$/.test(String(txt || "").trim());
-}
-
-function parseFechaFinanceInput(txt = "") {
-  const s = String(txt || "").trim().toLowerCase();
-
-  if (s === "hoy") {
-    const hoy = hoyDMY();
-    return {
-      ok: true,
-      fecha: hoy,
-      fechaTS: parseDMYtoTS(hoy),
-      mesKey: getMonthKeyFromDMY(hoy),
-    };
-  }
-
-  if (!isFechaDMY(s)) return { ok: false };
-
-  return {
-    ok: true,
-    fecha: s,
-    fechaTS: parseDMYtoTS(s),
-    mesKey: getMonthKeyFromDMY(s),
-  };
-}
-
-function getMonthKeyFromDMY(dmy = "") {
-  if (!isFechaDMY(dmy)) return "";
-  const [, mm, yyyy] = String(dmy).split("/").map(Number);
-  return `${yyyy}-${String(mm).padStart(2, "0")}`;
-}
-
-function getMonthLabelFromKey(monthKey = "") {
-  const m = String(monthKey || "").match(/^(\d{4})-(\d{2})$/);
-  if (!m) return monthKey || "-";
-  return `${m[2]}/${m[1]}`;
-}
-
-function parseMonthInputToKey(txt = "") {
-  const s = String(txt || "").trim();
-  if (!isMonthInputMMYYYY(s)) return null;
-  const [mm, yyyy] = s.split("/");
-  return `${yyyy}-${mm}`;
-}
-
-function buildMonthRangeByKey(monthKey = "") {
-  const m = String(monthKey || "").match(/^(\d{4})-(\d{2})$/);
-  if (!m) return null;
-
-  const yyyy = Number(m[1]);
-  const mm = Number(m[2]);
-
-  const start = new Date(yyyy, mm - 1, 1).getTime();
-  const end = new Date(yyyy, mm, 1).getTime() - 1;
-
-  return { start, end };
-}
-
-function startOfDayTS(dmy = "") {
-  return parseDMYtoTS(dmy);
-}
-
-function endOfDayTS(dmy = "") {
-  const ts = parseDMYtoTS(dmy);
-  if (!Number.isFinite(ts)) return ts;
-  return ts + 86399999;
-}
-
-function ymdFromDMY(dmy = "") {
-  if (!isFechaDMY(dmy)) return "";
-  const [dd, mm, yyyy] = String(dmy).split("/");
-  return `${yyyy}-${mm}-${dd}`;
-}
-
-function getFinanceUserFilter(userId) {
-  return String(userId);
-}
-
-async function registrarIngresoTx({
-  monto,
-  banco,
-  fecha,
-  userId,
-  userName = "",
-}) {
-  const parsed = parseFechaFinanceInput(fecha);
-  if (!parsed.ok) throw new Error("Fecha inválida");
-
-  const nMonto = parseMontoNumber(monto);
-  if (!Number.isFinite(nMonto) || nMonto <= 0) throw new Error("Monto inválido");
-
-  const ref = db.collection(FINANZAS_COLLECTION).doc();
-
-  await ref.set({
-    tipo: "ingreso",
-    monto: Number(nMonto),
-    banco: String(banco || "Otro").trim(),
-    motivo: "",
-    fecha: parsed.fecha,
-    fechaTS: parsed.fechaTS,
-    mesKey: parsed.mesKey,
-    createdBy: String(userId),
-    createdByName: String(userName || "").trim(),
-    createdAt: admin.firestore.FieldValue.serverTimestamp(),
-    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-  });
-
-  return { id: ref.id, fecha: parsed.fecha, monto: nMonto, banco: banco || "Otro" };
-}
-
-async function registrarEgresoTx({
-  monto,
-  motivo,
-  fecha,
-  userId,
-  userName = "",
-}) {
-  const parsed = parseFechaFinanceInput(fecha);
-  if (!parsed.ok) throw new Error("Fecha inválida");
-
-  const nMonto = parseMontoNumber(monto);
-  if (!Number.isFinite(nMonto) || nMonto <= 0) throw new Error("Monto inválido");
-
-  const ref = db.collection(FINANZAS_COLLECTION).doc();
-
-  await ref.set({
-    tipo: "egreso",
-    monto: Number(nMonto),
-    banco: "",
-    motivo: String(motivo || "Otros").trim(),
-    fecha: parsed.fecha,
-    fechaTS: parsed.fechaTS,
-    mesKey: parsed.mesKey,
-    createdBy: String(userId),
-    createdByName: String(userName || "").trim(),
-    createdAt: admin.firestore.FieldValue.serverTimestamp(),
-    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-  });
-
-  return { id: ref.id, fecha: parsed.fecha, monto: nMonto, motivo: motivo || "Otros" };
-}
-
-async function getMovimientosPorFecha(fechaDMY, userId, isSA = false) {
-  const ini = startOfDayTS(fechaDMY);
-  const fin = endOfDayTS(fechaDMY);
-
-  const snap = await db
-    .collection(FINANZAS_COLLECTION)
-    .where("fechaTS", ">=", ini)
-    .where("fechaTS", "<=", fin)
-    .get();
-
-  let arr = snap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
-
-  if (!isSA) {
-    arr = arr.filter((x) => String(x.createdBy || "") === String(userId));
-  }
-
-  arr.sort((a, b) => {
-    const ta = Number(a.fechaTS || 0);
-    const tb = Number(b.fechaTS || 0);
-    if (ta !== tb) return ta - tb;
-    return String(a.tipo || "").localeCompare(String(b.tipo || ""));
-  });
-
-  return arr;
-}
-
-async function getMovimientosPorMes(monthKey, userId, isSA = false) {
-  const snap = await db.collection(FINANZAS_COLLECTION).where("mesKey", "==", monthKey).get();
-
-  let arr = snap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
-
-  if (!isSA) {
-    arr = arr.filter((x) => String(x.createdBy || "") === String(userId));
-  }
-
-  arr.sort((a, b) => Number(a.fechaTS || 0) - Number(b.fechaTS || 0));
-  return arr;
-}
-
-function agruparIngresosPorBanco(movs = []) {
-  const map = new Map();
-
-  for (const m of movs) {
-    if (String(m.tipo || "") !== "ingreso") continue;
-    const banco = String(m.banco || "Otro").trim() || "Otro";
-    map.set(banco, Number(map.get(banco) || 0) + Number(m.monto || 0));
-  }
-
-  return Array.from(map.entries())
-    .map(([banco, monto]) => ({ banco, monto }))
-    .sort((a, b) => b.monto - a.monto);
-}
-
-function agruparEgresosPorMotivo(movs = []) {
-  const map = new Map();
-
-  for (const m of movs) {
-    if (String(m.tipo || "") !== "egreso") continue;
-    const motivo = String(m.motivo || "Otros").trim() || "Otros";
-    map.set(motivo, Number(map.get(motivo) || 0) + Number(m.monto || 0));
-  }
-
-  return Array.from(map.entries())
-    .map(([motivo, monto]) => ({ motivo, monto }))
-    .sort((a, b) => b.monto - a.monto);
-}
-
-function calcularTotalesMovimientos(movs = []) {
-  let ingresos = 0;
-  let egresos = 0;
-
-  for (const m of movs) {
-    if (String(m.tipo || "") === "ingreso") ingresos += Number(m.monto || 0);
-    if (String(m.tipo || "") === "egreso") egresos += Number(m.monto || 0);
-  }
-
-  const neta = ingresos - egresos;
-  return { ingresos, egresos, neta };
-}
-
-function resumenFinanzasTextoPorFecha(fechaDMY, movs = []) {
-  const { ingresos, egresos, neta } = calcularTotalesMovimientos(movs);
-  const bancos = agruparIngresosPorBanco(movs);
-  const motivos = agruparEgresosPorMotivo(movs);
-
-  let txt = `📊 *ESTADO DE RESULTADOS (${escMD(fechaDMY)})*\n\n`;
-
-  txt += `💰 *INGRESOS:* ${moneyLps(ingresos)}\n`;
-  if (!bancos.length) {
-    txt += `➖ Sin ingresos registrados\n`;
-  } else {
-    bancos.forEach((x) => {
-      txt += `➖ ${escMD(x.banco)}: ${moneyLps(x.monto)}\n`;
-    });
-  }
-
-  txt += `\n🛠️ *EGRESOS:* ${moneyLps(egresos)}\n`;
-  if (!motivos.length) {
-    txt += `➖ Sin egresos registrados\n`;
-  } else {
-    motivos.forEach((x) => {
-      txt += `➖ ${escMD(x.motivo)}: ${moneyLps(x.monto)}\n`;
-    });
-  }
-
-  txt += `\n📈 *GANANCIA NETA:* ${neta >= 0 ? "+" : ""}${moneyLps(neta)} ${neta >= 0 ? "🟢" : "🔴"}\n`;
-  txt += `🧾 *Movimientos:* ${movs.length}`;
-
-  return txt;
-}
-
-function resumenBancosMesTexto(monthKey, movs = []) {
-  const bancos = agruparIngresosPorBanco(movs);
-  const total = bancos.reduce((a, b) => a + Number(b.monto || 0), 0);
-
-  let txt = `🏦 *RESUMEN POR BANCO DEL MES ${escMD(getMonthLabelFromKey(monthKey))}*\n\n`;
-
-  if (!bancos.length) {
-    txt += `⚠️ No hay ingresos registrados en ese mes.`;
-    return txt;
-  }
-
-  bancos.forEach((x, i) => {
-    txt += `${i + 1}) *${escMD(x.banco)}* — ${moneyLps(x.monto)}\n`;
-  });
-
-  txt += `\n━━━━━━━━━━━━━━\n`;
-  txt += `💰 *Total ingresos del mes:* ${moneyLps(total)}`;
-
-  return txt;
-}
-
-function cierreCajaTexto(fechaDMY, movs = []) {
-  const { ingresos, egresos, neta } = calcularTotalesMovimientos(movs);
-
-  let txt = `🧾 *CIERRE DE CAJA (${escMD(fechaDMY)})*\n\n`;
-  txt += `💰 Entradas: ${moneyLps(ingresos)}\n`;
-  txt += `💸 Salidas: ${moneyLps(egresos)}\n`;
-  txt += `📦 Caja final: ${neta >= 0 ? "+" : ""}${moneyLps(neta)} ${neta >= 0 ? "🟢" : "🔴"}\n`;
-  txt += `🧮 Movimientos: ${movs.length}`;
-
-  return txt;
-}
-
-async function eliminarMovimientoFinanzas(id, userId, isSA = false) {
-  const ref = db.collection(FINANZAS_COLLECTION).doc(String(id));
-  const doc = await ref.get();
-
-  if (!doc.exists) throw new Error("Movimiento no encontrado");
-
-  const data = doc.data() || {};
-
-  if (!isSA && String(data.createdBy || "") !== String(userId)) {
-    throw new Error("No autorizado para eliminar este movimiento");
-  }
-
-  await ref.delete();
-  return data;
-}
-
-async function construirArchivoExcelCompatible(chatId, movs = [], nombre = "reporte_finanzas.xls") {
-  let html = "";
-  html += `<html><head><meta charset="UTF-8"></head><body>`;
-  html += `<table border="1">`;
-  html += `<tr><th>ID</th><th>Fecha</th><th>Tipo</th><th>Monto</th><th>Banco</th><th>Motivo</th><th>Admin</th></tr>`;
-
-  for (const m of movs) {
-    html += `<tr>`;
-    html += `<td>${String(m.id || "")}</td>`;
-    html += `<td>${String(m.fecha || "")}</td>`;
-    html += `<td>${String(m.tipo || "")}</td>`;
-    html += `<td>${Number(m.monto || 0)}</td>`;
-    html += `<td>${String(m.banco || "")}</td>`;
-    html += `<td>${String(m.motivo || "")}</td>`;
-    html += `<td>${String(m.createdByName || m.createdBy || "")}</td>`;
-    html += `</tr>`;
-  }
-
-  html += `</table></body></html>`;
-
-  const buffer = Buffer.from(html, "utf8");
-
-  return bot.sendDocument(chatId, buffer, {}, {
-    filename: nombre,
-    contentType: "application/vnd.ms-excel",
-  });
-}
-
-async function exportarFinanzasRangoExcel(chatId, fechaInicio, fechaFin, userId, isSA = false) {
-  if (!isFechaDMY(fechaInicio) || !isFechaDMY(fechaFin)) {
-    return bot.sendMessage(chatId, "⚠️ Formato inválido. Use dd/mm/yyyy");
-  }
-
-  const ini = startOfDayTS(fechaInicio);
-  const fin = endOfDayTS(fechaFin);
-
-  if (ini > fin) return bot.sendMessage(chatId, "⚠️ El rango es inválido.");
-
-  const snap = await db
-    .collection(FINANZAS_COLLECTION)
-    .where("fechaTS", ">=", ini)
-    .where("fechaTS", "<=", fin)
-    .get();
-
-  let movs = snap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
-
-  if (!isSA) {
-    movs = movs.filter((x) => String(x.createdBy || "") === String(userId));
-  }
-
-  movs.sort((a, b) => Number(a.fechaTS || 0) - Number(b.fechaTS || 0));
-
-  if (!movs.length) return bot.sendMessage(chatId, "⚠️ No hay movimientos en ese rango.");
-
-  const nombre = `finanzas_${ymdFromDMY(fechaInicio)}_a_${ymdFromDMY(fechaFin)}.xls`;
-  return construirArchivoExcelCompatible(chatId, movs, nombre);
-}
-
-function kbBancosFinanzas() {
-  const bancos = getFinBancos();
-  const rows = [];
-
-  for (let i = 0; i < bancos.length; i += 2) {
-    const row = [];
-    row.push({ text: bancos[i], callback_data: `fin:ing:banco:${encodeURIComponent(bancos[i])}` });
-    if (bancos[i + 1]) row.push({ text: bancos[i + 1], callback_data: `fin:ing:banco:${encodeURIComponent(bancos[i + 1])}` });
-    rows.push(row);
-  }
-
-  rows.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
-  return { inline_keyboard: rows };
-}
-
-function kbMotivosFinanzas() {
-  const motivos = getFinMotivosEgreso();
-  const rows = [];
-
-  for (let i = 0; i < motivos.length; i += 2) {
-    const row = [];
-    row.push({ text: motivos[i], callback_data: `fin:egr:motivo:${encodeURIComponent(motivos[i])}` });
-    if (motivos[i + 1]) row.push({ text: motivos[i + 1], callback_data: `fin:egr:motivo:${encodeURIComponent(motivos[i + 1])}` });
-    rows.push(row);
-  }
-
-  rows.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
-  return { inline_keyboard: rows };
-}
-
-async function menuPagos(chatId) {
-  return upsertPanel(
-    chatId,
-    "💳 *FINANZAS V12.4*\n\nSeleccione una opción:",
-    {
-      inline_keyboard: [
-        [
-          { text: "➕ Registrar Ingreso", callback_data: "fin:menu:ingreso" },
-          { text: "➖ Registrar Egreso", callback_data: "fin:menu:egreso" },
-        ],
-        [
-          { text: "📊 Ver Resumen por fecha", callback_data: "fin:menu:resumen_fecha" },
-          { text: "🧾 Cierre de caja", callback_data: "fin:menu:cierre" },
-        ],
-        [
-          { text: "🏦 Resumen banco del mes", callback_data: "fin:menu:bancos_mes" },
-          { text: "🗑️ Eliminar movimiento", callback_data: "fin:menu:eliminar" },
-        ],
-        [
-          { text: "📤 Exportar Excel rango", callback_data: "fin:menu:excel_rango" },
-          { text: "🏠 Inicio", callback_data: "go:inicio" },
-        ],
-      ],
-    },
-    "Markdown"
-  );
-}
-
 // ===============================
 // COMANDOS CLIENTES
 // ===============================
@@ -2897,11 +2423,9 @@ bot.onText(/\/sincronizar_todo/i, async (msg) => {
     return bot.sendMessage(chatId, "⛔ Solo el SUPER ADMIN puede sincronizar la base de datos.");
   }
 
-  await bot.sendMessage(
-    chatId,
-    "🔄 *Iniciando sincronización masiva...*\nEsto puede tardar unos segundos, por favor espere.",
-    { parse_mode: "Markdown" }
-  );
+  await bot.sendMessage(chatId, "🔄 *Iniciando sincronización masiva...*\nEsto puede tardar unos segundos, por favor espere.", {
+    parse_mode: "Markdown",
+  });
 
   let perfilesEmparejados = 0;
   let cuentasAfectadas = new Set();
@@ -2947,16 +2471,15 @@ bot.onText(/\/sincronizar_todo/i, async (msg) => {
             } else {
               disponibles = Math.max(0, Number(invData.disp || 0) - 1);
             }
-
             const estado = disponibles === 0 ? "llena" : "activa";
 
             await refInv.set(
               {
                 clientes: clientesInv,
-                ocupados,
-                disponibles,
+                ocupados: ocupados,
+                disponibles: disponibles,
                 disp: disponibles,
-                estado,
+                estado: estado,
                 updatedAt: admin.firestore.FieldValue.serverTimestamp(),
               },
               { merge: true }
@@ -3064,14 +2587,17 @@ bot.onText(/\/txt(?:\s+(.+))?/i, async (msg, match) => {
 // ===============================
 bot.onText(/\/finanzas/i, async (msg) => {
   if (!HAS_RUNTIME_LOCK) return;
+
   const chatId = msg.chat.id;
   const userId = msg.from.id;
   if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+
   return menuPagos(chatId);
 });
 
 bot.onText(/\/resumen_fecha\s+(.+)/i, async (msg, match) => {
   if (!HAS_RUNTIME_LOCK) return;
+
   const chatId = msg.chat.id;
   const userId = msg.from.id;
   if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
@@ -3085,6 +2611,7 @@ bot.onText(/\/resumen_fecha\s+(.+)/i, async (msg, match) => {
 
 bot.onText(/\/bancos_mes\s+(.+)/i, async (msg, match) => {
   if (!HAS_RUNTIME_LOCK) return;
+
   const chatId = msg.chat.id;
   const userId = msg.from.id;
   if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
@@ -3098,6 +2625,7 @@ bot.onText(/\/bancos_mes\s+(.+)/i, async (msg, match) => {
 
 bot.onText(/\/cierre_caja\s+(.+)/i, async (msg, match) => {
   if (!HAS_RUNTIME_LOCK) return;
+
   const chatId = msg.chat.id;
   const userId = msg.from.id;
   if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
@@ -3111,6 +2639,7 @@ bot.onText(/\/cierre_caja\s+(.+)/i, async (msg, match) => {
 
 bot.onText(/\/excel_finanzas\s+(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})/i, async (msg, match) => {
   if (!HAS_RUNTIME_LOCK) return;
+
   const chatId = msg.chat.id;
   const userId = msg.from.id;
   if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
@@ -3464,7 +2993,7 @@ bot.onText(/\/addcorreo\s+(\S+)\s+(\S+)(?:\s+(\d+))?/i, async (msg, match) => {
   await ref.set({
     plataforma: plat,
     correo: mail,
-    capacidad,
+    capacidad: capacidad,
     clientes: [],
     ocupados: 0,
     disponibles: capacidad,
@@ -3653,7 +3182,6 @@ bot.on("callback_query", async (q) => {
 
       if (data.startsWith("fin:del:one:")) {
         const id = String(data.split(":")[3] || "").trim();
-
         try {
           const eliminado = await eliminarMovimientoFinanzas(id, userId, isSuperAdmin(userId));
           return bot.sendMessage(
@@ -4344,7 +3872,7 @@ bot.on("callback_query", async (q) => {
           const invData = docInv.data() || {};
           let clientesInv = Array.isArray(invData.clientes) ? invData.clientes.slice() : [];
 
-          const indexInv = clientesInv.findIndex(cl => cl.nombre === nombreCliente && cl.pin === servicioABorrar.pin);
+          const indexInv = clientesInv.findIndex((cl) => cl.nombre === nombreCliente && cl.pin === servicioABorrar.pin);
 
           if (indexInv !== -1) {
             clientesInv.splice(indexInv, 1);
@@ -4359,16 +3887,15 @@ bot.on("callback_query", async (q) => {
             } else {
               disponibles = Number(invData.disp || 0) + 1;
             }
-
             const estado = disponibles === 0 ? "llena" : "activa";
 
             await refInv.set(
               {
                 clientes: clientesInv,
-                ocupados,
-                disponibles,
+                ocupados: ocupados,
+                disponibles: disponibles,
                 disp: disponibles,
-                estado,
+                estado: estado,
                 updatedAt: admin.firestore.FieldValue.serverTimestamp(),
               },
               { merge: true }
@@ -4388,13 +3915,12 @@ bot.on("callback_query", async (q) => {
         const c = await getCliente(clientId);
         if (!c) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
 
-        const serviciosOrden = serviciosConIndiceOriginal(Array.isArray(c.servicios) ? c.servicios : []);
-        if (!serviciosOrden.length) return bot.sendMessage(chatId, "⚠️ Este cliente no tiene servicios.");
+        const servicios = serviciosOrdenados(Array.isArray(c.servicios) ? c.servicios : []);
+        if (!servicios.length) return bot.sendMessage(chatId, "⚠️ Este cliente no tiene servicios.");
 
-        const kb = serviciosOrden.map((s, i) => [
-          { text: safeBtnLabel(`🔄 ${i + 1}) ${s.plataforma} — ${s.correo} (Ren: ${s.fechaRenovacion || "-"})`, 60), callback_data: `cli:ren:menu:${clientId}:${s.idxOriginal}` },
+        const kb = servicios.map((s, i) => [
+          { text: `🔄 ${i + 1}) ${s.plataforma} — ${s.correo} (Ren: ${s.fechaRenovacion || "-"})`, callback_data: `cli:ren:menu:${clientId}:${i}` },
         ]);
-
         kb.push([{ text: "⬅️ Volver", callback_data: `cli:view:${clientId}` }]);
         kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
 
@@ -4730,7 +4256,6 @@ bot.on("message", async (msg) => {
         if (!parsed.ok) return bot.sendMessage(chatId, "⚠️ Fecha inválida. Use dd/mm/yyyy o escriba hoy.");
 
         pending.delete(String(chatId));
-
         const ok = await registrarIngresoTx({
           monto: p.monto,
           banco: p.banco,
@@ -4765,7 +4290,6 @@ bot.on("message", async (msg) => {
         if (!parsed.ok) return bot.sendMessage(chatId, "⚠️ Fecha inválida. Use dd/mm/yyyy o escriba hoy.");
 
         pending.delete(String(chatId));
-
         const ok = await registrarEgresoTx({
           monto: p.monto,
           motivo: p.motivo,
@@ -4814,14 +4338,12 @@ bot.on("message", async (msg) => {
 
         pending.delete(String(chatId));
         const list = await getMovimientosPorFecha(fecha, userId, isSuperAdmin(userId));
-
         if (!list.length) return bot.sendMessage(chatId, "⚠️ No hay movimientos en esa fecha.");
 
         const kb = list.slice(0, 20).map((m, i) => {
           const label = `${i + 1}) ${m.tipo} | ${Number(m.monto || 0)} | ${m.banco || m.motivo || "-"}`;
           return [{ text: safeBtnLabel(label, 60), callback_data: `fin:del:one:${m.id}` }];
         });
-
         kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
 
         return bot.sendMessage(chatId, `🗑️ *Movimientos del ${escMD(fecha)}*\nSeleccione cuál eliminar:`, {
@@ -5116,7 +4638,7 @@ bot.on("message", async (msg) => {
       }
 
       if (p.mode === "cliAddServMail") {
-        if (!isEmailLike(t)) return bot.sendMessage(chatId, "⚠️ Correo inválido. Escriba el correo:");
+        if (!t.includes("@")) return bot.sendMessage(chatId, "⚠️ Correo inválido. Escriba el correo:");
         pending.set(String(chatId), {
           mode: "cliAddServPin",
           clientId: p.clientId,
@@ -5168,7 +4690,7 @@ bot.on("message", async (msg) => {
       }
 
       if (p.mode === "cliServEditMail") {
-        if (!isEmailLike(t)) return bot.sendMessage(chatId, "⚠️ Correo inválido.");
+        if (!t.includes("@")) return bot.sendMessage(chatId, "⚠️ Correo inválido.");
         pending.delete(String(chatId));
         await patchServicio(p.clientId, p.idx, { correo: t.toLowerCase() });
         return menuServicio(chatId, p.clientId, p.idx);
@@ -5354,3 +4876,5 @@ http
   .listen(PORT, () => {
     console.log("🌐 HTTP KEEPALIVE activo en puerto", PORT);
   });
+
+
