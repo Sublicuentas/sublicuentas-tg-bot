@@ -9,6 +9,7 @@
    ✅ CIERRE DE CAJA EN REGISTRO
    ✅ EXPORTAR EXCEL EN REPORTES
    ✅ DISNEYS AJUSTADO A 3 PERFILES
+   ✅ SUPER ADMIN POR ENV O FIRESTORE
 */
 
 const http = require("http");
@@ -601,12 +602,28 @@ function allowMsg(chatId, userId, limit = 10, windowMs = 5000) {
 // ===============================
 // ADMIN / ROLES
 // ===============================
-function isSuperAdmin(userId) {
-  return !!SUPER_ADMIN && String(userId) === String(SUPER_ADMIN);
+async function isSuperAdmin(userId) {
+  const uid = String(userId || "").trim();
+  if (!uid) return false;
+
+  if (SUPER_ADMIN && uid === String(SUPER_ADMIN).trim()) {
+    return true;
+  }
+
+  try {
+    const doc = await db.collection("admins").doc(uid).get();
+    if (!doc.exists) return false;
+
+    const data = doc.data() || {};
+    return data.activo === true && data.superAdmin === true;
+  } catch (e) {
+    logErr("isSuperAdmin:", e?.message || e);
+    return false;
+  }
 }
 
 async function isAdmin(userId) {
-  if (isSuperAdmin(userId)) return true;
+  if (await isSuperAdmin(userId)) return true;
   const doc = await db.collection("admins").doc(String(userId)).get();
   return doc.exists && doc.data().activo === true;
 }
@@ -1450,7 +1467,7 @@ async function exportarFinanzasRangoExcel(chatId, fechaInicio, fechaFin, userId,
   let movs = snap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
 
   if (!isSA) {
-    movs = movs.filter((x) => String(x.createdBy || "") === String(userId));
+    arr = movs.filter((x) => String(x.createdBy || "") === String(userId));
   }
 
   movs.sort((a, b) => Number(a.fechaTS || 0) - Number(b.fechaTS || 0));
@@ -1684,7 +1701,7 @@ async function menuFinGestion(chatId) {
 }
 
 async function menuRenovaciones(chatId, userIdOpt) {
-  const isSA = userIdOpt ? isSuperAdmin(userIdOpt) : false;
+  const isSA = userIdOpt ? await isSuperAdmin(userIdOpt) : false;
 
   const kb = [
     [{ text: "📅 Renovaciones hoy", callback_data: "ren:hoy" }],
@@ -1762,7 +1779,7 @@ function kbPlataformasWiz(prefix, clientId, idxOpt) {
     ],
     [{ text: "📡 iptv (4)", callback_data: cb("iptv4") }],
   ];
-}
+           }
 // ===============================
 // FICHA CLIENTE / CRM / EDICIÓN
 // ===============================
@@ -2816,6 +2833,8 @@ async function responderMenuCodigosNetflix(chatId, plataforma, correo) {
     "Markdown"
   );
 }
+
+
 // ===============================
 // COMANDOS CLIENTES
 // ===============================
@@ -5327,3 +5346,4 @@ http
   .listen(PORT, () => {
     console.log("🌐 HTTP KEEPALIVE activo en puerto", PORT);
   });
+
