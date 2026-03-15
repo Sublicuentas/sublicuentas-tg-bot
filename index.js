@@ -1,16 +1,18 @@
-/* ✅ SUBLICUENTAS TG BOT — INDEX FINAL (LIMPIO V12.4)
+/* ✅ SUBLICUENTAS TG BOT — INDEX FINAL (LIMPIO V13.0)
    ✅ ARRANQUE LIMPIO
    ✅ FIX 409 polling
    ✅ SIN LOCK GLOBAL QUE CONGELE EL BOT
    ✅ COMPATIBLE CON PARTE 2 Y PARTE 3
    ✅ NETFLIX LISTENER CARGA NORMAL
    ✅ SINCRONIZACIÓN ESPEJO AL GUARDAR
-   ✅ MÓDULO FINANZAS V12.4 INTEGRADO
+   ✅ BASE PREPARADA PARA FINANZAS V13
+   ✅ LISTO PARA EXCEL REAL CON GRÁFICOS
 */
 
 const http = require("http");
 const TelegramBot = require("node-telegram-bot-api");
 const admin = require("firebase-admin");
+const ExcelJS = require("exceljs");
 
 // ===============================
 // ENV
@@ -225,7 +227,7 @@ const PLATAFORMAS = [
 const PAGE_SIZE = 10;
 
 // ===============================
-// FINANZAS CONFIG GLOBAL
+// FINANZAS CONFIG GLOBAL V13
 // ===============================
 const FINANZAS_COLLECTION = "finanzas_movimientos";
 
@@ -434,6 +436,7 @@ function ymdFromDMY(dmy = "") {
 
 function parseFechaFinanceInput(txt = "") {
   const s = String(txt || "").trim().toLowerCase();
+
   if (s === "hoy") {
     const fecha = hoyDMY();
     return {
@@ -443,7 +446,9 @@ function parseFechaFinanceInput(txt = "") {
       mesKey: getMonthKeyFromDMY(fecha),
     };
   }
+
   if (!isFechaDMY(s)) return { ok: false };
+
   return {
     ok: true,
     fecha: s,
@@ -453,8 +458,14 @@ function parseFechaFinanceInput(txt = "") {
 }
 
 function parseMontoNumber(v) {
-  const n = Number(String(v || "").replace(/,/g, "").trim());
-  return Number.isFinite(n) ? n : NaN;
+  const clean = String(v || "")
+    .replace(/[^\d.,-]/g, "")
+    .replace(",", ".")
+    .trim();
+
+  const n = Number(clean);
+  if (!Number.isFinite(n)) return NaN;
+  return n;
 }
 
 function moneyLps(v) {
@@ -463,6 +474,12 @@ function moneyLps(v) {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   })} Lps`;
+}
+
+function moneyNumber(v) {
+  const n = Number(v || 0);
+  if (!Number.isFinite(n)) return 0;
+  return Number(n);
 }
 
 // ===============================
@@ -1233,25 +1250,13 @@ async function menuClientes(chatId) {
 async function menuPagos(chatId) {
   return upsertPanel(
     chatId,
-    "💳 *FINANZAS V12.4*\n\nSeleccione una opción:",
+    "💳 *FINANZAS V13*\n\nSeleccione una opción:",
     {
       inline_keyboard: [
-        [
-          { text: "➕ Registrar Ingreso", callback_data: "fin:menu:ingreso" },
-          { text: "➖ Registrar Egreso", callback_data: "fin:menu:egreso" },
-        ],
-        [
-          { text: "📊 Ver Resumen por fecha", callback_data: "fin:menu:resumen_fecha" },
-          { text: "🧾 Cierre de caja", callback_data: "fin:menu:cierre" },
-        ],
-        [
-          { text: "🏦 Resumen banco del mes", callback_data: "fin:menu:bancos_mes" },
-          { text: "🗑️ Eliminar movimiento", callback_data: "fin:menu:eliminar" },
-        ],
-        [
-          { text: "📤 Exportar CSV rango", callback_data: "fin:menu:excel_rango" },
-          { text: "🏠 Inicio", callback_data: "go:inicio" },
-        ],
+        [{ text: "📝 Registro", callback_data: "fin:menu:registro" }],
+        [{ text: "📊 Reportes", callback_data: "fin:menu:reportes" }],
+        [{ text: "🛠️ Gestión", callback_data: "fin:menu:gestion" }],
+        [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
       ],
     },
     "Markdown"
@@ -1497,10 +1502,6 @@ async function menuServicio(chatId, clientId, idx) {
 // ===============================
 // WIZARD CORREO / CLIENTES EN CORREO
 // ===============================
-function escapeMarkdown(text = "") {
-  return String(text || "").replace(/([_*\[\]()~`>#+\-=|{}!\\])/g, "\\$1");
-}
-
 async function buscarCorreoInventarioPorPlatCorreo(plataforma, correo) {
   const plat = normalizarPlataforma(plataforma);
   const mail = String(correo || "").trim().toLowerCase();
@@ -1865,7 +1866,7 @@ async function wizardNext(chatId, text) {
 
       const ordenados = serviciosOrdenados(servicios);
 
-      let resumen =
+      const resumen =
         `✅ Servicio agregado.\n¿Desea agregar otra plataforma a este cliente?\n\n` +
         `Cliente:\n${cliente?.nombrePerfil || st.data?.nombrePerfil || "-"}\n` +
         `${cliente?.telefono || st.data?.telefono || "-"}\n` +
@@ -2221,554 +2222,6 @@ async function enviarTXTATodosHoy(superChatId) {
     `✅ Enviado TXT HOY (${fecha})\n• Revendedores enviados: ${enviados}\n• Saltados: ${saltados}`
   );
 }
-
-// ===============================
-// FINANZAS HELPERS OPERATIVOS V12.4
-// ===============================
-function getFinBancos() {
-  try {
-    if (Array.isArray(global.FIN_BANCOS) && global.FIN_BANCOS.length) return global.FIN_BANCOS;
-  } catch (_) {}
-  return [
-    "Bac",
-    "Atlántida",
-    "Ficohsa",
-    "Davivienda",
-    "Banpais",
-    "Occidente",
-    "Lafise",
-    "Tigo Money",
-    "Efectivo",
-    "PayPal",
-    "Binance",
-    "Otro",
-  ];
-}
-
-function getFinMotivosEgreso() {
-  try {
-    if (Array.isArray(global.FIN_MOTIVOS_EGRESO) && global.FIN_MOTIVOS_EGRESO.length) {
-      return global.FIN_MOTIVOS_EGRESO;
-    }
-  } catch (_) {}
-  return [
-    "Renovaciones",
-    "Nuevas cuentas",
-    "Publicidad",
-    "Comisiones",
-    "Servicios",
-    "Retiro personal",
-    "Otros",
-  ];
-}
-
-async function registrarIngresoTx({
-  monto,
-  banco,
-  fecha,
-  userId,
-  userName = "",
-}) {
-  const parsed = parseFechaFinanceInput(fecha);
-  if (!parsed.ok) throw new Error("Fecha inválida");
-
-  const nMonto = parseMontoNumber(monto);
-  if (!Number.isFinite(nMonto) || nMonto <= 0) throw new Error("Monto inválido");
-
-  const ref = db.collection(FINANZAS_COLLECTION).doc();
-
-  await ref.set({
-    tipo: "ingreso",
-    monto: Number(nMonto),
-    banco: String(banco || "Otro").trim(),
-    motivo: "",
-    fecha: parsed.fecha,
-    fechaTS: parsed.fechaTS,
-    mesKey: parsed.mesKey,
-    createdBy: String(userId),
-    createdByName: String(userName || "").trim(),
-    createdAt: admin.firestore.FieldValue.serverTimestamp(),
-    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-  });
-
-  return { id: ref.id, fecha: parsed.fecha, monto: nMonto, banco: banco || "Otro" };
-}
-
-async function registrarEgresoTx({
-  monto,
-  motivo,
-  fecha,
-  userId,
-  userName = "",
-}) {
-  const parsed = parseFechaFinanceInput(fecha);
-  if (!parsed.ok) throw new Error("Fecha inválida");
-
-  const nMonto = parseMontoNumber(monto);
-  if (!Number.isFinite(nMonto) || nMonto <= 0) throw new Error("Monto inválido");
-
-  const ref = db.collection(FINANZAS_COLLECTION).doc();
-
-  await ref.set({
-    tipo: "egreso",
-    monto: Number(nMonto),
-    banco: "",
-    motivo: String(motivo || "Otros").trim(),
-    fecha: parsed.fecha,
-    fechaTS: parsed.fechaTS,
-    mesKey: parsed.mesKey,
-    createdBy: String(userId),
-    createdByName: String(userName || "").trim(),
-    createdAt: admin.firestore.FieldValue.serverTimestamp(),
-    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-  });
-
-  return { id: ref.id, fecha: parsed.fecha, monto: nMonto, motivo: motivo || "Otros" };
-}
-
-async function getMovimientosPorFecha(fechaDMY, userId, isSA = false) {
-  const ini = startOfDayTS(fechaDMY);
-  const fin = endOfDayTS(fechaDMY);
-
-  const snap = await db
-    .collection(FINANZAS_COLLECTION)
-    .where("fechaTS", ">=", ini)
-    .where("fechaTS", "<=", fin)
-    .get();
-
-  let arr = snap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
-
-  if (!isSA) {
-    arr = arr.filter((x) => String(x.createdBy || "") === String(userId));
-  }
-
-  arr.sort((a, b) => {
-    const ta = Number(a.fechaTS || 0);
-    const tb = Number(b.fechaTS || 0);
-    if (ta !== tb) return ta - tb;
-    return String(a.tipo || "").localeCompare(String(b.tipo || ""));
-  });
-
-  return arr;
-}
-
-async function getMovimientosPorMes(monthKey, userId, isSA = false) {
-  const snap = await db.collection(FINANZAS_COLLECTION).where("mesKey", "==", monthKey).get();
-
-  let arr = snap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
-
-  if (!isSA) {
-    arr = arr.filter((x) => String(x.createdBy || "") === String(userId));
-  }
-
-  arr.sort((a, b) => Number(a.fechaTS || 0) - Number(b.fechaTS || 0));
-  return arr;
-}
-
-function agruparIngresosPorBanco(movs = []) {
-  const map = new Map();
-  for (const m of movs) {
-    if (String(m.tipo || "") !== "ingreso") continue;
-    const banco = String(m.banco || "Otro").trim() || "Otro";
-    map.set(banco, Number(map.get(banco) || 0) + Number(m.monto || 0));
-  }
-  return Array.from(map.entries())
-    .map(([banco, monto]) => ({ banco, monto }))
-    .sort((a, b) => b.monto - a.monto);
-}
-
-function agruparEgresosPorMotivo(movs = []) {
-  const map = new Map();
-  for (const m of movs) {
-    if (String(m.tipo || "") !== "egreso") continue;
-    const motivo = String(m.motivo || "Otros").trim() || "Otros";
-    map.set(motivo, Number(map.get(motivo) || 0) + Number(m.monto || 0));
-  }
-  return Array.from(map.entries())
-    .map(([motivo, monto]) => ({ motivo, monto }))
-    .sort((a, b) => b.monto - a.monto);
-}
-
-function calcularTotalesMovimientos(movs = []) {
-  let ingresos = 0;
-  let egresos = 0;
-  for (const m of movs) {
-    if (String(m.tipo || "") === "ingreso") ingresos += Number(m.monto || 0);
-    if (String(m.tipo || "") === "egreso") egresos += Number(m.monto || 0);
-  }
-  const neta = ingresos - egresos;
-  return { ingresos, egresos, neta };
-}
-
-function resumenFinanzasTextoPorFecha(fechaDMY, movs = []) {
-  const { ingresos, egresos, neta } = calcularTotalesMovimientos(movs);
-  const bancos = agruparIngresosPorBanco(movs);
-  const motivos = agruparEgresosPorMotivo(movs);
-
-  let txt = `📊 *ESTADO DE RESULTADOS (${escMD(fechaDMY)})*\n\n`;
-  txt += `💰 *INGRESOS:* ${moneyLps(ingresos)}\n`;
-  if (!bancos.length) {
-    txt += `➖ Sin ingresos registrados\n`;
-  } else {
-    bancos.forEach((x) => {
-      txt += `➖ ${escMD(x.banco)}: ${moneyLps(x.monto)}\n`;
-    });
-  }
-
-  txt += `\n🛠️ *EGRESOS:* ${moneyLps(egresos)}\n`;
-  if (!motivos.length) {
-    txt += `➖ Sin egresos registrados\n`;
-  } else {
-    motivos.forEach((x) => {
-      txt += `➖ ${escMD(x.motivo)}: ${moneyLps(x.monto)}\n`;
-    });
-  }
-
-  txt += `\n📈 *GANANCIA NETA:* ${neta >= 0 ? "+" : ""}${moneyLps(neta)} ${neta >= 0 ? "🟢" : "🔴"}\n`;
-  txt += `🧾 *Movimientos:* ${movs.length}`;
-  return txt;
-}
-
-function resumenBancosMesTexto(monthKey, movs = []) {
-  const bancos = agruparIngresosPorBanco(movs);
-  const total = bancos.reduce((a, b) => a + Number(b.monto || 0), 0);
-
-  let txt = `🏦 *RESUMEN POR BANCO DEL MES ${escMD(getMonthLabelFromKey(monthKey))}*\n\n`;
-
-  if (!bancos.length) {
-    txt += `⚠️ No hay ingresos registrados en ese mes.`;
-    return txt;
-  }
-
-  bancos.forEach((x, i) => {
-    txt += `${i + 1}) *${escMD(x.banco)}* — ${moneyLps(x.monto)}\n`;
-  });
-
-  txt += `\n━━━━━━━━━━━━━━\n`;
-  txt += `💰 *Total ingresos del mes:* ${moneyLps(total)}`;
-  return txt;
-}
-
-function cierreCajaTexto(fechaDMY, movs = []) {
-  const { ingresos, egresos, neta } = calcularTotalesMovimientos(movs);
-  let txt = `🧾 *CIERRE DE CAJA (${escMD(fechaDMY)})*\n\n`;
-  txt += `💰 Entradas: ${moneyLps(ingresos)}\n`;
-  txt += `💸 Salidas: ${moneyLps(egresos)}\n`;
-  txt += `📦 Caja final: ${neta >= 0 ? "+" : ""}${moneyLps(neta)} ${neta >= 0 ? "🟢" : "🔴"}\n`;
-  txt += `🧮 Movimientos: ${movs.length}`;
-  return txt;
-}
-
-async function eliminarMovimientoFinanzas(id, userId, isSA = false) {
-  const ref = db.collection(FINANZAS_COLLECTION).doc(String(id));
-  const doc = await ref.get();
-  if (!doc.exists) throw new Error("Movimiento no encontrado");
-
-  const data = doc.data() || {};
-  if (!isSA && String(data.createdBy || "") !== String(userId)) {
-    throw new Error("No autorizado para eliminar este movimiento");
-  }
-
-  await ref.delete();
-  return data;
-}
-
-function csvEscape(v) {
-  const s = String(v ?? "");
-  if (s.includes('"') || s.includes(",") || s.includes("\n")) {
-    return `"${s.replace(/"/g, '""')}"`;
-  }
-  return s;
-}
-
-async function construirArchivoCSVFinanzas(chatId, movs = [], nombre = "reporte_finanzas.csv") {
-  const lines = [];
-  lines.push(["ID", "Fecha", "Tipo", "Monto", "Banco", "Motivo", "Admin"].map(csvEscape).join(","));
-
-  for (const m of movs) {
-    lines.push(
-      [
-        String(m.id || ""),
-        String(m.fecha || ""),
-        String(m.tipo || ""),
-        Number(m.monto || 0),
-        String(m.banco || ""),
-        String(m.motivo || ""),
-        String(m.createdByName || m.createdBy || ""),
-      ].map(csvEscape).join(",")
-    );
-  }
-
-  const csv = "\uFEFF" + lines.join("\n");
-  const buffer = Buffer.from(csv, "utf8");
-
-  return bot.sendDocument(chatId, buffer, {}, {
-    filename: nombre,
-    contentType: "text/csv",
-  });
-}
-
-async function exportarFinanzasRangoExcel(chatId, fechaInicio, fechaFin, userId, isSA = false) {
-  if (!isFechaDMY(fechaInicio) || !isFechaDMY(fechaFin)) {
-    return bot.sendMessage(chatId, "⚠️ Formato inválido. Use dd/mm/yyyy");
-  }
-
-  const ini = startOfDayTS(fechaInicio);
-  const fin = endOfDayTS(fechaFin);
-  if (ini > fin) return bot.sendMessage(chatId, "⚠️ El rango es inválido.");
-
-  const snap = await db
-    .collection(FINANZAS_COLLECTION)
-    .where("fechaTS", ">=", ini)
-    .where("fechaTS", "<=", fin)
-    .get();
-
-  let movs = snap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
-  if (!isSA) {
-    movs = movs.filter((x) => String(x.createdBy || "") === String(userId));
-  }
-
-  movs.sort((a, b) => Number(a.fechaTS || 0) - Number(b.fechaTS || 0));
-
-  if (!movs.length) return bot.sendMessage(chatId, "⚠️ No hay movimientos en ese rango.");
-
-  const nombre = `finanzas_${ymdFromDMY(fechaInicio)}_a_${ymdFromDMY(fechaFin)}.csv`;
-  return construirArchivoCSVFinanzas(chatId, movs, nombre);
-}
-
-function kbBancosFinanzas() {
-  const bancos = getFinBancos();
-  const rows = [];
-  for (let i = 0; i < bancos.length; i += 2) {
-    const row = [];
-    row.push({ text: bancos[i], callback_data: `fin:ing:banco:${encodeURIComponent(bancos[i])}` });
-    if (bancos[i + 1]) row.push({ text: bancos[i + 1], callback_data: `fin:ing:banco:${encodeURIComponent(bancos[i + 1])}` });
-    rows.push(row);
-  }
-  rows.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
-  return { inline_keyboard: rows };
-}
-
-function kbMotivosFinanzas() {
-  const motivos = getFinMotivosEgreso();
-  const rows = [];
-  for (let i = 0; i < motivos.length; i += 2) {
-    const row = [];
-    row.push({ text: motivos[i], callback_data: `fin:egr:motivo:${encodeURIComponent(motivos[i])}` });
-    if (motivos[i + 1]) row.push({ text: motivos[i + 1], callback_data: `fin:egr:motivo:${encodeURIComponent(motivos[i + 1])}` });
-    rows.push(row);
-  }
-  rows.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
-  return { inline_keyboard: rows };
-}
-
-// ===============================
-// HELPERS CODIGOS NETFLIX
-// ===============================
-function tsToMillisNetflix(v) {
-  try {
-    if (!v) return 0;
-    if (typeof v?.toDate === "function") return v.toDate().getTime();
-    if (v instanceof Date) return v.getTime();
-    const t = new Date(v).getTime();
-    return Number.isFinite(t) ? t : 0;
-  } catch (_) {
-    return 0;
-  }
-}
-
-async function obtenerUltimoCodigoNetflix(correo, tipo) {
-  const mail = String(correo || "").trim().toLowerCase();
-  if (!mail || !tipo) return null;
-
-  let snap = null;
-
-  try {
-    snap = await db
-      .collection("codigos_netflix")
-      .where("correo", "==", mail)
-      .where("tipo", "==", tipo)
-      .orderBy("fecha", "desc")
-      .limit(1)
-      .get();
-  } catch (e) {
-    const alt = await db
-      .collection("codigos_netflix")
-      .where("correo", "==", mail)
-      .where("tipo", "==", tipo)
-      .limit(50)
-      .get();
-
-    const docs = alt.docs
-      .map((d) => ({ id: d.id, ...(d.data() || {}) }))
-      .sort((a, b) => {
-        const fa = tsToMillisNetflix(a.fecha || a.createdAt || a.updatedAt);
-        const fb = tsToMillisNetflix(b.fecha || b.createdAt || b.updatedAt);
-        return fb - fa;
-      });
-
-    return docs.length ? docs[0] : null;
-  }
-
-  if (snap.empty) return null;
-  const d = snap.docs[0];
-  return { id: d.id, ...(d.data() || {}) };
-}
-
-async function obtenerUltimoCodigoNetflixGeneral(correo) {
-  const mail = String(correo || "").trim().toLowerCase();
-  if (!mail) return null;
-
-  let snap = null;
-
-  try {
-    snap = await db
-      .collection("codigos_netflix")
-      .where("correo", "==", mail)
-      .orderBy("fecha", "desc")
-      .limit(1)
-      .get();
-  } catch (e) {
-    const alt = await db
-      .collection("codigos_netflix")
-      .where("correo", "==", mail)
-      .limit(50)
-      .get();
-
-    const docs = alt.docs
-      .map((d) => ({ id: d.id, ...(d.data() || {}) }))
-      .sort((a, b) => {
-        const fa = tsToMillisNetflix(a.fecha || a.createdAt || a.updatedAt);
-        const fb = tsToMillisNetflix(b.fecha || b.createdAt || b.updatedAt);
-        return fb - fa;
-      });
-
-    return docs.length ? docs[0] : null;
-  }
-
-  if (snap.empty) return null;
-  const d = snap.docs[0];
-  return { id: d.id, ...(d.data() || {}) };
-}
-
-function labelTipoCodigoNetflix(tipo = "") {
-  const t = String(tipo || "").toLowerCase();
-  if (t === "signin") return "🔐 Inicio sesión";
-  if (t === "temporal") return "⏳ Código temporal";
-  if (t === "hogar") return "🏠 Código hogar";
-  if (t === "verification") return "✅ Verificación";
-  return "📩 Código";
-}
-
-function fmtFechaCodigoNetflix(fecha) {
-  if (!fecha) return "-";
-
-  try {
-    let dt = null;
-
-    if (typeof fecha?.toDate === "function") {
-      dt = fecha.toDate();
-    } else if (fecha instanceof Date) {
-      dt = fecha;
-    } else {
-      dt = new Date(fecha);
-    }
-
-    if (isNaN(dt.getTime())) return String(fecha);
-
-    return new Intl.DateTimeFormat("es-HN", {
-      timeZone: TZ,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-      hour12: false,
-    }).format(dt);
-  } catch (e) {
-    return String(fecha);
-  }
-}
-
-async function marcarCodigoNetflixUsado(docId) {
-  if (!docId) return;
-  try {
-    await db.collection("codigos_netflix").doc(String(docId)).set(
-      {
-        usado: true,
-        usadoAt: admin.firestore.FieldValue.serverTimestamp(),
-      },
-      { merge: true }
-    );
-  } catch (e) {
-    logErr("❌ Error marcando codigo usado:", e?.message || e);
-  }
-}
-
-async function responderCodigoNetflix(chatId, correo, tipo) {
-  const mail = String(correo || "").trim().toLowerCase();
-
-  let data = null;
-  if (tipo === "ultimo") {
-    data = await obtenerUltimoCodigoNetflixGeneral(mail);
-  } else {
-    data = await obtenerUltimoCodigoNetflix(mail, tipo);
-  }
-
-  if (!data) {
-    return bot.sendMessage(
-      chatId,
-      `🎬 *CÓDIGOS NETFLIX*\n\n📧 *${escMD(mail)}*\n🧩 *Tipo:* ${escMD(tipo === "ultimo" ? "último disponible" : tipo)}\n\n⚠️ No encontré códigos disponibles.`,
-      { parse_mode: "Markdown" }
-    );
-  }
-
-  const tipoReal = String(data.tipo || tipo || "ultimo").toLowerCase();
-  const codigo = String(data.codigo || "").trim();
-  const fuente = String(data.fuente || "-").trim();
-  const fechaFmt = fmtFechaCodigoNetflix(data.fecha || data.createdAt || data.updatedAt);
-  const usado = data.usado === true ? "Sí" : "No";
-
-  let txt = `🎬 *CÓDIGOS NETFLIX*\n\n`;
-  txt += `📧 *${escMD(mail)}*\n`;
-  txt += `🧩 *Tipo:* ${escMD(labelTipoCodigoNetflix(tipoReal))}\n`;
-  txt += `🔢 *Código:* \`${codigo || "-"}\`\n`;
-  txt += `🕒 *Fecha:* ${escMD(fechaFmt)}\n`;
-  txt += `📥 *Fuente:* ${escMD(fuente || "-")}\n`;
-  txt += `✅ *Usado:* ${escMD(usado)}`;
-
-  await bot.sendMessage(chatId, txt, { parse_mode: "Markdown" });
-
-  if (data.id) {
-    await marcarCodigoNetflixUsado(data.id);
-  }
-}
-
-async function responderMenuCodigosNetflix(chatId, plataforma, correo) {
-  const plat = normalizarPlataforma(plataforma);
-  const mail = String(correo || "").trim().toLowerCase();
-
-  if (plat !== "netflix" && plat !== "vipnetflix") {
-    return bot.sendMessage(chatId, "⚠️ Este menú de códigos solo aplica para Netflix.");
-  }
-
-  return bot.sendMessage(chatId, "🎬 *CÓDIGOS NETFLIX*\n\nSeleccione una opción:", {
-    parse_mode: "Markdown",
-    reply_markup: {
-      inline_keyboard: [
-        [{ text: "📩 Último código", callback_data: `nf_code|ultimo|${encodeURIComponent(mail)}|${plat}` }],
-        [{ text: "🔐 Inicio sesión", callback_data: `nf_code|signin|${encodeURIComponent(mail)}|${plat}` }],
-        [{ text: "⏳ Código temporal", callback_data: `nf_code|temporal|${encodeURIComponent(mail)}|${plat}` }],
-        [{ text: "🏠 Código hogar", callback_data: `nf_code|hogar|${encodeURIComponent(mail)}|${plat}` }],
-        [{ text: "✅ Verificación", callback_data: `nf_code|verification|${encodeURIComponent(mail)}|${plat}` }],
-        [{ text: "⬅️ Volver al correo", callback_data: `mail_panel|${plat}|${encodeURIComponent(mail)}` }],
-        [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
-      ],
-    },
-  });
-}
-
 // ===============================
 // COMANDOS CLIENTES
 // ===============================
@@ -5193,97 +4646,6 @@ bot.on("message", async (msg) => {
 });
 
 // ===============================
-// AUTO TXT 7AM
-// ===============================
-let _lastDailyRun = "";
-
-async function getLastRunDB() {
-  const ref = db.collection("config").doc("dailyRun");
-  const doc = await ref.get();
-  return doc.exists ? String(doc.data()?.lastRun || "") : "";
-}
-
-async function setLastRunDB(dmy) {
-  const ref = db.collection("config").doc("dailyRun");
-  await ref.set(
-    { lastRun: String(dmy), updatedAt: admin.firestore.FieldValue.serverTimestamp() },
-    { merge: true }
-  );
-}
-
-function getTimePartsNow() {
-  const now = new Date();
-  const fmt = new Intl.DateTimeFormat("es-HN", {
-    timeZone: TZ,
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(now);
-
-  const obj = {};
-  fmt.forEach((p) => {
-    if (p.type !== "literal") obj[p.type] = p.value;
-  });
-
-  return {
-    dmy: `${obj.day}/${obj.month}/${obj.year}`,
-    hh: Number(obj.hour),
-    mm: Number(obj.minute),
-  };
-}
-
-async function enviarTxtRenovacionesDiariasPorVendedor() {
-  if (!HAS_RUNTIME_LOCK) return;
-
-  const { dmy } = getTimePartsNow();
-
-  const snap = await db.collection("revendedores").get();
-  if (snap.empty) return;
-
-  for (const doc of snap.docs) {
-    const rev = normalizeRevendedorDoc(doc);
-
-    if (!rev.activo || !rev.nombre || !rev.telegramId) continue;
-
-    const list = await obtenerRenovacionesPorFecha(dmy, rev.nombre);
-    await enviarTXT(rev.telegramId, list, dmy, rev.nombre);
-
-    await doc.ref.set(
-      {
-        autoLastSent: dmy,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      },
-      { merge: true }
-    );
-  }
-}
-
-setInterval(async () => {
-  if (!HAS_RUNTIME_LOCK) return;
-
-  try {
-    const { dmy, hh, mm } = getTimePartsNow();
-
-    if (hh === 7 && mm === 0) {
-      const dbLast = await getLastRunDB();
-      if (_lastDailyRun === dmy || dbLast === dmy) return;
-
-      _lastDailyRun = dmy;
-      await setLastRunDB(dmy);
-      await enviarTxtRenovacionesDiariasPorVendedor();
-
-      logInfo(`✅ AutoTXT 7AM enviado (${dmy}) TZ=${TZ}`);
-    }
-  } catch (e) {
-    logErr("❌ AutoTXT error:", e?.message || e);
-  }
-}, 30 * 1000);
-
-// ===============================
 // HARDEN
 // ===============================
 process.on("unhandledRejection", (reason) => {
@@ -5339,3 +4701,4 @@ http
   .listen(PORT, () => {
     console.log("🌐 HTTP KEEPALIVE activo en puerto", PORT);
   });
+
