@@ -1,4 +1,4 @@
-/* ✅ SUBLICUENTAS TG BOT — INDEX FINAL (LIMPIO V13.3)
+/* ✅ SUBLICUENTAS TG BOT — INDEX FINAL (PARTE 1 CONSOLIDADA)
    ✅ ARRANQUE LIMPIO
    ✅ FIX 409 polling
    ✅ SIN LOCK GLOBAL QUE CONGELE EL BOT
@@ -465,7 +465,6 @@ function parseMontoNumber(v) {
 
   const hasComma = raw.includes(",");
   const hasDot = raw.includes(".");
-
   let normalized = raw;
 
   if (hasComma && hasDot) {
@@ -723,6 +722,441 @@ const wizard = new Map();
 const pending = new Map();
 
 // ===============================
+// HELPERS CLIENTES / DUPLICADOS
+// ===============================
+function dedupeClientes(arr = []) {
+  const map = new Map();
+
+  for (const c of Array.isArray(arr) ? arr : []) {
+    const tel = String(c.telefono_norm || onlyDigits(c.telefono || "") || "").trim();
+    const nom = String(c.nombre_norm || normTxt(c.nombrePerfil || "") || "").trim();
+    const key = `${tel}__${nom}`;
+    if (!map.has(key)) map.set(key, c);
+  }
+
+  return Array.from(map.values());
+}
+
+async function clienteDuplicado(nombre, telefono, excludeId = "") {
+  const nombreN = normTxt(nombre);
+  const telN = onlyDigits(telefono);
+  if (!nombreN || !telN) return null;
+
+  const snap = await db.collection("clientes").limit(5000).get();
+  let duplicado = null;
+
+  snap.forEach((doc) => {
+    if (excludeId && String(doc.id) === String(excludeId)) return;
+
+    const c = doc.data() || {};
+    const dbNombre = normTxt(c.nombrePerfil || "");
+    const dbTel = onlyDigits(c.telefono || "");
+
+    if (dbNombre === nombreN && dbTel === telN && !duplicado) {
+      duplicado = { id: doc.id, ...c };
+    }
+  });
+
+  return duplicado;
+}
+
+async function getCliente(clientId) {
+  const ref = db.collection("clientes").doc(String(clientId));
+  const doc = await ref.get();
+  if (!doc.exists) return null;
+  return { id: doc.id, ...(doc.data() || {}) };
+}
+
+async function patchServicio(clientId, idx, patch) {
+  const ref = db.collection("clientes").doc(String(clientId));
+  const doc = await ref.get();
+  if (!doc.exists) return false;
+
+  const c = doc.data() || {};
+  const servicios = Array.isArray(c.servicios) ? c.servicios : [];
+  if (idx < 0 || idx >= servicios.length) return false;
+
+  servicios[idx] = { ...(servicios[idx] || {}), ...patch };
+
+  await ref.set(
+    {
+      servicios,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    },
+    { merge: true }
+  );
+
+  return true;
+}
+
+// ===============================
+// ADD SERVICIO TX CON ESPEJO
+// ===============================
+async function addServicioTx(clientId, servicio) {
+  const refCliente = db.collection("clientes").doc(String(clientId));
+  const plat = normalizarPlataforma(servicio.plataforma);
+  const mail = String(servicio.correo || "").trim().toLowerCase();
+  const refInv = db.collection("inventario").doc(docIdInventario(mail, plat));
+
+  return db.runTransaction(async (tx) => {
+    const docCli = await tx.get(refCliente);
+    if (!docCli.exists) throw new Error("Cliente no existe en TX");
+
+    const curCli = docCli.data() || {};
+    const docInv = await tx.get(refInv);
+
+    const arrServ = Array.isArray(curCli.servicios) ? curCli.servicios.slice() : [];
+    arrServ.push(servicio);
+
+    tx.set(
+      refCliente,
+      {
+        servicios: arrServ,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+
+    if (docInv.exists) {
+      const invData = docInv.data() || {};
+      const clientesInv = Array.isArray(invData.clientes) ? invData.clientes.slice() : [];
+
+      const yaExiste = clientesInv.some(
+        (c) => c.nombre === curCli.nombrePerfil && c.pin === servicio.pin
+      );
+
+      if (!yaExiste) {
+        clientesInv.push({
+          nombre: curCli.nombrePerfil || "Sin Nombre",
+          pin: servicio.pin || "0000",
+          slot: clientesInv.length + 1,
+        });
+
+        const capacidad = Number(invData.capacidad || invData.total || 0);
+        const ocupados = clientesInv.length;
+        const disponibles = capacidad > 0
+          ? Math.max(0, capacidad - ocupados)
+          : Math.max(0, Number(invData.disp || 0) - 1);
+
+        tx.set(
+          refInv,
+          {
+            clientes: clientesInv,
+            ocupados,
+            disponibles,
+            disp: disponibles,
+            estado: disponibles === 0 ? "llena" : "activa",
+            capacidad: capacidad > 0 ? capacidad : getCapacidadCorreo(invData, plat),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        );
+      }
+    }
+
+    return {
+      cliente: { id: docCli.id, ...curCli },
+      servicios: arrServ,
+    };
+  });
+}
+
+// ===============================
+// HELPERS CRM
+// ===============================
+function daysUntilDMY(dmy) {
+  if (!isFechaDMY(dmy)) return null;
+  const [dd, mm, yyyy] = String(dmy).split("/").map(Number);
+  const target = new Date(yyyy, mm - 1, dd);
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  return Math.round((target.getTime() - today.getTime()) / 86400000);
+}
+
+function estadoServicioLabel(fechaRenovacion) {
+  const d = daysUntilDMY(fechaRenovacion);
+  if (d === null) return "⚪ Sin fecha";
+  if (d < 0) return "⚫ Vencido";
+  if (d === 0) return "🔴 Vence hoy";
+  if (d >= 1 && d <= 3) return "🟡 Próximo";
+  return "🟢 Activo";
+}
+
+function emojiPlataforma(plataforma = "") {
+  const p = normalizarPlataforma(plataforma);
+  const map = {
+    netflix: "📺",
+    vipnetflix: "🔥",
+    disneyp: "🏰",
+    disneys: "🎞️",
+    hbomax: "🍿",
+    primevideo: "🎥",
+    paramount: "📀",
+    crunchyroll: "🍥",
+    vix: "🎬",
+    appletv: "🍎",
+    universal: "🌎",
+    youtube: "▶️",
+    spotify: "🎵",
+    canva: "🎨",
+    oleadatv1: "🌊",
+    oleadatv3: "🌊",
+    iptv1: "📡",
+    iptv3: "📡",
+    iptv4: "📡",
+  };
+  return map[p] || "📦";
+}
+
+function labelPlataforma(plataforma = "") {
+  return `${emojiPlataforma(plataforma)} ${normalizarPlataforma(plataforma)}`;
+}
+
+function resumenClienteCRM(cliente) {
+  const servicios = serviciosOrdenados(Array.isArray(cliente?.servicios) ? cliente.servicios : []);
+  let totalMensual = 0;
+  let proxFecha = "";
+  let venceHoy = 0;
+  let vencidos = 0;
+  let proximos = 0;
+
+  for (const s of servicios) {
+    totalMensual += Number(s.precio || 0);
+    const d = daysUntilDMY(s.fechaRenovacion);
+    if (proxFecha === "" && isFechaDMY(s.fechaRenovacion)) proxFecha = s.fechaRenovacion;
+    if (d === 0) venceHoy++;
+    if (d !== null && d < 0) vencidos++;
+    if (d !== null && d >= 1 && d <= 3) proximos++;
+  }
+
+  let estadoGeneral = "🟢 Estable";
+  if (vencidos > 0 || venceHoy > 0) estadoGeneral = "🔴 Atención";
+  else if (proximos > 0) estadoGeneral = "🟡 Seguimiento";
+
+  return {
+    servicios,
+    totalMensual,
+    proxFecha: proxFecha || "-",
+    venceHoy,
+    vencidos,
+    proximos,
+    estadoGeneral,
+  };
+}
+
+function clienteResumenTXT(c) {
+  const r = resumenClienteCRM(c);
+
+  let body = "";
+  body += `CLIENTE CRM\n\n`;
+  body += `NOMBRE: ${stripAcentos(c.nombrePerfil || "-")}\n`;
+  body += `TELEFONO: ${onlyDigits(c.telefono || "") || "-"}\n`;
+  body += `VENDEDOR: ${stripAcentos(c.vendedor || "-")}\n\n`;
+  body += `SERVICIOS ACTIVOS: ${r.servicios.length}\n`;
+  body += `TOTAL MENSUAL: ${r.totalMensual} Lps\n`;
+  body += `PROXIMA RENOVACION: ${r.proxFecha}\n`;
+  body += `VENCE HOY: ${r.venceHoy}\n`;
+  body += `VENCIDOS: ${r.vencidos}\n`;
+  body += `PROXIMOS: ${r.proximos}\n`;
+  body += `ESTADO GENERAL: ${stripAcentos(r.estadoGeneral)}\n\n`;
+  body += `SERVICIOS\n\n`;
+
+  if (!r.servicios.length) {
+    body += "SIN SERVICIOS\n";
+  } else {
+    r.servicios.forEach((s, i) => {
+      body += `${i + 1}) ${normalizarPlataforma(s.plataforma)} | ${s.correo || "-"} | ${Number(s.precio || 0)} Lps | ${s.fechaRenovacion || "-"} | ${stripAcentos(estadoServicioLabel(s.fechaRenovacion))}\n`;
+    });
+  }
+
+  return body;
+}
+
+// ===============================
+// HELPERS INVENTARIO
+// ===============================
+function getCapacidadCorreo(data = {}, plataforma = "") {
+  const desdeData = Number(data.capacidad || data.total || 0);
+  if (Number.isFinite(desdeData) && desdeData > 0) return desdeData;
+
+  const plat = normalizarPlataforma(plataforma);
+  const mapa = {
+    netflix: 5,
+    vipnetflix: 1,
+    disney: 6,
+    disneyp: 6,
+    disneyplus: 6,
+    disneys: 3,
+    max: 5,
+    hbomax: 5,
+    primevideo: 5,
+    prime: 5,
+    paramount: 5,
+    vix: 4,
+    crunchyroll: 5,
+    spotify: 1,
+    youtube: 1,
+    canva: 1,
+    appletv: 4,
+    universal: 4,
+    oleadatv1: 1,
+    oleadatv3: 3,
+    iptv1: 1,
+    iptv3: 3,
+    iptv4: 4,
+  };
+
+  return mapa[plat] || 1;
+}
+
+async function buscarInventarioPorCorreo(correo) {
+  const mail = String(correo || "").trim().toLowerCase();
+  const snap = await db.collection("inventario").where("correo", "==", mail).limit(20).get();
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+}
+
+async function aplicarAutoLleno(chatId, ref, dataAntes, dataDespues) {
+  const antes = Number(dataAntes?.disp ?? 0);
+  const despues = Number(dataDespues?.disp ?? 0);
+
+  if (despues <= 0) {
+    await ref.set(
+      {
+        disp: 0,
+        disponibles: 0,
+        estado: "llena",
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+
+    if (antes > 0) {
+      return bot.sendMessage(
+        chatId,
+        `🚨 *ALERTA STOCK*\n${String(dataDespues.plataforma).toUpperCase()} quedó en *0*.\n📧 ${dataDespues.correo}\n✅ Estado: *LLENA*`,
+        { parse_mode: "Markdown" }
+      );
+    }
+  }
+}
+
+async function inventarioPlataformaTexto(plataforma, page) {
+  const p = normalizarPlataforma(plataforma);
+  const totalDefault = await getTotalPorPlataforma(p);
+
+  const snap = await db.collection("inventario").where("plataforma", "==", p).limit(500).get();
+
+  const docs = snap.docs
+    .map((d) => {
+      const data = d.data() || {};
+      const clientes = Array.isArray(data.clientes) ? data.clientes : [];
+      const capacidad = Number(data.capacidad || data.total || totalDefault || 0);
+      const ocupados = clientes.length;
+      const disponibles = capacidad > 0
+        ? Math.max(0, capacidad - ocupados)
+        : Number(data.disp || 0);
+
+      return {
+        id: d.id,
+        ...data,
+        capacidad,
+        ocupados,
+        disp: disponibles,
+        disponibles,
+        estado: disponibles <= 0 ? "llena" : "activa",
+      };
+    })
+    .sort((a, b) => String(a.correo || "").localeCompare(String(b.correo || "")));
+
+  const totalItems = docs.length;
+  const totalPages = Math.max(1, Math.ceil(totalItems / PAGE_SIZE));
+  const safePage = Math.min(Math.max(Number(page) || 0, 0), totalPages - 1);
+  const start = safePage * PAGE_SIZE;
+  const end = Math.min(start + PAGE_SIZE, totalItems);
+  const slice = docs.slice(start, end);
+
+  let texto = `📌 *${p.toUpperCase()} — INVENTARIO*\n`;
+  texto += `Mostrando ${totalItems === 0 ? 0 : start + 1}-${end} de ${totalItems}\n\n`;
+
+  if (slice.length === 0) {
+    texto += `⚠️ SIN CUENTAS REGISTRADAS\n`;
+  } else {
+    let i = start + 1;
+    for (const d of slice) {
+      texto += `${i}) ${d.correo} — 🔑 ${d?.clave ? d.clave : "-"} — ${d.ocupados}/${d.capacidad} — ${fmtEstado(d.estado)}\n`;
+      i++;
+    }
+
+    texto += `\n━━━━━━━━━━━━━━\n`;
+    texto += `📌 Para abrir correo: escriba /correo\n`;
+  }
+
+  texto += `\n📄 Página: ${safePage + 1}/${totalPages}`;
+  return { texto, safePage, totalPages };
+}
+
+async function enviarInventarioPlataforma(chatId, plataforma, page) {
+  const p = normalizarPlataforma(plataforma);
+
+  if (!esPlataformaValida(p)) {
+    return upsertPanel(
+      chatId,
+      "⚠️ Plataforma inválida.",
+      { inline_keyboard: [[{ text: "🏠 Inicio", callback_data: "go:inicio" }]] },
+      "Markdown"
+    );
+  }
+
+  const { texto, safePage, totalPages } = await inventarioPlataformaTexto(p, page);
+  const canBack = safePage > 0;
+  const canNext = safePage < totalPages - 1;
+
+  return upsertPanel(
+    chatId,
+    texto,
+    {
+      inline_keyboard: [
+        [
+          { text: "⬅️ Atrás", callback_data: canBack ? `inv:${p}:${safePage - 1}` : "noop" },
+          { text: "🏠 Inicio", callback_data: "go:inicio" },
+          { text: "➡️ Siguiente", callback_data: canNext ? `inv:${p}:${safePage + 1}` : "noop" },
+        ],
+        [{ text: "🔄 Actualizar", callback_data: `inv:${p}:${safePage}` }],
+        [{ text: "⬅️ Volver Inventario", callback_data: "menu:inventario" }],
+      ],
+    },
+    "Markdown"
+  );
+}
+
+async function mostrarStockGeneral(chatId) {
+  const cfg = await db.collection("config").doc("totales_plataforma").get();
+  const totals = cfg.exists ? cfg.data() : {};
+
+  let texto = "📦 *STOCK GENERAL*\n\n";
+
+  for (const p of PLATAFORMAS) {
+    const snap = await db.collection("inventario").where("plataforma", "==", p).limit(500).get();
+    let libres = 0;
+
+    snap.forEach((d) => {
+      const data = d.data() || {};
+      const clientes = Array.isArray(data.clientes) ? data.clientes : [];
+      const capacidad = Number(data.capacidad || data.total || totals?.[p] || 0);
+      libres += Math.max(0, capacidad - clientes.length);
+    });
+
+    texto += `✅ *${p}*: ${libres} libres (/${totals?.[p] ?? "-"})\n`;
+  }
+
+  return bot.sendMessage(chatId, texto, { parse_mode: "Markdown" });
+}
+
+async function enviarSubmenuInventario(chatId, plataforma, correo) {
+  return mostrarPanelCorreo(chatId, plataforma, correo);
+}
+
+// ===============================
 // HELPERS FINANZAS BASE
 // ===============================
 function getFinBancos() {
@@ -761,6 +1195,276 @@ function kbMotivosFinanzas() {
   }
   rows.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
   return { inline_keyboard: rows };
+}
+
+async function registrarIngresoTx({ monto, banco, fecha, userId, userName = "" }) {
+  const parsed = parseFechaFinanceInput(fecha);
+  if (!parsed.ok) throw new Error("Fecha inválida");
+
+  const nMonto = parseMontoNumber(monto);
+  if (!Number.isFinite(nMonto) || nMonto <= 0) throw new Error("Monto inválido");
+
+  const ref = db.collection(FINANZAS_COLLECTION).doc();
+
+  await ref.set({
+    tipo: "ingreso",
+    monto: Number(nMonto),
+    banco: String(banco || "Otro").trim(),
+    motivo: "",
+    detalle: "",
+    plataforma: "",
+    vendedor: "",
+    cliente: "",
+    fecha: parsed.fecha,
+    fechaTS: parsed.fechaTS,
+    mesKey: parsed.mesKey,
+    createdBy: String(userId),
+    createdByName: String(userName || "").trim(),
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+
+  return { id: ref.id, fecha: parsed.fecha, monto: nMonto, banco: banco || "Otro" };
+}
+
+async function registrarEgresoTx({ monto, motivo, fecha, userId, userName = "" }) {
+  const parsed = parseFechaFinanceInput(fecha);
+  if (!parsed.ok) throw new Error("Fecha inválida");
+
+  const nMonto = parseMontoNumber(monto);
+  if (!Number.isFinite(nMonto) || nMonto <= 0) throw new Error("Monto inválido");
+
+  const ref = db.collection(FINANZAS_COLLECTION).doc();
+
+  await ref.set({
+    tipo: "egreso",
+    monto: Number(nMonto),
+    banco: "",
+    motivo: String(motivo || "Otros").trim(),
+    detalle: "",
+    plataforma: "",
+    vendedor: "",
+    cliente: "",
+    fecha: parsed.fecha,
+    fechaTS: parsed.fechaTS,
+    mesKey: parsed.mesKey,
+    createdBy: String(userId),
+    createdByName: String(userName || "").trim(),
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+
+  return { id: ref.id, fecha: parsed.fecha, monto: nMonto, motivo: motivo || "Otros" };
+}
+
+async function getMovimientosPorFecha(fechaDMY, userId, isSA = false) {
+  const ini = startOfDayTS(fechaDMY);
+  const fin = endOfDayTS(fechaDMY);
+
+  const snap = await db
+    .collection(FINANZAS_COLLECTION)
+    .where("fechaTS", ">=", ini)
+    .where("fechaTS", "<=", fin)
+    .get();
+
+  let arr = snap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
+
+  if (!isSA) {
+    arr = arr.filter((x) => String(x.createdBy || "") === String(userId));
+  }
+
+  arr.sort((a, b) => Number(a.fechaTS || 0) - Number(b.fechaTS || 0));
+  return arr;
+}
+
+async function getMovimientosPorMes(monthKey, userId, isSA = false) {
+  const snap = await db.collection(FINANZAS_COLLECTION).where("mesKey", "==", monthKey).get();
+
+  let arr = snap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
+
+  if (!isSA) {
+    arr = arr.filter((x) => String(x.createdBy || "") === String(userId));
+  }
+
+  arr.sort((a, b) => Number(a.fechaTS || 0) - Number(b.fechaTS || 0));
+  return arr;
+}
+
+function agruparIngresosPorBanco(movs = []) {
+  const map = new Map();
+  for (const m of movs) {
+    if (String(m.tipo || "") !== "ingreso") continue;
+    const banco = String(m.banco || "Otro").trim() || "Otro";
+    map.set(banco, Number(map.get(banco) || 0) + Number(m.monto || 0));
+  }
+  return Array.from(map.entries())
+    .map(([banco, monto]) => ({ banco, monto }))
+    .sort((a, b) => b.monto - a.monto);
+}
+
+function agruparEgresosPorMotivo(movs = []) {
+  const map = new Map();
+  for (const m of movs) {
+    if (String(m.tipo || "") !== "egreso") continue;
+    const motivo = String(m.motivo || "Otros").trim() || "Otros";
+    map.set(motivo, Number(map.get(motivo) || 0) + Number(m.monto || 0));
+  }
+  return Array.from(map.entries())
+    .map(([motivo, monto]) => ({ motivo, monto }))
+    .sort((a, b) => b.monto - a.monto);
+}
+
+function calcularTotalesMovimientos(movs = []) {
+  let ingresos = 0;
+  let egresos = 0;
+  for (const m of movs) {
+    if (String(m.tipo || "") === "ingreso") ingresos += Number(m.monto || 0);
+    if (String(m.tipo || "") === "egreso") egresos += Number(m.monto || 0);
+  }
+  return { ingresos, egresos, neta: ingresos - egresos };
+}
+
+function resumenFinanzasTextoPorFecha(fechaDMY, movs = []) {
+  const { ingresos, egresos, neta } = calcularTotalesMovimientos(movs);
+  const bancos = agruparIngresosPorBanco(movs);
+  const motivos = agruparEgresosPorMotivo(movs);
+
+  let txt = `📊 *ESTADO DE RESULTADOS (${escMD(fechaDMY)})*\n\n`;
+  txt += `💰 *INGRESOS:* ${moneyLps(ingresos)}\n`;
+  if (!bancos.length) txt += `➖ Sin ingresos registrados\n`;
+  else bancos.forEach((x) => { txt += `➖ ${escMD(x.banco)}: ${moneyLps(x.monto)}\n`; });
+
+  txt += `\n🛠️ *EGRESOS:* ${moneyLps(egresos)}\n`;
+  if (!motivos.length) txt += `➖ Sin egresos registrados\n`;
+  else motivos.forEach((x) => { txt += `➖ ${escMD(x.motivo)}: ${moneyLps(x.monto)}\n`; });
+
+  txt += `\n📈 *GANANCIA NETA:* ${neta >= 0 ? "+" : ""}${moneyLps(neta)} ${neta >= 0 ? "🟢" : "🔴"}\n`;
+  txt += `🧾 *Movimientos:* ${movs.length}`;
+  return txt;
+}
+
+function resumenBancosMesTexto(monthKey, movs = []) {
+  const bancos = agruparIngresosPorBanco(movs);
+  const total = bancos.reduce((a, b) => a + Number(b.monto || 0), 0);
+
+  let txt = `🏦 *RESUMEN POR BANCO DEL MES ${escMD(getMonthLabelFromKey(monthKey))}*\n\n`;
+
+  if (!bancos.length) {
+    txt += `⚠️ No hay ingresos registrados en ese mes.`;
+    return txt;
+  }
+
+  bancos.forEach((x, i) => {
+    txt += `${i + 1}) *${escMD(x.banco)}* — ${moneyLps(x.monto)}\n`;
+  });
+
+  txt += `\n━━━━━━━━━━━━━━\n`;
+  txt += `💰 *Total ingresos del mes:* ${moneyLps(total)}`;
+  return txt;
+}
+
+function cierreCajaTexto(fechaDMY, movs = []) {
+  const { ingresos, egresos, neta } = calcularTotalesMovimientos(movs);
+  let txt = `🧾 *CIERRE DE CAJA (${escMD(fechaDMY)})*\n\n`;
+  txt += `💰 Entradas: ${moneyLps(ingresos)}\n`;
+  txt += `💸 Salidas: ${moneyLps(egresos)}\n`;
+  txt += `📦 Caja final: ${neta >= 0 ? "+" : ""}${moneyLps(neta)} ${neta >= 0 ? "🟢" : "🔴"}\n`;
+  txt += `🧮 Movimientos: ${movs.length}`;
+  return txt;
+}
+
+async function eliminarMovimientoFinanzas(id, userId, isSA = false) {
+  const ref = db.collection(FINANZAS_COLLECTION).doc(String(id));
+  const doc = await ref.get();
+  if (!doc.exists) throw new Error("Movimiento no encontrado");
+
+  const data = doc.data() || {};
+  if (!isSA && String(data.createdBy || "") !== String(userId)) {
+    throw new Error("No autorizado para eliminar este movimiento");
+  }
+
+  await ref.delete();
+  return data;
+}
+
+async function exportarFinanzasRangoExcel(chatId, fechaInicio, fechaFin, userId, isSA = false) {
+  if (!ExcelJS) {
+    return bot.sendMessage(chatId, "⚠️ ExcelJS no está instalado en el servidor.");
+  }
+
+  if (!isFechaDMY(fechaInicio) || !isFechaDMY(fechaFin)) {
+    return bot.sendMessage(chatId, "⚠️ Formato inválido. Use dd/mm/yyyy");
+  }
+
+  const ini = startOfDayTS(fechaInicio);
+  const fin = endOfDayTS(fechaFin);
+
+  if (ini > fin) {
+    return bot.sendMessage(chatId, "⚠️ El rango es inválido.");
+  }
+
+  const snap = await db
+    .collection(FINANZAS_COLLECTION)
+    .where("fechaTS", ">=", ini)
+    .where("fechaTS", "<=", fin)
+    .get();
+
+  let movs = snap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
+
+  if (!isSA) {
+    movs = movs.filter((x) => String(x.createdBy || "") === String(userId));
+  }
+
+  movs.sort((a, b) => Number(a.fechaTS || 0) - Number(b.fechaTS || 0));
+
+  if (!movs.length) {
+    return bot.sendMessage(chatId, "⚠️ No hay movimientos en ese rango.");
+  }
+
+  const workbook = new ExcelJS.Workbook();
+  const wsMov = workbook.addWorksheet("Movimientos");
+  wsMov.columns = [
+    { header: "Fecha", key: "fecha", width: 14 },
+    { header: "Tipo", key: "tipo", width: 12 },
+    { header: "Monto", key: "monto", width: 14 },
+    { header: "Banco", key: "banco", width: 18 },
+    { header: "Motivo", key: "motivo", width: 20 },
+    { header: "Creado por", key: "createdByName", width: 18 },
+  ];
+
+  wsMov.getRow(1).font = { bold: true };
+
+  for (const m of movs) {
+    wsMov.addRow({
+      fecha: m.fecha || "",
+      tipo: m.tipo || "",
+      monto: Number(m.monto || 0),
+      banco: m.banco || "",
+      motivo: m.motivo || "",
+      createdByName: m.createdByName || m.createdBy || "",
+    });
+  }
+
+  wsMov.getColumn("monto").numFmt = "#,##0.00";
+
+  const { ingresos, egresos, neta } = calcularTotalesMovimientos(movs);
+  const wsRes = workbook.addWorksheet("Resumen");
+  wsRes.columns = [
+    { header: "Concepto", key: "concepto", width: 24 },
+    { header: "Monto", key: "monto", width: 18 },
+  ];
+  wsRes.getRow(1).font = { bold: true };
+  wsRes.addRow({ concepto: "Ingresos", monto: ingresos });
+  wsRes.addRow({ concepto: "Egresos", monto: egresos });
+  wsRes.addRow({ concepto: "Ganancia neta", monto: neta });
+  wsRes.getColumn("monto").numFmt = "#,##0.00";
+
+  const buffer = await workbook.xlsx.writeBuffer();
+
+  return bot.sendDocument(chatId, Buffer.from(buffer), {}, {
+    filename: `finanzas_${ymdFromDMY(fechaInicio)}_a_${ymdFromDMY(fechaFin)}.xlsx`,
+    contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  });
 }
 
 // ===============================
@@ -1000,7 +1704,6 @@ function kbPlataformasWiz(prefix, clientId, idxOpt) {
     [{ text: "📡 iptv (4)", callback_data: cb("iptv4") }],
   ];
 }
-
 // ===============================
 // FICHA CLIENTE / CRM / EDICIÓN
 // ===============================
@@ -1040,7 +1743,7 @@ async function enviarFichaCliente(chatId, clientId) {
 
   txt += `*SERVICIOS*\n`;
   if (!servicios.length) {
-    txt += `— Sin servicios —\n`;
+    txt += `- Sin servicios -\n`;
   } else {
     servicios.forEach((s, i) => {
       txt += `\n*${i + 1})* ${escMD(labelPlataforma(s.plataforma))}\n`;
@@ -1064,12 +1767,7 @@ async function enviarFichaCliente(chatId, clientId) {
   kb.push([{ text: "📄 TXT de este cliente", callback_data: `cli:txt:one:${clientId}` }]);
   kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
 
-  return upsertPanel(
-    chatId,
-    txt,
-    { inline_keyboard: kb },
-    "Markdown"
-  );
+  return upsertPanel(chatId, txt, { inline_keyboard: kb }, "Markdown");
 }
 
 async function menuEditarCliente(chatId, clientId) {
@@ -1663,12 +2361,7 @@ async function enviarListaResultadosClientes(chatId, resultados) {
   ]);
   kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
 
-  return upsertPanel(
-    chatId,
-    txt,
-    { inline_keyboard: kb },
-    "Markdown"
-  );
+  return upsertPanel(chatId, txt, { inline_keyboard: kb }, "Markdown");
 }
 
 // ===============================
@@ -1994,13 +2687,9 @@ function fmtFechaCodigoNetflix(fecha) {
   try {
     let dt = null;
 
-    if (typeof fecha?.toDate === "function") {
-      dt = fecha.toDate();
-    } else if (fecha instanceof Date) {
-      dt = fecha;
-    } else {
-      dt = new Date(fecha);
-    }
+    if (typeof fecha?.toDate === "function") dt = fecha.toDate();
+    else if (fecha instanceof Date) dt = fecha;
+    else dt = new Date(fecha);
 
     if (isNaN(dt.getTime())) return String(fecha);
 
@@ -2038,11 +2727,8 @@ async function responderCodigoNetflix(chatId, correo, tipo) {
   const mail = String(correo || "").trim().toLowerCase();
 
   let data = null;
-  if (tipo === "ultimo") {
-    data = await obtenerUltimoCodigoNetflixGeneral(mail);
-  } else {
-    data = await obtenerUltimoCodigoNetflix(mail, tipo);
-  }
+  if (tipo === "ultimo") data = await obtenerUltimoCodigoNetflixGeneral(mail);
+  else data = await obtenerUltimoCodigoNetflix(mail, tipo);
 
   if (!data) {
     return bot.sendMessage(
@@ -2097,7 +2783,7 @@ async function responderMenuCodigosNetflix(chatId, plataforma, correo) {
     },
     "Markdown"
   );
-           }
+}
 
 // ===============================
 // COMANDOS CLIENTES
@@ -2214,11 +2900,9 @@ bot.onText(/\/sincronizar_todo/i, async (msg) => {
               slot: clientesInv.length + 1,
             });
 
-            const capacidad = Number(invData.capacidad || invData.total || 0);
+            const capacidad = Number(invData.capacidad || invData.total || getCapacidadCorreo(invData, plat) || 0);
             const ocupados = clientesInv.length;
-            const disponibles = capacidad > 0
-              ? Math.max(0, capacidad - ocupados)
-              : Math.max(0, Number(invData.disp || 0) - 1);
+            const disponibles = Math.max(0, capacidad - ocupados);
             const estado = disponibles === 0 ? "llena" : "activa";
 
             await refInv.set(
@@ -2694,7 +3378,7 @@ bot.onText(/\/addcorreo\s+(\S+)\s+(\S+)(?:\s+(\d+))?/i, async (msg, match) => {
   let capacidad = Number(capacidadRaw);
   if (!capacidadRaw || isNaN(capacidad) || capacidad <= 0) {
     const totales = await getTotalPorPlataforma(plat);
-    capacidad = totales || 5;
+    capacidad = totales || getCapacidadCorreo({}, plat) || 5;
   }
 
   await ref.set({
@@ -3588,11 +4272,9 @@ bot.on("callback_query", async (q) => {
             clientesInv.splice(indexInv, 1);
             clientesInv = clientesInv.map((cl, i) => ({ ...cl, slot: i + 1 }));
 
-            const capacidad = Number(invData.capacidad || invData.total || 0);
+            const capacidad = Number(invData.capacidad || invData.total || getCapacidadCorreo(invData, plat) || 0);
             const ocupados = clientesInv.length;
-            const disponibles = capacidad > 0
-              ? Math.max(0, capacidad - ocupados)
-              : Number(invData.disp || 0) + 1;
+            const disponibles = Math.max(0, capacidad - ocupados);
             const estado = disponibles === 0 ? "llena" : "activa";
 
             await refInv.set(
@@ -4610,3 +5292,4 @@ http
   .listen(PORT, () => {
     console.log("🌐 HTTP KEEPALIVE activo en puerto", PORT);
   });
+
