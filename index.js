@@ -1,4 +1,4 @@
-/* ✅ SUBLICUENTAS TG BOT — INDEX FINAL (LIMPIO V13.0)
+/* ✅ SUBLICUENTAS TG BOT — INDEX FINAL (LIMPIO V13.1)
    ✅ ARRANQUE LIMPIO
    ✅ FIX 409 polling
    ✅ SIN LOCK GLOBAL QUE CONGELE EL BOT
@@ -7,19 +7,14 @@
    ✅ SINCRONIZACIÓN ESPEJO AL GUARDAR
    ✅ BASE PREPARADA PARA FINANZAS V13
    ✅ LISTO PARA EXCEL REAL CON GRÁFICOS
+   ✅ FIX MENÚ FINANZAS POR SECCIONES
+   ✅ DISNEYS AJUSTADO A 3 PERFILES
 */
 
 const http = require("http");
 const TelegramBot = require("node-telegram-bot-api");
 const admin = require("firebase-admin");
-
-// ✅ ExcelJS PROTEGIDO (si no está instalado, NO tumba el bot)
-let ExcelJS = null;
-try {
-  ExcelJS = require("exceljs");
-} catch (e) {
-  console.log("⚠️ ExcelJS no instalado. (No afecta el bot). Instale: npm i exceljs");
-}
+const ExcelJS = require("exceljs");
 
 // ===============================
 // ENV
@@ -557,7 +552,7 @@ async function asegurarTotalesDefault() {
     netflix: 5,
     vipnetflix: 1,
     disneyp: 6,
-    disneys: 5,
+    disneys: 3,
     hbomax: 5,
     primevideo: 5,
     paramount: 5,
@@ -858,7 +853,9 @@ async function addServicioTx(clientId, servicio) {
       const invData = docInv.data() || {};
       const clientesInv = Array.isArray(invData.clientes) ? invData.clientes.slice() : [];
 
-      const yaExiste = clientesInv.some((c) => c.nombre === curCli.nombrePerfil && c.pin === servicio.pin);
+      const yaExiste = clientesInv.some(
+        (c) => c.nombre === curCli.nombrePerfil && c.pin === servicio.pin
+      );
 
       if (!yaExiste) {
         clientesInv.push({
@@ -1180,6 +1177,411 @@ async function enviarSubmenuInventario(chatId, plataforma, correo) {
 }
 
 // ===============================
+// HELPERS FINANZAS BASE
+// ===============================
+function getFinBancos() {
+  return Array.isArray(global.FIN_BANCOS) && global.FIN_BANCOS.length
+    ? global.FIN_BANCOS
+    : ["Bac", "Atlántida", "Ficohsa", "Davivienda", "Banpais", "Occidente", "Lafise", "Tigo Money", "Efectivo", "PayPal", "Binance", "Otro"];
+}
+
+function getFinMotivosEgreso() {
+  return Array.isArray(global.FIN_MOTIVOS_EGRESO) && global.FIN_MOTIVOS_EGRESO.length
+    ? global.FIN_MOTIVOS_EGRESO
+    : ["Renovaciones", "Nuevas cuentas", "Publicidad", "Comisiones", "Servicios", "Retiro personal", "Otros"];
+}
+
+function kbBancosFinanzas() {
+  const bancos = getFinBancos();
+  const rows = [];
+  for (let i = 0; i < bancos.length; i += 2) {
+    const row = [];
+    row.push({ text: bancos[i], callback_data: `fin:ing:banco:${encodeURIComponent(bancos[i])}` });
+    if (bancos[i + 1]) row.push({ text: bancos[i + 1], callback_data: `fin:ing:banco:${encodeURIComponent(bancos[i + 1])}` });
+    rows.push(row);
+  }
+  rows.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
+  return { inline_keyboard: rows };
+}
+
+function kbMotivosFinanzas() {
+  const motivos = getFinMotivosEgreso();
+  const rows = [];
+  for (let i = 0; i < motivos.length; i += 2) {
+    const row = [];
+    row.push({ text: motivos[i], callback_data: `fin:egr:motivo:${encodeURIComponent(motivos[i])}` });
+    if (motivos[i + 1]) row.push({ text: motivos[i + 1], callback_data: `fin:egr:motivo:${encodeURIComponent(motivos[i + 1])}` });
+    rows.push(row);
+  }
+  rows.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
+  return { inline_keyboard: rows };
+}
+
+async function registrarIngresoTx({
+  monto,
+  banco,
+  fecha,
+  userId,
+  userName = "",
+}) {
+  const parsed = parseFechaFinanceInput(fecha);
+  if (!parsed.ok) throw new Error("Fecha inválida");
+
+  const nMonto = parseMontoNumber(monto);
+  if (!Number.isFinite(nMonto) || nMonto <= 0) throw new Error("Monto inválido");
+
+  const ref = db.collection(FINANZAS_COLLECTION).doc();
+
+  await ref.set({
+    tipo: "ingreso",
+    monto: Number(nMonto),
+    banco: String(banco || "Otro").trim(),
+    motivo: "",
+    detalle: "",
+    plataforma: "",
+    vendedor: "",
+    cliente: "",
+    fecha: parsed.fecha,
+    fechaTS: parsed.fechaTS,
+    mesKey: parsed.mesKey,
+    createdBy: String(userId),
+    createdByName: String(userName || "").trim(),
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+
+  return { id: ref.id, fecha: parsed.fecha, monto: nMonto, banco: banco || "Otro" };
+}
+
+async function registrarEgresoTx({
+  monto,
+  motivo,
+  fecha,
+  userId,
+  userName = "",
+}) {
+  const parsed = parseFechaFinanceInput(fecha);
+  if (!parsed.ok) throw new Error("Fecha inválida");
+
+  const nMonto = parseMontoNumber(monto);
+  if (!Number.isFinite(nMonto) || nMonto <= 0) throw new Error("Monto inválido");
+
+  const ref = db.collection(FINANZAS_COLLECTION).doc();
+
+  await ref.set({
+    tipo: "egreso",
+    monto: Number(nMonto),
+    banco: "",
+    motivo: String(motivo || "Otros").trim(),
+    detalle: "",
+    plataforma: "",
+    vendedor: "",
+    cliente: "",
+    fecha: parsed.fecha,
+    fechaTS: parsed.fechaTS,
+    mesKey: parsed.mesKey,
+    createdBy: String(userId),
+    createdByName: String(userName || "").trim(),
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+
+  return { id: ref.id, fecha: parsed.fecha, monto: nMonto, motivo: motivo || "Otros" };
+}
+
+async function getMovimientosPorFecha(fechaDMY, userId, isSA = false) {
+  const ini = startOfDayTS(fechaDMY);
+  const fin = endOfDayTS(fechaDMY);
+
+  const snap = await db
+    .collection(FINANZAS_COLLECTION)
+    .where("fechaTS", ">=", ini)
+    .where("fechaTS", "<=", fin)
+    .get();
+
+  let arr = snap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
+
+  if (!isSA) {
+    arr = arr.filter((x) => String(x.createdBy || "") === String(userId));
+  }
+
+  arr.sort((a, b) => {
+    const ta = Number(a.fechaTS || 0);
+    const tb = Number(b.fechaTS || 0);
+    if (ta !== tb) return ta - tb;
+    return String(a.tipo || "").localeCompare(String(b.tipo || ""));
+  });
+
+  return arr;
+}
+
+async function getMovimientosPorMes(monthKey, userId, isSA = false) {
+  const snap = await db.collection(FINANZAS_COLLECTION).where("mesKey", "==", monthKey).get();
+
+  let arr = snap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
+
+  if (!isSA) {
+    arr = arr.filter((x) => String(x.createdBy || "") === String(userId));
+  }
+
+  arr.sort((a, b) => Number(a.fechaTS || 0) - Number(b.fechaTS || 0));
+  return arr;
+}
+
+function agruparIngresosPorBanco(movs = []) {
+  const map = new Map();
+  for (const m of movs) {
+    if (String(m.tipo || "") !== "ingreso") continue;
+    const banco = String(m.banco || "Otro").trim() || "Otro";
+    map.set(banco, Number(map.get(banco) || 0) + Number(m.monto || 0));
+  }
+  return Array.from(map.entries())
+    .map(([banco, monto]) => ({ banco, monto }))
+    .sort((a, b) => b.monto - a.monto);
+}
+
+function agruparEgresosPorMotivo(movs = []) {
+  const map = new Map();
+  for (const m of movs) {
+    if (String(m.tipo || "") !== "egreso") continue;
+    const motivo = String(m.motivo || "Otros").trim() || "Otros";
+    map.set(motivo, Number(map.get(motivo) || 0) + Number(m.monto || 0));
+  }
+  return Array.from(map.entries())
+    .map(([motivo, monto]) => ({ motivo, monto }))
+    .sort((a, b) => b.monto - a.monto);
+}
+
+function calcularTotalesMovimientos(movs = []) {
+  let ingresos = 0;
+  let egresos = 0;
+  for (const m of movs) {
+    if (String(m.tipo || "") === "ingreso") ingresos += Number(m.monto || 0);
+    if (String(m.tipo || "") === "egreso") egresos += Number(m.monto || 0);
+  }
+  const neta = ingresos - egresos;
+  return { ingresos, egresos, neta };
+}
+
+function resumenFinanzasTextoPorFecha(fechaDMY, movs = []) {
+  const { ingresos, egresos, neta } = calcularTotalesMovimientos(movs);
+  const bancos = agruparIngresosPorBanco(movs);
+  const motivos = agruparEgresosPorMotivo(movs);
+
+  let txt = `📊 *ESTADO DE RESULTADOS (${escMD(fechaDMY)})*\n\n`;
+  txt += `💰 *INGRESOS:* ${moneyLps(ingresos)}\n`;
+  if (!bancos.length) {
+    txt += `➖ Sin ingresos registrados\n`;
+  } else {
+    bancos.forEach((x) => {
+      txt += `➖ ${escMD(x.banco)}: ${moneyLps(x.monto)}\n`;
+    });
+  }
+
+  txt += `\n🛠️ *EGRESOS:* ${moneyLps(egresos)}\n`;
+  if (!motivos.length) {
+    txt += `➖ Sin egresos registrados\n`;
+  } else {
+    motivos.forEach((x) => {
+      txt += `➖ ${escMD(x.motivo)}: ${moneyLps(x.monto)}\n`;
+    });
+  }
+
+  txt += `\n📈 *GANANCIA NETA:* ${neta >= 0 ? "+" : ""}${moneyLps(neta)} ${neta >= 0 ? "🟢" : "🔴"}\n`;
+  txt += `🧾 *Movimientos:* ${movs.length}`;
+  return txt;
+}
+
+function resumenBancosMesTexto(monthKey, movs = []) {
+  const bancos = agruparIngresosPorBanco(movs);
+  const total = bancos.reduce((a, b) => a + Number(b.monto || 0), 0);
+
+  let txt = `🏦 *RESUMEN POR BANCO DEL MES ${escMD(getMonthLabelFromKey(monthKey))}*\n\n`;
+
+  if (!bancos.length) {
+    txt += `⚠️ No hay ingresos registrados en ese mes.`;
+    return txt;
+  }
+
+  bancos.forEach((x, i) => {
+    txt += `${i + 1}) *${escMD(x.banco)}* — ${moneyLps(x.monto)}\n`;
+  });
+
+  txt += `\n━━━━━━━━━━━━━━\n`;
+  txt += `💰 *Total ingresos del mes:* ${moneyLps(total)}`;
+  return txt;
+}
+
+function cierreCajaTexto(fechaDMY, movs = []) {
+  const { ingresos, egresos, neta } = calcularTotalesMovimientos(movs);
+  let txt = `🧾 *CIERRE DE CAJA (${escMD(fechaDMY)})*\n\n`;
+  txt += `💰 Entradas: ${moneyLps(ingresos)}\n`;
+  txt += `💸 Salidas: ${moneyLps(egresos)}\n`;
+  txt += `📦 Caja final: ${neta >= 0 ? "+" : ""}${moneyLps(neta)} ${neta >= 0 ? "🟢" : "🔴"}\n`;
+  txt += `🧮 Movimientos: ${movs.length}`;
+  return txt;
+}
+
+async function eliminarMovimientoFinanzas(id, userId, isSA = false) {
+  const ref = db.collection(FINANZAS_COLLECTION).doc(String(id));
+  const doc = await ref.get();
+  if (!doc.exists) throw new Error("Movimiento no encontrado");
+
+  const data = doc.data() || {};
+  if (!isSA && String(data.createdBy || "") !== String(userId)) {
+    throw new Error("No autorizado para eliminar este movimiento");
+  }
+
+  await ref.delete();
+  return data;
+}
+
+async function exportarFinanzasRangoExcel(chatId, fechaInicio, fechaFin, userId, isSA = false) {
+  if (!isFechaDMY(fechaInicio) || !isFechaDMY(fechaFin)) {
+    return bot.sendMessage(chatId, "⚠️ Formato inválido. Use dd/mm/yyyy");
+  }
+
+  const ini = startOfDayTS(fechaInicio);
+  const fin = endOfDayTS(fechaFin);
+
+  if (ini > fin) {
+    return bot.sendMessage(chatId, "⚠️ El rango es inválido.");
+  }
+
+  const snap = await db
+    .collection(FINANZAS_COLLECTION)
+    .where("fechaTS", ">=", ini)
+    .where("fechaTS", "<=", fin)
+    .get();
+
+  let movs = snap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
+
+  if (!isSA) {
+    movs = movs.filter((x) => String(x.createdBy || "") === String(userId));
+  }
+
+  movs.sort((a, b) => Number(a.fechaTS || 0) - Number(b.fechaTS || 0));
+
+  if (!movs.length) {
+    return bot.sendMessage(chatId, "⚠️ No hay movimientos en ese rango.");
+  }
+
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = "Sublicuentas Bot";
+  workbook.created = new Date();
+
+  const wsMov = workbook.addWorksheet("Movimientos");
+  wsMov.columns = [
+    { header: "Fecha", key: "fecha", width: 14 },
+    { header: "Tipo", key: "tipo", width: 12 },
+    { header: "Monto", key: "monto", width: 14 },
+    { header: "Banco", key: "banco", width: 18 },
+    { header: "Motivo", key: "motivo", width: 20 },
+    { header: "Detalle", key: "detalle", width: 26 },
+    { header: "Plataforma", key: "plataforma", width: 18 },
+    { header: "Vendedor", key: "vendedor", width: 18 },
+    { header: "Cliente", key: "cliente", width: 22 },
+    { header: "Creado por", key: "createdByName", width: 18 },
+  ];
+
+  wsMov.getRow(1).font = { bold: true };
+  wsMov.getRow(1).alignment = { horizontal: "center", vertical: "middle" };
+
+  for (const m of movs) {
+    wsMov.addRow({
+      fecha: m.fecha || "",
+      tipo: m.tipo || "",
+      monto: Number(m.monto || 0),
+      banco: m.banco || "",
+      motivo: m.motivo || "",
+      detalle: m.detalle || "",
+      plataforma: m.plataforma || "",
+      vendedor: m.vendedor || "",
+      cliente: m.cliente || "",
+      createdByName: m.createdByName || m.createdBy || "",
+    });
+  }
+
+  wsMov.getColumn("monto").numFmt = "#,##0.00";
+
+  wsMov.eachRow((row, rowNumber) => {
+    row.eachCell((cell) => {
+      cell.border = {
+        top: { style: "thin" },
+        left: { style: "thin" },
+        bottom: { style: "thin" },
+        right: { style: "thin" },
+      };
+      if (rowNumber === 1) {
+        cell.font = { bold: true };
+      }
+    });
+  });
+
+  const ingresos = movs
+    .filter((x) => String(x.tipo || "") === "ingreso")
+    .reduce((a, b) => a + Number(b.monto || 0), 0);
+
+  const egresos = movs
+    .filter((x) => String(x.tipo || "") === "egreso")
+    .reduce((a, b) => a + Number(b.monto || 0), 0);
+
+  const neta = ingresos - egresos;
+
+  const wsRes = workbook.addWorksheet("Resumen");
+  wsRes.columns = [
+    { header: "Concepto", key: "concepto", width: 24 },
+    { header: "Monto", key: "monto", width: 18 },
+  ];
+
+  wsRes.getRow(1).font = { bold: true };
+  wsRes.addRow({ concepto: "Ingresos", monto: ingresos });
+  wsRes.addRow({ concepto: "Egresos", monto: egresos });
+  wsRes.addRow({ concepto: "Ganancia neta", monto: neta });
+  wsRes.getColumn("monto").numFmt = "#,##0.00";
+
+  wsRes.eachRow((row) => {
+    row.eachCell((cell) => {
+      cell.border = {
+        top: { style: "thin" },
+        left: { style: "thin" },
+        bottom: { style: "thin" },
+        right: { style: "thin" },
+      };
+    });
+  });
+
+  const porBanco = {};
+  for (const m of movs) {
+    if (String(m.tipo || "") !== "ingreso") continue;
+    const banco = String(m.banco || "Otro").trim() || "Otro";
+    porBanco[banco] = Number(porBanco[banco] || 0) + Number(m.monto || 0);
+  }
+
+  const wsBanco = workbook.addWorksheet("Bancos");
+  wsBanco.columns = [
+    { header: "Banco", key: "banco", width: 22 },
+    { header: "Ingresos", key: "monto", width: 18 },
+  ];
+  wsBanco.getRow(1).font = { bold: true };
+
+  Object.entries(porBanco)
+    .sort((a, b) => Number(b[1]) - Number(a[1]))
+    .forEach(([banco, monto]) => {
+      wsBanco.addRow({ banco, monto });
+    });
+
+  wsBanco.getColumn("monto").numFmt = "#,##0.00";
+
+  const buffer = await workbook.xlsx.writeBuffer();
+
+  return bot.sendDocument(chatId, Buffer.from(buffer), {}, {
+    filename: `finanzas_${ymdFromDMY(fechaInicio)}_a_${ymdFromDMY(fechaFin)}.xlsx`,
+    contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  });
+}
+
+// ===============================
 // MENÚS
 // ===============================
 async function menuPrincipal(chatId) {
@@ -1336,6 +1738,27 @@ async function menuFinGestion(chatId) {
   );
 }
 
+async function menuRenovaciones(chatId, userIdOpt) {
+  const isSA = userIdOpt ? isSuperAdmin(userIdOpt) : false;
+
+  const kb = [
+    [{ text: "📅 Renovaciones hoy", callback_data: "ren:hoy" }],
+    [{ text: "📄 TXT hoy", callback_data: "txt:hoy" }],
+    [{ text: "🧾 Mis renovaciones", callback_data: "ren:mis" }],
+    [{ text: "📄 TXT Mis renovaciones", callback_data: "txt:mis" }],
+    [{ text: "👤 Revendedores (lista)", callback_data: "rev:lista" }],
+  ];
+
+  if (isSA) kb.push([{ text: "📬 Enviar TXT a TODOS (HOY)", callback_data: "txt:todos:hoy" }]);
+  kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
+
+  return upsertPanel(
+    chatId,
+    "📅 *RENOVACIONES*\n\nComandos:\n• /renovaciones hoy\n• /renovaciones dd/mm/yyyy\n• /renovaciones VENDEDOR dd/mm/yyyy\n\nTXT:\n• /txt hoy\n• /txt dd/mm/yyyy\n• /txt VENDEDOR dd/mm/yyyy\n\n✅ Nota:\n• *Enviar TXT a TODOS (HOY)* solo SUPERADMIN.\n",
+    { inline_keyboard: kb }
+  );
+}
+
 // ===============================
 // WIZARD HELPERS
 // ===============================
@@ -1394,7 +1817,7 @@ function kbPlataformasWiz(prefix, clientId, idxOpt) {
     ],
     [{ text: "📡 iptv (4)", callback_data: cb("iptv4") }],
   ];
-}
+                                }
 // ===============================
 // FICHA CLIENTE / CRM / EDICIÓN
 // ===============================
@@ -1601,7 +2024,7 @@ function getCapacidadCorreo(data = {}, plataforma = "") {
     disney: 6,
     disneyp: 6,
     disneyplus: 6,
-    disneys: 5,
+    disneys: 3,
     max: 5,
     hbomax: 5,
     primevideo: 5,
@@ -2491,7 +2914,7 @@ async function responderMenuCodigosNetflix(chatId, plataforma, correo) {
     },
     "Markdown"
   );
-}
+                   }
 
 // ===============================
 // COMANDOS CLIENTES
@@ -2995,13 +3418,8 @@ bot.onText(/\/start/i, async (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
 
-  if (await isAdmin(userId)) {
-    return menuPrincipal(chatId);
-  }
-
-  if (await isVendedor(userId)) {
-    return menuVendedor(chatId);
-  }
+  if (await isAdmin(userId)) return menuPrincipal(chatId);
+  if (await isVendedor(userId)) return menuVendedor(chatId);
 
   return bot.sendMessage(chatId, "⛔ Acceso denegado");
 });
@@ -3013,13 +3431,8 @@ bot.onText(/\/menu/i, async (msg) => {
   const userId = msg.from.id;
 
   try {
-    if (await isAdmin(userId)) {
-      return menuPrincipal(chatId);
-    }
-
-    if (await isVendedor(userId)) {
-      return menuVendedor(chatId);
-    }
+    if (await isAdmin(userId)) return menuPrincipal(chatId);
+    if (await isVendedor(userId)) return menuVendedor(chatId);
 
     return bot.sendMessage(chatId, "⛔ Acceso denegado", {
       reply_to_message_id: msg.message_id,
@@ -3188,9 +3601,6 @@ bot.on("callback_query", async (q) => {
       if (data === "fin:menu:reportes") return menuFinReportes(chatId);
       if (data === "fin:menu:gestion") return menuFinGestion(chatId);
 
-      // ===============================
-      // CALLBACKS FINANZAS
-      // ===============================
       if (data === "fin:menu:ingreso") {
         pending.set(String(chatId), { mode: "finIngresoMonto" });
         return upsertPanel(
@@ -3344,83 +3754,6 @@ bot.on("callback_query", async (q) => {
         return enviarSubmenuInventario(chatId, plat, correo);
       }
 
-      if (data.startsWith("inv:menu:sumar:")) {
-        const [, , , plat, correoEnc] = data.split(":");
-        const correo = decodeURIComponent(correoEnc || "");
-        pending.set(String(chatId), { mode: "invSumarQty", plat, correo });
-        return upsertPanel(
-          chatId,
-          `➕ *Agregar perfil*\n📌 ${String(plat).toUpperCase()}\n📧 ${escMD(correo)}\n\nEscriba cantidad a *SUMAR* (ej: 1):`,
-          { inline_keyboard: [[{ text: "↩️ Cancelar", callback_data: `inv:menu:cancel:${plat}:${encodeURIComponent(correo)}` }]] },
-          "Markdown"
-        );
-      }
-
-      if (data.startsWith("inv:menu:restar:")) {
-        const [, , , plat, correoEnc] = data.split(":");
-        const correo = decodeURIComponent(correoEnc || "");
-        pending.set(String(chatId), { mode: "invRestarQty", plat, correo });
-        return upsertPanel(
-          chatId,
-          `➖ *Quitar perfil*\n📌 ${String(plat).toUpperCase()}\n📧 ${escMD(correo)}\n\nEscriba cantidad a *RESTAR* (ej: 1):`,
-          { inline_keyboard: [[{ text: "↩️ Cancelar", callback_data: `inv:menu:cancel:${plat}:${encodeURIComponent(correo)}` }]] },
-          "Markdown"
-        );
-      }
-
-      if (data.startsWith("inv:menu:clave:")) {
-        const [, , , plat, correoEnc] = data.split(":");
-        const correo = decodeURIComponent(correoEnc || "");
-        pending.set(String(chatId), { mode: "invEditClave", plat, correo });
-        return upsertPanel(
-          chatId,
-          `✏️ *Editar clave*\n📌 ${String(plat).toUpperCase()}\n📧 ${escMD(correo)}\n\nEscriba la nueva clave:`,
-          { inline_keyboard: [[{ text: "↩️ Cancelar", callback_data: `inv:menu:cancel:${plat}:${encodeURIComponent(correo)}` }]] },
-          "Markdown"
-        );
-      }
-
-      if (data.startsWith("inv:menu:cancel:")) {
-        const [, , , plat, correoEnc] = data.split(":");
-        const correo = decodeURIComponent(correoEnc || "");
-        pending.delete(String(chatId));
-        pending.set(String(chatId), {
-          mode: "invSubmenuCtx",
-          plat: normalizarPlataforma(plat),
-          correo: String(correo).toLowerCase(),
-        });
-        return enviarSubmenuInventario(chatId, plat, correo);
-      }
-
-      if (data.startsWith("inv:menu:borrar:")) {
-        const [, , , plat, correoEnc] = data.split(":");
-        const correo = decodeURIComponent(correoEnc || "");
-        return bot.sendMessage(
-          chatId,
-          `🗑️ Confirmar *borrar correo*?\n📌 ${String(plat).toUpperCase()}\n📧 ${escMD(correo)}`,
-          {
-            parse_mode: "Markdown",
-            reply_markup: {
-              inline_keyboard: [
-                [{ text: "✅ Confirmar", callback_data: `inv:menu:borrarok:${normalizarPlataforma(plat)}:${encodeURIComponent(String(correo).toLowerCase())}` }],
-                [{ text: "⬅️ Cancelar", callback_data: `inv:menu:cancel:${plat}:${encodeURIComponent(correo)}` }],
-              ],
-            },
-          }
-        );
-      }
-
-      if (data.startsWith("inv:menu:borrarok:")) {
-        const [, , , plat, correoEnc] = data.split(":");
-        const correo = decodeURIComponent(correoEnc || "");
-        const ref = db.collection("inventario").doc(docIdInventario(correo, plat));
-        const doc = await ref.get();
-        if (!doc.exists) return bot.sendMessage(chatId, "⚠️ No existe ese correo en inventario.");
-        await ref.delete();
-        pending.delete(String(chatId));
-        return enviarInventarioPlataforma(chatId, plat, 0);
-      }
-
       if (data.startsWith("mail_panel|")) {
         const [, plataforma, correoEnc] = data.split("|");
         const correo = decodeURIComponent(correoEnc || "");
@@ -3444,302 +3777,6 @@ bot.on("callback_query", async (q) => {
         const tipo = parts[1] || "";
         const correo = decodeURIComponent(parts[2] || "");
         return responderCodigoNetflix(chatId, correo, tipo);
-      }
-
-      if (data.startsWith("mail_ver_clientes|")) {
-        const [, plataforma, correoEnc] = data.split("|");
-        const correo = decodeURIComponent(correoEnc || "");
-
-        const found = await buscarCorreoInventarioPorPlatCorreo(plataforma, correo);
-        if (!found) return bot.sendMessage(chatId, "❌ El correo no existe.");
-
-        const correoData = found.data || {};
-        const clientes = Array.isArray(correoData.clientes) ? correoData.clientes : [];
-        const capacidad = getCapacidadCorreo(correoData, plataforma);
-        const ocupados = clientes.length;
-        const disponibles = Math.max(0, capacidad - ocupados);
-        const estado = disponibles === 0 ? "LLENA" : "CON ESPACIO";
-
-        let txt = "👥 *Clientes en este correo*\n\n";
-        txt += `📧 *${escMD(correo)}*\n`;
-        txt += `📌 *${escMD(String(plataforma).toUpperCase())}*\n\n`;
-
-        if (!clientes.length) {
-          txt += "_No hay clientes asignados._\n\n";
-        } else {
-          clientes.forEach((c, i) => {
-            txt += `${i + 1}. ${escMD(c.nombre || "Sin nombre")} — PIN ${escMD(c.pin || "----")}\n`;
-          });
-          txt += "\n";
-        }
-
-        txt += `👤 *Ocupados:* ${ocupados}/${capacidad}\n`;
-        txt += `✅ *Disponibles:* ${disponibles}\n`;
-        txt += `📊 *Estado:* ${escMD(estado)}`;
-
-        return upsertPanel(
-          chatId,
-          txt,
-          {
-            inline_keyboard: [
-              [{ text: "⬅️ Volver al correo", callback_data: `mail_panel|${normalizarPlataforma(plataforma)}|${encodeURIComponent(correo)}` }],
-              [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
-            ],
-          },
-          "Markdown"
-        );
-      }
-
-      if (data.startsWith("mail_add_cliente|")) {
-        const [, plataforma, correoEnc] = data.split("|");
-        const correo = decodeURIComponent(correoEnc || "");
-
-        const found = await buscarCorreoInventarioPorPlatCorreo(plataforma, correo);
-        if (!found) return bot.sendMessage(chatId, "❌ El correo no existe.");
-
-        const correoData = found.data || {};
-        const clientes = Array.isArray(correoData.clientes) ? correoData.clientes : [];
-        const capacidad = getCapacidadCorreo(correoData, plataforma);
-        const ocupados = clientes.length;
-        const disponibles = Math.max(0, capacidad - ocupados);
-
-        if (disponibles <= 0) {
-          return bot.sendMessage(
-            chatId,
-            `❌ Esta cuenta ya está llena.\n\n👤 Ocupados: ${ocupados}/${capacidad}\n✅ Disponibles: 0\n📊 Estado: LLENA`
-          );
-        }
-
-        pending.set(String(chatId), {
-          mode: "mailAddClienteNombre",
-          plataforma: normalizarPlataforma(plataforma),
-          correo: String(correo).toLowerCase(),
-        });
-
-        return bot.sendMessage(chatId, "👤 *Agregar cliente*\n\nEscriba el nombre del cliente:", {
-          parse_mode: "Markdown",
-        });
-      }
-
-      if (data.startsWith("mail_del_cliente|")) {
-        const [, plataforma, correoEnc] = data.split("|");
-        const correo = decodeURIComponent(correoEnc || "");
-
-        const found = await buscarCorreoInventarioPorPlatCorreo(plataforma, correo);
-        if (!found) return bot.sendMessage(chatId, "❌ El correo no existe.");
-
-        const correoData = found.data || {};
-        const clientes = Array.isArray(correoData.clientes) ? correoData.clientes : [];
-
-        if (!clientes.length) {
-          return bot.sendMessage(chatId, "⚠️ Este correo no tiene clientes.");
-        }
-
-        const kb = clientes.map((c, i) => [
-          {
-            text: `${i + 1}. ${c.nombre || "Sin nombre"} — PIN ${c.pin || "----"}`,
-            callback_data: `mail_del_cliente_ok|${normalizarPlataforma(plataforma)}|${encodeURIComponent(correo)}|${i}`,
-          },
-        ]);
-
-        kb.push([{ text: "⬅️ Volver", callback_data: `mail_panel|${normalizarPlataforma(plataforma)}|${encodeURIComponent(correo)}` }]);
-
-        return upsertPanel(
-          chatId,
-          `➖ *Quitar cliente*\n\n📧 *${escMD(correo)}*\n\nSeleccione el cliente que desea quitar:`,
-          {
-            inline_keyboard: kb,
-          },
-          "Markdown"
-        );
-      }
-
-      if (data.startsWith("mail_del_cliente_ok|")) {
-        const [, plataforma, correoEnc, indexStr] = data.split("|");
-        const correo = decodeURIComponent(correoEnc || "");
-        const index = Number(indexStr);
-
-        const found = await buscarCorreoInventarioPorPlatCorreo(plataforma, correo);
-        if (!found) return bot.sendMessage(chatId, "❌ El correo no existe.");
-
-        const ref = found.ref;
-        const correoData = found.data || {};
-        let clientes = Array.isArray(correoData.clientes) ? correoData.clientes.slice() : [];
-
-        if (!clientes.length) return bot.sendMessage(chatId, "⚠️ Este correo ya no tiene clientes.");
-        if (isNaN(index) || index < 0 || index >= clientes.length) return bot.sendMessage(chatId, "❌ Cliente inválido.");
-
-        const cliente = clientes[index];
-        clientes.splice(index, 1);
-
-        clientes = clientes.map((c, i) => ({
-          ...c,
-          slot: i + 1,
-        }));
-
-        const capacidad = getCapacidadCorreo(correoData, plataforma);
-        const ocupados = clientes.length;
-        const disponibles = Math.max(0, capacidad - ocupados);
-        const estado = disponibles === 0 ? "LLENA" : "CON ESPACIO";
-
-        await ref.set(
-          {
-            clientes,
-            ocupados,
-            disponibles,
-            disp: disponibles,
-            estado: disponibles === 0 ? "llena" : "activa",
-            capacidad,
-            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-          },
-          { merge: true }
-        );
-
-        await bot.sendMessage(
-          chatId,
-          "✅ *Cliente quitado correctamente*\n\n" +
-            `👤 *Nombre:* ${escMD(cliente.nombre || "Sin nombre")}\n` +
-            `🔐 *PIN:* ${escMD(cliente.pin || "----")}\n\n` +
-            `👤 *Ocupados:* ${ocupados}/${capacidad}\n` +
-            `✅ *Disponibles:* ${disponibles}\n` +
-            `📊 *Estado:* ${escMD(estado)}`,
-          { parse_mode: "Markdown" }
-        );
-
-        return mostrarPanelCorreo(chatId, plataforma, correo);
-      }
-
-      if (data.startsWith("mail_edit_pin|")) {
-        const [, plataforma, correoEnc] = data.split("|");
-        const correo = decodeURIComponent(correoEnc || "");
-
-        const found = await buscarCorreoInventarioPorPlatCorreo(plataforma, correo);
-        if (!found) return bot.sendMessage(chatId, "❌ El correo no existe.");
-
-        const correoData = found.data || {};
-        const clientes = Array.isArray(correoData.clientes) ? correoData.clientes : [];
-
-        if (!clientes.length) return bot.sendMessage(chatId, "⚠️ Este correo no tiene clientes.");
-
-        const kb = clientes.map((c, i) => [
-          {
-            text: `${i + 1}. ${c.nombre || "Sin nombre"} — PIN ${c.pin || "----"}`,
-            callback_data: `mail_edit_pin_sel|${normalizarPlataforma(plataforma)}|${encodeURIComponent(correo)}|${i}`,
-          },
-        ]);
-
-        kb.push([{ text: "⬅️ Volver", callback_data: `mail_panel|${normalizarPlataforma(plataforma)}|${encodeURIComponent(correo)}` }]);
-
-        return upsertPanel(
-          chatId,
-          `🔐 *Editar PIN*\n\n📧 *${escMD(correo)}*\n\nSeleccione el cliente:`,
-          {
-            inline_keyboard: kb,
-          },
-          "Markdown"
-        );
-      }
-
-      if (data.startsWith("mail_edit_pin_sel|")) {
-        const [, plataforma, correoEnc, indexStr] = data.split("|");
-        const correo = decodeURIComponent(correoEnc || "");
-        const clienteIndex = Number(indexStr);
-
-        const found = await buscarCorreoInventarioPorPlatCorreo(plataforma, correo);
-        if (!found) return bot.sendMessage(chatId, "❌ El correo no existe.");
-
-        const correoData = found.data || {};
-        const clientes = Array.isArray(correoData.clientes) ? correoData.clientes : [];
-
-        if (!clientes.length) return bot.sendMessage(chatId, "⚠️ Este correo no tiene clientes.");
-        if (isNaN(clienteIndex) || clienteIndex < 0 || clienteIndex >= clientes.length) {
-          return bot.sendMessage(chatId, "❌ Cliente inválido.");
-        }
-
-        const cliente = clientes[clienteIndex];
-
-        pending.set(String(chatId), {
-          mode: "mailEditPin",
-          plataforma: normalizarPlataforma(plataforma),
-          correo: String(correo).toLowerCase(),
-          clienteIndex,
-        });
-
-        return bot.sendMessage(
-          chatId,
-          "🔐 *Editar PIN*\n\n" +
-            `👤 *Cliente:* ${escMD(cliente.nombre || "Sin nombre")}\n` +
-            `🔑 *PIN actual:* ${escMD(cliente.pin || "----")}\n\n` +
-            "Escriba el nuevo PIN de 4 dígitos:",
-          { parse_mode: "Markdown" }
-        );
-      }
-
-      if (data.startsWith("mail_edit_clave|")) {
-        const [, plataforma, correoEnc] = data.split("|");
-        const correo = decodeURIComponent(correoEnc || "");
-
-        const found = await buscarCorreoInventarioPorPlatCorreo(plataforma, correo);
-        if (!found) return bot.sendMessage(chatId, "❌ El correo no existe.");
-
-        const correoData = found.data || {};
-        const claveActual = correoData.clave || "Sin clave";
-
-        pending.set(String(chatId), {
-          mode: "mailEditClaveCorreo",
-          plataforma: normalizarPlataforma(plataforma),
-          correo: String(correo).toLowerCase(),
-        });
-
-        return bot.sendMessage(
-          chatId,
-          "✏️ *Editar clave del correo*\n\n" +
-            `📧 *Correo:* ${escMD(correo)}\n` +
-            `🔑 *Clave actual:* ${escMD(claveActual)}\n\n` +
-            "Escriba la nueva clave del correo:",
-          { parse_mode: "Markdown" }
-        );
-      }
-
-      if (data.startsWith("mail_delete|")) {
-        const [, plataforma, correoEnc] = data.split("|");
-        const correo = decodeURIComponent(correoEnc || "");
-
-        const found = await buscarCorreoInventarioPorPlatCorreo(plataforma, correo);
-        if (!found) return bot.sendMessage(chatId, "❌ Este correo ya no existe.");
-
-        return upsertPanel(
-          chatId,
-          "⚠️ *Confirmar eliminación*\n\n" +
-            `📧 *Correo:* ${escMD(correo)}\n\n` +
-            "Esta acción eliminará la cuenta del inventario.\n\n¿Está seguro que desea borrarla?",
-          {
-            inline_keyboard: [
-              [{ text: "✅ Sí borrar", callback_data: `mail_delete_confirm|${normalizarPlataforma(plataforma)}|${encodeURIComponent(correo)}` }],
-              [{ text: "❌ Cancelar", callback_data: `mail_panel|${normalizarPlataforma(plataforma)}|${encodeURIComponent(correo)}` }],
-            ],
-          },
-          "Markdown"
-        );
-      }
-
-      if (data.startsWith("mail_delete_confirm|")) {
-        const [, plataforma, correoEnc] = data.split("|");
-        const correo = decodeURIComponent(correoEnc || "");
-
-        const found = await buscarCorreoInventarioPorPlatCorreo(plataforma, correo);
-        if (!found) return mostrarListaCorreosPlataforma(chatId, plataforma);
-
-        const ref = found.ref;
-        const correoData = found.data || {};
-        const clientes = Array.isArray(correoData.clientes) ? correoData.clientes : [];
-
-        if (clientes.length > 0) {
-          await bot.sendMessage(chatId, "⚠️ Este correo tenía clientes asignados. Se eliminará igualmente del inventario.");
-        }
-
-        await ref.delete();
-        return enviarInventarioPlataforma(chatId, plataforma, 0);
       }
 
       if (data === "cli:txt:general") return reporteClientesTXTGeneral(chatId);
@@ -4357,9 +4394,6 @@ bot.on("message", async (msg) => {
       const p = pending.get(String(chatId));
       const t = String(text || "").trim();
 
-      // ===============================
-      // PENDING FINANZAS
-      // ===============================
       if (p.mode === "finIngresoMonto") {
         const monto = parseMontoNumber(t);
         if (!Number.isFinite(monto) || monto <= 0) {
@@ -4497,9 +4531,6 @@ bot.on("message", async (msg) => {
         return exportarFinanzasRangoExcel(chatId, p.fechaInicio, t, userId, isSuperAdmin(userId));
       }
 
-      // ===============================
-      // PENDING RESTO DEL BOT
-      // ===============================
       if (p.mode === "mailAddClienteNombre") {
         if (!t) return bot.sendMessage(chatId, "⚠️ Escriba el nombre del cliente.");
 
@@ -4621,79 +4652,6 @@ bot.on("message", async (msg) => {
 
         await bot.sendMessage(chatId, "✅ Clave del correo actualizada.");
         return mostrarPanelCorreo(chatId, p.plataforma, p.correo);
-      }
-
-      if (p.mode === "invSumarQty") {
-        const qty = Number(t);
-        if (!Number.isFinite(qty) || qty <= 0) {
-          return bot.sendMessage(chatId, "⚠️ Cantidad inválida. Escriba un número (ej: 1)");
-        }
-
-        pending.delete(String(chatId));
-
-        const correo = String(p.correo).toLowerCase();
-        const plat = normalizarPlataforma(p.plat);
-
-        const ref = db.collection("inventario").doc(docIdInventario(correo, plat));
-        const doc = await ref.get();
-        if (!doc.exists) return bot.sendMessage(chatId, "⚠️ Ese correo no existe en inventario.");
-
-        const d = doc.data() || {};
-        const nuevoDisp = Number(d.disp || 0) + qty;
-
-        await ref.set(
-          { disp: nuevoDisp, estado: "activa", updatedAt: admin.firestore.FieldValue.serverTimestamp() },
-          { merge: true }
-        );
-
-        pending.set(String(chatId), { mode: "invSubmenuCtx", plat, correo });
-        return enviarSubmenuInventario(chatId, plat, correo);
-      }
-
-      if (p.mode === "invRestarQty") {
-        const qty = Number(t);
-        if (!Number.isFinite(qty) || qty <= 0) {
-          return bot.sendMessage(chatId, "⚠️ Cantidad inválida. Escriba un número (ej: 1)");
-        }
-
-        pending.delete(String(chatId));
-
-        const correo = String(p.correo).toLowerCase();
-        const plat = normalizarPlataforma(p.plat);
-
-        const ref = db.collection("inventario").doc(docIdInventario(correo, plat));
-        const doc = await ref.get();
-        if (!doc.exists) return bot.sendMessage(chatId, "⚠️ Ese correo no existe en inventario.");
-
-        const d = doc.data() || {};
-        const antes = { ...d };
-        const nuevoDisp = Math.max(0, Number(d.disp || 0) - qty);
-
-        await ref.set({ disp: nuevoDisp, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
-
-        const despues = { ...d, disp: nuevoDisp, plataforma: plat, correo };
-        await aplicarAutoLleno(chatId, ref, antes, despues);
-
-        pending.set(String(chatId), { mode: "invSubmenuCtx", plat, correo });
-        return enviarSubmenuInventario(chatId, plat, correo);
-      }
-
-      if (p.mode === "invEditClave") {
-        if (!t) return bot.sendMessage(chatId, "⚠️ Clave vacía.");
-
-        pending.delete(String(chatId));
-
-        const correo = String(p.correo).toLowerCase();
-        const plat = normalizarPlataforma(p.plat);
-
-        const ref = db.collection("inventario").doc(docIdInventario(correo, plat));
-        const doc = await ref.get();
-        if (!doc.exists) return bot.sendMessage(chatId, "⚠️ Ese correo no existe en inventario.");
-
-        await ref.set({ clave: t, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
-
-        pending.set(String(chatId), { mode: "invSubmenuCtx", plat, correo });
-        return enviarSubmenuInventario(chatId, plat, correo);
       }
 
       if (p.mode === "cliRenovarFechaManual") {
