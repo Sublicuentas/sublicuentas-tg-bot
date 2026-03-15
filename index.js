@@ -6,7 +6,6 @@
    ✅ NETFLIX LISTENER CARGA NORMAL
    ✅ SINCRONIZACIÓN ESPEJO AL GUARDAR
    ✅ BASE PREPARADA PARA FINANZAS V13
-   ✅ FIX MENÚ FINANZAS POR SECCIONES
    ✅ CIERRE DE CAJA EN REGISTRO
    ✅ EXPORTAR EXCEL EN REPORTES
    ✅ DISNEYS AJUSTADO A 3 PERFILES
@@ -465,6 +464,7 @@ function parseMontoNumber(v) {
 
   const hasComma = raw.includes(",");
   const hasDot = raw.includes(".");
+
   let normalized = raw;
 
   if (hasComma && hasDot) {
@@ -492,6 +492,12 @@ function moneyLps(v) {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   })} Lps`;
+}
+
+function moneyNumber(v) {
+  const n = Number(v || 0);
+  if (!Number.isFinite(n)) return 0;
+  return Number(n);
 }
 
 // ===============================
@@ -819,7 +825,8 @@ async function addServicioTx(clientId, servicio) {
 
     if (docInv.exists) {
       const invData = docInv.data() || {};
-      const clientesInv = Array.isArray(invData.clientes) ? invData.clientes.slice() : [];
+      let clientesInv = Array.isArray(invData.clientes) ? invData.clientes.slice() : [];
+      const capacidad = Number(invData.capacidad || invData.total || getCapacidadCorreo(invData, plat) || 0);
 
       const yaExiste = clientesInv.some(
         (c) => c.nombre === curCli.nombrePerfil && c.pin === servicio.pin
@@ -832,21 +839,19 @@ async function addServicioTx(clientId, servicio) {
           slot: clientesInv.length + 1,
         });
 
-        const capacidad = Number(invData.capacidad || invData.total || 0);
         const ocupados = clientesInv.length;
-        const disponibles = capacidad > 0
-          ? Math.max(0, capacidad - ocupados)
-          : Math.max(0, Number(invData.disp || 0) - 1);
+        const disponibles = Math.max(0, capacidad - ocupados);
+        const estado = disponibles === 0 ? "llena" : "activa";
 
         tx.set(
           refInv,
           {
             clientes: clientesInv,
+            capacidad,
             ocupados,
             disponibles,
             disp: disponibles,
-            estado: disponibles === 0 ? "llena" : "activa",
-            capacidad: capacidad > 0 ? capacidad : getCapacidadCorreo(invData, plat),
+            estado,
             updatedAt: admin.firestore.FieldValue.serverTimestamp(),
           },
           { merge: true }
@@ -975,6 +980,12 @@ function clienteResumenTXT(c) {
 // ===============================
 // HELPERS INVENTARIO
 // ===============================
+async function buscarInventarioPorCorreo(correo) {
+  const mail = String(correo || "").trim().toLowerCase();
+  const snap = await db.collection("inventario").where("correo", "==", mail).limit(50).get();
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+}
+
 function getCapacidadCorreo(data = {}, plataforma = "") {
   const desdeData = Number(data.capacidad || data.total || 0);
   if (Number.isFinite(desdeData) && desdeData > 0) return desdeData;
@@ -1009,12 +1020,6 @@ function getCapacidadCorreo(data = {}, plataforma = "") {
   return mapa[plat] || 1;
 }
 
-async function buscarInventarioPorCorreo(correo) {
-  const mail = String(correo || "").trim().toLowerCase();
-  const snap = await db.collection("inventario").where("correo", "==", mail).limit(20).get();
-  return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-}
-
 async function aplicarAutoLleno(chatId, ref, dataAntes, dataDespues) {
   const antes = Number(dataAntes?.disp ?? 0);
   const despues = Number(dataDespues?.disp ?? 0);
@@ -1023,7 +1028,6 @@ async function aplicarAutoLleno(chatId, ref, dataAntes, dataDespues) {
     await ref.set(
       {
         disp: 0,
-        disponibles: 0,
         estado: "llena",
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       },
@@ -1050,11 +1054,10 @@ async function inventarioPlataformaTexto(plataforma, page) {
     .map((d) => {
       const data = d.data() || {};
       const clientes = Array.isArray(data.clientes) ? data.clientes : [];
-      const capacidad = Number(data.capacidad || data.total || totalDefault || 0);
+      const capacidad = Number(data.capacidad || data.total || totalDefault || getCapacidadCorreo(data, p) || 0);
       const ocupados = clientes.length;
-      const disponibles = capacidad > 0
-        ? Math.max(0, capacidad - ocupados)
-        : Number(data.disp || 0);
+      const disponibles = Math.max(0, capacidad - ocupados);
+      const estado = disponibles === 0 ? "llena" : "activa";
 
       return {
         id: d.id,
@@ -1063,10 +1066,16 @@ async function inventarioPlataformaTexto(plataforma, page) {
         ocupados,
         disp: disponibles,
         disponibles,
-        estado: disponibles <= 0 ? "llena" : "activa",
+        estado,
       };
     })
-    .sort((a, b) => String(a.correo || "").localeCompare(String(b.correo || "")));
+    .filter((x) => Number(x.disp || 0) > 0)
+    .sort((a, b) => {
+      if (Number(b.disp || 0) !== Number(a.disp || 0)) {
+        return Number(b.disp || 0) - Number(a.disp || 0);
+      }
+      return String(a.correo || "").localeCompare(String(b.correo || ""));
+    });
 
   const totalItems = docs.length;
   const totalPages = Math.max(1, Math.ceil(totalItems / PAGE_SIZE));
@@ -1075,15 +1084,15 @@ async function inventarioPlataformaTexto(plataforma, page) {
   const end = Math.min(start + PAGE_SIZE, totalItems);
   const slice = docs.slice(start, end);
 
-  let texto = `📌 *${p.toUpperCase()} — INVENTARIO*\n`;
+  let texto = `📌 *${p.toUpperCase()} — INVENTARIO DISPONIBLE*\n`;
   texto += `Mostrando ${totalItems === 0 ? 0 : start + 1}-${end} de ${totalItems}\n\n`;
 
   if (slice.length === 0) {
-    texto += `⚠️ SIN CUENTAS REGISTRADAS\n`;
+    texto += `⚠️ No hay correos con espacio disponible.\n`;
   } else {
     let i = start + 1;
     for (const d of slice) {
-      texto += `${i}) ${d.correo} — 🔑 ${d?.clave ? d.clave : "-"} — ${d.ocupados}/${d.capacidad} — ${fmtEstado(d.estado)}\n`;
+      texto += `${i}) ${d.correo} — 🔑 ${d?.clave ? d.clave : "Sin clave"} — ${d.ocupados}/${d.capacidad} — ${fmtEstado(d.estado)}\n`;
       i++;
     }
 
@@ -1142,7 +1151,7 @@ async function mostrarStockGeneral(chatId) {
     snap.forEach((d) => {
       const data = d.data() || {};
       const clientes = Array.isArray(data.clientes) ? data.clientes : [];
-      const capacidad = Number(data.capacidad || data.total || totals?.[p] || 0);
+      const capacidad = Number(data.capacidad || data.total || totals?.[p] || getCapacidadCorreo(data, p) || 0);
       libres += Math.max(0, capacidad - clientes.length);
     });
 
@@ -1197,7 +1206,13 @@ function kbMotivosFinanzas() {
   return { inline_keyboard: rows };
 }
 
-async function registrarIngresoTx({ monto, banco, fecha, userId, userName = "" }) {
+async function registrarIngresoTx({
+  monto,
+  banco,
+  fecha,
+  userId,
+  userName = "",
+}) {
   const parsed = parseFechaFinanceInput(fecha);
   if (!parsed.ok) throw new Error("Fecha inválida");
 
@@ -1227,7 +1242,13 @@ async function registrarIngresoTx({ monto, banco, fecha, userId, userName = "" }
   return { id: ref.id, fecha: parsed.fecha, monto: nMonto, banco: banco || "Otro" };
 }
 
-async function registrarEgresoTx({ monto, motivo, fecha, userId, userName = "" }) {
+async function registrarEgresoTx({
+  monto,
+  motivo,
+  fecha,
+  userId,
+  userName = "",
+}) {
   const parsed = parseFechaFinanceInput(fecha);
   if (!parsed.ok) throw new Error("Fecha inválida");
 
@@ -1273,7 +1294,13 @@ async function getMovimientosPorFecha(fechaDMY, userId, isSA = false) {
     arr = arr.filter((x) => String(x.createdBy || "") === String(userId));
   }
 
-  arr.sort((a, b) => Number(a.fechaTS || 0) - Number(b.fechaTS || 0));
+  arr.sort((a, b) => {
+    const ta = Number(a.fechaTS || 0);
+    const tb = Number(b.fechaTS || 0);
+    if (ta !== tb) return ta - tb;
+    return String(a.tipo || "").localeCompare(String(b.tipo || ""));
+  });
+
   return arr;
 }
 
@@ -1321,7 +1348,8 @@ function calcularTotalesMovimientos(movs = []) {
     if (String(m.tipo || "") === "ingreso") ingresos += Number(m.monto || 0);
     if (String(m.tipo || "") === "egreso") egresos += Number(m.monto || 0);
   }
-  return { ingresos, egresos, neta: ingresos - egresos };
+  const neta = ingresos - egresos;
+  return { ingresos, egresos, neta };
 }
 
 function resumenFinanzasTextoPorFecha(fechaDMY, movs = []) {
@@ -1331,12 +1359,22 @@ function resumenFinanzasTextoPorFecha(fechaDMY, movs = []) {
 
   let txt = `📊 *ESTADO DE RESULTADOS (${escMD(fechaDMY)})*\n\n`;
   txt += `💰 *INGRESOS:* ${moneyLps(ingresos)}\n`;
-  if (!bancos.length) txt += `➖ Sin ingresos registrados\n`;
-  else bancos.forEach((x) => { txt += `➖ ${escMD(x.banco)}: ${moneyLps(x.monto)}\n`; });
+  if (!bancos.length) {
+    txt += `➖ Sin ingresos registrados\n`;
+  } else {
+    bancos.forEach((x) => {
+      txt += `➖ ${escMD(x.banco)}: ${moneyLps(x.monto)}\n`;
+    });
+  }
 
   txt += `\n🛠️ *EGRESOS:* ${moneyLps(egresos)}\n`;
-  if (!motivos.length) txt += `➖ Sin egresos registrados\n`;
-  else motivos.forEach((x) => { txt += `➖ ${escMD(x.motivo)}: ${moneyLps(x.monto)}\n`; });
+  if (!motivos.length) {
+    txt += `➖ Sin egresos registrados\n`;
+  } else {
+    motivos.forEach((x) => {
+      txt += `➖ ${escMD(x.motivo)}: ${moneyLps(x.monto)}\n`;
+    });
+  }
 
   txt += `\n📈 *GANANCIA NETA:* ${neta >= 0 ? "+" : ""}${moneyLps(neta)} ${neta >= 0 ? "🟢" : "🔴"}\n`;
   txt += `🧾 *Movimientos:* ${movs.length}`;
@@ -1422,6 +1460,9 @@ async function exportarFinanzasRangoExcel(chatId, fechaInicio, fechaFin, userId,
   }
 
   const workbook = new ExcelJS.Workbook();
+  workbook.creator = "Sublicuentas Bot";
+  workbook.created = new Date();
+
   const wsMov = workbook.addWorksheet("Movimientos");
   wsMov.columns = [
     { header: "Fecha", key: "fecha", width: 14 },
@@ -1429,10 +1470,15 @@ async function exportarFinanzasRangoExcel(chatId, fechaInicio, fechaFin, userId,
     { header: "Monto", key: "monto", width: 14 },
     { header: "Banco", key: "banco", width: 18 },
     { header: "Motivo", key: "motivo", width: 20 },
+    { header: "Detalle", key: "detalle", width: 26 },
+    { header: "Plataforma", key: "plataforma", width: 18 },
+    { header: "Vendedor", key: "vendedor", width: 18 },
+    { header: "Cliente", key: "cliente", width: 22 },
     { header: "Creado por", key: "createdByName", width: 18 },
   ];
 
   wsMov.getRow(1).font = { bold: true };
+  wsMov.getRow(1).alignment = { horizontal: "center", vertical: "middle" };
 
   for (const m of movs) {
     wsMov.addRow({
@@ -1441,13 +1487,26 @@ async function exportarFinanzasRangoExcel(chatId, fechaInicio, fechaFin, userId,
       monto: Number(m.monto || 0),
       banco: m.banco || "",
       motivo: m.motivo || "",
+      detalle: m.detalle || "",
+      plataforma: m.plataforma || "",
+      vendedor: m.vendedor || "",
+      cliente: m.cliente || "",
       createdByName: m.createdByName || m.createdBy || "",
     });
   }
 
   wsMov.getColumn("monto").numFmt = "#,##0.00";
 
-  const { ingresos, egresos, neta } = calcularTotalesMovimientos(movs);
+  const ingresos = movs
+    .filter((x) => String(x.tipo || "") === "ingreso")
+    .reduce((a, b) => a + Number(b.monto || 0), 0);
+
+  const egresos = movs
+    .filter((x) => String(x.tipo || "") === "egreso")
+    .reduce((a, b) => a + Number(b.monto || 0), 0);
+
+  const neta = ingresos - egresos;
+
   const wsRes = workbook.addWorksheet("Resumen");
   wsRes.columns = [
     { header: "Concepto", key: "concepto", width: 24 },
@@ -1743,7 +1802,7 @@ async function enviarFichaCliente(chatId, clientId) {
 
   txt += `*SERVICIOS*\n`;
   if (!servicios.length) {
-    txt += `- Sin servicios -\n`;
+    txt += `— Sin servicios —\n`;
   } else {
     servicios.forEach((s, i) => {
       txt += `\n*${i + 1})* ${escMD(labelPlataforma(s.plataforma))}\n`;
@@ -1892,40 +1951,6 @@ async function buscarCorreoInventarioPorPlatCorreo(plataforma, correo) {
   }
 
   return null;
-}
-
-function getCapacidadCorreo(data = {}, plataforma = "") {
-  const desdeData = Number(data.capacidad || data.total || 0);
-  if (Number.isFinite(desdeData) && desdeData > 0) return desdeData;
-
-  const plat = normalizarPlataforma(plataforma);
-  const mapa = {
-    netflix: 5,
-    vipnetflix: 1,
-    disney: 6,
-    disneyp: 6,
-    disneyplus: 6,
-    disneys: 3,
-    max: 5,
-    hbomax: 5,
-    primevideo: 5,
-    prime: 5,
-    paramount: 5,
-    vix: 4,
-    crunchyroll: 5,
-    spotify: 1,
-    youtube: 1,
-    canva: 1,
-    appletv: 4,
-    universal: 4,
-    oleadatv1: 1,
-    oleadatv3: 3,
-    iptv1: 1,
-    iptv3: 3,
-    iptv4: 4,
-  };
-
-  return mapa[plat] || 1;
 }
 
 async function mostrarListaCorreosPlataforma(chatId, plataforma) {
@@ -2687,9 +2712,13 @@ function fmtFechaCodigoNetflix(fecha) {
   try {
     let dt = null;
 
-    if (typeof fecha?.toDate === "function") dt = fecha.toDate();
-    else if (fecha instanceof Date) dt = fecha;
-    else dt = new Date(fecha);
+    if (typeof fecha?.toDate === "function") {
+      dt = fecha.toDate();
+    } else if (fecha instanceof Date) {
+      dt = fecha;
+    } else {
+      dt = new Date(fecha);
+    }
 
     if (isNaN(dt.getTime())) return String(fecha);
 
@@ -2727,8 +2756,11 @@ async function responderCodigoNetflix(chatId, correo, tipo) {
   const mail = String(correo || "").trim().toLowerCase();
 
   let data = null;
-  if (tipo === "ultimo") data = await obtenerUltimoCodigoNetflixGeneral(mail);
-  else data = await obtenerUltimoCodigoNetflix(mail, tipo);
+  if (tipo === "ultimo") {
+    data = await obtenerUltimoCodigoNetflixGeneral(mail);
+  } else {
+    data = await obtenerUltimoCodigoNetflix(mail, tipo);
+  }
 
   if (!data) {
     return bot.sendMessage(
@@ -2784,7 +2816,6 @@ async function responderMenuCodigosNetflix(chatId, plataforma, correo) {
     "Markdown"
   );
 }
-
 // ===============================
 // COMANDOS CLIENTES
 // ===============================
@@ -2900,9 +2931,11 @@ bot.onText(/\/sincronizar_todo/i, async (msg) => {
               slot: clientesInv.length + 1,
             });
 
-            const capacidad = Number(invData.capacidad || invData.total || getCapacidadCorreo(invData, plat) || 0);
+            const capacidad = Number(invData.capacidad || invData.total || 0);
             const ocupados = clientesInv.length;
-            const disponibles = Math.max(0, capacidad - ocupados);
+            const disponibles = capacidad > 0
+              ? Math.max(0, capacidad - ocupados)
+              : Math.max(0, Number(invData.disp || 0) - 1);
             const estado = disponibles === 0 ? "llena" : "activa";
 
             await refInv.set(
@@ -3378,7 +3411,7 @@ bot.onText(/\/addcorreo\s+(\S+)\s+(\S+)(?:\s+(\d+))?/i, async (msg, match) => {
   let capacidad = Number(capacidadRaw);
   if (!capacidadRaw || isNaN(capacidad) || capacidad <= 0) {
     const totales = await getTotalPorPlataforma(plat);
-    capacidad = totales || getCapacidadCorreo({}, plat) || 5;
+    capacidad = totales || 5;
   }
 
   await ref.set({
@@ -4272,9 +4305,11 @@ bot.on("callback_query", async (q) => {
             clientesInv.splice(indexInv, 1);
             clientesInv = clientesInv.map((cl, i) => ({ ...cl, slot: i + 1 }));
 
-            const capacidad = Number(invData.capacidad || invData.total || getCapacidadCorreo(invData, plat) || 0);
+            const capacidad = Number(invData.capacidad || invData.total || 0);
             const ocupados = clientesInv.length;
-            const disponibles = Math.max(0, capacidad - ocupados);
+            const disponibles = capacidad > 0
+              ? Math.max(0, capacidad - ocupados)
+              : Number(invData.disp || 0) + 1;
             const estado = disponibles === 0 ? "llena" : "activa";
 
             await refInv.set(
@@ -5292,4 +5327,3 @@ http
   .listen(PORT, () => {
     console.log("🌐 HTTP KEEPALIVE activo en puerto", PORT);
   });
-
