@@ -1,12 +1,14 @@
-/* ✅ SUBLICUENTAS TG BOT — INDEX FINAL (LIMPIO V12.4)
+/* ✅ SUBLICUENTAS TG BOT — INDEX FINAL (LIMPIO V12.5)
    ✅ ARRANQUE LIMPIO
    ✅ FIX 409 polling
    ✅ SIN LOCK GLOBAL QUE CONGELE EL BOT
-   ✅ COMPATIBLE CON TU PARTE 2 Y PARTE 3
+   ✅ COMPATIBLE CON PARTE 2 DEPURADA
+   ✅ COMPATIBLE CON PARTE 3
    ✅ NETFLIX LISTENER CARGA NORMAL
    ✅ SINCRONIZACIÓN ESPEJO AL GUARDAR
-   ✅ MÓDULO FINANZAS V12.4 INTEGRADO
+   ✅ MÓDULO FINANZAS V12.5 BASE
 */
+
 const http = require("http");
 const TelegramBot = require("node-telegram-bot-api");
 const admin = require("firebase-admin");
@@ -38,13 +40,15 @@ if (!admin.apps.length) {
     }),
   });
 }
+
 const db = admin.firestore();
 console.log("✅ FIREBASE PROJECT:", FIREBASE_PROJECT_ID);
 
 // ===============================
-// COMPATIBILIDAD CON PARTE 3
+// COMPATIBILIDAD GLOBAL
 // ===============================
 let HAS_RUNTIME_LOCK = true;
+
 async function releaseRuntimeLock() {
   return true;
 }
@@ -101,14 +105,17 @@ async function hardStopBot() {
 
 async function startBotSafe(force = false) {
   const now = Date.now();
+
   if (BOT_IS_STARTING && !force) {
     console.log("ℹ️ Bot ya está iniciando, se evita start duplicado");
     return;
   }
+
   if (BOT_POLLING_ACTIVE && !force) {
     console.log("ℹ️ Bot ya activo");
     return;
   }
+
   if (!force && now - BOT_LAST_START_AT < 7000) {
     console.log("ℹ️ Ventana anti-restart activa");
     return;
@@ -119,17 +126,21 @@ async function startBotSafe(force = false) {
 
   try {
     console.log("🔄 Arrancando bot limpio...");
+
     if (BOT_START_TIMEOUT) {
       clearTimeout(BOT_START_TIMEOUT);
       BOT_START_TIMEOUT = null;
     }
+
     await hardStopBot();
     await new Promise((r) => setTimeout(r, 2500));
+
     await bot.startPolling({
       restart: false,
       interval: 300,
       params: { timeout: 10 },
     });
+
     BOT_POLLING_ACTIVE = true;
     console.log("✅ Bot iniciado correctamente");
   } catch (err) {
@@ -146,6 +157,7 @@ function scheduleBotRestart(delayMs = 10000) {
     clearTimeout(BOT_START_TIMEOUT);
     BOT_START_TIMEOUT = null;
   }
+
   BOT_START_TIMEOUT = setTimeout(() => {
     startBotSafe(true).catch((e) => {
       console.error("❌ scheduleBotRestart error:", e?.message || e);
@@ -176,6 +188,7 @@ function startNetflixListenerIfLeader() {
   try {
     await hardStopBot();
   } catch (_) {}
+
   startNetflixListenerIfLeader();
 
   setTimeout(() => {
@@ -246,7 +259,7 @@ global.FIN_BANCOS = FIN_BANCOS;
 global.FIN_MOTIVOS_EGRESO = FIN_MOTIVOS_EGRESO;
 
 // ===============================
-// HELPERS
+// HELPERS BASE
 // ===============================
 function stripAcentos(str = "") {
   return String(str).normalize("NFD").replace(/[\u0300-\u036f]/g, "");
@@ -264,7 +277,7 @@ function onlyDigits(str = "") {
 }
 
 function normalizarPlataforma(txt = "") {
-  return String(txt)
+  return String(txt || "")
     .toLowerCase()
     .trim()
     .replace(/\s+/g, "")
@@ -356,31 +369,19 @@ function escMD(text = "") {
   return String(text || "").replace(/([_*\[\]()~`>#+\-=|{}!\\])/g, "\\$1");
 }
 
-async function enviarTxtComoArchivo(chatId, contenido, filename = "reporte.txt") {
-  const limpio = stripAcentos(String(contenido || "")).replace(/[^\x00-\x7F]/g, "");
-  const buffer = Buffer.from(limpio, "utf8");
-  return bot.sendDocument(chatId, buffer, {}, { filename, contentType: "text/plain" });
+function parseMontoNumber(v) {
+  const n = Number(String(v || "").replace(/,/g, "").trim());
+  return Number.isFinite(n) ? n : NaN;
 }
 
-async function enviarExcelCompatible(chatId, html, filename = "reporte.xls") {
-  const buffer = Buffer.from(String(html || ""), "utf8");
-  return bot.sendDocument(chatId, buffer, {}, {
-    filename,
-    contentType: "application/vnd.ms-excel",
-  });
+function moneyLps(v) {
+  const n = Number(v || 0);
+  return `${n.toLocaleString("es-HN", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })} Lps`;
 }
 
-function logInfo(...args) {
-  console.log("ℹ️", ...args);
-}
-
-function logErr(...args) {
-  console.log("❌", ...args);
-}
-
-// ===============================
-// HELPERS FECHA / MES FINANZAS
-// ===============================
 function isMonthInputMMYYYY(txt = "") {
   return /^(0[1-9]|1[0-2])\/\d{4}$/.test(String(txt || "").trim());
 }
@@ -422,6 +423,7 @@ function ymdFromDMY(dmy = "") {
 
 function parseFechaFinanceInput(txt = "") {
   const s = String(txt || "").trim().toLowerCase();
+
   if (s === "hoy") {
     const fecha = hoyDMY();
     return {
@@ -431,7 +433,9 @@ function parseFechaFinanceInput(txt = "") {
       mesKey: getMonthKeyFromDMY(fecha),
     };
   }
+
   if (!isFechaDMY(s)) return { ok: false };
+
   return {
     ok: true,
     fecha: s,
@@ -440,17 +444,26 @@ function parseFechaFinanceInput(txt = "") {
   };
 }
 
-function parseMontoNumber(v) {
-  const n = Number(String(v || "").replace(/,/g, "").trim());
-  return Number.isFinite(n) ? n : NaN;
+async function enviarTxtComoArchivo(chatId, contenido, filename = "reporte.txt") {
+  const limpio = stripAcentos(String(contenido || "")).replace(/[^\x00-\x7F]/g, "");
+  const buffer = Buffer.from(limpio, "utf8");
+  return bot.sendDocument(chatId, buffer, {}, { filename, contentType: "text/plain" });
 }
 
-function moneyLps(v) {
-  const n = Number(v || 0);
-  return `${n.toLocaleString("es-HN", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })} Lps`;
+async function enviarExcelCompatible(chatId, html, filename = "reporte.xls") {
+  const buffer = Buffer.from(String(html || ""), "utf8");
+  return bot.sendDocument(chatId, buffer, {}, {
+    filename,
+    contentType: "application/vnd.ms-excel",
+  });
+}
+
+function logInfo(...args) {
+  console.log("ℹ️", ...args);
+}
+
+function logErr(...args) {
+  console.log("❌", ...args);
 }
 
 // ===============================
@@ -473,6 +486,7 @@ function normalizeRevendedorDoc(doc) {
   const nombre = getSafeRevNombre(data, doc.id);
   const activo = getSafeRevActivo(data);
   const telegramId = getSafeRevTelegramId(data);
+
   return {
     id: doc.id,
     ...data,
@@ -496,6 +510,7 @@ async function getTotalPorPlataforma(plataforma) {
 async function asegurarTotalesDefault() {
   const ref = db.collection("config").doc("totales_plataforma");
   const doc = await ref.get();
+
   const defaults = {
     netflix: 5,
     vipnetflix: 1,
@@ -517,27 +532,33 @@ async function asegurarTotalesDefault() {
     iptv3: 3,
     iptv4: 4,
   };
+
   if (!doc.exists) {
     await ref.set(defaults);
     logInfo("✅ Totales default creados");
     return;
   }
+
   await ref.set(defaults, { merge: true });
 }
+
 asegurarTotalesDefault().catch(logErr);
 
 // ===============================
 // RATE LIMIT
 // ===============================
 const rate = new Map();
+
 function allowMsg(chatId, userId, limit = 10, windowMs = 5000) {
   const k = `${chatId}:${userId}`;
   const now = Date.now();
   const cur = rate.get(k) || { t: now, count: 0 };
+
   if (now - cur.t > windowMs) {
     cur.t = now;
     cur.count = 0;
   }
+
   cur.count++;
   rate.set(k, cur);
   return cur.count <= limit;
@@ -560,24 +581,30 @@ async function getRevendedorPorTelegramId(userId) {
   const uid = String(userId).trim();
   const snap = await db.collection("revendedores").get();
   if (snap.empty) return null;
+
   let found = null;
   snap.forEach((doc) => {
     const r = normalizeRevendedorDoc(doc);
     if (r.telegramId === uid && r.activo === true) found = r;
   });
+
   return found;
 }
 
 async function setTelegramIdToRevendedor(nombre, userId) {
   const nombreNorm = normTxt(nombre);
   const snap = await db.collection("revendedores").get();
+
   if (snap.empty) return { ok: false, msg: "⚠️ No hay revendedores en la colección." };
+
   let found = null;
   snap.forEach((doc) => {
     const r = normalizeRevendedorDoc(doc);
     if (r.nombre_norm === nombreNorm) found = { ref: doc.ref, data: r };
   });
+
   if (!found) return { ok: false, msg: "⚠️ No encontré ese revendedor por nombre." };
+
   await found.ref.set(
     {
       nombre: found.data.nombre,
@@ -588,6 +615,7 @@ async function setTelegramIdToRevendedor(nombre, userId) {
     },
     { merge: true }
   );
+
   return { ok: true, msg: `✅ Vinculado: ${found.data.nombre} => telegramId ${String(userId)}` };
 }
 
@@ -601,6 +629,7 @@ async function isVendedor(userId) {
 // PANEL BLINDADO
 // ===============================
 const panelMsgId = new Map();
+
 function bindPanelFromCallback(q) {
   const chatId = q.message?.chat?.id;
   const mid = q.message?.message_id;
@@ -621,6 +650,7 @@ async function sendFreshPanel(chatId, text, replyMarkup, parseMode = "Markdown",
 async function upsertPanel(chatId, text, replyMarkup, parseMode = "Markdown") {
   const key = String(chatId);
   const mid = panelMsgId.get(key);
+
   if (mid) {
     try {
       await bot.editMessageText(text, {
@@ -647,6 +677,7 @@ async function upsertPanel(chatId, text, replyMarkup, parseMode = "Markdown") {
       throw e;
     }
   }
+
   return sendFreshPanel(chatId, text, replyMarkup, parseMode);
 }
 
@@ -661,12 +692,14 @@ const pending = new Map();
 // ===============================
 function dedupeClientes(arr = []) {
   const map = new Map();
+
   for (const c of Array.isArray(arr) ? arr : []) {
     const tel = String(c.telefono_norm || onlyDigits(c.telefono || "") || "").trim();
     const nom = String(c.nombre_norm || normTxt(c.nombrePerfil || "") || "").trim();
     const key = `${tel}__${nom}`;
     if (!map.has(key)) map.set(key, c);
   }
+
   return Array.from(map.values());
 }
 
@@ -674,8 +707,10 @@ async function clienteDuplicado(nombre, telefono, excludeId = "") {
   const nombreN = normTxt(nombre);
   const telN = onlyDigits(telefono);
   if (!nombreN || !telN) return null;
+
   const snap = await db.collection("clientes").limit(5000).get();
   let duplicado = null;
+
   snap.forEach((doc) => {
     if (excludeId && String(doc.id) === String(excludeId)) return;
     const c = doc.data() || {};
@@ -685,6 +720,7 @@ async function clienteDuplicado(nombre, telefono, excludeId = "") {
       duplicado = { id: doc.id, ...c };
     }
   });
+
   return duplicado;
 }
 
@@ -693,10 +729,12 @@ async function borrarDuplicadosClientes() {
   const mapa = new Map();
   const batch = db.batch();
   let borrados = 0;
+
   snap.forEach((doc) => {
     const c = doc.data() || {};
     const key = `${normTxt(c.nombrePerfil || "")}|${onlyDigits(c.telefono || "")}`;
     if (!key || key === "|") return;
+
     if (mapa.has(key)) {
       batch.delete(doc.ref);
       borrados++;
@@ -704,6 +742,7 @@ async function borrarDuplicadosClientes() {
       mapa.set(key, doc.id);
     }
   });
+
   if (borrados > 0) await batch.commit();
   return borrados;
 }
@@ -719,10 +758,13 @@ async function patchServicio(clientId, idx, patch) {
   const ref = db.collection("clientes").doc(String(clientId));
   const doc = await ref.get();
   if (!doc.exists) return false;
+
   const c = doc.data() || {};
   const servicios = Array.isArray(c.servicios) ? c.servicios : [];
   if (idx < 0 || idx >= servicios.length) return false;
+
   servicios[idx] = { ...(servicios[idx] || {}), ...patch };
+
   await ref.set(
     {
       servicios,
@@ -730,6 +772,7 @@ async function patchServicio(clientId, idx, patch) {
     },
     { merge: true }
   );
+
   return true;
 }
 
@@ -745,8 +788,8 @@ async function addServicioTx(clientId, servicio) {
   return db.runTransaction(async (tx) => {
     const docCli = await tx.get(refCliente);
     if (!docCli.exists) throw new Error("Cliente no existe en TX");
-    const curCli = docCli.data() || {};
 
+    const curCli = docCli.data() || {};
     const docInv = await tx.get(refInv);
 
     const arrServ = Array.isArray(curCli.servicios) ? curCli.servicios.slice() : [];
@@ -812,10 +855,12 @@ async function addServicioTx(clientId, servicio) {
 // ===============================
 function daysUntilDMY(dmy) {
   if (!isFechaDMY(dmy)) return null;
+
   const [dd, mm, yyyy] = String(dmy).split("/").map(Number);
   const target = new Date(yyyy, mm - 1, dd);
   const now = new Date();
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
   return Math.round((target.getTime() - today.getTime()) / 86400000);
 }
 
@@ -905,6 +950,7 @@ function clienteResumenTXT(c) {
   body += `PROXIMOS: ${r.proximos}\n`;
   body += `ESTADO GENERAL: ${stripAcentos(r.estadoGeneral)}\n\n`;
   body += `SERVICIOS\n\n`;
+
   if (!r.servicios.length) {
     body += "SIN SERVICIOS\n";
   } else {
@@ -912,6 +958,7 @@ function clienteResumenTXT(c) {
       body += `${i + 1}) ${normalizarPlataforma(s.plataforma)} | ${s.correo || "-"} | ${Number(s.precio || 0)} Lps | ${s.fechaRenovacion || "-"} | ${stripAcentos(estadoServicioLabel(s.fechaRenovacion))}\n`;
     });
   }
+
   return body;
 }
 
@@ -927,6 +974,7 @@ async function buscarInventarioPorCorreo(correo) {
 async function aplicarAutoLleno(chatId, ref, dataAntes, dataDespues) {
   const antes = Number(dataAntes?.disp ?? 0);
   const despues = Number(dataDespues?.disp ?? 0);
+
   if (despues <= 0) {
     await ref.set(
       {
@@ -936,6 +984,7 @@ async function aplicarAutoLleno(chatId, ref, dataAntes, dataDespues) {
       },
       { merge: true }
     );
+
     if (antes > 0) {
       return bot.sendMessage(
         chatId,
@@ -949,6 +998,7 @@ async function aplicarAutoLleno(chatId, ref, dataAntes, dataDespues) {
 async function inventarioPlataformaTexto(plataforma, page) {
   const p = normalizarPlataforma(plataforma);
   const totalDefault = await getTotalPorPlataforma(p);
+
   const snap = await db.collection("inventario").where("plataforma", "==", p).limit(500).get();
 
   const docs = snap.docs
@@ -957,14 +1007,17 @@ async function inventarioPlataformaTexto(plataforma, page) {
       const clientes = Array.isArray(data.clientes) ? data.clientes : [];
       const capacidad = Number(data.capacidad || data.total || totalDefault || 0);
       const ocupados = clientes.length;
+
       let disponibles = 0;
       if (capacidad > 0) {
         disponibles = Math.max(0, capacidad - ocupados);
       } else {
         disponibles = Number(data.disp || 0);
       }
+
       let estado = "activa";
       if (disponibles <= 0) estado = "llena";
+
       return {
         id: d.id,
         ...data,
@@ -993,22 +1046,26 @@ async function inventarioPlataformaTexto(plataforma, page) {
     let i = start + 1;
     let libresTotal = 0;
     docs.forEach((x) => (libresTotal += Number(x.disp || 0)));
+
     for (const d of slice) {
       const capacidad = Number(d.capacidad || totalDefault || "-");
       texto += `${i}) ${d.correo} — 🔑 ${d?.clave ? d.clave : "-"} — ${d.disp}/${capacidad}\n`;
       i++;
     }
+
     texto += `\n━━━━━━━━━━━━━━\n`;
     texto += `📊 Correos con stock: ${totalItems}\n`;
     texto += `👤 Perfiles/Pantallas libres totales: ${libresTotal}\n\n`;
     texto += `👉 Para abrir submenu: escriba /correo (ej: /mail@gmail.com)\n`;
   }
+
   texto += `\n📄 Página: ${safePage + 1}/${totalPages}`;
   return { texto, safePage, totalPages };
 }
 
 async function enviarInventarioPlataforma(chatId, plataforma, page) {
   const p = normalizarPlataforma(plataforma);
+
   if (!esPlataformaValida(p)) {
     return upsertPanel(
       chatId,
@@ -1017,9 +1074,11 @@ async function enviarInventarioPlataforma(chatId, plataforma, page) {
       "Markdown"
     );
   }
+
   const { texto, safePage, totalPages } = await inventarioPlataformaTexto(p, page);
   const canBack = safePage > 0;
   const canNext = safePage < totalPages - 1;
+
   return upsertPanel(
     chatId,
     texto,
@@ -1041,22 +1100,28 @@ async function enviarInventarioPlataforma(chatId, plataforma, page) {
 async function mostrarStockGeneral(chatId) {
   const cfg = await db.collection("config").doc("totales_plataforma").get();
   const totals = cfg.exists ? cfg.data() : {};
+
   let texto = "📦 *STOCK GENERAL*\n\n";
+
   for (const p of PLATAFORMAS) {
     const snap = await db.collection("inventario").where("plataforma", "==", p).limit(500).get();
     let libres = 0;
+
     snap.forEach((d) => {
       const data = d.data() || {};
       const clientes = Array.isArray(data.clientes) ? data.clientes : [];
       const capacidad = Number(data.capacidad || data.total || totals?.[p] || 0);
+
       if (capacidad > 0) {
         libres += Math.max(0, capacidad - clientes.length);
       } else {
         libres += Number(data.disp || 0);
       }
     });
+
     texto += `✅ *${p}*: ${libres} libres (/${totals?.[p] ?? "-"})\n`;
   }
+
   return bot.sendMessage(chatId, texto, { parse_mode: "Markdown" });
 }
 
@@ -1159,7 +1224,7 @@ async function menuClientes(chatId) {
 async function menuPagos(chatId) {
   return upsertPanel(
     chatId,
-    "💳 *FINANZAS V12.4*\n\nSeleccione una opción:",
+    "💳 *FINANZAS V12.5*\n\nSeleccione una opción:",
     {
       inline_keyboard: [
         [
@@ -1186,6 +1251,7 @@ async function menuPagos(chatId) {
 
 async function menuRenovaciones(chatId, userIdOpt) {
   const isSA = userIdOpt ? isSuperAdmin(userIdOpt) : false;
+
   const kb = [
     [{ text: "📅 Renovaciones hoy", callback_data: "ren:hoy" }],
     [{ text: "📄 TXT hoy", callback_data: "txt:hoy" }],
@@ -1193,8 +1259,10 @@ async function menuRenovaciones(chatId, userIdOpt) {
     [{ text: "📄 TXT Mis renovaciones", callback_data: "txt:mis" }],
     [{ text: "👤 Revendedores (lista)", callback_data: "rev:lista" }],
   ];
+
   if (isSA) kb.push([{ text: "📬 Enviar TXT a TODOS (HOY)", callback_data: "txt:todos:hoy" }]);
   kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
+
   return upsertPanel(
     chatId,
     "📅 *RENOVACIONES*\n\nComandos:\n• /renovaciones hoy\n• /renovaciones dd/mm/yyyy\n• /renovaciones VENDEDOR dd/mm/yyyy\n\nTXT:\n• /txt hoy\n• /txt dd/mm/yyyy\n• /txt VENDEDOR dd/mm/yyyy\n\n✅ Nota:\n• *Enviar TXT a TODOS (HOY)* solo SUPERADMIN.\n",
@@ -1208,9 +1276,11 @@ async function menuRenovaciones(chatId, userIdOpt) {
 function w(chatId) {
   return wizard.get(String(chatId));
 }
+
 function wset(chatId, state) {
   wizard.set(String(chatId), state);
 }
+
 function wclear(chatId) {
   wizard.delete(String(chatId));
 }
@@ -1218,6 +1288,7 @@ function wclear(chatId) {
 function kbPlataformasWiz(prefix, clientId, idxOpt) {
   const cb = (plat) =>
     idxOpt !== undefined ? `${prefix}:${plat}:${clientId}:${idxOpt}` : `${prefix}:${plat}:${clientId}`;
+
   return [
     [
       { text: "📺 netflix", callback_data: cb("netflix") },
@@ -1258,7 +1329,6 @@ function kbPlataformasWiz(prefix, clientId, idxOpt) {
     [{ text: "📡 iptv (4)", callback_data: cb("iptv4") }],
   ];
 }
-
 // ===============================
 // FICHA CLIENTE / CRM / EDICIÓN
 // ===============================
@@ -2146,120 +2216,41 @@ async function enviarTXTATodosHoy(superChatId) {
 // ===============================
 // FINANZAS HELPERS OPERATIVOS V12.4
 // ===============================
-const FINANZAS_COLLECTION = "finanzas_movimientos";
-
-const FIN_BANCOS_FALLBACK = [
-  "Bac",
-  "Atlántida",
-  "Ficohsa",
-  "Davivienda",
-  "Banpais",
-  "Occidente",
-  "Lafise",
-  "Tigo Money",
-  "Efectivo",
-  "PayPal",
-  "Binance",
-  "Otro",
-];
-
-const FIN_EGRESOS_FALLBACK = [
-  "Renovaciones",
-  "Nuevas cuentas",
-  "Publicidad",
-  "Comisiones",
-  "Servicios",
-  "Retiro personal",
-  "Otros",
-];
-
 function getFinBancos() {
   try {
     if (Array.isArray(global.FIN_BANCOS) && global.FIN_BANCOS.length) return global.FIN_BANCOS;
   } catch (_) {}
-  return FIN_BANCOS_FALLBACK;
+  return [
+    "Bac",
+    "Atlántida",
+    "Ficohsa",
+    "Davivienda",
+    "Banpais",
+    "Occidente",
+    "Lafise",
+    "Tigo Money",
+    "Efectivo",
+    "PayPal",
+    "Binance",
+    "Otro",
+  ];
 }
 
 function getFinMotivosEgreso() {
   try {
-    if (Array.isArray(global.FIN_MOTIVOS_EGRESO) && global.FIN_MOTIVOS_EGRESO.length) return global.FIN_MOTIVOS_EGRESO;
+    if (Array.isArray(global.FIN_MOTIVOS_EGRESO) && global.FIN_MOTIVOS_EGRESO.length) {
+      return global.FIN_MOTIVOS_EGRESO;
+    }
   } catch (_) {}
-  return FIN_EGRESOS_FALLBACK;
-}
-
-function parseMontoNumber(v) {
-  const n = Number(String(v || "").replace(/,/g, "").trim());
-  return Number.isFinite(n) ? n : NaN;
-}
-
-function moneyLps(v) {
-  const n = Number(v || 0);
-  return `${n.toLocaleString("es-HN", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })} Lps`;
-}
-
-function isMonthInputMMYYYY(txt = "") {
-  return /^(0[1-9]|1[0-2])\/\d{4}$/.test(String(txt || "").trim());
-}
-
-function parseFechaFinanceInput(txt = "") {
-  const s = String(txt || "").trim().toLowerCase();
-
-  if (s === "hoy") {
-    const hoy = hoyDMY();
-    return {
-      ok: true,
-      fecha: hoy,
-      fechaTS: parseDMYtoTS(hoy),
-      mesKey: getMonthKeyFromDMY(hoy),
-    };
-  }
-
-  if (!isFechaDMY(s)) return { ok: false };
-
-  return {
-    ok: true,
-    fecha: s,
-    fechaTS: parseDMYtoTS(s),
-    mesKey: getMonthKeyFromDMY(s),
-  };
-}
-
-function getMonthKeyFromDMY(dmy = "") {
-  if (!isFechaDMY(dmy)) return "";
-  const [, mm, yyyy] = String(dmy).split("/").map(Number);
-  return `${yyyy}-${String(mm).padStart(2, "0")}`;
-}
-
-function getMonthLabelFromKey(monthKey = "") {
-  const m = String(monthKey || "").match(/^(\d{4})-(\d{2})$/);
-  if (!m) return monthKey || "-";
-  return `${m[2]}/${m[1]}`;
-}
-
-function parseMonthInputToKey(txt = "") {
-  const s = String(txt || "").trim();
-  if (!isMonthInputMMYYYY(s)) return null;
-  const [mm, yyyy] = s.split("/");
-  return `${yyyy}-${mm}`;
-}
-
-function startOfDayTS(dmy = "") {
-  return parseDMYtoTS(dmy);
-}
-
-function endOfDayTS(dmy = "") {
-  const ts = parseDMYtoTS(dmy);
-  if (!Number.isFinite(ts)) return ts;
-  return ts + 86399999;
-}
-
-function ymdFromDMY(dmy = "") {
-  if (!isFechaDMY(dmy)) return "";
-  const [dd, mm, yyyy] = String(dmy).split("/");
-  return `${yyyy}-${mm}-${dd}`;
+  return [
+    "Renovaciones",
+    "Nuevas cuentas",
+    "Publicidad",
+    "Comisiones",
+    "Servicios",
+    "Retiro personal",
+    "Otros",
+  ];
 }
 
 async function registrarIngresoTx({
@@ -2330,12 +2321,12 @@ async function getMovimientosPorFecha(fechaDMY, userId, isSA = false) {
   const ini = startOfDayTS(fechaDMY);
   const fin = endOfDayTS(fechaDMY);
 
-  let q = db
+  const snap = await db
     .collection(FINANZAS_COLLECTION)
     .where("fechaTS", ">=", ini)
-    .where("fechaTS", "<=", fin);
+    .where("fechaTS", "<=", fin)
+    .get();
 
-  const snap = await q.get();
   let arr = snap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
 
   if (!isSA) {
@@ -2353,8 +2344,7 @@ async function getMovimientosPorFecha(fechaDMY, userId, isSA = false) {
 }
 
 async function getMovimientosPorMes(monthKey, userId, isSA = false) {
-  let q = db.collection(FINANZAS_COLLECTION).where("mesKey", "==", monthKey);
-  const snap = await q.get();
+  const snap = await db.collection(FINANZAS_COLLECTION).where("mesKey", "==", monthKey).get();
 
   let arr = snap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
 
@@ -2553,34 +2543,6 @@ function kbMotivosFinanzas() {
   }
   rows.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
   return { inline_keyboard: rows };
-}
-
-async function menuPagos(chatId) {
-  return upsertPanel(
-    chatId,
-    "💳 *FINANZAS V12.4*\n\nSeleccione una opción:",
-    {
-      inline_keyboard: [
-        [
-          { text: "➕ Registrar Ingreso", callback_data: "fin:menu:ingreso" },
-          { text: "➖ Registrar Egreso", callback_data: "fin:menu:egreso" },
-        ],
-        [
-          { text: "📊 Ver Resumen por fecha", callback_data: "fin:menu:resumen_fecha" },
-          { text: "🧾 Cierre de caja", callback_data: "fin:menu:cierre" },
-        ],
-        [
-          { text: "🏦 Resumen banco del mes", callback_data: "fin:menu:bancos_mes" },
-          { text: "🗑️ Eliminar movimiento", callback_data: "fin:menu:eliminar" },
-        ],
-        [
-          { text: "📤 Exportar Excel rango", callback_data: "fin:menu:excel_rango" },
-          { text: "🏠 Inicio", callback_data: "go:inicio" },
-        ],
-      ],
-    },
-    "Markdown"
-  );
 }
 
 // ===============================
@@ -2789,7 +2751,6 @@ async function responderMenuCodigosNetflix(chatId, plataforma, correo) {
     },
   });
 }
-
 // ===============================
 // COMANDOS CLIENTES
 // ===============================
@@ -2864,18 +2825,20 @@ bot.onText(/\/sincronizar_todo/i, async (msg) => {
     return bot.sendMessage(chatId, "⛔ Solo el SUPER ADMIN puede sincronizar la base de datos.");
   }
 
-  await bot.sendMessage(chatId, "🔄 *Iniciando sincronización masiva...*\nEsto puede tardar unos segundos, por favor espere.", {
-    parse_mode: "Markdown",
-  });
+  await bot.sendMessage(
+    chatId,
+    "🔄 *Iniciando sincronización masiva...*\nEsto puede tardar unos segundos, por favor espere.",
+    { parse_mode: "Markdown" }
+  );
 
   let perfilesEmparejados = 0;
-  let cuentasAfectadas = new Set();
+  const cuentasAfectadas = new Set();
 
   try {
     const snapClientes = await db.collection("clientes").get();
 
     for (const docCli of snapClientes.docs) {
-      const c = docCli.data();
+      const c = docCli.data() || {};
       const servicios = Array.isArray(c.servicios) ? c.servicios : [];
       const nombreCliente = c.nombrePerfil || "Sin Nombre";
 
@@ -2912,15 +2875,16 @@ bot.onText(/\/sincronizar_todo/i, async (msg) => {
             } else {
               disponibles = Math.max(0, Number(invData.disp || 0) - 1);
             }
+
             const estado = disponibles === 0 ? "llena" : "activa";
 
             await refInv.set(
               {
                 clientes: clientesInv,
-                ocupados: ocupados,
-                disponibles: disponibles,
+                ocupados,
+                disponibles,
                 disp: disponibles,
-                estado: estado,
+                estado,
                 updatedAt: admin.firestore.FieldValue.serverTimestamp(),
               },
               { merge: true }
@@ -2975,7 +2939,10 @@ bot.onText(/\/renovaciones(?:\s+(.+))?/i, async (msg, match) => {
       fecha = parts[parts.length - 1];
       vendedor = parts.slice(0, -1).join(" ");
     } else {
-      return bot.sendMessage(chatId, "⚠️ Uso:\n/renovaciones hoy\n/renovaciones dd/mm/yyyy\n/renovaciones VENDEDOR dd/mm/yyyy");
+      return bot.sendMessage(
+        chatId,
+        "⚠️ Uso:\n/renovaciones hoy\n/renovaciones dd/mm/yyyy\n/renovaciones VENDEDOR dd/mm/yyyy"
+      );
     }
   }
 
@@ -3013,7 +2980,10 @@ bot.onText(/\/txt(?:\s+(.+))?/i, async (msg, match) => {
       fecha = parts[parts.length - 1];
       vendedor = parts.slice(0, -1).join(" ");
     } else {
-      return bot.sendMessage(chatId, "⚠️ Uso:\n/txt hoy\n/txt dd/mm/yyyy\n/txt VENDEDOR dd/mm/yyyy");
+      return bot.sendMessage(
+        chatId,
+        "⚠️ Uso:\n/txt hoy\n/txt dd/mm/yyyy\n/txt VENDEDOR dd/mm/yyyy"
+      );
     }
   }
 
@@ -3043,7 +3013,10 @@ bot.onText(/\/resumen_fecha\s+(.+)/i, async (msg, match) => {
   const userId = msg.from.id;
   if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
 
-  const fecha = String(match[1] || "").trim().toLowerCase() === "hoy" ? hoyDMY() : String(match[1] || "").trim();
+  const fecha = String(match[1] || "").trim().toLowerCase() === "hoy"
+    ? hoyDMY()
+    : String(match[1] || "").trim();
+
   if (!isFechaDMY(fecha)) return bot.sendMessage(chatId, "⚠️ Uso: /resumen_fecha dd/mm/yyyy");
 
   const list = await getMovimientosPorFecha(fecha, userId, isSuperAdmin(userId));
@@ -3071,7 +3044,10 @@ bot.onText(/\/cierre_caja\s+(.+)/i, async (msg, match) => {
   const userId = msg.from.id;
   if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
 
-  const fecha = String(match[1] || "").trim().toLowerCase() === "hoy" ? hoyDMY() : String(match[1] || "").trim();
+  const fecha = String(match[1] || "").trim().toLowerCase() === "hoy"
+    ? hoyDMY()
+    : String(match[1] || "").trim();
+
   if (!isFechaDMY(fecha)) return bot.sendMessage(chatId, "⚠️ Uso: /cierre_caja dd/mm/yyyy");
 
   const list = await getMovimientosPorFecha(fecha, userId, isSuperAdmin(userId));
@@ -3401,7 +3377,9 @@ bot.onText(/\/addcorreo\s+(\S+)\s+(\S+)(?:\s+(\d+))?/i, async (msg, match) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
 
-  if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado. Solo admins pueden agregar inventario.");
+  if (!(await isAdmin(userId))) {
+    return bot.sendMessage(chatId, "⛔ Acceso denegado. Solo admins pueden agregar inventario.");
+  }
 
   const platRaw = match[1];
   const correoRaw = match[2];
@@ -3409,12 +3387,20 @@ bot.onText(/\/addcorreo\s+(\S+)\s+(\S+)(?:\s+(\d+))?/i, async (msg, match) => {
 
   const plat = normalizarPlataforma(platRaw);
   if (!esPlataformaValida(plat)) {
-    return bot.sendMessage(chatId, `⚠️ *Plataforma no válida.*\nEjemplos válidos: netflix, disneyp, hbomax...`, { parse_mode: "Markdown" });
+    return bot.sendMessage(
+      chatId,
+      `⚠️ *Plataforma no válida.*\nEjemplos válidos: netflix, disneyp, hbomax...`,
+      { parse_mode: "Markdown" }
+    );
   }
 
   const mail = String(correoRaw).toLowerCase().trim();
   if (!isEmailLike(mail)) {
-    return bot.sendMessage(chatId, "⚠️ *Formato de correo inválido.* Asegúrese de que lleve el @.", { parse_mode: "Markdown" });
+    return bot.sendMessage(
+      chatId,
+      "⚠️ *Formato de correo inválido.* Asegúrese de que lleve el @.",
+      { parse_mode: "Markdown" }
+    );
   }
 
   const docId = docIdInventario(mail, plat);
@@ -3422,7 +3408,11 @@ bot.onText(/\/addcorreo\s+(\S+)\s+(\S+)(?:\s+(\d+))?/i, async (msg, match) => {
   const doc = await ref.get();
 
   if (doc.exists) {
-    return bot.sendMessage(chatId, "⚠️ *Este correo ya existe* en el inventario para esta plataforma.", { parse_mode: "Markdown" });
+    return bot.sendMessage(
+      chatId,
+      "⚠️ *Este correo ya existe* en el inventario para esta plataforma.",
+      { parse_mode: "Markdown" }
+    );
   }
 
   let capacidad = Number(capacidadRaw);
@@ -3434,7 +3424,7 @@ bot.onText(/\/addcorreo\s+(\S+)\s+(\S+)(?:\s+(\d+))?/i, async (msg, match) => {
   await ref.set({
     plataforma: plat,
     correo: mail,
-    capacidad: capacidad,
+    capacidad,
     clientes: [],
     ocupados: 0,
     disponibles: capacidad,
@@ -3586,7 +3576,9 @@ bot.on("callback_query", async (q) => {
       if (data.startsWith("fin:ing:banco:")) {
         const banco = decodeURIComponent(data.split(":").slice(3).join(":") || "");
         const p = pending.get(String(chatId));
-        if (!p || p.mode !== "finIngresoBancoPick") return bot.sendMessage(chatId, "⚠️ Flujo de ingreso no activo.");
+        if (!p || p.mode !== "finIngresoBancoPick") {
+          return bot.sendMessage(chatId, "⚠️ Flujo de ingreso no activo.");
+        }
 
         pending.set(String(chatId), {
           mode: "finIngresoFecha",
@@ -3605,7 +3597,9 @@ bot.on("callback_query", async (q) => {
       if (data.startsWith("fin:egr:motivo:")) {
         const motivo = decodeURIComponent(data.split(":").slice(3).join(":") || "");
         const p = pending.get(String(chatId));
-        if (!p || p.mode !== "finEgresoMotivoPick") return bot.sendMessage(chatId, "⚠️ Flujo de egreso no activo.");
+        if (!p || p.mode !== "finEgresoMotivoPick") {
+          return bot.sendMessage(chatId, "⚠️ Flujo de egreso no activo.");
+        }
 
         pending.set(String(chatId), {
           mode: "finEgresoFecha",
@@ -4333,10 +4327,10 @@ bot.on("callback_query", async (q) => {
             await refInv.set(
               {
                 clientes: clientesInv,
-                ocupados: ocupados,
-                disponibles: disponibles,
+                ocupados,
+                disponibles,
                 disp: disponibles,
-                estado: estado,
+                estado,
                 updatedAt: admin.firestore.FieldValue.serverTimestamp(),
               },
               { merge: true }
@@ -4680,7 +4674,9 @@ bot.on("message", async (msg) => {
       // ===============================
       if (p.mode === "finIngresoMonto") {
         const monto = parseMontoNumber(t);
-        if (!Number.isFinite(monto) || monto <= 0) return bot.sendMessage(chatId, "⚠️ Monto inválido. Escriba solo número.");
+        if (!Number.isFinite(monto) || monto <= 0) {
+          return bot.sendMessage(chatId, "⚠️ Monto inválido. Escriba solo número.");
+        }
 
         pending.set(String(chatId), {
           mode: "finIngresoBancoPick",
@@ -4714,7 +4710,9 @@ bot.on("message", async (msg) => {
 
       if (p.mode === "finEgresoMonto") {
         const monto = parseMontoNumber(t);
-        if (!Number.isFinite(monto) || monto <= 0) return bot.sendMessage(chatId, "⚠️ Monto inválido. Escriba solo número.");
+        if (!Number.isFinite(monto) || monto <= 0) {
+          return bot.sendMessage(chatId, "⚠️ Monto inválido. Escriba solo número.");
+        }
 
         pending.set(String(chatId), {
           mode: "finEgresoMotivoPick",
@@ -4939,7 +4937,9 @@ bot.on("message", async (msg) => {
 
       if (p.mode === "invSumarQty") {
         const qty = Number(t);
-        if (!Number.isFinite(qty) || qty <= 0) return bot.sendMessage(chatId, "⚠️ Cantidad inválida. Escriba un número (ej: 1)");
+        if (!Number.isFinite(qty) || qty <= 0) {
+          return bot.sendMessage(chatId, "⚠️ Cantidad inválida. Escriba un número (ej: 1)");
+        }
 
         pending.delete(String(chatId));
 
@@ -4964,7 +4964,9 @@ bot.on("message", async (msg) => {
 
       if (p.mode === "invRestarQty") {
         const qty = Number(t);
-        if (!Number.isFinite(qty) || qty <= 0) return bot.sendMessage(chatId, "⚠️ Cantidad inválida. Escriba un número (ej: 1)");
+        if (!Number.isFinite(qty) || qty <= 0) {
+          return bot.sendMessage(chatId, "⚠️ Cantidad inválida. Escriba un número (ej: 1)");
+        }
 
         pending.delete(String(chatId));
 
@@ -5317,3 +5319,7 @@ http
   .listen(PORT, () => {
     console.log("🌐 HTTP KEEPALIVE activo en puerto", PORT);
   });
+
+      
+
+
