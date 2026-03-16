@@ -14,6 +14,7 @@
    ✅ EGRESOS CON DETALLE
    ✅ TOP PLATAFORMAS VENDIDAS EN REPORTES
    ✅ HELPER PARA /MENU ANCLADO ABAJO
+   ✅ ADMINS VEN TODO EN FINANZAS
 */
 
 const http = require("http");
@@ -1395,6 +1396,7 @@ async function registrarEgresoTx({
   };
 }
 
+// ✅ ADMINS VEN TODO
 async function getMovimientosPorFecha(fechaDMY, userId, isSA = false) {
   const ini = startOfDayTS(fechaDMY);
   const fin = endOfDayTS(fechaDMY);
@@ -1407,10 +1409,6 @@ async function getMovimientosPorFecha(fechaDMY, userId, isSA = false) {
 
   let movs = snap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
 
-  if (!isSA) {
-    movs = movs.filter((x) => String(x.createdBy || "") === String(userId));
-  }
-
   movs.sort((a, b) => {
     const ta = Number(a.fechaTS || 0);
     const tb = Number(b.fechaTS || 0);
@@ -1421,14 +1419,11 @@ async function getMovimientosPorFecha(fechaDMY, userId, isSA = false) {
   return movs;
 }
 
+// ✅ ADMINS VEN TODO
 async function getMovimientosPorMes(monthKey, userId, isSA = false) {
   const snap = await db.collection(FINANZAS_COLLECTION).where("mesKey", "==", monthKey).get();
 
   let movs = snap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
-
-  if (!isSA) {
-    movs = movs.filter((x) => String(x.createdBy || "") === String(userId));
-  }
 
   movs.sort((a, b) => Number(a.fechaTS || 0) - Number(b.fechaTS || 0));
   return movs;
@@ -1592,6 +1587,7 @@ async function eliminarMovimientoFinanzas(id, userId, isSA = false) {
   return data;
 }
 
+// ✅ ADMINS VEN TODO
 async function exportarFinanzasRangoExcel(chatId, fechaInicio, fechaFin, userId, isSA = false) {
   if (!ExcelJS) {
     return bot.sendMessage(chatId, "⚠️ ExcelJS no está instalado en el servidor.");
@@ -1615,10 +1611,6 @@ async function exportarFinanzasRangoExcel(chatId, fechaInicio, fechaFin, userId,
     .get();
 
   let movs = snap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
-
-  if (!isSA) {
-    movs = movs.filter((x) => String(x.createdBy || "") === String(userId));
-  }
 
   movs.sort((a, b) => Number(a.fechaTS || 0) - Number(b.fechaTS || 0));
 
@@ -1999,8 +1991,7 @@ function kbPlataformasWiz(prefix, clientId, idxOpt) {
     ],
     [{ text: "📡 iptv (4)", callback_data: cb("iptv4") }],
   ];
-      }
-
+}
 // ===============================
 // FICHA CLIENTE / CRM / EDICIÓN
 // ===============================
