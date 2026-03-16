@@ -14,7 +14,6 @@
    ✅ EGRESOS CON DETALLE
    ✅ TOP PLATAFORMAS VENDIDAS EN REPORTES
    ✅ HELPER PARA /MENU ANCLADO ABAJO
-   ✅ ADMINS VEN TODO EN FINANZAS
 */
 
 const http = require("http");
@@ -971,11 +970,11 @@ function humanPlataforma(plataforma = "") {
     youtube: "YouTube",
     spotify: "Spotify",
     canva: "Canva",
-    oleadatv1: "OleadaTV (1)",
-    oleadatv3: "OleadaTV (3)",
-    iptv1: "IPTV (1)",
-    iptv3: "IPTV (3)",
-    iptv4: "IPTV (4)",
+    oleadatv1: "Oleada",
+    oleadatv3: "Oleada",
+    iptv1: "IPTV",
+    iptv3: "IPTV",
+    iptv4: "IPTV",
   };
   return map[p] || p || "-";
 }
@@ -1228,7 +1227,7 @@ async function mostrarStockGeneral(chatId) {
       libres += Math.max(0, capacidad - clientes.length);
     });
 
-    texto += `✅ *${p}*: ${libres} libres (/${totals?.[p] ?? "-"})\n`;
+    texto += `✅ *${humanPlataforma(p)}*: ${libres} libres (/${totals?.[p] ?? "-"})\n`;
   }
 
   return bot.sendMessage(chatId, texto, { parse_mode: "Markdown" });
@@ -1396,7 +1395,9 @@ async function registrarEgresoTx({
   };
 }
 
-// ✅ ADMINS VEN TODO
+// ===============================
+// FINANZAS VISIBLES PARA TODOS LOS ADMINS
+// ===============================
 async function getMovimientosPorFecha(fechaDMY, userId, isSA = false) {
   const ini = startOfDayTS(fechaDMY);
   const fin = endOfDayTS(fechaDMY);
@@ -1407,7 +1408,7 @@ async function getMovimientosPorFecha(fechaDMY, userId, isSA = false) {
     .where("fechaTS", "<=", fin)
     .get();
 
-  let movs = snap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
+  const movs = snap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
 
   movs.sort((a, b) => {
     const ta = Number(a.fechaTS || 0);
@@ -1419,11 +1420,10 @@ async function getMovimientosPorFecha(fechaDMY, userId, isSA = false) {
   return movs;
 }
 
-// ✅ ADMINS VEN TODO
 async function getMovimientosPorMes(monthKey, userId, isSA = false) {
   const snap = await db.collection(FINANZAS_COLLECTION).where("mesKey", "==", monthKey).get();
 
-  let movs = snap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
+  const movs = snap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
 
   movs.sort((a, b) => Number(a.fechaTS || 0) - Number(b.fechaTS || 0));
   return movs;
@@ -1443,12 +1443,20 @@ function agruparIngresosPorBanco(movs = []) {
 
 function agruparIngresosPorPlataforma(movs = []) {
   const map = new Map();
+
   for (const m of movs) {
     if (String(m.tipo || "") !== "ingreso") continue;
-    const plataforma = normalizarPlataforma(m.plataforma || "");
-    if (!plataforma) continue;
-    map.set(plataforma, Number(map.get(plataforma) || 0) + Number(m.monto || 0));
+
+    const bruto = String(m.plataforma || "").split(",");
+
+    for (const item of bruto) {
+      const plataforma = humanPlataforma(item.trim());
+      if (!plataforma || plataforma === "-") continue;
+
+      map.set(plataforma, Number(map.get(plataforma) || 0) + Number(m.monto || 0));
+    }
   }
+
   return Array.from(map.entries())
     .map(([plataforma, monto]) => ({ plataforma, monto }))
     .sort((a, b) => b.monto - a.monto);
@@ -1477,28 +1485,22 @@ function calcularTotalesMovimientos(movs = []) {
   return { ingresos, egresos, neta };
 }
 
+// ===============================
+// RESUMEN POR FECHA SIN TOP PLATAFORMAS
+// ===============================
 function resumenFinanzasTextoPorFecha(fechaDMY, movs = []) {
   const { ingresos, egresos, neta } = calcularTotalesMovimientos(movs);
   const bancos = agruparIngresosPorBanco(movs);
-  const plataformas = agruparIngresosPorPlataforma(movs).slice(0, 10);
   const motivos = agruparEgresosPorMotivo(movs);
 
   let txt = `📊 *ESTADO DE RESULTADOS (${escMD(fechaDMY)})*\n\n`;
   txt += `💰 *INGRESOS:* ${moneyLps(ingresos)}\n`;
+
   if (!bancos.length) {
     txt += `➖ Sin ingresos registrados\n`;
   } else {
     bancos.forEach((x) => {
       txt += `➖ ${escMD(x.banco)}: ${moneyLps(x.monto)}\n`;
-    });
-  }
-
-  txt += `\n🏆 *TOP PLATAFORMAS VENDIDAS:*\n`;
-  if (!plataformas.length) {
-    txt += `➖ Sin plataformas registradas\n`;
-  } else {
-    plataformas.forEach((x, i) => {
-      txt += `${i + 1}) ${escMD(labelPlataforma(x.plataforma))} — ${moneyLps(x.monto)}\n`;
     });
   }
 
@@ -1518,7 +1520,6 @@ function resumenFinanzasTextoPorFecha(fechaDMY, movs = []) {
 
 function resumenBancosMesTexto(monthKey, movs = []) {
   const bancos = agruparIngresosPorBanco(movs);
-  const plataformas = agruparIngresosPorPlataforma(movs).slice(0, 10);
   const total = bancos.reduce((a, b) => a + Number(b.monto || 0), 0);
 
   let txt = `🏦 *RESUMEN POR BANCO DEL MES ${escMD(getMonthLabelFromKey(monthKey))}*\n\n`;
@@ -1531,15 +1532,6 @@ function resumenBancosMesTexto(monthKey, movs = []) {
   bancos.forEach((x, i) => {
     txt += `${i + 1}) *${escMD(x.banco)}* — ${moneyLps(x.monto)}\n`;
   });
-
-  txt += `\n🏆 *TOP PLATAFORMAS DEL MES:*\n`;
-  if (!plataformas.length) {
-    txt += `➖ Sin plataformas registradas\n`;
-  } else {
-    plataformas.forEach((x, i) => {
-      txt += `${i + 1}) ${escMD(labelPlataforma(x.plataforma))} — ${moneyLps(x.monto)}\n`;
-    });
-  }
 
   txt += `\n━━━━━━━━━━━━━━\n`;
   txt += `💰 *Total ingresos del mes:* ${moneyLps(total)}`;
@@ -1557,7 +1549,7 @@ function resumenTopPlataformasTexto(monthKey, movs = []) {
   }
 
   plataformas.forEach((x, i) => {
-    txt += `${i + 1}) ${escMD(labelPlataforma(x.plataforma))} — ${moneyLps(x.monto)}\n`;
+    txt += `${i + 1}) ${escMD(x.plataforma)} — ${moneyLps(x.monto)}\n`;
   });
 
   return txt;
@@ -1573,21 +1565,19 @@ function cierreCajaTexto(fechaDMY, movs = []) {
   return txt;
 }
 
+// ===============================
+// ELIMINAR MOVIMIENTO: CUALQUIER ADMIN
+// ===============================
 async function eliminarMovimientoFinanzas(id, userId, isSA = false) {
   const ref = db.collection(FINANZAS_COLLECTION).doc(String(id));
   const doc = await ref.get();
   if (!doc.exists) throw new Error("Movimiento no encontrado");
 
   const data = doc.data() || {};
-  if (!isSA && String(data.createdBy || "") !== String(userId)) {
-    throw new Error("No autorizado para eliminar este movimiento");
-  }
-
   await ref.delete();
   return data;
 }
 
-// ✅ ADMINS VEN TODO
 async function exportarFinanzasRangoExcel(chatId, fechaInicio, fechaFin, userId, isSA = false) {
   if (!ExcelJS) {
     return bot.sendMessage(chatId, "⚠️ ExcelJS no está instalado en el servidor.");
@@ -1610,7 +1600,7 @@ async function exportarFinanzasRangoExcel(chatId, fechaInicio, fechaFin, userId,
     .where("fechaTS", "<=", fin)
     .get();
 
-  let movs = snap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
+  const movs = snap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
 
   movs.sort((a, b) => Number(a.fechaTS || 0) - Number(b.fechaTS || 0));
 
@@ -1688,7 +1678,7 @@ async function exportarFinanzasRangoExcel(chatId, fechaInicio, fechaFin, userId,
   if (topPlats.length) {
     topPlats.forEach((x) => {
       wsTop.addRow({
-        plataforma: humanPlataforma(x.plataforma),
+        plataforma: x.plataforma,
         monto: Number(x.monto || 0),
       });
     });
@@ -1991,7 +1981,7 @@ function kbPlataformasWiz(prefix, clientId, idxOpt) {
     ],
     [{ text: "📡 iptv (4)", callback_data: cb("iptv4") }],
   ];
-}
+   }
 // ===============================
 // FICHA CLIENTE / CRM / EDICIÓN
 // ===============================
@@ -3045,7 +3035,6 @@ async function responderMenuCodigosNetflix(chatId, plataforma, correo) {
     "Markdown"
   );
 }
-
 // ===============================
 // COMANDOS CLIENTES
 // ===============================
@@ -3329,6 +3318,20 @@ bot.onText(/\/bancos_mes\s+(.+)/i, async (msg, match) => {
   return bot.sendMessage(chatId, resumenBancosMesTexto(key, list), { parse_mode: "Markdown" });
 });
 
+bot.onText(/\/top_plataformas_mes\s+(.+)/i, async (msg, match) => {
+  if (!HAS_RUNTIME_LOCK) return;
+
+  const chatId = msg.chat.id;
+  const userId = msg.from.id;
+  if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+
+  const key = parseMonthInputToKey(String(match[1] || "").trim());
+  if (!key) return bot.sendMessage(chatId, "⚠️ Uso: /top_plataformas_mes mm/yyyy");
+
+  const list = await getMovimientosPorMes(key, userId, await isSuperAdmin(userId));
+  return bot.sendMessage(chatId, resumenTopPlataformasTexto(key, list), { parse_mode: "Markdown" });
+});
+
 bot.onText(/\/cierre_caja\s+(.+)/i, async (msg, match) => {
   if (!HAS_RUNTIME_LOCK) return;
 
@@ -3544,8 +3547,8 @@ bot.onText(/\/start/i, async (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
 
-  if (await isAdmin(userId)) return menuPrincipal(chatId);
-  if (await isVendedor(userId)) return menuVendedor(chatId);
+  if (await isAdmin(userId)) return menuPrincipalFromCommand(msg);
+  if (await isVendedor(userId)) return menuVendedorFromCommand(msg);
 
   return bot.sendMessage(chatId, "⛔ Acceso denegado");
 });
@@ -3557,12 +3560,12 @@ bot.onText(/\/menu/i, async (msg) => {
   const userId = msg.from.id;
 
   try {
-    await bot.sendMessage(chatId, "📋 Abriendo menú...");
+    if (await isAdmin(userId)) return menuPrincipalFromCommand(msg);
+    if (await isVendedor(userId)) return menuVendedorFromCommand(msg);
 
-    if (await isAdmin(userId)) return menuPrincipal(chatId);
-    if (await isVendedor(userId)) return menuVendedor(chatId);
-
-    return bot.sendMessage(chatId, "⛔ Acceso denegado");
+    return bot.sendMessage(chatId, "⛔ Acceso denegado", {
+      reply_to_message_id: msg.message_id,
+    });
   } catch (err) {
     return bot.sendMessage(chatId, "⚠️ Error interno.");
   }
@@ -3767,6 +3770,16 @@ bot.on("callback_query", async (q) => {
         );
       }
 
+      if (data === "fin:menu:top_plataformas") {
+        pending.set(String(chatId), { mode: "finTopPlataformasMesAsk" });
+        return upsertPanel(
+          chatId,
+          "🏆 *TOP PLATAFORMAS DEL MES*\n\nEscriba el mes en formato *mm/yyyy*.\nEjemplo: *01/2026*",
+          { inline_keyboard: [[{ text: "🏠 Inicio", callback_data: "go:inicio" }]] },
+          "Markdown"
+        );
+      }
+
       if (data === "fin:menu:cierre") {
         pending.set(String(chatId), { mode: "finCierreCajaAsk" });
         return upsertPanel(
@@ -3805,14 +3818,14 @@ bot.on("callback_query", async (q) => {
         }
 
         pending.set(String(chatId), {
-          mode: "finIngresoPlataforma",
+          mode: "finIngresoFecha",
           monto: p.monto,
           banco,
         });
 
         return upsertPanel(
           chatId,
-          `➕ *REGISTRAR INGRESO*\n\n🏦 Banco: *${escMD(banco)}*\n📺 Escriba la plataforma vendida.\nEjemplo: Netflix, Disney, Prime, HBO Max.`,
+          `➕ *REGISTRAR INGRESO*\n\n🏦 Banco: *${escMD(banco)}*\n📅 Escriba la fecha en formato *dd/mm/yyyy* o escriba *hoy*.`,
           { inline_keyboard: [[{ text: "🏠 Inicio", callback_data: "go:inicio" }]] },
           "Markdown"
         );
@@ -3826,14 +3839,14 @@ bot.on("callback_query", async (q) => {
         }
 
         pending.set(String(chatId), {
-          mode: "finEgresoDetalle",
+          mode: "finEgresoFecha",
           monto: p.monto,
           motivo,
         });
 
         return upsertPanel(
           chatId,
-          `➖ *REGISTRAR EGRESO*\n\n🧾 Motivo: *${escMD(motivo)}*\n✍️ Escriba el detalle.\nEjemplo: a quién se pagó, qué renovación fue o qué gasto se hizo.`,
+          `➖ *REGISTRAR EGRESO*\n\n🧾 Motivo: *${escMD(motivo)}*\n📅 Escriba la fecha en formato *dd/mm/yyyy* o escriba *hoy*.`,
           { inline_keyboard: [[{ text: "🏠 Inicio", callback_data: "go:inicio" }]] },
           "Markdown"
         );
@@ -4849,6 +4862,7 @@ bot.on("message", async (msg) => {
         "finanzas",
         "resumen_fecha",
         "bancos_mes",
+        "top_plataformas_mes",
         "cierre_caja",
         "excel_finanzas",
         ...PLATAFORMAS,
@@ -4904,43 +4918,6 @@ bot.on("message", async (msg) => {
         });
       }
 
-      if (p.mode === "finIngresoPlataforma") {
-        if (!t) {
-          return bot.sendMessage(chatId, "⚠️ Escriba la plataforma vendida.");
-        }
-
-        pending.set(String(chatId), {
-          mode: "finIngresoDetalle",
-          monto: p.monto,
-          banco: p.banco,
-          plataforma: t,
-        });
-
-        return bot.sendMessage(
-          chatId,
-          "📝 Escriba el detalle del ingreso.\nEjemplo: nombre del cliente, plan vendido o nota interna."
-        );
-      }
-
-      if (p.mode === "finIngresoDetalle") {
-        if (!t) {
-          return bot.sendMessage(chatId, "⚠️ Escriba el detalle del ingreso.");
-        }
-
-        pending.set(String(chatId), {
-          mode: "finIngresoFecha",
-          monto: p.monto,
-          banco: p.banco,
-          plataforma: p.plataforma,
-          detalle: t,
-        });
-
-        return bot.sendMessage(
-          chatId,
-          "📅 Escriba la fecha en formato dd/mm/yyyy o escriba hoy."
-        );
-      }
-
       if (p.mode === "finIngresoFecha") {
         const parsed = parseFechaFinanceInput(t);
         if (!parsed.ok) return bot.sendMessage(chatId, "⚠️ Fecha inválida. Use dd/mm/yyyy o escriba hoy.");
@@ -4949,8 +4926,6 @@ bot.on("message", async (msg) => {
         const ok = await registrarIngresoTx({
           monto: p.monto,
           banco: p.banco,
-          plataforma: p.plataforma || "",
-          detalle: p.detalle || "",
           fecha: parsed.fecha,
           userId,
           userName: msg.from?.first_name || "",
@@ -4958,7 +4933,7 @@ bot.on("message", async (msg) => {
 
         return bot.sendMessage(
           chatId,
-          `✅ *Ingreso registrado*\n\n💰 Monto: ${moneyLps(ok.monto)}\n🏦 Banco: ${escMD(ok.banco)}\n📺 Plataforma: ${escMD(ok.plataforma || "-")}\n📝 Detalle: ${escMD(ok.detalle || "-")}\n📅 Fecha: ${escMD(ok.fecha)}\n🆔 ID: \`${ok.id}\``,
+          `✅ *Ingreso registrado*\n\n💰 Monto: ${moneyLps(ok.monto)}\n🏦 Banco: ${escMD(ok.banco)}\n📅 Fecha: ${escMD(ok.fecha)}\n🆔 ID: \`${ok.id}\``,
           { parse_mode: "Markdown" }
         );
       }
@@ -4979,24 +4954,6 @@ bot.on("message", async (msg) => {
         });
       }
 
-      if (p.mode === "finEgresoDetalle") {
-        if (!t) {
-          return bot.sendMessage(chatId, "⚠️ Escriba el detalle del egreso.");
-        }
-
-        pending.set(String(chatId), {
-          mode: "finEgresoFecha",
-          monto: p.monto,
-          motivo: p.motivo,
-          detalle: t,
-        });
-
-        return bot.sendMessage(
-          chatId,
-          "📅 Escriba la fecha en formato dd/mm/yyyy o escriba hoy."
-        );
-      }
-
       if (p.mode === "finEgresoFecha") {
         const parsed = parseFechaFinanceInput(t);
         if (!parsed.ok) return bot.sendMessage(chatId, "⚠️ Fecha inválida. Use dd/mm/yyyy o escriba hoy.");
@@ -5005,7 +4962,6 @@ bot.on("message", async (msg) => {
         const ok = await registrarEgresoTx({
           monto: p.monto,
           motivo: p.motivo,
-          detalle: p.detalle || "",
           fecha: parsed.fecha,
           userId,
           userName: msg.from?.first_name || "",
@@ -5013,7 +4969,7 @@ bot.on("message", async (msg) => {
 
         return bot.sendMessage(
           chatId,
-          `✅ *Egreso registrado*\n\n💸 Monto: ${moneyLps(ok.monto)}\n🧾 Motivo: ${escMD(ok.motivo)}\n📝 Detalle: ${escMD(ok.detalle || "-")}\n📅 Fecha: ${escMD(ok.fecha)}\n🆔 ID: \`${ok.id}\``,
+          `✅ *Egreso registrado*\n\n💸 Monto: ${moneyLps(ok.monto)}\n🧾 Motivo: ${escMD(ok.motivo)}\n📅 Fecha: ${escMD(ok.fecha)}\n🆔 ID: \`${ok.id}\``,
           { parse_mode: "Markdown" }
         );
       }
@@ -5034,6 +4990,15 @@ bot.on("message", async (msg) => {
         pending.delete(String(chatId));
         const list = await getMovimientosPorMes(key, userId, await isSuperAdmin(userId));
         return bot.sendMessage(chatId, resumenBancosMesTexto(key, list), { parse_mode: "Markdown" });
+      }
+
+      if (p.mode === "finTopPlataformasMesAsk") {
+        const key = parseMonthInputToKey(t);
+        if (!key) return bot.sendMessage(chatId, "⚠️ Mes inválido. Use mm/yyyy");
+
+        pending.delete(String(chatId));
+        const list = await getMovimientosPorMes(key, userId, await isSuperAdmin(userId));
+        return bot.sendMessage(chatId, resumenTopPlataformasTexto(key, list), { parse_mode: "Markdown" });
       }
 
       if (p.mode === "finCierreCajaAsk") {
@@ -5615,5 +5580,6 @@ http
   .listen(PORT, () => {
     console.log("🌐 HTTP KEEPALIVE activo en puerto", PORT);
   });
+
 
 
