@@ -3079,9 +3079,11 @@ async function responderMenuCodigosNetflix(chatId, plataforma, correo) {
     "Markdown"
   );
 }
+
 // ===============================
 // COMANDOS CLIENTES
 // ===============================
+
 bot.onText(/\/buscar\s+(.+)/i, async (msg, match) => {
   if (!HAS_RUNTIME_LOCK) return;
 
@@ -3131,6 +3133,7 @@ bot.onText(/\/clientes_txt/i, async (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
   if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+
   return reporteClientesTXTGeneral(chatId);
 });
 
@@ -3140,6 +3143,7 @@ bot.onText(/\/vendedores_txt_split/i, async (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
   if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+
   return reporteClientesSplitPorVendedorTXT(chatId);
 });
 
@@ -3149,7 +3153,7 @@ bot.onText(/\/sincronizar_todo/i, async (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
 
-  if (!isSuperAdmin(userId)) {
+  if (!(await isSuperAdmin(userId))) {
     return bot.sendMessage(chatId, "⛔ Solo el SUPER ADMIN puede sincronizar la base de datos.");
   }
 
@@ -3180,44 +3184,46 @@ bot.onText(/\/sincronizar_todo/i, async (msg) => {
         const refInv = db.collection("inventario").doc(docId);
         const docInv = await refInv.get();
 
-        if (docInv.exists) {
-          const invData = docInv.data() || {};
-          let clientesInv = Array.isArray(invData.clientes) ? invData.clientes.slice() : [];
-          const pinCliente = s.pin || "0000";
+        if (!docInv.exists) continue;
 
-          const yaExiste = clientesInv.some((x) => x.nombre === nombreCliente && x.pin === pinCliente);
+        const invData = docInv.data() || {};
+        let clientesInv = Array.isArray(invData.clientes) ? invData.clientes.slice() : [];
+        const pinCliente = s.pin || "0000";
 
-          if (!yaExiste) {
-            clientesInv.push({
-              nombre: nombreCliente,
-              pin: pinCliente,
-              slot: clientesInv.length + 1,
-            });
+        const yaExiste = clientesInv.some(
+          (x) => x.nombre === nombreCliente && x.pin === pinCliente
+        );
 
-            const capacidad = Number(invData.capacidad || invData.total || 0);
-            const ocupados = clientesInv.length;
-            const disponibles = capacidad > 0
-              ? Math.max(0, capacidad - ocupados)
-              : Math.max(0, Number(invData.disp || 0) - 1);
-            const estado = disponibles === 0 ? "llena" : "activa";
+        if (yaExiste) continue;
 
-            await refInv.set(
-              {
-                clientes: clientesInv,
-                ocupados,
-                disponibles,
-                disp: disponibles,
-                estado,
-                capacidad,
-                updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-              },
-              { merge: true }
-            );
+        clientesInv.push({
+          nombre: nombreCliente,
+          pin: pinCliente,
+          slot: clientesInv.length + 1,
+        });
 
-            perfilesEmparejados++;
-            cuentasAfectadas.add(docId);
-          }
-        }
+        const capacidad = Number(invData.capacidad || invData.total || 0);
+        const ocupados = clientesInv.length;
+        const disponibles = capacidad > 0
+          ? Math.max(0, capacidad - ocupados)
+          : Math.max(0, Number(invData.disp || 0) - 1);
+        const estado = disponibles === 0 ? "llena" : "activa";
+
+        await refInv.set(
+          {
+            clientes: clientesInv,
+            ocupados,
+            disponibles,
+            disp: disponibles,
+            estado,
+            capacidad,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        );
+
+        perfilesEmparejados++;
+        cuentasAfectadas.add(docId);
       }
     }
 
@@ -3236,6 +3242,7 @@ bot.onText(/\/sincronizar_todo/i, async (msg) => {
 // ===============================
 // COMANDOS RENOVACIONES
 // ===============================
+
 bot.onText(/\/renovaciones(?:\s+(.+))?/i, async (msg, match) => {
   if (!HAS_RUNTIME_LOCK) return;
 
@@ -3320,6 +3327,7 @@ bot.onText(/\/txt(?:\s+(.+))?/i, async (msg, match) => {
 // ===============================
 // COMANDOS FINANZAS
 // ===============================
+
 bot.onText(/\/finanzas/i, async (msg) => {
   if (!HAS_RUNTIME_LOCK) return;
 
@@ -3345,7 +3353,9 @@ bot.onText(/\/resumen_fecha\s+(.+)/i, async (msg, match) => {
   if (!isFechaDMY(fecha)) return bot.sendMessage(chatId, "⚠️ Uso: /resumen_fecha dd/mm/yyyy");
 
   const list = await getMovimientosPorFecha(fecha, userId, await isSuperAdmin(userId));
-  return bot.sendMessage(chatId, resumenFinanzasTextoPorFecha(fecha, list), { parse_mode: "Markdown" });
+  return bot.sendMessage(chatId, resumenFinanzasTextoPorFecha(fecha, list), {
+    parse_mode: "Markdown",
+  });
 });
 
 bot.onText(/\/bancos_mes\s+(.+)/i, async (msg, match) => {
@@ -3359,7 +3369,9 @@ bot.onText(/\/bancos_mes\s+(.+)/i, async (msg, match) => {
   if (!key) return bot.sendMessage(chatId, "⚠️ Uso: /bancos_mes mm/yyyy");
 
   const list = await getMovimientosPorMes(key, userId, await isSuperAdmin(userId));
-  return bot.sendMessage(chatId, resumenBancosMesTexto(key, list), { parse_mode: "Markdown" });
+  return bot.sendMessage(chatId, resumenBancosMesTexto(key, list), {
+    parse_mode: "Markdown",
+  });
 });
 
 bot.onText(/\/top_plataformas_mes\s+(.+)/i, async (msg, match) => {
@@ -3373,7 +3385,9 @@ bot.onText(/\/top_plataformas_mes\s+(.+)/i, async (msg, match) => {
   if (!key) return bot.sendMessage(chatId, "⚠️ Uso: /top_plataformas_mes mm/yyyy");
 
   const list = await getMovimientosPorMes(key, userId, await isSuperAdmin(userId));
-  return bot.sendMessage(chatId, resumenTopPlataformasTexto(key, list), { parse_mode: "Markdown" });
+  return bot.sendMessage(chatId, resumenTopPlataformasTexto(key, list), {
+    parse_mode: "Markdown",
+  });
 });
 
 bot.onText(/\/cierre_caja\s+(.+)/i, async (msg, match) => {
@@ -3391,21 +3405,32 @@ bot.onText(/\/cierre_caja\s+(.+)/i, async (msg, match) => {
   if (!isFechaDMY(fecha)) return bot.sendMessage(chatId, "⚠️ Uso: /cierre_caja dd/mm/yyyy");
 
   const list = await getMovimientosPorFecha(fecha, userId, await isSuperAdmin(userId));
-  return bot.sendMessage(chatId, cierreCajaTexto(fecha, list), { parse_mode: "Markdown" });
+  return bot.sendMessage(chatId, cierreCajaTexto(fecha, list), {
+    parse_mode: "Markdown",
+  });
 });
 
-bot.onText(/\/excel_finanzas\s+(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})/i, async (msg, match) => {
-  if (!HAS_RUNTIME_LOCK) return;
+bot.onText(
+  /\/excel_finanzas\s+(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})/i,
+  async (msg, match) => {
+    if (!HAS_RUNTIME_LOCK) return;
 
-  const chatId = msg.chat.id;
-  const userId = msg.from.id;
-  if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+    const chatId = msg.chat.id;
+    const userId = msg.from.id;
+    if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
 
-  const fechaInicio = String(match[1] || "").trim();
-  const fechaFin = String(match[2] || "").trim();
+    const fechaInicio = String(match[1] || "").trim();
+    const fechaFin = String(match[2] || "").trim();
 
-  return exportarFinanzasRangoExcel(chatId, fechaInicio, fechaFin, userId, await isSuperAdmin(userId));
-});
+    return exportarFinanzasRangoExcel(
+      chatId,
+      fechaInicio,
+      fechaFin,
+      userId,
+      await isSuperAdmin(userId)
+    );
+  }
+);
 
 bot.onText(/\/editar_movimiento\s+([A-Za-z0-9_-]+)/i, async (msg, match) => {
   if (!HAS_RUNTIME_LOCK) return;
@@ -3453,12 +3478,16 @@ bot.onText(/\/editar_movimiento\s+([A-Za-z0-9_-]+)/i, async (msg, match) => {
 // ===============================
 // IDS / VINCULACIÓN
 // ===============================
+
 bot.onText(/\/id/i, async (msg) => {
   if (!HAS_RUNTIME_LOCK) return;
 
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-  return bot.sendMessage(chatId, `🆔 Tu Telegram ID es:\n${userId}\n\n📩 Envíelo al administrador para activarte en el bot.`);
+  return bot.sendMessage(
+    chatId,
+    `🆔 Tu Telegram ID es:\n${userId}\n\n📩 Envíelo al administrador para activarte en el bot.`
+  );
 });
 
 bot.onText(/\/miid/i, async (msg) => {
@@ -3466,7 +3495,10 @@ bot.onText(/\/miid/i, async (msg) => {
 
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-  return bot.sendMessage(chatId, `🆔 Tu Telegram ID es:\n${userId}\n\n📩 Envíelo al administrador para activarte en el bot.`);
+  return bot.sendMessage(
+    chatId,
+    `🆔 Tu Telegram ID es:\n${userId}\n\n📩 Envíelo al administrador para activarte en el bot.`
+  );
 });
 
 bot.onText(/\/vincular_vendedor\s+(.+)/i, async (msg, match) => {
@@ -3485,6 +3517,7 @@ bot.onText(/\/vincular_vendedor\s+(.+)/i, async (msg, match) => {
 // ===============================
 // REVENDEDORES ADMIN
 // ===============================
+
 bot.onText(/\/addvendedor\s+(\d+)\s+(.+)/i, async (msg, match) => {
   if (!HAS_RUNTIME_LOCK) return;
 
@@ -3513,7 +3546,10 @@ bot.onText(/\/addvendedor\s+(\d+)\s+(.+)/i, async (msg, match) => {
     { merge: true }
   );
 
-  return bot.sendMessage(chatId, `✅ Revendedor agregado\n\n👤 ${nombre}\n🆔 ${telegramId}\n📌 DocID: ${docId}`);
+  return bot.sendMessage(
+    chatId,
+    `✅ Revendedor agregado\n\n👤 ${nombre}\n🆔 ${telegramId}\n📌 DocID: ${docId}`
+  );
 });
 
 bot.onText(/\/delvendedor\s+(.+)/i, async (msg, match) => {
@@ -3561,13 +3597,16 @@ async function listarRevendedores(chatId) {
 // ===============================
 // ADMINS
 // ===============================
+
 bot.onText(/\/adminadd\s+(\d+)/i, async (msg, match) => {
   if (!HAS_RUNTIME_LOCK) return;
 
   const chatId = msg.chat.id;
   const userId = msg.from.id;
 
-  if (!(await isSuperAdmin(userId))) return bot.sendMessage(chatId, "⛔ Solo SUPER ADMIN puede agregar admins.");
+  if (!(await isSuperAdmin(userId))) {
+    return bot.sendMessage(chatId, "⛔ Solo SUPER ADMIN puede agregar admins.");
+  }
 
   const id = String(match[1] || "").trim();
 
@@ -3589,7 +3628,9 @@ bot.onText(/\/admindel\s+(\d+)/i, async (msg, match) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
 
-  if (!(await isSuperAdmin(userId))) return bot.sendMessage(chatId, "⛔ Solo SUPER ADMIN puede eliminar admins.");
+  if (!(await isSuperAdmin(userId))) {
+    return bot.sendMessage(chatId, "⛔ Solo SUPER ADMIN puede eliminar admins.");
+  }
 
   const id = String(match[1] || "").trim();
 
@@ -3628,6 +3669,7 @@ bot.onText(/\/adminlist/i, async (msg) => {
 // ===============================
 // START / MENU BLINDADO
 // ===============================
+
 bot.onText(/\/start/i, async (msg) => {
   if (!HAS_RUNTIME_LOCK) return;
 
@@ -3663,6 +3705,7 @@ bot.onText(/\/menu/i, async (msg) => {
 // ===============================
 // ATAJOS INVENTARIO
 // ===============================
+
 PLATAFORMAS.forEach((p) => {
   bot.onText(new RegExp("^\\/" + p + "(?:@\\w+)?(?:\\s+.*)?$", "i"), async (msg) => {
     if (!HAS_RUNTIME_LOCK) return;
@@ -3670,6 +3713,7 @@ PLATAFORMAS.forEach((p) => {
     const chatId = msg.chat.id;
     const userId = msg.from.id;
     if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+
     return enviarInventarioPlataforma(chatId, p, 0);
   });
 });
@@ -3680,12 +3724,14 @@ bot.onText(/\/stock/i, async (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
   if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+
   return mostrarStockGeneral(chatId);
 });
 
 // ===============================
 // AGREGAR NUEVO CORREO AL INVENTARIO
 // ===============================
+
 bot.onText(/\/addcorreo\s+(\S+)\s+(\S+)(?:\s+(\d+))?/i, async (msg, match) => {
   if (!HAS_RUNTIME_LOCK) return;
 
@@ -3760,6 +3806,7 @@ bot.onText(/\/addcorreo\s+(\S+)\s+(\S+)(?:\s+(\d+))?/i, async (msg, match) => {
 // ===============================
 // CALLBACKS
 // ===============================
+
 bot.on("callback_query", async (q) => {
   if (!HAS_RUNTIME_LOCK) return;
 
@@ -3994,14 +4041,21 @@ bot.on("callback_query", async (q) => {
       if (data.startsWith("fin:del:one:")) {
         const id = String(data.split(":")[3] || "").trim();
         try {
-          const eliminado = await eliminarMovimientoFinanzas(id, userId, await isSuperAdmin(userId));
+          const eliminado = await eliminarMovimientoFinanzas(
+            id,
+            userId,
+            await isSuperAdmin(userId)
+          );
           return bot.sendMessage(
             chatId,
             `✅ Movimiento eliminado.\n\n🗂️ Tipo: ${eliminado.tipo}\n💰 Monto: ${moneyLps(eliminado.monto)}\n📅 Fecha: ${eliminado.fecha}`,
             { parse_mode: "Markdown" }
           );
         } catch (e) {
-          return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo eliminar el movimiento."}`);
+          return bot.sendMessage(
+            chatId,
+            `⚠️ ${e.message || "No se pudo eliminar el movimiento."}`
+          );
         }
       }
 
@@ -4090,7 +4144,12 @@ bot.on("callback_query", async (q) => {
         return upsertPanel(
           chatId,
           `➕ *Agregar perfil*\n📌 ${String(plat).toUpperCase()}\n📧 ${escMD(correo)}\n\nEscriba cantidad a *SUMAR* (ej: 1):`,
-          { inline_keyboard: [[{ text: "↩️ Cancelar", callback_data: `inv:menu:cancel:${plat}:${encodeURIComponent(correo)}` }]] },
+          {
+            inline_keyboard: [[{
+              text: "↩️ Cancelar",
+              callback_data: `inv:menu:cancel:${plat}:${encodeURIComponent(correo)}`,
+            }]],
+          },
           "Markdown"
         );
       }
@@ -4102,7 +4161,12 @@ bot.on("callback_query", async (q) => {
         return upsertPanel(
           chatId,
           `➖ *Quitar perfil*\n📌 ${String(plat).toUpperCase()}\n📧 ${escMD(correo)}\n\nEscriba cantidad a *RESTAR* (ej: 1):`,
-          { inline_keyboard: [[{ text: "↩️ Cancelar", callback_data: `inv:menu:cancel:${plat}:${encodeURIComponent(correo)}` }]] },
+          {
+            inline_keyboard: [[{
+              text: "↩️ Cancelar",
+              callback_data: `inv:menu:cancel:${plat}:${encodeURIComponent(correo)}`,
+            }]],
+          },
           "Markdown"
         );
       }
@@ -4114,7 +4178,12 @@ bot.on("callback_query", async (q) => {
         return upsertPanel(
           chatId,
           `✏️ *Editar clave*\n📌 ${String(plat).toUpperCase()}\n📧 ${escMD(correo)}\n\nEscriba la nueva clave:`,
-          { inline_keyboard: [[{ text: "↩️ Cancelar", callback_data: `inv:menu:cancel:${plat}:${encodeURIComponent(correo)}` }]] },
+          {
+            inline_keyboard: [[{
+              text: "↩️ Cancelar",
+              callback_data: `inv:menu:cancel:${plat}:${encodeURIComponent(correo)}`,
+            }]],
+          },
           "Markdown"
         );
       }
@@ -4139,8 +4208,14 @@ bot.on("callback_query", async (q) => {
           `🗑️ Confirmar *borrar correo*?\n📌 ${String(plat).toUpperCase()}\n📧 ${escMD(correo)}`,
           {
             inline_keyboard: [
-              [{ text: "✅ Confirmar", callback_data: `inv:menu:borrarok:${normalizarPlataforma(plat)}:${encodeURIComponent(String(correo).toLowerCase())}` }],
-              [{ text: "⬅️ Cancelar", callback_data: `inv:menu:cancel:${plat}:${encodeURIComponent(correo)}` }],
+              [{
+                text: "✅ Confirmar",
+                callback_data: `inv:menu:borrarok:${normalizarPlataforma(plat)}:${encodeURIComponent(String(correo).toLowerCase())}`,
+              }],
+              [{
+                text: "⬅️ Cancelar",
+                callback_data: `inv:menu:cancel:${plat}:${encodeURIComponent(correo)}`,
+              }],
             ],
           },
           "Markdown"
@@ -4219,7 +4294,10 @@ bot.on("callback_query", async (q) => {
           txt,
           {
             inline_keyboard: [
-              [{ text: "⬅️ Volver al correo", callback_data: `mail_panel|${normalizarPlataforma(plataforma)}|${encodeURIComponent(correo)}` }],
+              [{
+                text: "⬅️ Volver al correo",
+                callback_data: `mail_panel|${normalizarPlataforma(plataforma)}|${encodeURIComponent(correo)}`,
+              }],
               [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
             ],
           },
@@ -4279,14 +4357,15 @@ bot.on("callback_query", async (q) => {
           },
         ]);
 
-        kb.push([{ text: "⬅️ Volver", callback_data: `mail_panel|${normalizarPlataforma(plataforma)}|${encodeURIComponent(correo)}` }]);
+        kb.push([{
+          text: "⬅️ Volver",
+          callback_data: `mail_panel|${normalizarPlataforma(plataforma)}|${encodeURIComponent(correo)}`,
+        }]);
 
         return upsertPanel(
           chatId,
           `➖ *Quitar cliente*\n\n📧 *${escMD(correo)}*\n\nSeleccione el cliente que desea quitar:`,
-          {
-            inline_keyboard: kb,
-          },
+          { inline_keyboard: kb },
           "Markdown"
         );
       }
@@ -4304,7 +4383,9 @@ bot.on("callback_query", async (q) => {
         let clientes = Array.isArray(correoData.clientes) ? correoData.clientes.slice() : [];
 
         if (!clientes.length) return bot.sendMessage(chatId, "⚠️ Este correo ya no tiene clientes.");
-        if (isNaN(index) || index < 0 || index >= clientes.length) return bot.sendMessage(chatId, "❌ Cliente inválido.");
+        if (isNaN(index) || index < 0 || index >= clientes.length) {
+          return bot.sendMessage(chatId, "❌ Cliente inválido.");
+        }
 
         const cliente = clientes[index];
         clientes.splice(index, 1);
@@ -4365,14 +4446,15 @@ bot.on("callback_query", async (q) => {
           },
         ]);
 
-        kb.push([{ text: "⬅️ Volver", callback_data: `mail_panel|${normalizarPlataforma(plataforma)}|${encodeURIComponent(correo)}` }]);
+        kb.push([{
+          text: "⬅️ Volver",
+          callback_data: `mail_panel|${normalizarPlataforma(plataforma)}|${encodeURIComponent(correo)}`,
+        }]);
 
         return upsertPanel(
           chatId,
           `🔐 *Editar PIN*\n\n📧 *${escMD(correo)}*\n\nSeleccione el cliente:`,
-          {
-            inline_keyboard: kb,
-          },
+          { inline_keyboard: kb },
           "Markdown"
         );
       }
@@ -4452,8 +4534,14 @@ bot.on("callback_query", async (q) => {
             "Esta acción eliminará la cuenta del inventario.\n\n¿Está seguro que desea borrarla?",
           {
             inline_keyboard: [
-              [{ text: "✅ Sí borrar", callback_data: `mail_delete_confirm|${normalizarPlataforma(plataforma)}|${encodeURIComponent(correo)}` }],
-              [{ text: "❌ Cancelar", callback_data: `mail_panel|${normalizarPlataforma(plataforma)}|${encodeURIComponent(correo)}` }],
+              [{
+                text: "✅ Sí borrar",
+                callback_data: `mail_delete_confirm|${normalizarPlataforma(plataforma)}|${encodeURIComponent(correo)}`,
+              }],
+              [{
+                text: "❌ Cancelar",
+                callback_data: `mail_panel|${normalizarPlataforma(plataforma)}|${encodeURIComponent(correo)}`,
+              }],
             ],
           },
           "Markdown"
@@ -4472,7 +4560,10 @@ bot.on("callback_query", async (q) => {
         const clientes = Array.isArray(correoData.clientes) ? correoData.clientes : [];
 
         if (clientes.length > 0) {
-          await bot.sendMessage(chatId, "⚠️ Este correo tenía clientes asignados. Se eliminará igualmente del inventario.");
+          await bot.sendMessage(
+            chatId,
+            "⚠️ Este correo tenía clientes asignados. Se eliminará igualmente del inventario."
+          );
         }
 
         await ref.delete();
@@ -4486,7 +4577,11 @@ bot.on("callback_query", async (q) => {
         const clientId = data.split(":")[3];
         const c = await getCliente(clientId);
         if (!c) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
-        return enviarTxtComoArchivo(chatId, clienteResumenTXT(c), `cliente_${onlyDigits(c.telefono || "") || clientId}.txt`);
+        return enviarTxtComoArchivo(
+          chatId,
+          clienteResumenTXT(c),
+          `cliente_${onlyDigits(c.telefono || "") || clientId}.txt`
+        );
       }
 
       if (data.startsWith("cli:view:")) return enviarFichaCliente(chatId, data.split(":")[2]);
@@ -4682,10 +4777,19 @@ bot.on("callback_query", async (q) => {
 
         const c = doc.data() || {};
         const servicios = Array.isArray(c.servicios) ? c.servicios : [];
-        if (idx < 0 || idx >= servicios.length) return bot.sendMessage(chatId, "⚠️ Servicio inválido.");
+        if (idx < 0 || idx >= servicios.length) {
+          return bot.sendMessage(chatId, "⚠️ Servicio inválido.");
+        }
 
         servicios[idx] = { ...(servicios[idx] || {}), plataforma: plat };
-        await ref.set({ servicios, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        await ref.set(
+          {
+            servicios,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        );
+
         return menuServicio(chatId, clientId, idx);
       }
 
@@ -4718,7 +4822,9 @@ bot.on("callback_query", async (q) => {
 
         const c = doc.data() || {};
         const servicios = Array.isArray(c.servicios) ? c.servicios : [];
-        if (idx < 0 || idx >= servicios.length) return bot.sendMessage(chatId, "⚠️ Servicio inválido.");
+        if (idx < 0 || idx >= servicios.length) {
+          return bot.sendMessage(chatId, "⚠️ Servicio inválido.");
+        }
 
         const servicioABorrar = servicios[idx];
         const plat = normalizarPlataforma(servicioABorrar.plataforma);
@@ -4732,7 +4838,9 @@ bot.on("callback_query", async (q) => {
           const invData = docInv.data() || {};
           let clientesInv = Array.isArray(invData.clientes) ? invData.clientes.slice() : [];
 
-          const indexInv = clientesInv.findIndex((cl) => cl.nombre === nombreCliente && cl.pin === servicioABorrar.pin);
+          const indexInv = clientesInv.findIndex(
+            (cl) => cl.nombre === nombreCliente && cl.pin === servicioABorrar.pin
+          );
 
           if (indexInv !== -1) {
             clientesInv.splice(indexInv, 1);
@@ -4761,7 +4869,13 @@ bot.on("callback_query", async (q) => {
         }
 
         servicios.splice(idx, 1);
-        await ref.set({ servicios, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        await ref.set(
+          {
+            servicios,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        );
 
         if (servicios.length) return menuListaServicios(chatId, clientId);
         return enviarFichaCliente(chatId, clientId);
@@ -4776,12 +4890,23 @@ bot.on("callback_query", async (q) => {
         if (!servicios.length) return bot.sendMessage(chatId, "⚠️ Este cliente no tiene servicios.");
 
         const kb = servicios.map((s, i) => [
-          { text: safeBtnLabel(`🔄 ${i + 1}) ${s.plataforma} — ${s.correo} (Ren: ${s.fechaRenovacion || "-"})`, 60), callback_data: `cli:ren:menu:${clientId}:${s.idxOriginal}` },
+          {
+            text: safeBtnLabel(
+              `🔄 ${i + 1}) ${s.plataforma} — ${s.correo} (Ren: ${s.fechaRenovacion || "-"})`,
+              60
+            ),
+            callback_data: `cli:ren:menu:${clientId}:${s.idxOriginal}`,
+          },
         ]);
         kb.push([{ text: "⬅️ Volver", callback_data: `cli:view:${clientId}` }]);
         kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
 
-        return upsertPanel(chatId, "🔄 *RENOVAR SERVICIO*\nSeleccione cuál renovar:", { inline_keyboard: kb }, "Markdown");
+        return upsertPanel(
+          chatId,
+          "🔄 *RENOVAR SERVICIO*\nSeleccione cuál renovar:",
+          { inline_keyboard: kb },
+          "Markdown"
+        );
       }
 
       if (data.startsWith("cli:ren:menu:")) {
@@ -4793,10 +4918,16 @@ bot.on("callback_query", async (q) => {
         if (!c) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
 
         const servicios = Array.isArray(c.servicios) ? c.servicios : [];
-        if (idx < 0 || idx >= servicios.length) return bot.sendMessage(chatId, "⚠️ Servicio inválido.");
+        if (idx < 0 || idx >= servicios.length) {
+          return bot.sendMessage(chatId, "⚠️ Servicio inválido.");
+        }
 
         const s = servicios[idx] || {};
-        const texto = `🔄 *RENOVAR SERVICIO #${idx + 1}*\n📌 ${escMD(s.plataforma || "-")}\n📧 ${escMD(s.correo || "-")}\n📅 Actual: *${escMD(s.fechaRenovacion || "-")}*`;
+        const texto =
+          `🔄 *RENOVAR SERVICIO #${idx + 1}*\n` +
+          `📌 ${escMD(s.plataforma || "-")}\n` +
+          `📧 ${escMD(s.correo || "-")}\n` +
+          `📅 Actual: *${escMD(s.fechaRenovacion || "-")}*`;
 
         return upsertPanel(
           chatId,
@@ -4824,14 +4955,22 @@ bot.on("callback_query", async (q) => {
 
         const c = doc.data() || {};
         const servicios = Array.isArray(c.servicios) ? c.servicios : [];
-        if (idx < 0 || idx >= servicios.length) return bot.sendMessage(chatId, "⚠️ Servicio inválido.");
+        if (idx < 0 || idx >= servicios.length) {
+          return bot.sendMessage(chatId, "⚠️ Servicio inválido.");
+        }
 
         const actual = String(servicios[idx].fechaRenovacion || hoyDMY());
         const base = isFechaDMY(actual) ? actual : hoyDMY();
         const nueva = addDaysDMY(base, 30);
 
         servicios[idx] = { ...(servicios[idx] || {}), fechaRenovacion: nueva };
-        await ref.set({ servicios, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        await ref.set(
+          {
+            servicios,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        );
 
         return menuServicio(chatId, clientId, idx);
       }
@@ -4953,6 +5092,7 @@ bot.on("callback_query", async (q) => {
 // ===============================
 // MESSAGE HANDLER
 // ===============================
+
 bot.on("message", async (msg) => {
   if (!HAS_RUNTIME_LOCK) return;
 
@@ -5008,10 +5148,14 @@ bot.on("message", async (msg) => {
             ]);
             kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
 
-            return bot.sendMessage(chatId, `📧 ${escMD(posibleCorreo)}\nSeleccione plataforma:`, {
-              parse_mode: "Markdown",
-              reply_markup: { inline_keyboard: kb },
-            });
+            return bot.sendMessage(
+              chatId,
+              `📧 ${escMD(posibleCorreo)}\nSeleccione plataforma:`,
+              {
+                parse_mode: "Markdown",
+                reply_markup: { inline_keyboard: kb },
+              }
+            );
           }
 
           return bot.sendMessage(chatId, "⚠️ Correo no encontrado en inventario.");
@@ -5021,7 +5165,16 @@ bot.on("message", async (msg) => {
       const cmd = limpiarQuery(text);
       const first = cmd.split(" ")[0];
 
-      const vendedorCmd = new Set(["menu", "start", "miid", "id", "vincular_vendedor", "renovaciones", "txt"]);
+      const vendedorCmd = new Set([
+        "menu",
+        "start",
+        "miid",
+        "id",
+        "vincular_vendedor",
+        "renovaciones",
+        "txt",
+      ]);
+
       if (!adminOk && vendOk && !vendedorCmd.has(first)) return;
 
       const comandosReservados = new Set([
@@ -5099,11 +5252,7 @@ bot.on("message", async (msg) => {
           return bot.sendMessage(chatId, "⚠️ Monto inválido. Escriba solo número.");
         }
 
-        pending.set(String(chatId), {
-          mode: "finIngresoBancoPick",
-          monto,
-        });
-
+        pending.set(String(chatId), { mode: "finIngresoBancoPick", monto });
         return bot.sendMessage(chatId, "🏦 Seleccione el banco:", {
           reply_markup: kbBancosFinanzas(),
         });
@@ -5171,11 +5320,7 @@ bot.on("message", async (msg) => {
           return bot.sendMessage(chatId, "⚠️ Monto inválido. Escriba solo número.");
         }
 
-        pending.set(String(chatId), {
-          mode: "finEgresoMotivoPick",
-          monto,
-        });
-
+        pending.set(String(chatId), { mode: "finEgresoMotivoPick", monto });
         return bot.sendMessage(chatId, "🧾 Seleccione el motivo del egreso:", {
           reply_markup: kbMotivosFinanzas(),
         });
@@ -5228,7 +5373,9 @@ bot.on("message", async (msg) => {
 
         pending.delete(String(chatId));
         const list = await getMovimientosPorFecha(fecha, userId, await isSuperAdmin(userId));
-        return bot.sendMessage(chatId, resumenFinanzasTextoPorFecha(fecha, list), { parse_mode: "Markdown" });
+        return bot.sendMessage(chatId, resumenFinanzasTextoPorFecha(fecha, list), {
+          parse_mode: "Markdown",
+        });
       }
 
       if (p.mode === "finResumenBancoMesAsk") {
@@ -5237,7 +5384,9 @@ bot.on("message", async (msg) => {
 
         pending.delete(String(chatId));
         const list = await getMovimientosPorMes(key, userId, await isSuperAdmin(userId));
-        return bot.sendMessage(chatId, resumenBancosMesTexto(key, list), { parse_mode: "Markdown" });
+        return bot.sendMessage(chatId, resumenBancosMesTexto(key, list), {
+          parse_mode: "Markdown",
+        });
       }
 
       if (p.mode === "finTopPlataformasMesAsk") {
@@ -5246,7 +5395,9 @@ bot.on("message", async (msg) => {
 
         pending.delete(String(chatId));
         const list = await getMovimientosPorMes(key, userId, await isSuperAdmin(userId));
-        return bot.sendMessage(chatId, resumenTopPlataformasTexto(key, list), { parse_mode: "Markdown" });
+        return bot.sendMessage(chatId, resumenTopPlataformasTexto(key, list), {
+          parse_mode: "Markdown",
+        });
       }
 
       if (p.mode === "finCierreCajaAsk") {
@@ -5255,7 +5406,9 @@ bot.on("message", async (msg) => {
 
         pending.delete(String(chatId));
         const list = await getMovimientosPorFecha(fecha, userId, await isSuperAdmin(userId));
-        return bot.sendMessage(chatId, cierreCajaTexto(fecha, list), { parse_mode: "Markdown" });
+        return bot.sendMessage(chatId, cierreCajaTexto(fecha, list), {
+          parse_mode: "Markdown",
+        });
       }
 
       if (p.mode === "finEliminarFechaAsk") {
@@ -5272,10 +5425,14 @@ bot.on("message", async (msg) => {
         });
         kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
 
-        return bot.sendMessage(chatId, `🗑️ *Movimientos del ${escMD(fecha)}*\nSeleccione cuál eliminar:`, {
-          parse_mode: "Markdown",
-          reply_markup: { inline_keyboard: kb },
-        });
+        return bot.sendMessage(
+          chatId,
+          `🗑️ *Movimientos del ${escMD(fecha)}*\nSeleccione cuál eliminar:`,
+          {
+            parse_mode: "Markdown",
+            reply_markup: { inline_keyboard: kb },
+          }
+        );
       }
 
       if (p.mode === "finExcelRangoInicio") {
@@ -5293,7 +5450,13 @@ bot.on("message", async (msg) => {
         if (!isFechaDMY(t)) return bot.sendMessage(chatId, "⚠️ Fecha inválida. Use dd/mm/yyyy");
 
         pending.delete(String(chatId));
-        return exportarFinanzasRangoExcel(chatId, p.fechaInicio, t, userId, await isSuperAdmin(userId));
+        return exportarFinanzasRangoExcel(
+          chatId,
+          p.fechaInicio,
+          t,
+          userId,
+          await isSuperAdmin(userId)
+        );
       }
 
       if (p.mode === "finEditMonto") {
@@ -5574,7 +5737,12 @@ bot.on("message", async (msg) => {
         const nuevaCapacidad = Math.max(ocupados, capacidadActual - qty);
         const disponibles = Math.max(0, nuevaCapacidad - ocupados);
 
-        const antes = { ...d, disp: Math.max(0, capacidadActual - ocupados), capacidad: capacidadActual };
+        const antes = {
+          ...d,
+          disp: Math.max(0, capacidadActual - ocupados),
+          capacidad: capacidadActual,
+        };
+
         await ref.set(
           {
             capacidad: nuevaCapacidad,
@@ -5587,7 +5755,14 @@ bot.on("message", async (msg) => {
           { merge: true }
         );
 
-        const despues = { ...d, disp: disponibles, plataforma: plat, correo, capacidad: nuevaCapacidad };
+        const despues = {
+          ...d,
+          disp: disponibles,
+          plataforma: plat,
+          correo,
+          capacidad: nuevaCapacidad,
+        };
+
         await aplicarAutoLleno(chatId, ref, antes, despues);
 
         pending.set(String(chatId), { mode: "invSubmenuCtx", plat, correo });
@@ -5606,7 +5781,13 @@ bot.on("message", async (msg) => {
         const doc = await ref.get();
         if (!doc.exists) return bot.sendMessage(chatId, "⚠️ Ese correo no existe en inventario.");
 
-        await ref.set({ clave: t, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        await ref.set(
+          {
+            clave: t,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        );
 
         pending.set(String(chatId), { mode: "invSubmenuCtx", plat, correo });
         return enviarSubmenuInventario(chatId, plat, correo);
@@ -5624,10 +5805,18 @@ bot.on("message", async (msg) => {
 
         const c = doc.data() || {};
         const servicios = Array.isArray(c.servicios) ? c.servicios : [];
-        if (p.idx < 0 || p.idx >= servicios.length) return bot.sendMessage(chatId, "⚠️ Servicio inválido.");
+        if (p.idx < 0 || p.idx >= servicios.length) {
+          return bot.sendMessage(chatId, "⚠️ Servicio inválido.");
+        }
 
         servicios[p.idx] = { ...(servicios[p.idx] || {}), fechaRenovacion: fecha };
-        await ref.set({ servicios, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        await ref.set(
+          {
+            servicios,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        );
 
         return menuServicio(chatId, p.clientId, p.idx);
       }
@@ -5647,9 +5836,14 @@ bot.on("message", async (msg) => {
         pending.delete(String(chatId));
         const ref = db.collection("clientes").doc(String(p.clientId));
         await ref.set(
-          { nombrePerfil: t, nombre_norm: normTxt(t), updatedAt: admin.firestore.FieldValue.serverTimestamp() },
+          {
+            nombrePerfil: t,
+            nombre_norm: normTxt(t),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
           { merge: true }
         );
+
         return menuEditarCliente(chatId, p.clientId);
       }
 
@@ -5668,9 +5862,14 @@ bot.on("message", async (msg) => {
         pending.delete(String(chatId));
         const ref = db.collection("clientes").doc(String(p.clientId));
         await ref.set(
-          { telefono: t, telefono_norm: onlyDigits(t), updatedAt: admin.firestore.FieldValue.serverTimestamp() },
+          {
+            telefono: t,
+            telefono_norm: onlyDigits(t),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
           { merge: true }
         );
+
         return menuEditarCliente(chatId, p.clientId);
       }
 
@@ -5678,20 +5877,27 @@ bot.on("message", async (msg) => {
         pending.delete(String(chatId));
         const ref = db.collection("clientes").doc(String(p.clientId));
         await ref.set(
-          { vendedor: t, vendedor_norm: normTxt(t), updatedAt: admin.firestore.FieldValue.serverTimestamp() },
+          {
+            vendedor: t,
+            vendedor_norm: normTxt(t),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
           { merge: true }
         );
+
         return menuEditarCliente(chatId, p.clientId);
       }
 
       if (p.mode === "cliAddServMail") {
         if (!t.includes("@")) return bot.sendMessage(chatId, "⚠️ Correo inválido. Escriba el correo:");
+
         pending.set(String(chatId), {
           mode: "cliAddServPin",
           clientId: p.clientId,
           plat: p.plat,
           mail: t.toLowerCase(),
         });
+
         return bot.sendMessage(chatId, "🔐 Escriba el pin/clave:");
       }
 
@@ -5703,12 +5909,16 @@ bot.on("message", async (msg) => {
           mail: p.mail,
           pin: t,
         });
+
         return bot.sendMessage(chatId, "💰 Precio (solo número, Lps):");
       }
 
       if (p.mode === "cliAddServPrecio") {
         const n = Number(t);
-        if (!Number.isFinite(n) || n <= 0) return bot.sendMessage(chatId, "⚠️ Precio inválido. Escriba solo número:");
+        if (!Number.isFinite(n) || n <= 0) {
+          return bot.sendMessage(chatId, "⚠️ Precio inválido. Escriba solo número:");
+        }
+
         pending.set(String(chatId), {
           mode: "cliAddServFecha",
           clientId: p.clientId,
@@ -5717,6 +5927,7 @@ bot.on("message", async (msg) => {
           pin: p.pin,
           precio: n,
         });
+
         return bot.sendMessage(chatId, "📅 Fecha renovación (dd/mm/yyyy):");
       }
 
@@ -5738,6 +5949,7 @@ bot.on("message", async (msg) => {
 
       if (p.mode === "cliServEditMail") {
         if (!t.includes("@")) return bot.sendMessage(chatId, "⚠️ Correo inválido.");
+
         pending.delete(String(chatId));
         await patchServicio(p.clientId, p.idx, { correo: t.toLowerCase() });
         return menuServicio(chatId, p.clientId, p.idx);
@@ -5752,6 +5964,7 @@ bot.on("message", async (msg) => {
       if (p.mode === "cliServEditPrecio") {
         const n = Number(t);
         if (!Number.isFinite(n) || n <= 0) return bot.sendMessage(chatId, "⚠️ Precio inválido.");
+
         pending.delete(String(chatId));
         await patchServicio(p.clientId, p.idx, { precio: n });
         return menuServicio(chatId, p.clientId, p.idx);
@@ -5759,6 +5972,7 @@ bot.on("message", async (msg) => {
 
       if (p.mode === "cliServEditFecha") {
         if (!isFechaDMY(t)) return bot.sendMessage(chatId, "⚠️ Formato inválido. Use dd/mm/yyyy");
+
         pending.delete(String(chatId));
         await patchServicio(p.clientId, p.idx, { fechaRenovacion: t });
         return menuServicio(chatId, p.clientId, p.idx);
@@ -5779,6 +5993,7 @@ bot.on("message", async (msg) => {
 // ===============================
 // AUTO TXT 7AM
 // ===============================
+
 let _lastDailyRun = "";
 
 async function getLastRunDB() {
@@ -5790,7 +6005,10 @@ async function getLastRunDB() {
 async function setLastRunDB(dmy) {
   const ref = db.collection("config").doc("dailyRun");
   await ref.set(
-    { lastRun: String(dmy), updatedAt: admin.firestore.FieldValue.serverTimestamp() },
+    {
+      lastRun: String(dmy),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    },
     { merge: true }
   );
 }
@@ -5870,6 +6088,7 @@ setInterval(async () => {
 // ===============================
 // HARDEN
 // ===============================
+
 process.on("unhandledRejection", (reason) => {
   console.error("❌ unhandledRejection:", reason);
 });
@@ -5899,6 +6118,7 @@ process.on("SIGTERM", async () => {
 // ===============================
 // HTTP KEEPALIVE FINAL
 // ===============================
+
 const PORT = process.env.PORT || 10000;
 
 http
