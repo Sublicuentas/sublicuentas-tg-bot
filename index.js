@@ -2025,7 +2025,6 @@ function kbPlataformasWiz(prefix, clientId, idxOpt) {
     [{ text: "📡 iptv (4)", callback_data: cb("iptv4") }],
   ];
 }
-
 // ===============================
 // FICHA CLIENTE / CRM / EDICIÓN
 // ===============================
@@ -2041,34 +2040,199 @@ function serviciosConIndiceOriginal(servicios = []) {
   return arr;
 }
 
+function serviciosOrdenados(servicios = []) {
+  return serviciosConIndiceOriginal(servicios).map((x) => {
+    const c = { ...x };
+    delete c.idxOriginal;
+    return c;
+  });
+}
+
 function safeBtnLabel(txt = "", max = 55) {
   const s = String(txt || "").replace(/\s+/g, " ").trim();
   return s.length > max ? `${s.slice(0, max - 1)}…` : s;
+}
+
+function getEstadoGeneralCliente(cliente = {}) {
+  const servicios = Array.isArray(cliente.servicios) ? cliente.servicios : [];
+  if (!servicios.length) return "⚪ Sin cuentas";
+
+  const hayVencido = servicios.some((s) => {
+    if (!isFechaDMY(s?.fechaRenovacion)) return false;
+    const d = daysUntilDMY(s.fechaRenovacion);
+    return d !== null && d < 0;
+  });
+
+  if (hayVencido) return "🔴 Vencido";
+  return "🟢 Vigente";
+}
+
+function getProximaRenovacionCliente(cliente = {}) {
+  const servicios = serviciosOrdenados(Array.isArray(cliente.servicios) ? cliente.servicios : []);
+  const conFecha = servicios.filter((s) => isFechaDMY(s.fechaRenovacion));
+  if (!conFecha.length) return "-";
+  return conFecha[0].fechaRenovacion || "-";
+}
+
+function getTotalMensualCliente(cliente = {}) {
+  const servicios = Array.isArray(cliente.servicios) ? cliente.servicios : [];
+  return servicios.reduce((acc, s) => acc + Number(s?.precio || 0), 0);
+}
+
+async function getHistorialCliente(clientId) {
+  try {
+    const snap = await db
+      .collection("clientes")
+      .doc(String(clientId))
+      .collection("historial")
+      .orderBy("createdAt", "desc")
+      .limit(500)
+      .get();
+
+    if (snap.empty) return [];
+    return snap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
+  } catch (e) {
+    return [];
+  }
+}
+
+async function registrarHistorialCliente(clientId, payload = {}) {
+  try {
+    await db
+      .collection("clientes")
+      .doc(String(clientId))
+      .collection("historial")
+      .add({
+        ...payload,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+  } catch (e) {
+    logErr("❌ registrarHistorialCliente:", e?.message || e);
+  }
+}
+
+async function construirHistorialClienteTXT(cliente = {}, clientId = "") {
+  const nombre = stripAcentos(cliente.nombrePerfil || "-");
+  const telefono = onlyDigits(cliente.telefono || "") || "-";
+  const vendedor = stripAcentos(cliente.vendedor || "-");
+  const servicios = serviciosOrdenados(Array.isArray(cliente.servicios) ? cliente.servicios : []);
+  const historial = clientId ? await getHistorialCliente(clientId) : [];
+
+  let body = "";
+  body += `HISTORIAL DEL CLIENTE\n\n`;
+  body += `NOMBRE: ${nombre}\n`;
+  body += `TELEFONO: ${telefono}\n`;
+  body += `VENDEDOR ACTUAL: ${vendedor}\n`;
+  body += `ESTADO: ${stripAcentos(getEstadoGeneralCliente(cliente))}\n`;
+  body += `TOTAL MENSUAL: ${getTotalMensualCliente(cliente)} Lps\n`;
+  body += `PROXIMA RENOVACION: ${getProximaRenovacionCliente(cliente)}\n\n`;
+
+  body += `SERVICIOS ACTIVOS\n\n`;
+
+  if (!servicios.length) {
+    body += `SIN CUENTAS REGISTRADAS\n`;
+  } else {
+    servicios.forEach((s, i) => {
+      body += `${String(i + 1).padStart(2, "0")}) `;
+      body += `${stripAcentos(humanPlataforma(s.plataforma || "-"))} | `;
+      body += `${stripAcentos(String(s.correo || "-"))} | `;
+      body += `${Number(s.precio || 0)} Lps | `;
+      body += `${s.fechaRenovacion || "-"} | `;
+      body += `ESTADO: ${stripAcentos(estadoServicioLabel(s.fechaRenovacion))}\n`;
+    });
+  }
+
+  body += `\n--------------------\n`;
+  body += `TOTAL SERVICIOS: ${servicios.length}\n\n`;
+
+  body += `MOVIMIENTOS / HISTORIAL\n\n`;
+
+  if (!historial.length) {
+    body += `SIN MOVIMIENTOS REGISTRADOS\n`;
+  } else {
+    historial.forEach((h, i) => {
+      const fecha =
+        h.fecha ||
+        h.fechaRenovacion ||
+        h.createdAt?.toDate?.()?.toLocaleString?.("es-HN", { hour12: false }) ||
+        "-";
+
+      body += `${String(i + 1).padStart(2, "0")}) `;
+      body += `${stripAcentos(h.tipo || "movimiento")} | `;
+      body += `${stripAcentos(humanPlataforma(h.plataforma || "-"))} | `;
+      body += `${stripAcentos(String(h.correo || "-"))} | `;
+      body += `${Number(h.precio || 0)} Lps | `;
+      body += `${stripAcentos(String(fecha))} | `;
+      body += `VENDEDOR: ${stripAcentos(h.vendedor || vendedor || "-")}\n`;
+    });
+  }
+
+  return body;
+}
+
+function clienteResumenTXT(c = {}) {
+  const servicios = serviciosOrdenados(Array.isArray(c.servicios) ? c.servicios : []);
+  const estadoGeneral = getEstadoGeneralCliente(c);
+  const totalMensual = getTotalMensualCliente(c);
+  const proxFecha = getProximaRenovacionCliente(c);
+
+  let body = "";
+  body += `CLIENTE CRM\n\n`;
+  body += `NOMBRE: ${stripAcentos(c.nombrePerfil || "-")}\n`;
+  body += `TELEFONO: ${onlyDigits(c.telefono || "") || "-"}\n`;
+  body += `VENDEDOR: ${stripAcentos(c.vendedor || "-")}\n\n`;
+  body += `SERVICIOS ACTIVOS: ${servicios.length}\n`;
+  body += `TOTAL MENSUAL: ${totalMensual} Lps\n`;
+  body += `PROXIMA RENOVACION: ${proxFecha}\n`;
+  body += `ESTADO GENERAL: ${stripAcentos(estadoGeneral)}\n\n`;
+  body += `SERVICIOS\n\n`;
+
+  if (!servicios.length) {
+    body += `SIN SERVICIOS\n`;
+  } else {
+    servicios.forEach((s, i) => {
+      body += `${i + 1}) ${stripAcentos(humanPlataforma(s.plataforma || "-"))} | ${s.correo || "-"} | ${Number(s.precio || 0)} Lps | ${s.fechaRenovacion || "-"} | ${stripAcentos(estadoServicioLabel(s.fechaRenovacion))}\n`;
+    });
+  }
+
+  return body;
+}
+
+async function enviarHistorialClienteTXT(chatId, clientId) {
+  const c = await getCliente(clientId);
+  if (!c) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
+
+  const body = await construirHistorialClienteTXT(c, clientId);
+  const nombreSafe =
+    stripAcentos(c.nombrePerfil || "cliente").replace(/[^\w\-]+/g, "_").slice(0, 40) || "cliente";
+
+  return enviarTxtComoArchivo(chatId, body, `historial_${nombreSafe}_${Date.now()}.txt`);
 }
 
 async function enviarFichaCliente(chatId, clientId) {
   const c = await getCliente(clientId);
   if (!c) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
 
-  const r = resumenClienteCRM(c);
-  const servicios = r.servicios;
+  const servicios = serviciosOrdenados(Array.isArray(c.servicios) ? c.servicios : []);
+  const estadoGeneral = getEstadoGeneralCliente(c);
+  const totalMensual = getTotalMensualCliente(c);
+  const proxFecha = getProximaRenovacionCliente(c);
 
   let txt = `👤 *CRM CLIENTE*\n\n`;
   txt += `🧑 *Nombre:* ${escMD(c.nombrePerfil || "-")}\n`;
   txt += `📱 *Teléfono:* ${escMD(c.telefono || "-")}\n`;
   txt += `🧾 *Vendedor:* ${escMD(c.vendedor || "-")}\n`;
-  txt += `📊 *Estado general:* ${escMD(r.estadoGeneral)}\n`;
-  txt += `💰 *Total mensual:* ${r.totalMensual} Lps\n`;
-  txt += `📅 *Próxima renovación:* ${escMD(r.proxFecha)}\n`;
-  txt += `🧩 *Servicios activos:* ${servicios.length}\n`;
-  txt += `🔴 *Vence hoy:* ${r.venceHoy}   ⚫ *Vencidos:* ${r.vencidos}   🟡 *Próximos:* ${r.proximos}\n\n`;
+  txt += `📊 *Estado general:* ${escMD(estadoGeneral)}\n`;
+  txt += `💰 *Total mensual:* ${totalMensual} Lps\n`;
+  txt += `📅 *Próxima renovación:* ${escMD(proxFecha)}\n`;
+  txt += `🧩 *Servicios activos:* ${servicios.length}\n\n`;
 
   txt += `*SERVICIOS*\n`;
   if (!servicios.length) {
     txt += `— Sin servicios —\n`;
   } else {
     servicios.forEach((s, i) => {
-      txt += `\n*${i + 1})* ${escMD(labelPlataforma(s.plataforma))}\n`;
+      txt += `\n*${i + 1})* ${escMD(labelPlataforma(s.plataforma || "-"))}\n`;
       txt += `📧 ${escMD(s.correo || "-")}\n`;
       txt += `🔐 ${escMD(s.pin || "-")}\n`;
       txt += `💵 ${Number(s.precio || 0)} Lps\n`;
@@ -2087,6 +2251,7 @@ async function enviarFichaCliente(chatId, clientId) {
 
   kb.push([{ text: "➕ Agregar servicio", callback_data: `cli:serv:add:${clientId}` }]);
   kb.push([{ text: "📄 TXT de este cliente", callback_data: `cli:txt:one:${clientId}` }]);
+  kb.push([{ text: "📜 Historial TXT", callback_data: `cli:txt:hist:${clientId}` }]);
   kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
 
   return upsertPanel(chatId, txt, { inline_keyboard: kb }, "Markdown");
@@ -2219,11 +2384,7 @@ async function buscarCorreoInventarioPorPlatCorreo(plataforma, correo) {
 async function mostrarListaCorreosPlataforma(chatId, plataforma) {
   const plat = normalizarPlataforma(plataforma);
 
-  const snap = await db
-    .collection("inventario")
-    .where("plataforma", "==", plat)
-    .limit(500)
-    .get();
+  const snap = await db.collection("inventario").where("plataforma", "==", plat).limit(500).get();
 
   if (snap.empty) {
     return upsertPanel(
@@ -2267,14 +2428,7 @@ async function mostrarListaCorreosPlataforma(chatId, plataforma) {
 
   kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
 
-  return upsertPanel(
-    chatId,
-    txt,
-    {
-      inline_keyboard: kb,
-    },
-    "Markdown"
-  );
+  return upsertPanel(chatId, txt, { inline_keyboard: kb }, "Markdown");
 }
 
 async function mostrarMenuClientesCorreo(chatId, plataforma, correo) {
@@ -2360,14 +2514,7 @@ async function mostrarPanelCorreo(chatId, plataforma, correo) {
   kb.push([{ text: "⬅️ Volver Inventario", callback_data: `inv:${plat}:0` }]);
   kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
 
-  return upsertPanel(
-    chatId,
-    txt,
-    {
-      inline_keyboard: kb,
-    },
-    "Markdown"
-  );
+  return upsertPanel(chatId, txt, { inline_keyboard: kb }, "Markdown");
 }
 
 // ===============================
@@ -2445,6 +2592,14 @@ async function wizardNext(chatId, text) {
       { merge: true }
     );
 
+    await registrarHistorialCliente(st.clientId, {
+      tipo: "cliente_creado",
+      nombrePerfil: d.nombrePerfil || "",
+      telefono: String(d.telefono || "").trim(),
+      vendedor: d.vendedor || "",
+      fecha: hoyDMY(),
+    });
+
     st.step = 4;
     st.servStep = 1;
     st.servicio = {};
@@ -2508,6 +2663,17 @@ async function wizardNext(chatId, text) {
         pin: String(s.pin || "").trim(),
         precio: Number(s.precio || 0),
         fechaRenovacion: s.fechaRenovacion,
+      });
+
+      await registrarHistorialCliente(st.clientId, {
+        tipo: "servicio_agregado",
+        plataforma: String(s.plataforma || "").trim(),
+        correo: String(s.correo || "").trim().toLowerCase(),
+        pin: String(s.pin || "").trim(),
+        precio: Number(s.precio || 0),
+        fechaRenovacion: s.fechaRenovacion,
+        vendedor: cliente?.vendedor || st.data?.vendedor || "",
+        fecha: hoyDMY(),
       });
 
       st.servicio = {};
@@ -2712,7 +2878,9 @@ async function obtenerClientesPorVendedor(vendedorNombre) {
 
   snap.forEach((doc) => {
     const c = doc.data() || {};
-    if (normTxt(c.vendedor || "") === normTxt(vendedorNombre || "")) out.push({ id: doc.id, ...c });
+    if (normTxt(c.vendedor || "") === normTxt(vendedorNombre || "")) {
+      out.push({ id: doc.id, ...c });
+    }
   });
 
   out.sort((a, b) => normTxt(a.nombrePerfil).localeCompare(normTxt(b.nombrePerfil)));
@@ -3028,7 +3196,9 @@ async function responderCodigoNetflix(chatId, correo, tipo) {
   if (!data) {
     return bot.sendMessage(
       chatId,
-      `🎬 *CÓDIGOS NETFLIX*\n\n📧 *${escMD(mail)}*\n🧩 *Tipo:* ${escMD(tipo === "ultimo" ? "último disponible" : tipo)}\n\n⚠️ No encontré códigos disponibles.`,
+      `🎬 *CÓDIGOS NETFLIX*\n\n📧 *${escMD(mail)}*\n🧩 *Tipo:* ${escMD(
+        tipo === "ultimo" ? "último disponible" : tipo
+      )}\n\n⚠️ No encontré códigos disponibles.`,
       { parse_mode: "Markdown" }
     );
   }
@@ -3079,7 +3249,6 @@ async function responderMenuCodigosNetflix(chatId, plataforma, correo) {
     "Markdown"
   );
 }
-
 // ===============================
 // COMANDOS CLIENTES
 // ===============================
@@ -4572,6 +4741,11 @@ bot.on("callback_query", async (q) => {
 
       if (data === "cli:txt:general") return reporteClientesTXTGeneral(chatId);
       if (data === "cli:txt:vendedores_split") return reporteClientesSplitPorVendedorTXT(chatId);
+
+      if (data.startsWith("cli:txt:hist:")) {
+        const clientId = data.split(":")[3];
+        return enviarHistorialClienteTXT(chatId, clientId);
+      }
 
       if (data.startsWith("cli:txt:one:")) {
         const clientId = data.split(":")[3];
