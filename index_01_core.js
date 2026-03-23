@@ -1,15 +1,6 @@
-/* ✅ SUBLICUENTAS TG BOT — PARTE 1/6 CORREGIDA
+/* ✅ SUBLICUENTAS TG BOT — PARTE 1/6
    CORE / ARRANQUE / FIREBASE / POLLING / CONSTANTES
    -------------------------------------------------
-   Este archivo contiene:
-   - require principales
-   - ENV
-   - Firebase
-   - bot base
-   - restart seguro polling
-   - listener Netflix
-   - boot controlado
-   - constantes globales
 */
 
 const TelegramBot = require("node-telegram-bot-api");
@@ -220,10 +211,6 @@ function startNetflixListenerIfLeader() {
 
 // ===============================
 // BOOT CONTROLADO
-// IMPORTANTE:
-// Este archivo YA NO arranca solo.
-// El arranque debe hacerse desde index.js
-// después de cargar las 6 partes.
 // ===============================
 async function bootCore() {
   try {
@@ -249,14 +236,20 @@ const PLATAFORMAS = [
   "vix",
   "appletv",
   "universal",
-  "youtube",
+
   "spotify",
-  "canva",
+  "youtube",
+  "deezer",
+
   "oleadatv1",
   "oleadatv3",
   "iptv1",
   "iptv3",
   "iptv4",
+
+  "canva",
+  "gemini",
+  "chatgpt",
 ];
 
 const PAGE_SIZE = 10;
@@ -290,7 +283,6 @@ const FIN_MOTIVOS_EGRESO = [
   "Otros",
 ];
 
-// Compatibilidad global
 global.FIN_BANCOS = FIN_BANCOS;
 global.FIN_MOTIVOS_EGRESO = FIN_MOTIVOS_EGRESO;
 
