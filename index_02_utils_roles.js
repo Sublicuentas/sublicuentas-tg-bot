@@ -1,4 +1,4 @@
-/* ✅ SUBLICUENTAS TG BOT — PARTE 2/6
+/* ✅ SUBLICUENTAS TG BOT — PARTE 2/6 CORREGIDA
    UTILS / ROLES / PANEL / HELPERS GENERALES
    ------------------------------------------
    ✅ ROLES: admin / super admin / vendedor
@@ -337,7 +337,7 @@ function normalizarPlataforma(raw = "") {
 
 function esPlataformaValida(raw = "") {
   const p = normalizarPlataforma(raw);
-  return Object.prototype.hasOwnProperty.call(PLATAFORMAS || {}, p);
+  return Array.isArray(PLATAFORMAS) && PLATAFORMAS.includes(p);
 }
 
 function humanPlataformaSimple(raw = "") {
