@@ -1,329 +1,671 @@
-/* ✅ SUBLICUENTAS TG BOT — PARTE 2/6 CORREGIDA */
+/* ✅ SUBLICUENTAS TG BOT — PARTE 2/6
+   UTILS / ROLES / PANEL / HELPERS GENERALES
+   ------------------------------------------
+   ✅ ROLES: admin / super admin / vendedor
+   ✅ PANEL ANCLADO + edición segura
+   ✅ WIZARD + PENDING STATE
+   ✅ HELPERS: fechas, dinero, texto, plataformas
+   ✅ NORMALIZACIONES Y VALIDACIONES
+*/
 
-const { bot, admin, db, TZ, SUPER_ADMIN, PLATAFORMAS } = require("./index_01_core");
+const {
+  bot,
+  admin,
+  db,
+  TZ,
+  PLATAFORMAS,
+  SUPER_ADMIN,
+} = require("./index_01_core");
 
-function stripAcentos(str = "") {
-  return String(str).normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+// ===============================
+// ESTADO EN MEMORIA
+// ===============================
+const panelMsgId = new Map();      // chatId -> message_id del panel principal
+const panelBindings = new Map();   // `${chatId}:${messageId}` -> true
+const wizard = new Map();          // userId -> estado wizard
+const pending = new Map();         // userId -> estado temporal
+
+// ===============================
+// LOG / ERROR
+// ===============================
+function logErr(tag, err) {
+  const msg = err?.response?.body || err?.message || err;
+  console.error(`❌ [${tag}]`, msg);
 }
-function normTxt(str = "") {
-  return stripAcentos(String(str || "")).toLowerCase().trim().replace(/\s+/g, " ");
+
+function sleep(ms = 250) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
-function onlyDigits(str = "") {
-  return String(str || "").replace(/\D/g, "");
+
+// ===============================
+// TEXTO / NORMALIZACIÓN
+// ===============================
+function normTxt(v = "") {
+  return String(v || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
 }
-function normalizarPlataforma(txt = "") {
-  return String(txt || "").toLowerCase().trim().replace(/\s+/g, "").replace(/[.\-_/]+/g, "");
+
+function onlyDigits(v = "") {
+  return String(v || "").replace(/\D+/g, "");
 }
-function esPlataformaValida(p = "") {
-  return PLATAFORMAS.includes(normalizarPlataforma(p));
+
+function isEmailLike(v = "") {
+  const s = String(v || "").trim();
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/i.test(s);
 }
-function safeMail(correo = "") {
-  return String(correo || "").trim().toLowerCase().replace(/[\/#?&\s]+/g, "_");
+
+function escMD(s = "") {
+  return String(s || "").replace(/([_\*\[\]\(\)~`>#+\-=|{}\.!\\])/g, "\\$1");
 }
-function docIdInventario(correo, plataforma) {
-  return `${normalizarPlataforma(plataforma)}__${safeMail(correo)}`;
+
+function toTitleCase(str = "") {
+  return String(str || "")
+    .toLowerCase()
+    .split(" ")
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ");
 }
-function fmtEstado(estado = "") {
-  const e = String(estado || "").toLowerCase();
-  if (e === "bloqueada" || e === "llena") return "LLENA";
-  return "ACTIVA";
+
+function chunkArray(arr = [], size = 10) {
+  const out = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
 }
-function isFechaDMY(s = "") {
-  return /^\d{2}\/\d{2}\/\d{4}$/.test(String(s || "").trim());
+
+// ===============================
+// FECHAS / HORAS
+// ===============================
+function pad2(n) {
+  return String(Number(n) || 0).padStart(2, "0");
 }
-function hoyDMY() {
+
+function getNowParts() {
   const now = new Date();
-  const fmt = new Intl.DateTimeFormat("es-HN", {
+  const fmt = new Intl.DateTimeFormat("en-GB", {
     timeZone: TZ,
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
-  }).formatToParts(now);
-  const obj = {};
-  fmt.forEach((p) => { if (p.type !== "literal") obj[p.type] = p.value; });
-  return `${obj.day}/${obj.month}/${obj.year}`;
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
+
+  const parts = Object.fromEntries(fmt.formatToParts(now).map((p) => [p.type, p.value]));
+  return {
+    dd: parts.day,
+    mm: parts.month,
+    yyyy: parts.year,
+    hh: parts.hour,
+    min: parts.minute,
+    ss: parts.second,
+  };
 }
-function esTelefono(txt = "") {
-  const t = onlyDigits(String(txt || "").trim());
-  return /^[0-9]{7,15}$/.test(t);
+
+function hoyDMY() {
+  const p = getNowParts();
+  return `${p.dd}/${p.mm}/${p.yyyy}`;
 }
-function limpiarQuery(txt = "") {
-  return String(txt || "").trim().replace(/^\/+/, "").replace(/\s+/g, " ").toLowerCase();
+
+function ahoraHM() {
+  const p = getNowParts();
+  return `${p.hh}:${p.min}`;
 }
-function isEmailLike(s = "") {
-  const x = String(s || "").trim().toLowerCase();
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(x);
+
+function isFechaDMY(v = "") {
+  const s = String(v || "").trim();
+  if (!/^\d{2}\/\d{2}\/\d{4}$/.test(s)) return false;
+
+  const [dd, mm, yyyy] = s.split("/").map(Number);
+  if (yyyy < 2020 || yyyy > 2100) return false;
+  if (mm < 1 || mm > 12) return false;
+  if (dd < 1 || dd > 31) return false;
+
+  const dt = new Date(Date.UTC(yyyy, mm - 1, dd));
+  return (
+    dt.getUTCFullYear() === yyyy &&
+    dt.getUTCMonth() === mm - 1 &&
+    dt.getUTCDate() === dd
+  );
 }
-function getCredentialMode(plataforma = "") {
-  const p = normalizarPlataforma(plataforma);
-  if (["oleadatv1", "oleadatv3", "iptv1", "iptv3", "iptv4"].includes(p)) return "user_pass";
-  if (["canva"].includes(p)) return "email_only";
-  return "email_pass";
+
+function parseFechaFinanceInput(raw = "") {
+  const s = String(raw || "").trim().replace(/[-.]/g, "/");
+  if (!s) return null;
+
+  if (/^\d{2}\/\d{2}\/\d{4}$/.test(s)) {
+    return isFechaDMY(s) ? s : null;
+  }
+
+  if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(s)) {
+    let [d, m, y] = s.split("/");
+    d = pad2(d);
+    m = pad2(m);
+    const out = `${d}/${m}/${y}`;
+    return isFechaDMY(out) ? out : null;
+  }
+
+  if (/^\d{8}$/.test(s)) {
+    const out = `${s.slice(0, 2)}/${s.slice(2, 4)}/${s.slice(4, 8)}`;
+    return isFechaDMY(out) ? out : null;
+  }
+
+  return null;
 }
-function getIdentLabel(plataforma = "") {
-  return getCredentialMode(plataforma) === "user_pass" ? "Usuario" : "Correo";
-}
-function getAccessTypeLabel(plataforma = "") {
-  const mode = getCredentialMode(plataforma);
-  if (mode === "user_pass") return "Usuario + clave";
-  if (mode === "email_only") return "Solo correo";
-  return "Correo + clave";
-}
-function validateIdentByPlatform(plataforma = "", value = "") {
-  const v = String(value || "").trim();
-  if (!v) return false;
-  const mode = getCredentialMode(plataforma);
-  if (mode === "user_pass") return /^[^\s]{3,100}$/.test(v);
-  return isEmailLike(v);
-}
-function normalizeIdentByPlatform(plataforma = "", value = "") {
-  return String(value || "").trim().toLowerCase();
-}
-function parseDMYtoTS(dmy = "") {
-  const s = String(dmy || "").trim();
-  const m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
-  if (!m) return Number.POSITIVE_INFINITY;
-  return new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1])).getTime();
-}
-function addDaysDMY(dmy, days) {
+
+function parseDMYtoDate(dmy = "") {
   if (!isFechaDMY(dmy)) return null;
-  const [dd, mm, yyyy] = String(dmy).split("/").map(Number);
-  const dt = new Date(yyyy, mm - 1, dd);
-  dt.setDate(dt.getDate() + Number(days || 0));
-  return `${String(dt.getDate()).padStart(2, "0")}/${String(dt.getMonth() + 1).padStart(2, "0")}/${dt.getFullYear()}`;
+  const [dd, mm, yyyy] = dmy.split("/").map(Number);
+  return new Date(Date.UTC(yyyy, mm - 1, dd, 12, 0, 0));
 }
-function escMD(text = "") {
-  return String(text || "").replace(/([_*\[\]()~`>#+\-=|{}.!\\])/g, "\\$1");
+
+function parseDMYtoTS(dmy = "") {
+  const dt = parseDMYtoDate(dmy);
+  if (!dt) return null;
+  return admin.firestore.Timestamp.fromDate(dt);
 }
-async function enviarTxtComoArchivo(chatId, contenido, filename = "reporte.txt") {
-  const limpio = stripAcentos(String(contenido || "")).replace(/[^\x00-\x7F]/g, "");
-  const buffer = Buffer.from(limpio, "utf8");
-  return bot.sendDocument(chatId, buffer, {}, { filename, contentType: "text/plain" });
-}
-function logInfo(...args) { console.log("ℹ️", ...args); }
-function logErr(...args) { console.log("❌", ...args); }
-function safeBtnLabel(txt = "", max = 56) {
-  const s = String(txt || "").replace(/\s+/g, " ").trim();
-  if (s.length <= max) return s;
-  return `${s.slice(0, max - 1)}…`;
-}
-function isMonthInputMMYYYY(txt = "") {
-  return /^(0[1-9]|1[0-2])\/\d{4}$/.test(String(txt || "").trim());
-}
-function getMonthKeyFromDMY(dmy = "") {
-  if (!isFechaDMY(dmy)) return "";
-  const [, mm, yyyy] = String(dmy).split("/").map(Number);
-  return `${yyyy}-${String(mm).padStart(2, "0")}`;
-}
-function parseMonthInputToKey(txt = "") {
-  const s = String(txt || "").trim();
-  if (!isMonthInputMMYYYY(s)) return null;
-  const [mm, yyyy] = s.split("/");
-  return `${yyyy}-${mm}`;
-}
-function getMonthLabelFromKey(monthKey = "") {
-  const m = String(monthKey || "").match(/^(\d{4})-(\d{2})$/);
-  if (!m) return monthKey || "-";
-  return `${m[2]}/${m[1]}`;
-}
-function startOfDayTS(dmy = "") { return parseDMYtoTS(dmy); }
-function endOfDayTS(dmy = "") { const ts = parseDMYtoTS(dmy); return Number.isFinite(ts) ? ts + 86399999 : ts; }
+
 function ymdFromDMY(dmy = "") {
-  if (!isFechaDMY(dmy)) return "";
-  const [dd, mm, yyyy] = String(dmy).split("/");
+  if (!isFechaDMY(dmy)) return null;
+  const [dd, mm, yyyy] = dmy.split("/");
   return `${yyyy}-${mm}-${dd}`;
 }
-function parseFechaFinanceInput(txt = "") {
-  const s = String(txt || "").trim().toLowerCase();
-  if (s === "hoy") {
-    const fecha = hoyDMY();
-    return { ok: true, fecha, fechaTS: parseDMYtoTS(fecha), mesKey: getMonthKeyFromDMY(fecha) };
-  }
-  if (!isFechaDMY(s)) return { ok: false };
-  return { ok: true, fecha: s, fechaTS: parseDMYtoTS(s), mesKey: getMonthKeyFromDMY(s) };
+
+function startOfDayTS(dmy = "") {
+  if (!isFechaDMY(dmy)) return null;
+  const [dd, mm, yyyy] = dmy.split("/").map(Number);
+  const dt = new Date(Date.UTC(yyyy, mm - 1, dd, 0, 0, 0, 0));
+  return admin.firestore.Timestamp.fromDate(dt);
 }
-function parseMontoNumber(v) {
-  const raw = String(v || "").trim().replace(/[^\d.,-]/g, "");
-  if (!raw) return NaN;
-  const hasComma = raw.includes(",");
-  const hasDot = raw.includes(".");
-  let normalized = raw;
-  if (hasComma && hasDot) {
-    normalized = raw.lastIndexOf(".") > raw.lastIndexOf(",") ? raw.replace(/,/g, "") : raw.replace(/\./g, "").replace(",", ".");
-  } else if (hasComma && !hasDot) {
-    const parts = raw.split(",");
-    normalized = parts.length === 2 && parts[1].length <= 2 ? raw.replace(",", ".") : raw.replace(/,/g, "");
+
+function endOfDayTS(dmy = "") {
+  if (!isFechaDMY(dmy)) return null;
+  const [dd, mm, yyyy] = dmy.split("/").map(Number);
+  const dt = new Date(Date.UTC(yyyy, mm - 1, dd, 23, 59, 59, 999));
+  return admin.firestore.Timestamp.fromDate(dt);
+}
+
+function getMonthKeyFromDMY(dmy = "") {
+  if (!isFechaDMY(dmy)) return null;
+  const [, mm, yyyy] = dmy.split("/");
+  return `${yyyy}-${mm}`;
+}
+
+function parseMonthInputToKey(raw = "") {
+  const s = String(raw || "").trim();
+  if (!s) return getMonthKeyFromDMY(hoyDMY());
+
+  if (/^\d{4}-\d{2}$/.test(s)) return s;
+
+  if (/^\d{2}\/\d{4}$/.test(s)) {
+    const [mm, yyyy] = s.split("/");
+    return `${yyyy}-${mm}`;
   }
-  const n = Number(normalized);
+
+  if (/^\d{1,2}\/\d{4}$/.test(s)) {
+    let [mm, yyyy] = s.split("/");
+    mm = pad2(mm);
+    return `${yyyy}-${mm}`;
+  }
+
+  const n = normTxt(s);
+  const meses = {
+    enero: "01",
+    febrero: "02",
+    marzo: "03",
+    abril: "04",
+    mayo: "05",
+    junio: "06",
+    julio: "07",
+    agosto: "08",
+    septiembre: "09",
+    setiembre: "09",
+    octubre: "10",
+    noviembre: "11",
+    diciembre: "12",
+  };
+
+  for (const [name, mm] of Object.entries(meses)) {
+    const rx = new RegExp(`^${name}\\s+(\\d{4})$`, "i");
+    const m = n.match(rx);
+    if (m) return `${m[1]}-${mm}`;
+  }
+
+  return null;
+}
+
+function getMonthLabelFromKey(key = "") {
+  if (!/^\d{4}-\d{2}$/.test(String(key || ""))) return String(key || "");
+  const [yyyy, mm] = String(key).split("-");
+  const mapa = {
+    "01": "Enero",
+    "02": "Febrero",
+    "03": "Marzo",
+    "04": "Abril",
+    "05": "Mayo",
+    "06": "Junio",
+    "07": "Julio",
+    "08": "Agosto",
+    "09": "Septiembre",
+    "10": "Octubre",
+    "11": "Noviembre",
+    "12": "Diciembre",
+  };
+  return `${mapa[mm] || mm} ${yyyy}`;
+}
+
+// ===============================
+// DINERO / NÚMEROS
+// ===============================
+function parseMontoNumber(raw = "") {
+  if (raw === null || raw === undefined) return NaN;
+  let s = String(raw).trim();
+  if (!s) return NaN;
+
+  s = s
+    .replace(/lps|lempiras?|hnl|,/gi, "")
+    .replace(/\s+/g, "")
+    .replace(/[^\d.\-]/g, "");
+
+  const n = Number(s);
   return Number.isFinite(n) ? n : NaN;
 }
-function moneyLps(v) {
+
+function moneyNumber(v = 0) {
   const n = Number(v || 0);
-  return `${n.toLocaleString("es-HN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Lps`;
-}
-function moneyNumber(v) { const n = Number(v || 0); return Number.isFinite(n) ? Number(n) : 0; }
-
-const rate = new Map();
-function allowMsg(chatId, userId, limit = 10, windowMs = 5000) {
-  const k = `${chatId}:${userId}`;
-  const now = Date.now();
-  const cur = rate.get(k) || { t: now, count: 0 };
-  if (now - cur.t > windowMs) { cur.t = now; cur.count = 0; }
-  cur.count++; rate.set(k, cur); return cur.count <= limit;
+  return Number.isFinite(n) ? Number(n.toFixed(2)) : 0;
 }
 
-function getSafeRevNombre(r = {}, fallbackId = "") { return String(r.nombre || r.Nombre || fallbackId || "").trim(); }
-function getSafeRevActivo(r = {}) { return r.activo === true || r.Activo === true; }
-function getSafeRevTelegramId(r = {}) { return String(r.telegramId ?? r.TelegramId ?? "").trim(); }
-function normalizeRevendedorDoc(doc) {
-  const data = doc.data() || {};
-  const nombre = getSafeRevNombre(data, doc.id);
-  const activo = getSafeRevActivo(data);
-  const telegramId = getSafeRevTelegramId(data);
-  return { id: doc.id, ...data, nombre, activo, telegramId, nombre_norm: normTxt(nombre) };
+function moneyLps(v = 0) {
+  const n = moneyNumber(v);
+  return `${n.toFixed(2)} Lps`;
 }
 
-async function getTotalPorPlataforma(plataforma) {
-  const cfg = await db.collection("config").doc("totales_plataforma").get();
-  const p = normalizarPlataforma(plataforma);
-  if (!cfg.exists) return null;
-  return cfg.data()?.[p] ?? null;
-}
-async function asegurarTotalesDefault() {
-  const ref = db.collection("config").doc("totales_plataforma");
-  const doc = await ref.get();
-  const defaults = {
-    netflix: 5, vipnetflix: 1, disneyp: 6, disneys: 3, hbomax: 5, primevideo: 5,
-    paramount: 5, crunchyroll: 5, vix: 4, appletv: 4, universal: 4,
-    spotify: 1, youtube: 1, deezer: 1,
-    canva: 1, gemini: 1, chatgpt: 1,
-    oleadatv1: 1, oleadatv3: 3, iptv1: 1, iptv3: 3, iptv4: 4,
+// ===============================
+// PLATAFORMAS
+// ===============================
+function normalizarPlataforma(raw = "") {
+  const s = normTxt(raw)
+    .replace(/\+/g, "plus")
+    .replace(/\./g, "")
+    .replace(/\s+/g, "");
+
+  const alias = {
+    netflix: "netflix",
+    vipnetflix: "vipnetflix",
+    disneyp: "disneyp",
+    disneypremium: "disneyp",
+    disneys: "disneys",
+    disneystandard: "disneys",
+    hbomax: "hbomax",
+    hbo: "hbomax",
+    max: "hbomax",
+    primevideo: "primevideo",
+    prime: "primevideo",
+    paramount: "paramount",
+    paramountplus: "paramount",
+    crunchyroll: "crunchyroll",
+    vix: "vix",
+    appletv: "appletv",
+    appletvplus: "appletv",
+    universal: "universal",
+    universalplus: "universal",
+    spotify: "spotify",
+    youtube: "youtube",
+    youtubepremium: "youtube",
+    deezer: "deezer",
+    canva: "canva",
+    gemini: "gemini",
+    chatgpt: "chatgpt",
+    oleada1: "oleadatv1",
+    oleada3: "oleadatv3",
+    oleadatv1: "oleadatv1",
+    oleadatv3: "oleadatv3",
+    iptv1: "iptv1",
+    iptv3: "iptv3",
+    iptv4: "iptv4",
   };
-  if (!doc.exists) { await ref.set(defaults); logInfo("✅ Totales default creados"); return; }
-  await ref.set(defaults, { merge: true });
-}
-asegurarTotalesDefault().catch(logErr);
 
+  return alias[s] || s;
+}
+
+function esPlataformaValida(raw = "") {
+  const p = normalizarPlataforma(raw);
+  return Object.prototype.hasOwnProperty.call(PLATAFORMAS || {}, p);
+}
+
+function humanPlataformaSimple(raw = "") {
+  const p = normalizarPlataforma(raw);
+  const map = {
+    netflix: "Netflix",
+    vipnetflix: "Vipnetflix",
+    disneyp: "Disneyp",
+    disneys: "Disneys",
+    hbomax: "Hbomax",
+    primevideo: "Prime video",
+    paramount: "Paramount+",
+    crunchyroll: "Crunchyroll",
+    vix: "Vix correo y clave",
+    appletv: "Appletv correo y clave",
+    universal: "Universal correo y clave",
+    spotify: "Spotify correo y clave",
+    youtube: "Youtube correo y clave",
+    deezer: "Deezer correo y clave",
+    oleadatv1: "Oleada 1",
+    oleadatv3: "Oleada 3",
+    iptv1: "Iptv 1",
+    iptv3: "Iptv 3",
+    iptv4: "Iptv 4",
+    canva: "Canva",
+    gemini: "Gemini",
+    chatgpt: "Chatgpt",
+  };
+  return map[p] || toTitleCase(String(raw || p));
+}
+
+function plataformaRequiereCorreo(raw = "") {
+  const p = normalizarPlataforma(raw);
+  const noCorreo = new Set(["oleadatv1", "oleadatv3", "iptv1", "iptv3", "iptv4"]);
+  return !noCorreo.has(p);
+}
+
+function plataformaRequiereClave(raw = "") {
+  const p = normalizarPlataforma(raw);
+  return p !== "canva";
+}
+
+function plataformaEsUsuarioClave(raw = "") {
+  const p = normalizarPlataforma(raw);
+  return ["oleadatv1", "oleadatv3", "iptv1", "iptv3", "iptv4"].includes(p);
+}
+
+// ===============================
+// ROLES / ACCESO
+// ===============================
 async function isSuperAdmin(userId) {
   const uid = String(userId || "").trim();
   if (!uid) return false;
-  if (SUPER_ADMIN && uid === String(SUPER_ADMIN).trim()) return true;
+
+  if (uid === String(SUPER_ADMIN || "").trim()) return true;
+
   try {
-    const doc = await db.collection("admins").doc(uid).get();
-    if (!doc.exists) return false;
-    const data = doc.data() || {};
-    return data.activo === true && data.superAdmin === true;
-  } catch (e) { logErr("isSuperAdmin:", e?.message || e); return false; }
-}
-async function isAdmin(userId) {
-  if (await isSuperAdmin(userId)) return true;
-  const doc = await db.collection("admins").doc(String(userId)).get();
-  return doc.exists && doc.data()?.activo === true;
-}
-async function getRevendedorPorTelegramId(userId) {
-  const uid = String(userId || "").trim();
-  const snap = await db.collection("revendedores").get();
-  if (snap.empty) return null;
-  let found = null;
-  snap.forEach((doc) => { const r = normalizeRevendedorDoc(doc); if (r.telegramId === uid && r.activo === true) found = r; });
-  return found;
-}
-async function setTelegramIdToRevendedor(nombre, userId) {
-  const nombreNorm = normTxt(nombre);
-  const snap = await db.collection("revendedores").get();
-  if (snap.empty) return { ok: false, msg: "⚠️ No hay revendedores en la colección." };
-  let found = null;
-  snap.forEach((doc) => { const r = normalizeRevendedorDoc(doc); if (r.nombre_norm === nombreNorm) found = { ref: doc.ref, data: r }; });
-  if (!found) return { ok: false, msg: "⚠️ No encontré ese revendedor por nombre." };
-  await found.ref.set({
-    nombre: found.data.nombre,
-    nombre_norm: normTxt(found.data.nombre),
-    telegramId: String(userId),
-    activo: true,
-    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-  }, { merge: true });
-  return { ok: true, msg: `✅ Vinculado: ${found.data.nombre} => telegramId ${String(userId)}` };
-}
-async function isVendedor(userId) {
-  if (await isAdmin(userId)) return false;
-  const rev = await getRevendedorPorTelegramId(userId);
-  return !!(rev && rev.nombre && rev.telegramId === String(userId));
+    const snap = await db.collection("admins").doc(uid).get();
+    if (!snap.exists) return false;
+    const d = snap.data() || {};
+    return d.superAdmin === true || d.role === "superadmin" || d.role === "super_admin";
+  } catch (e) {
+    logErr("isSuperAdmin", e);
+    return false;
+  }
 }
 
-const panelMsgId = new Map();
-function bindPanelFromCallback(q) {
-  const chatId = q.message?.chat?.id;
-  const mid = q.message?.message_id;
-  if (chatId && mid) panelMsgId.set(String(chatId), mid);
+async function isAdmin(userId) {
+  const uid = String(userId || "").trim();
+  if (!uid) return false;
+
+  if (await isSuperAdmin(uid)) return true;
+
+  try {
+    const snap = await db.collection("admins").doc(uid).get();
+    if (!snap.exists) return false;
+    const d = snap.data() || {};
+    return d.activo !== false;
+  } catch (e) {
+    logErr("isAdmin", e);
+    return false;
+  }
 }
-async function sendFreshPanel(chatId, text, replyMarkup, parseMode = "Markdown", extraOpts = {}) {
-  const sent = await bot.sendMessage(chatId, text, {
-    parse_mode: parseMode,
-    reply_markup: replyMarkup,
-    disable_web_page_preview: true,
-    ...extraOpts,
-  });
-  panelMsgId.set(String(chatId), sent.message_id);
-  return sent;
+
+async function getRevendedorPorTelegramId(telegramId) {
+  const tid = String(telegramId || "").trim();
+  if (!tid) return null;
+
+  try {
+    const snap = await db
+      .collection("revendedores")
+      .where("telegramId", "==", tid)
+      .limit(1)
+      .get();
+
+    if (snap.empty) return null;
+
+    const d = snap.docs[0];
+    return { id: d.id, ...(d.data() || {}) };
+  } catch (e) {
+    logErr("getRevendedorPorTelegramId", e);
+    return null;
+  }
 }
-async function upsertPanel(chatId, text, replyMarkup, parseMode = "Markdown") {
-  const key = String(chatId);
-  const mid = panelMsgId.get(key);
-  if (mid) {
+
+async function isVendedor(userId) {
+  const r = await getRevendedorPorTelegramId(userId);
+  return !!(r && r.activo !== false);
+}
+
+function normalizeRevendedorDoc(doc = {}) {
+  const nombre = String(doc.nombre || "").trim();
+  return {
+    nombre,
+    nombre_norm: normTxt(nombre),
+    telegramId: doc.telegramId ? String(doc.telegramId).trim() : "",
+    activo: doc.activo !== false,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  };
+}
+
+async function setTelegramIdToRevendedor(refOrId, telegramId) {
+  const tid = String(telegramId || "").trim();
+  if (!tid) throw new Error("Telegram ID inválido");
+
+  const ref = typeof refOrId === "string"
+    ? db.collection("revendedores").doc(refOrId)
+    : refOrId;
+
+  await ref.set(
+    {
+      telegramId: tid,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    },
+    { merge: true }
+  );
+
+  const snap = await ref.get();
+  return { id: snap.id, ...(snap.data() || {}) };
+}
+
+async function allowMsg(msg) {
+  const chatId = msg?.chat?.id;
+  const userId = msg?.from?.id;
+  if (!chatId || !userId) return false;
+
+  if (await isAdmin(userId)) return true;
+  if (await isVendedor(userId)) return true;
+
+  try {
+    await bot.sendMessage(chatId, "⛔ Acceso denegado");
+  } catch (e) {
+    logErr("allowMsg", e);
+  }
+  return false;
+}
+
+// ===============================
+// PANEL / CALLBACK / UX
+// ===============================
+function bindPanelFromCallback(query) {
+  try {
+    const chatId = query?.message?.chat?.id;
+    const messageId = query?.message?.message_id;
+    if (!chatId || !messageId) return;
+    panelMsgId.set(chatId, messageId);
+    panelBindings.set(`${chatId}:${messageId}`, true);
+  } catch (e) {
+    logErr("bindPanelFromCallback", e);
+  }
+}
+
+async function limpiarQuery(botRef, query, opts = {}) {
+  try {
+    const text = opts?.text || "";
+    return await botRef.answerCallbackQuery(query.id, text ? { text } : {});
+  } catch (_) {
+    return null;
+  }
+}
+
+async function safeEditMessageText(chatId, messageId, text, extra = {}) {
+  try {
+    return await bot.editMessageText(text, {
+      chat_id: chatId,
+      message_id: messageId,
+      parse_mode: "Markdown",
+      ...extra,
+    });
+  } catch (e) {
+    const desc = String(e?.response?.body?.description || e?.message || "");
+
+    if (/message is not modified/i.test(desc)) return null;
+    if (/message to edit not found/i.test(desc)) return null;
+    if (/message can't be edited/i.test(desc)) return null;
+    throw e;
+  }
+}
+
+async function upsertPanel(chatId, text, keyboard = []) {
+  const reply_markup = { inline_keyboard: keyboard };
+  const knownMessageId = panelMsgId.get(chatId);
+
+  if (knownMessageId) {
     try {
-      await bot.editMessageText(text, {
-        chat_id: chatId,
-        message_id: mid,
-        parse_mode: parseMode,
-        reply_markup: replyMarkup,
-        disable_web_page_preview: true,
-      });
-      return;
+      await safeEditMessageText(chatId, knownMessageId, text, { reply_markup });
+      panelBindings.set(`${chatId}:${knownMessageId}`, true);
+      return { chat: { id: chatId }, message_id: knownMessageId, reused: true };
     } catch (e) {
-      const msg = String(e?.message || "").toLowerCase();
-      if (
-        msg.includes("message is not modified") ||
-        msg.includes("message to edit not found") ||
-        msg.includes("message can't be edited") ||
-        msg.includes("message_id_invalid") ||
-        msg.includes("400") || msg.includes("409")
-      ) {
-        panelMsgId.delete(key);
-        return sendFreshPanel(chatId, text, replyMarkup, parseMode);
-      }
-      throw e;
+      logErr("upsertPanel.edit", e);
     }
   }
-  return sendFreshPanel(chatId, text, replyMarkup, parseMode);
-}
-async function sendCommandAnchoredPanel(msg, text, replyMarkup, parseMode = "Markdown", extraOpts = {}) {
-  const chatId = msg.chat.id;
-  const sent = await bot.sendMessage(chatId, text, {
-    parse_mode: parseMode,
-    reply_markup: replyMarkup,
-    disable_web_page_preview: true,
-    reply_to_message_id: msg.message_id,
-    ...extraOpts,
-  });
-  panelMsgId.set(String(chatId), sent.message_id);
-  return sent;
+
+  try {
+    const sent = await bot.sendMessage(chatId, text, {
+      parse_mode: "Markdown",
+      reply_markup,
+    });
+
+    panelMsgId.set(chatId, sent.message_id);
+    panelBindings.set(`${chatId}:${sent.message_id}`, true);
+    return sent;
+  } catch (e) {
+    logErr("upsertPanel.send", e);
+    throw e;
+  }
 }
 
-const wizard = new Map();
-const pending = new Map();
-function w(chatId) { return wizard.get(String(chatId)); }
-function wset(chatId, state) { wizard.set(String(chatId), state); }
-function wclear(chatId) { wizard.delete(String(chatId)); }
+async function sendCommandAnchoredPanel(chatId, text, keyboard = []) {
+  try {
+    const sent = await bot.sendMessage(chatId, text, {
+      parse_mode: "Markdown",
+      reply_markup: { inline_keyboard: keyboard },
+    });
 
+    panelMsgId.set(chatId, sent.message_id);
+    panelBindings.set(`${chatId}:${sent.message_id}`, true);
+    return sent;
+  } catch (e) {
+    logErr("sendCommandAnchoredPanel", e);
+    throw e;
+  }
+}
+
+// ===============================
+// DOC HELPERS / FIRESTORE
+// ===============================
+async function docExists(collectionName, docId) {
+  const snap = await db.collection(collectionName).doc(String(docId)).get();
+  return snap.exists;
+}
+
+async function getDocData(collectionName, docId) {
+  const snap = await db.collection(collectionName).doc(String(docId)).get();
+  if (!snap.exists) return null;
+  return { id: snap.id, ...(snap.data() || {}) };
+}
+
+async function deleteDocSafe(collectionName, docId) {
+  const ref = db.collection(collectionName).doc(String(docId));
+  const snap = await ref.get();
+  if (!snap.exists) return false;
+  await ref.delete();
+  return true;
+}
+
+// ===============================
+// EXPORTS
+// ===============================
 module.exports = {
-  stripAcentos, normTxt, onlyDigits, normalizarPlataforma, esPlataformaValida, safeMail,
-  docIdInventario, fmtEstado, isFechaDMY, hoyDMY, esTelefono, limpiarQuery, isEmailLike,
-  getCredentialMode, getIdentLabel, getAccessTypeLabel, validateIdentByPlatform, normalizeIdentByPlatform,
-  parseDMYtoTS, addDaysDMY, escMD, enviarTxtComoArchivo, logInfo, logErr, safeBtnLabel,
-  isMonthInputMMYYYY, getMonthKeyFromDMY, parseMonthInputToKey, getMonthLabelFromKey,
-  startOfDayTS, endOfDayTS, ymdFromDMY, parseFechaFinanceInput, parseMontoNumber, moneyLps, moneyNumber,
-  allowMsg, getSafeRevNombre, getSafeRevActivo, getSafeRevTelegramId, normalizeRevendedorDoc,
-  getTotalPorPlataforma, asegurarTotalesDefault, isSuperAdmin, isAdmin, getRevendedorPorTelegramId,
-  setTelegramIdToRevendedor, isVendedor, panelMsgId, bindPanelFromCallback, sendFreshPanel, upsertPanel,
-  sendCommandAnchoredPanel, wizard, pending, w, wset, wclear,
+  // estado
+  panelMsgId,
+  wizard,
+  pending,
+
+  // logs / comunes
+  logErr,
+  sleep,
+  escMD,
+  normTxt,
+  onlyDigits,
+  isEmailLike,
+  toTitleCase,
+  chunkArray,
+
+  // fechas
+  hoyDMY,
+  ahoraHM,
+  isFechaDMY,
+  parseFechaFinanceInput,
+  parseDMYtoTS,
+  ymdFromDMY,
+  startOfDayTS,
+  endOfDayTS,
+  getMonthKeyFromDMY,
+  parseMonthInputToKey,
+  getMonthLabelFromKey,
+
+  // números / dinero
+  parseMontoNumber,
+  moneyNumber,
+  moneyLps,
+
+  // plataformas
+  normalizarPlataforma,
+  esPlataformaValida,
+  humanPlataformaSimple,
+  plataformaRequiereCorreo,
+  plataformaRequiereClave,
+  plataformaEsUsuarioClave,
+
+  // roles
+  allowMsg,
+  isAdmin,
+  isSuperAdmin,
+  isVendedor,
+  getRevendedorPorTelegramId,
+  setTelegramIdToRevendedor,
+  normalizeRevendedorDoc,
+
+  // panel
+  bindPanelFromCallback,
+  limpiarQuery,
+  upsertPanel,
+  sendCommandAnchoredPanel,
+
+  // firestore utils
+  docExists,
+  getDocData,
+  deleteDocSafe,
 };
