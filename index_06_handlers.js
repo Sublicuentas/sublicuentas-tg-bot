@@ -1,12 +1,11 @@
-/* ✅ SUBLICUENTAS TG BOT — PARTE 6/6 CORREGIDA
+/* ✅ SUBLICUENTAS TG BOT — PARTE 6/6 AJUSTADA
    HANDLERS / COMANDOS / CALLBACKS / MESSAGE / AUTOTXT / HARDEN / HTTP
    -------------------------------------------------------------------
-   Compatible con:
-   - inventario por categorías
-   - plataformas nuevas: deezer, gemini, chatgpt
-   - accesos por correo o usuario según plataforma
-   - parte 1, 2, 3, 4 y 5 actualizadas
-   ✅ CORREGIDO: eliminar movimientos por fecha
+   Ajustes aplicados:
+   - /start y /menu blindados directo a menuPrincipal/menuVendedor
+   - regex de comandos dinámicos escapadas correctamente
+   - HTTP protegido para no duplicar servidor
+   - mantiene compatibilidad con partes 1,2,3,4,5
 */
 
 const http = require("http");
@@ -105,9 +104,7 @@ const {
 
 const {
   menuPrincipal,
-  menuPrincipalFromCommand,
   menuVendedor,
-  menuVendedorFromCommand,
   menuInventario,
   menuInventarioVideo,
   menuInventarioMusica,
@@ -143,6 +140,10 @@ function hasRuntimeLock() {
 
 function identIcon(plataforma = "") {
   return getIdentLabel(plataforma) === "Usuario" ? "👤" : "📧";
+}
+
+function escapeRegex(txt = "") {
+  return String(txt).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function textoBtnEliminarMovimiento(m = {}) {
@@ -775,35 +776,47 @@ bot.onText(/\/adminlist/i, async (msg) => {
 // ===============================
 // START / MENU BLINDADO
 // ===============================
-bot.onText(/\/start/i, async (msg) => {
-  if (!hasRuntimeLock()) return;
-
-  const chatId = msg.chat.id;
-  const userId = msg.from.id;
-
-  if (await isAdmin(userId)) return menuPrincipalFromCommand(msg);
-  if (await isVendedor(userId)) return menuVendedorFromCommand(msg);
-
-  return bot.sendMessage(chatId, "⛔ Acceso denegado");
-});
-
-bot.onText(/\/menu/i, async (msg) => {
+bot.onText(/^\/start(?:@\w+)?$/i, async (msg) => {
   if (!hasRuntimeLock()) return;
 
   const chatId = msg.chat.id;
   const userId = msg.from.id;
 
   try {
+    pending.delete(String(chatId));
+    wizard.delete(String(chatId));
     panelMsgId.delete(String(chatId));
 
-    if (await isAdmin(userId)) return menuPrincipalFromCommand(msg);
-    if (await isVendedor(userId)) return menuVendedorFromCommand(msg);
+    if (await isAdmin(userId)) return menuPrincipal(chatId);
+    if (await isVendedor(userId)) return menuVendedor(chatId);
+
+    return bot.sendMessage(chatId, "⛔ Acceso denegado");
+  } catch (err) {
+    logErr("/start error:", err?.stack || err?.message || err);
+    return bot.sendMessage(chatId, "⚠️ Error interno al abrir el menú.");
+  }
+});
+
+bot.onText(/^\/menu(?:@\w+)?$/i, async (msg) => {
+  if (!hasRuntimeLock()) return;
+
+  const chatId = msg.chat.id;
+  const userId = msg.from.id;
+
+  try {
+    pending.delete(String(chatId));
+    wizard.delete(String(chatId));
+    panelMsgId.delete(String(chatId));
+
+    if (await isAdmin(userId)) return menuPrincipal(chatId);
+    if (await isVendedor(userId)) return menuVendedor(chatId);
 
     return bot.sendMessage(chatId, "⛔ Acceso denegado", {
       reply_to_message_id: msg.message_id,
     });
-  } catch (_) {
-    return bot.sendMessage(chatId, "⚠️ Error interno.");
+  } catch (err) {
+    logErr("/menu error:", err?.stack || err?.message || err);
+    return bot.sendMessage(chatId, "⚠️ Error interno al abrir el menú.");
   }
 });
 
@@ -811,7 +824,9 @@ bot.onText(/\/menu/i, async (msg) => {
 // ATAJOS INVENTARIO
 // ===============================
 PLATAFORMAS.forEach((p) => {
-  bot.onText(new RegExp("^\\/" + p + "(?:@\\w+)?(?:\\s+.*)?$", "i"), async (msg) => {
+  const safeP = escapeRegex(String(p));
+
+  bot.onText(new RegExp(`^\\/${safeP}(?:@\\w+)?(?:\\s+.*)?$`, "i"), async (msg) => {
     if (!hasRuntimeLock()) return;
 
     const chatId = msg.chat.id;
@@ -983,7 +998,6 @@ bot.on("callback_query", async (q) => {
       if (data === "fin:menu:reportes") return menuFinReportes(chatId);
       if (data === "fin:menu:eliminar") return menuFinEliminarTipo(chatId);
 
-      // ✅ CORREGIDO: ahora pide fecha primero
       if (data === "fin:menu:eliminar:ingreso") {
         pending.set(String(chatId), {
           mode: "finEliminarFechaAsk",
@@ -1003,7 +1017,6 @@ bot.on("callback_query", async (q) => {
         );
       }
 
-      // ✅ CORREGIDO: ahora pide fecha primero
       if (data === "fin:menu:eliminar:egreso") {
         pending.set(String(chatId), {
           mode: "finEliminarFechaAsk",
@@ -2485,7 +2498,6 @@ bot.on("message", async (msg) => {
       const p = pending.get(String(chatId));
       const t = String(text || "").trim();
 
-      // ✅ CORREGIDO: pedir fecha para eliminar y luego listar solo ese día
       if (p.mode === "finEliminarFechaAsk") {
         const parsed = parseFechaFinanceInput(t);
 
@@ -3419,20 +3431,22 @@ process.on("SIGTERM", async () => {
 });
 
 // ===============================
-// HTTP KEEPALIVE FINAL
+// HTTP KEEPALIVE FINAL BLINDADO
 // ===============================
 const PORT = process.env.PORT || 10000;
 
-http
-  .createServer((req, res) => {
-    if (req.url === "/health") {
-      res.writeHead(200, { "Content-Type": "application/json" });
-      return res.end(JSON.stringify(getCoreHealth()));
-    }
+if (!global.__SUBLICUENTAS_HTTP_SERVER__) {
+  global.__SUBLICUENTAS_HTTP_SERVER__ = http
+    .createServer((req, res) => {
+      if (req.url === "/health") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        return res.end(JSON.stringify(getCoreHealth()));
+      }
 
-    res.writeHead(200, { "Content-Type": "text/plain" });
-    res.end("OK");
-  })
-  .listen(PORT, () => {
-    console.log("🌐 HTTP KEEPALIVE activo en puerto", PORT);
-  });
+      res.writeHead(200, { "Content-Type": "text/plain" });
+      res.end("OK");
+    })
+    .listen(PORT, () => {
+      console.log("🌐 HTTP KEEPALIVE activo en puerto", PORT);
+    });
+     }
