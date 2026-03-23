@@ -6,6 +6,7 @@
    - plataformas nuevas: deezer, gemini, chatgpt
    - accesos por correo o usuario según plataforma
    - parte 1, 2, 3, 4 y 5 actualizadas
+   ✅ CORREGIDO: eliminar movimientos por fecha
 */
 
 const http = require("http");
@@ -117,7 +118,6 @@ const {
   menuRenovaciones,
   menuFinRegistro,
   menuFinEliminarTipo,
-  menuFinEliminarListado,
   menuFinReportes,
   kbBancosFinanzas,
   kbMotivosFinanzas,
@@ -125,7 +125,6 @@ const {
   registrarEgresoTx,
   getMovimientosPorFecha,
   getMovimientosPorMes,
-  getMovimientosPorTipo,
   resumenFinanzasTextoPorFecha,
   resumenBancosMesTexto,
   resumenTopPlataformasTexto,
@@ -144,6 +143,27 @@ function hasRuntimeLock() {
 
 function identIcon(plataforma = "") {
   return getIdentLabel(plataforma) === "Usuario" ? "👤" : "📧";
+}
+
+function textoBtnEliminarMovimiento(m = {}) {
+  const tipo = String(m.tipo || "").toLowerCase();
+  const fecha = String(m.fecha || "-");
+  const monto = moneyLps(m.monto || 0);
+
+  const concepto =
+    tipo === "egreso"
+      ? String(m.motivo || m.detalle || m.descripcion || "Egreso")
+      : String(m.plataforma || m.detalle || m.descripcion || "Ingreso");
+
+  const extra =
+    tipo === "egreso"
+      ? String(m.detalle || "")
+      : String(m.banco || "");
+
+  let txt = `${fecha} • ${monto} • ${concepto}`;
+  if (extra) txt += ` • ${extra}`;
+
+  return safeBtnLabel(txt, 60);
 }
 
 async function listarRevendedores(chatId) {
@@ -815,8 +835,6 @@ bot.onText(/\/stock/i, async (msg) => {
 // ===============================
 // AGREGAR CUENTA INVENTARIO
 // /addcorreo plataforma acceso [capacidad]
-// Nota interna: el campo se sigue guardando en "correo"
-// aunque para ciertas plataformas sea usuario.
 // ===============================
 bot.onText(/\/addcorreo\s+(\S+)\s+(\S+)(?:\s+(\d+))?/i, async (msg, match) => {
   if (!hasRuntimeLock()) return;
@@ -965,14 +983,44 @@ bot.on("callback_query", async (q) => {
       if (data === "fin:menu:reportes") return menuFinReportes(chatId);
       if (data === "fin:menu:eliminar") return menuFinEliminarTipo(chatId);
 
+      // ✅ CORREGIDO: ahora pide fecha primero
       if (data === "fin:menu:eliminar:ingreso") {
-        const list = await getMovimientosPorTipo("ingreso", 20);
-        return menuFinEliminarListado(chatId, "ingreso", list);
+        pending.set(String(chatId), {
+          mode: "finEliminarFechaAsk",
+          tipo: "ingreso",
+        });
+
+        return upsertPanel(
+          chatId,
+          "🗑️ *ELIMINAR INGRESO POR FECHA*\n\nEscriba la fecha exacta en formato *dd/mm/yyyy*.\n\nEjemplo: *23/03/2026*",
+          {
+            inline_keyboard: [
+              [{ text: "⬅️ Volver eliminar", callback_data: "fin:menu:eliminar" }],
+              [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
+            ],
+          },
+          "Markdown"
+        );
       }
 
+      // ✅ CORREGIDO: ahora pide fecha primero
       if (data === "fin:menu:eliminar:egreso") {
-        const list = await getMovimientosPorTipo("egreso", 20);
-        return menuFinEliminarListado(chatId, "egreso", list);
+        pending.set(String(chatId), {
+          mode: "finEliminarFechaAsk",
+          tipo: "egreso",
+        });
+
+        return upsertPanel(
+          chatId,
+          "🗑️ *ELIMINAR EGRESO POR FECHA*\n\nEscriba la fecha exacta en formato *dd/mm/yyyy*.\n\nEjemplo: *23/03/2026*",
+          {
+            inline_keyboard: [
+              [{ text: "⬅️ Volver eliminar", callback_data: "fin:menu:eliminar" }],
+              [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
+            ],
+          },
+          "Markdown"
+        );
       }
 
       if (data === "fin:menu:ingreso") {
@@ -1156,7 +1204,10 @@ bot.on("callback_query", async (q) => {
               [{ text: "✅ Sí, eliminar este", callback_data: `fin:del:ok:${id}` }],
               [
                 {
-                  text: tipo === "egreso" ? "⬅️ Volver egresos" : "⬅️ Volver ingresos",
+                  text:
+                    tipo === "egreso"
+                      ? "⬅️ Buscar egresos por fecha"
+                      : "⬅️ Buscar ingresos por fecha",
                   callback_data:
                     tipo === "egreso"
                       ? "fin:menu:eliminar:egreso"
@@ -1193,7 +1244,10 @@ bot.on("callback_query", async (q) => {
               inline_keyboard: [
                 [
                   {
-                    text: tipoEliminado === "egreso" ? "➖ Ver egresos" : "➕ Ver ingresos",
+                    text:
+                      tipoEliminado === "egreso"
+                        ? "➖ Buscar egreso por fecha"
+                        : "➕ Buscar ingreso por fecha",
                     callback_data: `fin:menu:eliminar:${tipoEliminado}`,
                   },
                 ],
@@ -2370,7 +2424,6 @@ bot.on("message", async (msg) => {
       if (adminOk && !comandosReservados.has(first)) {
         const query = normalizeIdentByPlatform("", cmd.trim());
 
-        // 1) Intentar abrir cuenta de inventario por acceso exacto
         const hits = await buscarInventarioPorCorreo(query);
 
         if (hits.length === 1) {
@@ -2401,7 +2454,6 @@ bot.on("message", async (msg) => {
           );
         }
 
-        // 2) Si no era inventario, buscar cliente
         if (onlyDigits(query).length >= 7) {
           const resultados = await buscarPorTelefonoTodos(query);
           const dedup = dedupeClientes(resultados);
@@ -2432,6 +2484,78 @@ bot.on("message", async (msg) => {
 
       const p = pending.get(String(chatId));
       const t = String(text || "").trim();
+
+      // ✅ CORREGIDO: pedir fecha para eliminar y luego listar solo ese día
+      if (p.mode === "finEliminarFechaAsk") {
+        const parsed = parseFechaFinanceInput(t);
+
+        if (!parsed.ok) {
+          return bot.sendMessage(
+            chatId,
+            "⚠️ Fecha inválida. Use *dd/mm/yyyy*.\nEjemplo: *23/03/2026*",
+            { parse_mode: "Markdown" }
+          );
+        }
+
+        const fecha = parsed.fecha;
+        const isSuper = await isSuperAdmin(userId);
+
+        const listFecha = await getMovimientosPorFecha(fecha, userId, isSuper);
+        const list = (Array.isArray(listFecha) ? listFecha : []).filter(
+          (x) => String(x.tipo || "").toLowerCase() === String(p.tipo || "").toLowerCase()
+        );
+
+        pending.delete(String(chatId));
+
+        if (!list.length) {
+          return upsertPanel(
+            chatId,
+            `⚠️ No encontré *${p.tipo === "egreso" ? "egresos" : "ingresos"}* en la fecha *${escMD(fecha)}*.`,
+            {
+              inline_keyboard: [
+                [
+                  {
+                    text: p.tipo === "egreso" ? "➖ Buscar otra fecha" : "➕ Buscar otra fecha",
+                    callback_data:
+                      p.tipo === "egreso"
+                        ? "fin:menu:eliminar:egreso"
+                        : "fin:menu:eliminar:ingreso",
+                  },
+                ],
+                [{ text: "⬅️ Volver eliminar", callback_data: "fin:menu:eliminar" }],
+                [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
+              ],
+            },
+            "Markdown"
+          );
+        }
+
+        const kb = list.slice(0, 40).map((m) => [
+          {
+            text: textoBtnEliminarMovimiento(m),
+            callback_data: `fin:del:pick:${m.id}`,
+          },
+        ]);
+
+        kb.push([
+          {
+            text: p.tipo === "egreso" ? "➖ Buscar otra fecha" : "➕ Buscar otra fecha",
+            callback_data:
+              p.tipo === "egreso"
+                ? "fin:menu:eliminar:egreso"
+                : "fin:menu:eliminar:ingreso",
+          },
+        ]);
+        kb.push([{ text: "⬅️ Volver eliminar", callback_data: "fin:menu:eliminar" }]);
+        kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
+
+        return upsertPanel(
+          chatId,
+          `🗑️ *${p.tipo === "egreso" ? "EGRESOS" : "INGRESOS"} DEL ${escMD(fecha)}*\n\nSeleccione el movimiento que desea borrar:`,
+          { inline_keyboard: kb },
+          "Markdown"
+        );
+      }
 
       if (p.mode === "finIngresoMonto") {
         const monto = parseMontoNumber(t);
