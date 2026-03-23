@@ -826,7 +826,8 @@ module.exports = {
   w,
   wset,
   wclear,
-};/* ✅ SUBLICUENTAS TG BOT — PARTE 3/6
+};
+/* ✅ SUBLICUENTAS TG BOT — PARTE 3/6
    CLIENTES / CRM / HISTORIAL / BÚSQUEDAS / TXT / RENOVACIONES
    -----------------------------------------------------------
 */
@@ -2662,6 +2663,7 @@ module.exports = {
   responderCodigoNetflix,
   responderMenuCodigosNetflix,
 };
+
 /* ✅ SUBLICUENTAS TG BOT — PARTE 5/6
    FINANZAS / REPORTES / EXCEL / MENÚS
    -----------------------------------
@@ -2697,8 +2699,6 @@ const {
   logErr,
   isSuperAdmin,
 } = require("./index_02_utils_roles");
-
-const { humanPlataforma } = require("./index_03_clientes_crm");
 
 // ===============================
 // MENÚS PRINCIPALES
@@ -2864,6 +2864,9 @@ async function menuPagos(chatId) {
   );
 }
 
+// Alias para compatibilidad si otra parte usa menuFinanzas()
+const menuFinanzas = menuPagos;
+
 async function menuFinRegistro(chatId) {
   return upsertPanel(
     chatId,
@@ -2885,7 +2888,7 @@ async function menuFinRegistro(chatId) {
 async function menuFinEliminarTipo(chatId) {
   return upsertPanel(
     chatId,
-    "🗑️ *ELIMINAR MOVIMIENTO ESPECÍFICO*\n\nSeleccione qué desea listar para eliminar.\nLuego podrá escoger *un solo registro exacto* por fecha:",
+    "🗑️ *ELIMINAR MOVIMIENTO ESPECÍFICO*\n\nSeleccione qué desea listar para eliminar.\nLuego podrá escoger *un solo registro exacto*:",
     {
       inline_keyboard: [
         [{ text: "➕ Ver ingresos", callback_data: "fin:menu:eliminar:ingreso" }],
@@ -2932,20 +2935,30 @@ function getFinMotivosEgreso() {
 }
 
 function getFinPlataformasIngreso() {
-  return PLATAFORMAS.slice();
+  return Array.isArray(PLATAFORMAS) ? PLATAFORMAS.slice() : [];
 }
 
 function kbBancosFinanzas() {
   const bancos = getFinBancos();
   const rows = [];
+
   for (let i = 0; i < bancos.length; i += 2) {
     const row = [];
-    row.push({ text: bancos[i], callback_data: `fin:ing:banco:${encodeURIComponent(bancos[i])}` });
+    row.push({
+      text: bancos[i],
+      callback_data: `fin:ing:banco:${encodeURIComponent(bancos[i])}`,
+    });
+
     if (bancos[i + 1]) {
-      row.push({ text: bancos[i + 1], callback_data: `fin:ing:banco:${encodeURIComponent(bancos[i + 1])}` });
+      row.push({
+        text: bancos[i + 1],
+        callback_data: `fin:ing:banco:${encodeURIComponent(bancos[i + 1])}`,
+      });
     }
+
     rows.push(row);
   }
+
   rows.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
   return { inline_keyboard: rows };
 }
@@ -2953,14 +2966,24 @@ function kbBancosFinanzas() {
 function kbMotivosFinanzas() {
   const motivos = getFinMotivosEgreso();
   const rows = [];
+
   for (let i = 0; i < motivos.length; i += 2) {
     const row = [];
-    row.push({ text: motivos[i], callback_data: `fin:egr:motivo:${encodeURIComponent(motivos[i])}` });
+    row.push({
+      text: motivos[i],
+      callback_data: `fin:egr:motivo:${encodeURIComponent(motivos[i])}`,
+    });
+
     if (motivos[i + 1]) {
-      row.push({ text: motivos[i + 1], callback_data: `fin:egr:motivo:${encodeURIComponent(motivos[i + 1])}` });
+      row.push({
+        text: motivos[i + 1],
+        callback_data: `fin:egr:motivo:${encodeURIComponent(motivos[i + 1])}`,
+      });
     }
+
     rows.push(row);
   }
+
   rows.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
   return { inline_keyboard: rows };
 }
@@ -3077,7 +3100,7 @@ async function registrarIngresoTx({
     id: ref.id,
     fecha: parsed.fecha,
     monto: nMonto,
-    banco: banco || "Otro",
+    banco: String(banco || "Otro").trim(),
     plataforma: String(plataforma || "").trim(),
     plataformas: plataformasArray,
     detalle: String(detalle || "").trim(),
@@ -3125,7 +3148,7 @@ async function registrarEgresoTx({
     id: ref.id,
     fecha: parsed.fecha,
     monto: nMonto,
-    motivo: motivo || "Otros",
+    motivo: String(motivo || "Otros").trim(),
     detalle: String(detalle || "").trim(),
   };
 }
@@ -3163,13 +3186,36 @@ async function getMovimientosPorMes(monthKey, userId, isSA = false) {
   return movs;
 }
 
+// Para eliminar exacto sin pedir índice compuesto complejo
+async function getMovimientosRecientesParaEliminar(tipo = "", limit = 20) {
+  const tipoNorm = String(tipo || "").trim().toLowerCase();
+  if (!["ingreso", "egreso"].includes(tipoNorm)) return [];
+
+  const take = Math.max(Number(limit || 20) * 4, 80);
+
+  const snap = await db
+    .collection(FINANZAS_COLLECTION)
+    .orderBy("fechaTS", "desc")
+    .limit(take)
+    .get();
+
+  const movs = snap.docs
+    .map((d) => ({ id: d.id, ...(d.data() || {}) }))
+    .filter((m) => String(m.tipo || "").trim().toLowerCase() === tipoNorm)
+    .slice(0, Number(limit || 20));
+
+  return movs;
+}
+
 function agruparIngresosPorBanco(movs = []) {
   const map = new Map();
+
   for (const m of movs) {
     if (String(m.tipo || "") !== "ingreso") continue;
     const banco = String(m.banco || "Otro").trim() || "Otro";
     map.set(banco, Number(map.get(banco) || 0) + Number(m.monto || 0));
   }
+
   return Array.from(map.entries())
     .map(([banco, monto]) => ({ banco, monto }))
     .sort((a, b) => b.monto - a.monto);
@@ -3202,11 +3248,13 @@ function agruparIngresosPorPlataforma(movs = []) {
 
 function agruparEgresosPorMotivo(movs = []) {
   const map = new Map();
+
   for (const m of movs) {
     if (String(m.tipo || "") !== "egreso") continue;
     const motivo = String(m.motivo || "Otros").trim() || "Otros";
     map.set(motivo, Number(map.get(motivo) || 0) + Number(m.monto || 0));
   }
+
   return Array.from(map.entries())
     .map(([motivo, monto]) => ({ motivo, monto }))
     .sort((a, b) => b.monto - a.monto);
@@ -3215,12 +3263,76 @@ function agruparEgresosPorMotivo(movs = []) {
 function calcularTotalesMovimientos(movs = []) {
   let ingresos = 0;
   let egresos = 0;
+
   for (const m of movs) {
     if (String(m.tipo || "") === "ingreso") ingresos += Number(m.monto || 0);
     if (String(m.tipo || "") === "egreso") egresos += Number(m.monto || 0);
   }
+
   const neta = ingresos - egresos;
   return { ingresos, egresos, neta };
+}
+
+// ===============================
+// HELPERS TEXTO ELIMINAR
+// ===============================
+function getConceptoMovimientoFin(m = {}) {
+  const esIngreso = String(m.tipo || "") === "ingreso";
+
+  if (esIngreso) {
+    return String(m.plataforma || m.detalle || m.cliente || "Sin detalle").trim();
+  }
+
+  return String(m.detalle || m.motivo || m.cliente || "Sin detalle").trim();
+}
+
+function buildEliminarMovimientoLabel(m = {}) {
+  const esIngreso = String(m.tipo || "") === "ingreso";
+  const icon = esIngreso ? "➕" : "➖";
+  const fecha = String(m.fecha || "").trim() || "--/--/----";
+  const monto = moneyLps(Number(m.monto || 0));
+  const extra = esIngreso
+    ? String(m.banco || "Sin banco").trim()
+    : String(m.motivo || "Sin motivo").trim();
+
+  const concepto = getConceptoMovimientoFin(m).replace(/\s+/g, " ").trim();
+  const conceptoShort = concepto.length > 24 ? `${concepto.slice(0, 24)}…` : concepto;
+  const extraShort = extra.length > 16 ? `${extra.slice(0, 16)}…` : extra;
+
+  return `${icon} ${fecha} • ${monto} • ${conceptoShort} • ${extraShort}`;
+}
+
+function buildEliminarMovimientoTexto(m = {}) {
+  const esIngreso = String(m.tipo || "") === "ingreso";
+  const tipo = esIngreso ? "INGRESO" : "EGRESO";
+  const fecha = escMD(String(m.fecha || "").trim() || "--/--/----");
+  const monto = escMD(moneyLps(Number(m.monto || 0)));
+  const bancoMotivo = esIngreso
+    ? `*Banco:* ${escMD(String(m.banco || "Sin banco").trim())}`
+    : `*Motivo:* ${escMD(String(m.motivo || "Sin motivo").trim())}`;
+  const plataforma = esIngreso && String(m.plataforma || "").trim()
+    ? `\n*Plataforma:* ${escMD(String(m.plataforma || "").trim())}`
+    : "";
+  const detalle = `*Detalle:* ${escMD(String(m.detalle || "").trim() || "Sin detalle")}`;
+  const cliente = String(m.cliente || "").trim()
+    ? `\n*Cliente:* ${escMD(String(m.cliente || "").trim())}`
+    : "";
+  const vendedor = String(m.vendedor || "").trim()
+    ? `\n*Vendedor:* ${escMD(String(m.vendedor || "").trim())}`
+    : "";
+  const user = String(m.createdByName || m.createdBy || "").trim()
+    ? `\n*Registrado por:* ${escMD(String(m.createdByName || m.createdBy || "").trim())}`
+    : "";
+
+  return (
+    `🗑️ *CONFIRMAR ELIMINACIÓN*\n\n` +
+    `*Tipo:* ${tipo}\n` +
+    `*Fecha:* ${fecha}\n` +
+    `*Monto:* ${monto}\n` +
+    `${bancoMotivo}${plataforma}\n` +
+    `${detalle}${cliente}${vendedor}${user}\n\n` +
+    `¿Desea eliminar este movimiento?`
+  );
 }
 
 // ===============================
@@ -3254,7 +3366,7 @@ function resumenFinanzasTextoPorFecha(fechaDMY, movs = []) {
 
     const usuario = String(m.createdByName || m.createdBy || "Admin");
 
-    txt += `${i + 1}) ${signo} *Lps ${Number(m.monto || 0)}* ${escMD(concepto)} — ${escMD(usuario)} — ${escMD(bancoOMotivo)}\n`;
+    txt += `${i + 1}) ${signo} *${escMD(moneyLps(Number(m.monto || 0)))}* ${escMD(concepto)} — ${escMD(usuario)} — ${escMD(bancoOMotivo)}\n`;
   });
 
   txt += "\n━━━━━━━━━━━━━━\n";
@@ -3308,11 +3420,13 @@ function resumenTopPlataformasTexto(monthKey, movs = []) {
 
 function cierreCajaTexto(fechaDMY, movs = []) {
   const { ingresos, egresos, neta } = calcularTotalesMovimientos(movs);
+
   let txt = `🧾 *CIERRE DE CAJA (${escMD(fechaDMY)})*\n\n`;
   txt += `💰 Entradas: ${moneyLps(ingresos)}\n`;
   txt += `💸 Salidas: ${moneyLps(egresos)}\n`;
   txt += `📦 Caja final: ${neta >= 0 ? "+" : ""}${moneyLps(neta)} ${neta >= 0 ? "🟢" : "🔴"}\n`;
   txt += `🧮 Movimientos: ${movs.length}`;
+
   return txt;
 }
 
@@ -3335,191 +3449,196 @@ async function eliminarMovimientoFinanzas(id, userId, isSA = false) {
 // EXPORTAR EXCEL PRO
 // ===============================
 async function exportarFinanzasRangoExcel(chatId, fechaInicio, fechaFin, userId, isSA = false) {
-  if (!ExcelJS) {
-    return bot.sendMessage(chatId, "⚠️ ExcelJS no está instalado en el servidor.");
-  }
-
-  if (!isFechaDMY(fechaInicio) || !isFechaDMY(fechaFin)) {
-    return bot.sendMessage(chatId, "⚠️ Formato inválido. Use dd/mm/yyyy");
-  }
-
-  const ini = startOfDayTS(fechaInicio);
-  const fin = endOfDayTS(fechaFin);
-
-  if (ini > fin) {
-    return bot.sendMessage(chatId, "⚠️ El rango es inválido.");
-  }
-
-  const snap = await db
-    .collection(FINANZAS_COLLECTION)
-    .where("fechaTS", ">=", ini)
-    .where("fechaTS", "<=", fin)
-    .get();
-
-  const movs = snap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
-  movs.sort((a, b) => Number(a.fechaTS || 0) - Number(b.fechaTS || 0));
-
-  if (!movs.length) {
-    return bot.sendMessage(chatId, "⚠️ No hay movimientos en ese rango.");
-  }
-
-  const workbook = new ExcelJS.Workbook();
-  workbook.creator = "Sublicuentas Bot";
-  workbook.created = new Date();
-  workbook.modified = new Date();
-
-  const wsMov = workbook.addWorksheet("Movimientos", {
-    views: [{ state: "frozen", ySplit: 1 }],
-  });
-
-  wsMov.columns = [
-    { header: "Fecha", key: "fecha", width: 14 },
-    { header: "Tipo", key: "tipo", width: 12 },
-    { header: "Monto", key: "monto", width: 14 },
-    { header: "Banco", key: "banco", width: 18 },
-    { header: "Motivo", key: "motivo", width: 22 },
-    { header: "Plataforma", key: "plataforma", width: 24 },
-    { header: "Detalle", key: "detalle", width: 36 },
-    { header: "Usuario", key: "usuario", width: 18 },
-    { header: "Cliente", key: "cliente", width: 22 },
-    { header: "ID", key: "id", width: 28 },
-  ];
-
-  wsMov.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
-  wsMov.getRow(1).fill = {
-    type: "pattern",
-    pattern: "solid",
-    fgColor: { argb: "FF1F4E78" },
-  };
-  wsMov.getRow(1).alignment = { horizontal: "center", vertical: "middle" };
-
-  movs.forEach((m) => {
-    const row = wsMov.addRow({
-      fecha: m.fecha || "",
-      tipo: String(m.tipo || "").toUpperCase(),
-      monto: Number(m.monto || 0),
-      banco: m.banco || "",
-      motivo: m.motivo || "",
-      plataforma: m.plataforma || "",
-      detalle: m.detalle || "",
-      usuario: m.createdByName || m.createdBy || "",
-      cliente: m.cliente || "",
-      id: m.id || "",
-    });
-
-    row.getCell("monto").numFmt = "#,##0.00";
-
-    if (String(m.tipo || "") === "ingreso") {
-      row.getCell("tipo").font = { bold: true, color: { argb: "FF008000" } };
-    } else {
-      row.getCell("tipo").font = { bold: true, color: { argb: "FFFF0000" } };
+  try {
+    if (!ExcelJS) {
+      return bot.sendMessage(chatId, "⚠️ ExcelJS no está instalado en el servidor.");
     }
-  });
 
-  const { ingresos, egresos, neta } = calcularTotalesMovimientos(movs);
+    if (!isFechaDMY(fechaInicio) || !isFechaDMY(fechaFin)) {
+      return bot.sendMessage(chatId, "⚠️ Formato inválido. Use dd/mm/yyyy");
+    }
 
-  const wsRes = workbook.addWorksheet("Resumen", {
-    views: [{ state: "frozen", ySplit: 1 }],
-  });
+    const ini = startOfDayTS(fechaInicio);
+    const fin = endOfDayTS(fechaFin);
 
-  wsRes.columns = [
-    { header: "Concepto", key: "concepto", width: 28 },
-    { header: "Monto", key: "monto", width: 18 },
-  ];
+    if (ini > fin) {
+      return bot.sendMessage(chatId, "⚠️ El rango es inválido.");
+    }
 
-  wsRes.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
-  wsRes.getRow(1).fill = {
-    type: "pattern",
-    pattern: "solid",
-    fgColor: { argb: "FF1F4E78" },
-  };
+    const snap = await db
+      .collection(FINANZAS_COLLECTION)
+      .where("fechaTS", ">=", ini)
+      .where("fechaTS", "<=", fin)
+      .get();
 
-  wsRes.addRow({ concepto: "Ingresos", monto: ingresos });
-  wsRes.addRow({ concepto: "Egresos", monto: egresos });
-  wsRes.addRow({ concepto: "Ganancia neta", monto: neta });
-  wsRes.getColumn("monto").numFmt = "#,##0.00";
+    const movs = snap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
+    movs.sort((a, b) => Number(a.fechaTS || 0) - Number(b.fechaTS || 0));
 
-  const wsBancos = workbook.addWorksheet("Bancos", {
-    views: [{ state: "frozen", ySplit: 1 }],
-  });
+    if (!movs.length) {
+      return bot.sendMessage(chatId, "⚠️ No hay movimientos en ese rango.");
+    }
 
-  wsBancos.columns = [
-    { header: "Banco", key: "banco", width: 24 },
-    { header: "Monto", key: "monto", width: 18 },
-  ];
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = "Sublicuentas Bot";
+    workbook.created = new Date();
+    workbook.modified = new Date();
 
-  wsBancos.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
-  wsBancos.getRow(1).fill = {
-    type: "pattern",
-    pattern: "solid",
-    fgColor: { argb: "FF1F4E78" },
-  };
-
-  const bancos = agruparIngresosPorBanco(movs);
-  bancos.forEach((x) => {
-    wsBancos.addRow({
-      banco: x.banco,
-      monto: Number(x.monto || 0),
+    const wsMov = workbook.addWorksheet("Movimientos", {
+      views: [{ state: "frozen", ySplit: 1 }],
     });
-  });
-  wsBancos.getColumn("monto").numFmt = "#,##0.00";
 
-  const wsTop = workbook.addWorksheet("Top Plataformas", {
-    views: [{ state: "frozen", ySplit: 1 }],
-  });
+    wsMov.columns = [
+      { header: "Fecha", key: "fecha", width: 14 },
+      { header: "Tipo", key: "tipo", width: 12 },
+      { header: "Monto", key: "monto", width: 14 },
+      { header: "Banco", key: "banco", width: 18 },
+      { header: "Motivo", key: "motivo", width: 22 },
+      { header: "Plataforma", key: "plataforma", width: 24 },
+      { header: "Detalle", key: "detalle", width: 36 },
+      { header: "Usuario", key: "usuario", width: 18 },
+      { header: "Cliente", key: "cliente", width: 22 },
+      { header: "ID", key: "id", width: 28 },
+    ];
 
-  wsTop.columns = [
-    { header: "Plataforma", key: "plataforma", width: 26 },
-    { header: "Monto", key: "monto", width: 18 },
-  ];
+    wsMov.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
+    wsMov.getRow(1).fill = {
+      type: "pattern",
+      pattern: "solid",
+      fgColor: { argb: "FF1F4E78" },
+    };
+    wsMov.getRow(1).alignment = { horizontal: "center", vertical: "middle" };
 
-  wsTop.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
-  wsTop.getRow(1).fill = {
-    type: "pattern",
-    pattern: "solid",
-    fgColor: { argb: "FF1F4E78" },
-  };
+    movs.forEach((m) => {
+      const row = wsMov.addRow({
+        fecha: m.fecha || "",
+        tipo: String(m.tipo || "").toUpperCase(),
+        monto: Number(m.monto || 0),
+        banco: m.banco || "",
+        motivo: m.motivo || "",
+        plataforma: m.plataforma || "",
+        detalle: m.detalle || "",
+        usuario: m.createdByName || m.createdBy || "",
+        cliente: m.cliente || "",
+        id: m.id || "",
+      });
 
-  const topPlats = agruparIngresosPorPlataforma(movs);
-  topPlats.forEach((x) => {
-    wsTop.addRow({
-      plataforma: humanCategoriaPlataforma(x.plataforma),
-      monto: Number(x.monto || 0),
+      row.getCell("monto").numFmt = "#,##0.00";
+
+      if (String(m.tipo || "") === "ingreso") {
+        row.getCell("tipo").font = { bold: true, color: { argb: "FF008000" } };
+      } else {
+        row.getCell("tipo").font = { bold: true, color: { argb: "FFFF0000" } };
+      }
     });
-  });
-  wsTop.getColumn("monto").numFmt = "#,##0.00";
 
-  const wsEgr = workbook.addWorksheet("Egresos por Motivo", {
-    views: [{ state: "frozen", ySplit: 1 }],
-  });
+    const { ingresos, egresos, neta } = calcularTotalesMovimientos(movs);
 
-  wsEgr.columns = [
-    { header: "Motivo", key: "motivo", width: 28 },
-    { header: "Monto", key: "monto", width: 18 },
-  ];
-
-  wsEgr.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
-  wsEgr.getRow(1).fill = {
-    type: "pattern",
-    pattern: "solid",
-    fgColor: { argb: "FF1F4E78" },
-  };
-
-  const egresosMot = agruparEgresosPorMotivo(movs);
-  egresosMot.forEach((x) => {
-    wsEgr.addRow({
-      motivo: x.motivo,
-      monto: Number(x.monto || 0),
+    const wsRes = workbook.addWorksheet("Resumen", {
+      views: [{ state: "frozen", ySplit: 1 }],
     });
-  });
-  wsEgr.getColumn("monto").numFmt = "#,##0.00";
 
-  const buffer = await workbook.xlsx.writeBuffer();
+    wsRes.columns = [
+      { header: "Concepto", key: "concepto", width: 28 },
+      { header: "Monto", key: "monto", width: 18 },
+    ];
 
-  return bot.sendDocument(chatId, Buffer.from(buffer), {}, {
-    filename: `finanzas_pro_${ymdFromDMY(fechaInicio)}_a_${ymdFromDMY(fechaFin)}.xlsx`,
-    contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-  });
+    wsRes.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
+    wsRes.getRow(1).fill = {
+      type: "pattern",
+      pattern: "solid",
+      fgColor: { argb: "FF1F4E78" },
+    };
+
+    wsRes.addRow({ concepto: "Ingresos", monto: ingresos });
+    wsRes.addRow({ concepto: "Egresos", monto: egresos });
+    wsRes.addRow({ concepto: "Ganancia neta", monto: neta });
+    wsRes.getColumn("monto").numFmt = "#,##0.00";
+
+    const wsBancos = workbook.addWorksheet("Bancos", {
+      views: [{ state: "frozen", ySplit: 1 }],
+    });
+
+    wsBancos.columns = [
+      { header: "Banco", key: "banco", width: 24 },
+      { header: "Monto", key: "monto", width: 18 },
+    ];
+
+    wsBancos.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
+    wsBancos.getRow(1).fill = {
+      type: "pattern",
+      pattern: "solid",
+      fgColor: { argb: "FF1F4E78" },
+    };
+
+    const bancos = agruparIngresosPorBanco(movs);
+    bancos.forEach((x) => {
+      wsBancos.addRow({
+        banco: x.banco,
+        monto: Number(x.monto || 0),
+      });
+    });
+    wsBancos.getColumn("monto").numFmt = "#,##0.00";
+
+    const wsTop = workbook.addWorksheet("Top Plataformas", {
+      views: [{ state: "frozen", ySplit: 1 }],
+    });
+
+    wsTop.columns = [
+      { header: "Plataforma", key: "plataforma", width: 26 },
+      { header: "Monto", key: "monto", width: 18 },
+    ];
+
+    wsTop.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
+    wsTop.getRow(1).fill = {
+      type: "pattern",
+      pattern: "solid",
+      fgColor: { argb: "FF1F4E78" },
+    };
+
+    const topPlats = agruparIngresosPorPlataforma(movs);
+    topPlats.forEach((x) => {
+      wsTop.addRow({
+        plataforma: humanCategoriaPlataforma(x.plataforma),
+        monto: Number(x.monto || 0),
+      });
+    });
+    wsTop.getColumn("monto").numFmt = "#,##0.00";
+
+    const wsEgr = workbook.addWorksheet("Egresos por Motivo", {
+      views: [{ state: "frozen", ySplit: 1 }],
+    });
+
+    wsEgr.columns = [
+      { header: "Motivo", key: "motivo", width: 28 },
+      { header: "Monto", key: "monto", width: 18 },
+    ];
+
+    wsEgr.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
+    wsEgr.getRow(1).fill = {
+      type: "pattern",
+      pattern: "solid",
+      fgColor: { argb: "FF1F4E78" },
+    };
+
+    const egresosMot = agruparEgresosPorMotivo(movs);
+    egresosMot.forEach((x) => {
+      wsEgr.addRow({
+        motivo: x.motivo,
+        monto: Number(x.monto || 0),
+      });
+    });
+    wsEgr.getColumn("monto").numFmt = "#,##0.00";
+
+    const buffer = await workbook.xlsx.writeBuffer();
+
+    return bot.sendDocument(chatId, Buffer.from(buffer), {}, {
+      filename: `finanzas_pro_${ymdFromDMY(fechaInicio)}_a_${ymdFromDMY(fechaFin)}.xlsx`,
+      contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    });
+  } catch (e) {
+    logErr("exportarFinanzasRangoExcel", e);
+    return bot.sendMessage(chatId, "❌ No se pudo exportar el Excel.");
+  }
 }
 
 // ===============================
@@ -3535,6 +3654,7 @@ module.exports = {
   menuRenovaciones,
 
   menuPagos,
+  menuFinanzas,
   menuFinRegistro,
   menuFinEliminarTipo,
   menuFinReportes,
@@ -3555,10 +3675,15 @@ module.exports = {
 
   getMovimientosPorFecha,
   getMovimientosPorMes,
+  getMovimientosRecientesParaEliminar,
   agruparIngresosPorBanco,
   agruparIngresosPorPlataforma,
   agruparEgresosPorMotivo,
   calcularTotalesMovimientos,
+
+  getConceptoMovimientoFin,
+  buildEliminarMovimientoLabel,
+  buildEliminarMovimientoTexto,
 
   resumenFinanzasTextoPorFecha,
   resumenBancosMesTexto,
@@ -3682,6 +3807,7 @@ const {
   menuRenovaciones,
   menuFinRegistro,
   menuFinEliminarTipo,
+  menuFinEliminarListado,
   menuFinReportes,
   kbBancosFinanzas,
   kbMotivosFinanzas,
@@ -3689,10 +3815,12 @@ const {
   registrarEgresoTx,
   getMovimientosPorFecha,
   getMovimientosPorMes,
+  getMovimientosPorTipo,
   resumenFinanzasTextoPorFecha,
   resumenBancosMesTexto,
   resumenTopPlataformasTexto,
   cierreCajaTexto,
+  textoConfirmarEliminacionMovimiento,
   exportarFinanzasRangoExcel,
   eliminarMovimientoFinanzas,
 } = require("./index_05_finanzas_menus");
@@ -3709,11 +3837,17 @@ async function listarRevendedores(chatId) {
   if (snap.empty) return bot.sendMessage(chatId, "⚠️ No hay revendedores.");
 
   const all = snap.docs.map((d) => normalizeRevendedorDoc(d));
-  all.sort((a, b) => String(a.nombre || "").localeCompare(String(b.nombre || ""), "es", { sensitivity: "base" }));
+  all.sort((a, b) =>
+    String(a.nombre || "").localeCompare(String(b.nombre || ""), "es", {
+      sensitivity: "base",
+    })
+  );
 
   let t = "👤 *REVENDEDORES*\n\n";
   all.forEach((x) => {
-    t += `• ${escMD(x.nombre || x.id)} — ${x.activo ? "✅ activo" : "⛔ inactivo"}${x.telegramId ? ` | 🆔 ${escMD(x.telegramId)}` : ""}\n`;
+    t += `• ${escMD(x.nombre || x.id)} — ${x.activo ? "✅ activo" : "⛔ inactivo"}${
+      x.telegramId ? ` | 🆔 ${escMD(x.telegramId)}` : ""
+    }\n`;
   });
 
   if (t.length > 3800) {
@@ -3801,11 +3935,9 @@ bot.onText(/\/sincronizar_todo/i, async (msg) => {
     return bot.sendMessage(chatId, "⛔ Solo el SUPER ADMIN puede sincronizar la base de datos.");
   }
 
-  await bot.sendMessage(
-    chatId,
-    "🔄 *Iniciando sincronización masiva...*",
-    { parse_mode: "Markdown" }
-  );
+  await bot.sendMessage(chatId, "🔄 *Iniciando sincronización masiva...*", {
+    parse_mode: "Markdown",
+  });
 
   let perfilesEmparejados = 0;
   const cuentasAfectadas = new Set();
@@ -3847,9 +3979,10 @@ bot.onText(/\/sincronizar_todo/i, async (msg) => {
 
         const capacidad = Number(invData.capacidad || invData.total || 0);
         const ocupados = clientesInv.length;
-        const disponibles = capacidad > 0
-          ? Math.max(0, capacidad - ocupados)
-          : Math.max(0, Number(invData.disp || 0) - 1);
+        const disponibles =
+          capacidad > 0
+            ? Math.max(0, capacidad - ocupados)
+            : Math.max(0, Number(invData.disp || 0) - 1);
         const estado = disponibles === 0 ? "llena" : "activa";
 
         await refInv.set(
@@ -3878,7 +4011,10 @@ bot.onText(/\/sincronizar_todo/i, async (msg) => {
     return bot.sendMessage(chatId, reporte, { parse_mode: "Markdown" });
   } catch (error) {
     logErr("Error en sincronización:", error);
-    return bot.sendMessage(chatId, "⚠️ Ocurrió un error al sincronizar. Revise los logs del servidor.");
+    return bot.sendMessage(
+      chatId,
+      "⚠️ Ocurrió un error al sincronizar. Revise los logs del servidor."
+    );
   }
 });
 
@@ -4051,24 +4187,27 @@ bot.onText(/\/cierre_caja\s+(.+)/i, async (msg, match) => {
   });
 });
 
-bot.onText(/\/excel_finanzas\s+(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})/i, async (msg, match) => {
-  if (!hasRuntimeLock()) return;
+bot.onText(
+  /\/excel_finanzas\s+(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})/i,
+  async (msg, match) => {
+    if (!hasRuntimeLock()) return;
 
-  const chatId = msg.chat.id;
-  const userId = msg.from.id;
-  if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+    const chatId = msg.chat.id;
+    const userId = msg.from.id;
+    if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
 
-  const fechaInicio = String(match[1] || "").trim();
-  const fechaFin = String(match[2] || "").trim();
+    const fechaInicio = String(match[1] || "").trim();
+    const fechaFin = String(match[2] || "").trim();
 
-  return exportarFinanzasRangoExcel(
-    chatId,
-    fechaInicio,
-    fechaFin,
-    userId,
-    await isSuperAdmin(userId)
-  );
-});
+    return exportarFinanzasRangoExcel(
+      chatId,
+      fechaInicio,
+      fechaFin,
+      userId,
+      await isSuperAdmin(userId)
+    );
+  }
+);
 
 bot.onText(/\/editar_movimiento\s+([A-Za-z0-9_-]+)/i, async (msg, match) => {
   if (!hasRuntimeLock()) return;
@@ -4167,7 +4306,13 @@ bot.onText(/\/addvendedor\s+(\d+)\s+(.+)/i, async (msg, match) => {
 
   if (!telegramId || !nombre) return bot.sendMessage(chatId, "⚠️ Uso:\n/addvendedor ID Nombre");
 
-  const docId = String(nombre || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().replace(/\s+/g, " ") || String(Date.now());
+  const docId =
+    String(nombre || "")
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .trim()
+      .replace(/\s+/g, " ") || String(Date.now());
 
   await db.collection("revendedores").doc(docId).set(
     {
@@ -4491,33 +4636,13 @@ bot.on("callback_query", async (q) => {
       if (data === "fin:menu:eliminar") return menuFinEliminarTipo(chatId);
 
       if (data === "fin:menu:eliminar:ingreso") {
-        pending.set(String(chatId), { mode: "finEliminarFechaAsk", tipoFiltro: "ingreso" });
-        return upsertPanel(
-          chatId,
-          "🗑️ *ELIMINAR INGRESO*\n\nEscriba la fecha en formato *dd/mm/yyyy* para listar ingresos.",
-          {
-            inline_keyboard: [
-              [{ text: "⬅️ Volver Eliminar", callback_data: "fin:menu:eliminar" }],
-              [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
-            ],
-          },
-          "Markdown"
-        );
+        const list = await getMovimientosPorTipo("ingreso", 20);
+        return menuFinEliminarListado(chatId, "ingreso", list);
       }
 
       if (data === "fin:menu:eliminar:egreso") {
-        pending.set(String(chatId), { mode: "finEliminarFechaAsk", tipoFiltro: "egreso" });
-        return upsertPanel(
-          chatId,
-          "🗑️ *ELIMINAR EGRESO*\n\nEscriba la fecha en formato *dd/mm/yyyy* para listar egresos.",
-          {
-            inline_keyboard: [
-              [{ text: "⬅️ Volver Eliminar", callback_data: "fin:menu:eliminar" }],
-              [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
-            ],
-          },
-          "Markdown"
-        );
+        const list = await getMovimientosPorTipo("egreso", 20);
+        return menuFinEliminarListado(chatId, "egreso", list);
       }
 
       if (data === "fin:menu:ingreso") {
@@ -4640,7 +4765,9 @@ bot.on("callback_query", async (q) => {
 
         return upsertPanel(
           chatId,
-          `➕ *REGISTRAR INGRESO*\n\n🏦 Banco: *${escMD(banco)}*\n\n📦 Escriba manualmente la plataforma o plataformas.\nEjemplo:\nNetflix\nDisney\nHBO Max\nPrime Video`,
+          `➕ *REGISTRAR INGRESO*\n\n🏦 Banco: *${escMD(
+            banco
+          )}*\n\n📦 Escriba manualmente la plataforma o plataformas.\nEjemplo:\nNetflix\nDisney\nHBO Max\nPrime Video`,
           {
             inline_keyboard: [
               [{ text: "⬅️ Volver Finanzas", callback_data: "fin:menu:registro" }],
@@ -4666,7 +4793,9 @@ bot.on("callback_query", async (q) => {
 
         return upsertPanel(
           chatId,
-          `➖ *REGISTRAR EGRESO*\n\n🧾 Motivo: *${escMD(motivo)}*\n\n📝 Escriba el detalle del egreso:`,
+          `➖ *REGISTRAR EGRESO*\n\n🧾 Motivo: *${escMD(
+            motivo
+          )}*\n\n📝 Escriba el detalle del egreso:`,
           {
             inline_keyboard: [
               [{ text: "⬅️ Volver Finanzas", callback_data: "fin:menu:registro" }],
@@ -4677,18 +4806,73 @@ bot.on("callback_query", async (q) => {
         );
       }
 
-      if (data.startsWith("fin:del:one:")) {
+      if (data.startsWith("fin:del:pick:")) {
         const id = String(data.split(":")[3] || "").trim();
+        const ref = db.collection(FINANZAS_COLLECTION).doc(id);
+        const doc = await ref.get();
+
+        if (!doc.exists) {
+          return bot.sendMessage(chatId, "⚠️ Movimiento no encontrado.");
+        }
+
+        const m = { id: doc.id, ...(doc.data() || {}) };
+        const tipo = String(m.tipo || "").toLowerCase() === "egreso" ? "egreso" : "ingreso";
+
+        return upsertPanel(
+          chatId,
+          textoConfirmarEliminacionMovimiento(m),
+          {
+            inline_keyboard: [
+              [{ text: "✅ Sí, eliminar este", callback_data: `fin:del:ok:${id}` }],
+              [
+                {
+                  text: tipo === "egreso" ? "⬅️ Volver egresos" : "⬅️ Volver ingresos",
+                  callback_data:
+                    tipo === "egreso"
+                      ? "fin:menu:eliminar:egreso"
+                      : "fin:menu:eliminar:ingreso",
+                },
+              ],
+              [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
+            ],
+          },
+          "Markdown"
+        );
+      }
+
+      if (data.startsWith("fin:del:ok:")) {
+        const id = String(data.split(":")[3] || "").trim();
+
         try {
           const eliminado = await eliminarMovimientoFinanzas(
             id,
             userId,
             await isSuperAdmin(userId)
           );
-          return bot.sendMessage(
+
+          const tipoEliminado =
+            String(eliminado.tipo || "").toLowerCase() === "egreso" ? "egreso" : "ingreso";
+
+          return upsertPanel(
             chatId,
-            `✅ Movimiento eliminado.\n\n🗂️ Tipo: ${eliminado.tipo}\n💰 Monto: ${moneyLps(eliminado.monto)}\n📅 Fecha: ${eliminado.fecha}`,
-            { parse_mode: "Markdown" }
+            `✅ *Movimiento eliminado correctamente*\n\n` +
+              `🗂️ Tipo: ${escMD(eliminado.tipo || "-")}\n` +
+              `💰 Monto: ${moneyLps(eliminado.monto || 0)}\n` +
+              `📅 Fecha: ${escMD(eliminado.fecha || "-")}`,
+            {
+              inline_keyboard: [
+                [
+                  {
+                    text: tipoEliminado === "egreso" ? "➖ Ver egresos" : "➕ Ver ingresos",
+                    callback_data: `fin:menu:eliminar:${tipoEliminado}`,
+                  },
+                ],
+                [{ text: "🗑️ Volver eliminar", callback_data: "fin:menu:eliminar" }],
+                [{ text: "⬅️ Volver a Finanzas", callback_data: "menu:pagos" }],
+                [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
+              ],
+            },
+            "Markdown"
           );
         } catch (e) {
           return bot.sendMessage(
@@ -4760,7 +4944,11 @@ bot.on("callback_query", async (q) => {
 
       if (data === "inv:general") return mostrarStockGeneral(chatId);
 
-      if (data.startsWith("inv:") && !data.startsWith("inv:open:") && !data.startsWith("inv:menu:")) {
+      if (
+        data.startsWith("inv:") &&
+        !data.startsWith("inv:open:") &&
+        !data.startsWith("inv:menu:")
+      ) {
         const [, plat, pageStr] = data.split(":");
         return enviarInventarioPlataforma(chatId, plat, Number(pageStr || 0));
       }
@@ -4782,7 +4970,9 @@ bot.on("callback_query", async (q) => {
         pending.set(String(chatId), { mode: "invSumarQty", plat, correo });
         return upsertPanel(
           chatId,
-          `➕ *Agregar perfil*\n📌 ${String(plat).toUpperCase()}\n📧 ${escMD(correo)}\n\nEscriba cantidad a *SUMAR* (ej: 1):`,
+          `➕ *Agregar perfil*\n📌 ${String(plat).toUpperCase()}\n📧 ${escMD(
+            correo
+          )}\n\nEscriba cantidad a *SUMAR* (ej: 1):`,
           {
             inline_keyboard: [[{
               text: "↩️ Cancelar",
@@ -4799,7 +4989,9 @@ bot.on("callback_query", async (q) => {
         pending.set(String(chatId), { mode: "invRestarQty", plat, correo });
         return upsertPanel(
           chatId,
-          `➖ *Quitar perfil*\n📌 ${String(plat).toUpperCase()}\n📧 ${escMD(correo)}\n\nEscriba cantidad a *RESTAR* (ej: 1):`,
+          `➖ *Quitar perfil*\n📌 ${String(plat).toUpperCase()}\n📧 ${escMD(
+            correo
+          )}\n\nEscriba cantidad a *RESTAR* (ej: 1):`,
           {
             inline_keyboard: [[{
               text: "↩️ Cancelar",
@@ -4816,7 +5008,9 @@ bot.on("callback_query", async (q) => {
         pending.set(String(chatId), { mode: "invEditClave", plat, correo });
         return upsertPanel(
           chatId,
-          `✏️ *Editar clave*\n📌 ${String(plat).toUpperCase()}\n📧 ${escMD(correo)}\n\nEscriba la nueva clave:`,
+          `✏️ *Editar clave*\n📌 ${String(plat).toUpperCase()}\n📧 ${escMD(
+            correo
+          )}\n\nEscriba la nueva clave:`,
           {
             inline_keyboard: [[{
               text: "↩️ Cancelar",
@@ -6054,49 +6248,6 @@ bot.on("message", async (msg) => {
         return bot.sendMessage(chatId, cierreCajaTexto(fecha, list), {
           parse_mode: "Markdown",
         });
-      }
-
-      if (p.mode === "finEliminarFechaAsk") {
-        const fecha = String(t || "").trim();
-        if (!isFechaDMY(fecha)) return bot.sendMessage(chatId, "⚠️ Fecha inválida. Use dd/mm/yyyy");
-
-        pending.delete(String(chatId));
-        let list = await getMovimientosPorFecha(fecha, userId, await isSuperAdmin(userId));
-
-        if (p.tipoFiltro) {
-          list = list.filter((m) => String(m.tipo || "").toLowerCase() === String(p.tipoFiltro).toLowerCase());
-        }
-
-        if (!list.length) {
-          return bot.sendMessage(
-            chatId,
-            p.tipoFiltro
-              ? `⚠️ No hay ${p.tipoFiltro === "ingreso" ? "ingresos" : "egresos"} en esa fecha.`
-              : "⚠️ No hay movimientos en esa fecha."
-          );
-        }
-
-        const kb = list.slice(0, 20).map((m, i) => {
-          const tipo = String(m.tipo || "").toLowerCase();
-          const bancoOMotivo = tipo === "ingreso"
-            ? `🏦 ${m.banco || "-"}`
-            : `🧾 ${m.motivo || "-"}`;
-          const detalle = m.detalle ? ` | ${m.detalle}` : "";
-          const label = `${i + 1}) ${tipo === "ingreso" ? "+" : "-"} ${moneyNumber(m.monto || 0)} | ${bancoOMotivo}${detalle}`;
-
-          return [{ text: safeBtnLabel(label, 60), callback_data: `fin:del:one:${m.id}` }];
-        });
-
-        kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
-
-        return bot.sendMessage(
-          chatId,
-          `🗑️ *${p.tipoFiltro === "ingreso" ? "INGRESOS" : p.tipoFiltro === "egreso" ? "EGRESOS" : "MOVIMIENTOS"} del ${escMD(fecha)}*\nSeleccione cuál eliminar:`,
-          {
-            parse_mode: "Markdown",
-            reply_markup: { inline_keyboard: kb },
-          }
-        );
       }
 
       if (p.mode === "finExcelRangoInicio") {
