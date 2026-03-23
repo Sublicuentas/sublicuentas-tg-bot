@@ -332,6 +332,7 @@ module.exports = {
   bootCore,
   getCoreHealth,
 };
+
 const {
   bot,
   admin,
@@ -2663,7 +2664,6 @@ module.exports = {
   responderCodigoNetflix,
   responderMenuCodigosNetflix,
 };
-
 /* ✅ SUBLICUENTAS TG BOT — PARTE 5/6
    FINANZAS / REPORTES / EXCEL / MENÚS
    -----------------------------------
@@ -2897,6 +2897,44 @@ async function menuFinEliminarTipo(chatId) {
         [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
       ],
     },
+    "Markdown"
+  );
+}
+
+async function menuFinEliminarListado(chatId, tipo = "", list = []) {
+  const tipoNorm = String(tipo || "").trim().toLowerCase() === "egreso" ? "egreso" : "ingreso";
+  const titulo = tipoNorm === "egreso" ? "➖ *EGRESOS RECIENTES*" : "➕ *INGRESOS RECIENTES*";
+
+  const rows = [];
+
+  if (!Array.isArray(list) || !list.length) {
+    rows.push([{ text: "⬅️ Volver eliminar", callback_data: "fin:menu:eliminar" }]);
+    rows.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
+
+    return upsertPanel(
+      chatId,
+      `${titulo}\n\n⚠️ No hay movimientos recientes para mostrar.`,
+      { inline_keyboard: rows },
+      "Markdown"
+    );
+  }
+
+  for (const m of list) {
+    rows.push([
+      {
+        text: buildEliminarMovimientoLabel(m),
+        callback_data: `fin:del:pick:${m.id}`,
+      },
+    ]);
+  }
+
+  rows.push([{ text: "⬅️ Volver eliminar", callback_data: "fin:menu:eliminar" }]);
+  rows.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
+
+  return upsertPanel(
+    chatId,
+    `${titulo}\n\nSeleccione el movimiento exacto que desea eliminar:`,
+    { inline_keyboard: rows },
     "Markdown"
   );
 }
@@ -3207,6 +3245,11 @@ async function getMovimientosRecientesParaEliminar(tipo = "", limit = 20) {
   return movs;
 }
 
+// Alias de compatibilidad con parte 6 vieja
+async function getMovimientosPorTipo(tipo = "", limit = 20) {
+  return getMovimientosRecientesParaEliminar(tipo, limit);
+}
+
 function agruparIngresosPorBanco(movs = []) {
   const map = new Map();
 
@@ -3310,9 +3353,10 @@ function buildEliminarMovimientoTexto(m = {}) {
   const bancoMotivo = esIngreso
     ? `*Banco:* ${escMD(String(m.banco || "Sin banco").trim())}`
     : `*Motivo:* ${escMD(String(m.motivo || "Sin motivo").trim())}`;
-  const plataforma = esIngreso && String(m.plataforma || "").trim()
-    ? `\n*Plataforma:* ${escMD(String(m.plataforma || "").trim())}`
-    : "";
+  const plataforma =
+    esIngreso && String(m.plataforma || "").trim()
+      ? `\n*Plataforma:* ${escMD(String(m.plataforma || "").trim())}`
+      : "";
   const detalle = `*Detalle:* ${escMD(String(m.detalle || "").trim() || "Sin detalle")}`;
   const cliente = String(m.cliente || "").trim()
     ? `\n*Cliente:* ${escMD(String(m.cliente || "").trim())}`
@@ -3333,6 +3377,11 @@ function buildEliminarMovimientoTexto(m = {}) {
     `${detalle}${cliente}${vendedor}${user}\n\n` +
     `¿Desea eliminar este movimiento?`
   );
+}
+
+// Alias de compatibilidad con parte 6 vieja
+function textoConfirmarEliminacionMovimiento(m = {}) {
+  return buildEliminarMovimientoTexto(m);
 }
 
 // ===============================
@@ -3657,6 +3706,7 @@ module.exports = {
   menuFinanzas,
   menuFinRegistro,
   menuFinEliminarTipo,
+  menuFinEliminarListado,
   menuFinReportes,
 
   getFinBancos,
@@ -3676,6 +3726,7 @@ module.exports = {
   getMovimientosPorFecha,
   getMovimientosPorMes,
   getMovimientosRecientesParaEliminar,
+  getMovimientosPorTipo,
   agruparIngresosPorBanco,
   agruparIngresosPorPlataforma,
   agruparEgresosPorMotivo,
@@ -3684,6 +3735,7 @@ module.exports = {
   getConceptoMovimientoFin,
   buildEliminarMovimientoLabel,
   buildEliminarMovimientoTexto,
+  textoConfirmarEliminacionMovimiento,
 
   resumenFinanzasTextoPorFecha,
   resumenBancosMesTexto,
@@ -3693,6 +3745,7 @@ module.exports = {
 
   exportarFinanzasRangoExcel,
 };
+
 /* ✅ SUBLICUENTAS TG BOT — PARTE 6/6
    HANDLERS / COMANDOS / CALLBACKS / MESSAGE / AUTOTXT / HARDEN / HTTP
    -------------------------------------------------------------------
@@ -6956,3 +7009,5 @@ http
   .listen(PORT, () => {
     console.log("🌐 HTTP KEEPALIVE activo en puerto", PORT);
   });
+
+
