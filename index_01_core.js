@@ -1,6 +1,5 @@
-/* ✅ SUBLICUENTAS TG BOT — PARTE 1/6
+/* ✅ SUBLICUENTAS TG BOT — PARTE 1/6 CORREGIDA
    CORE / ARRANQUE / FIREBASE / POLLING / CONSTANTES
-   -------------------------------------------------
 */
 
 const TelegramBot = require("node-telegram-bot-api");
@@ -14,9 +13,6 @@ try {
   console.log("⚠️ ExcelJS no está instalado. El bot iniciará sin exportación Excel.");
 }
 
-// ===============================
-// ENV
-// ===============================
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID;
 const FIREBASE_CLIENT_EMAIL = process.env.FIREBASE_CLIENT_EMAIL;
@@ -29,9 +25,6 @@ if (!FIREBASE_PROJECT_ID || !FIREBASE_CLIENT_EMAIL || !FIREBASE_PRIVATE_KEY) {
   throw new Error("Faltan variables Firebase");
 }
 
-// ===============================
-// FIREBASE
-// ===============================
 if (!admin.apps.length) {
   admin.initializeApp({
     credential: admin.credential.cert({
@@ -45,9 +38,6 @@ if (!admin.apps.length) {
 const db = admin.firestore();
 console.log("✅ FIREBASE PROJECT:", FIREBASE_PROJECT_ID);
 
-// ===============================
-// ESTADO CORE
-// ===============================
 const CORE_STATE = {
   HAS_RUNTIME_LOCK: true,
   BOT_IS_STARTING: false,
@@ -57,23 +47,12 @@ const CORE_STATE = {
   NETFLIX_LISTENER_STARTED: false,
 };
 
-// ===============================
-// COMPATIBILIDAD
-// ===============================
 async function releaseRuntimeLock() {
   return true;
 }
 
-// ===============================
-// BOT BASE
-// ===============================
-const bot = new TelegramBot(BOT_TOKEN, {
-  polling: false,
-});
+const bot = new TelegramBot(BOT_TOKEN, { polling: false });
 
-// ===============================
-// HELPERS RESTART
-// ===============================
 function clearScheduledRestart() {
   if (CORE_STATE.BOT_START_TIMEOUT) {
     clearTimeout(CORE_STATE.BOT_START_TIMEOUT);
@@ -83,7 +62,6 @@ function clearScheduledRestart() {
 
 function scheduleBotRestart(delayMs = 10000) {
   clearScheduledRestart();
-
   CORE_STATE.BOT_START_TIMEOUT = setTimeout(() => {
     startBotSafe(true).catch((e) => {
       console.error("❌ scheduleBotRestart error:", e?.message || e);
@@ -95,19 +73,12 @@ function scheduleBotRestart(delayMs = 10000) {
   }
 }
 
-// ===============================
-// EVENTOS BASE BOT
-// ===============================
 bot.on("polling_error", async (err) => {
   const msg = String(err?.message || err || "");
   console.error("❌ polling_error:", msg);
-
   CORE_STATE.BOT_POLLING_ACTIVE = false;
 
-  if (
-    msg.includes("409") ||
-    msg.toLowerCase().includes("terminated by other getupdates request")
-  ) {
+  if (msg.includes("409") || msg.toLowerCase().includes("terminated by other getupdates request")) {
     scheduleBotRestart(10000);
     return;
   }
@@ -127,49 +98,25 @@ bot.on("webhook_error", (err) => {
   console.error("❌ webhook_error:", err?.message || err);
 });
 
-// ===============================
-// HARD STOP / START SEGURO
-// ===============================
 async function hardStopBot() {
   clearScheduledRestart();
-
-  try {
-    await bot.stopPolling();
-  } catch (_) {}
-
-  try {
-    await bot.deleteWebHook();
-  } catch (_) {}
-
+  try { await bot.stopPolling(); } catch (_) {}
+  try { await bot.deleteWebHook(); } catch (_) {}
   CORE_STATE.BOT_POLLING_ACTIVE = false;
 }
 
 async function startBotSafe(force = false) {
   const now = Date.now();
 
-  if (CORE_STATE.BOT_IS_STARTING && !force) {
-    console.log("ℹ️ Bot ya está iniciando, se evita start duplicado");
-    return;
-  }
-
-  if (CORE_STATE.BOT_POLLING_ACTIVE && !force) {
-    console.log("ℹ️ Bot ya activo");
-    return;
-  }
-
-  if (!force && now - CORE_STATE.BOT_LAST_START_AT < 7000) {
-    console.log("ℹ️ Ventana anti-restart activa");
-    return;
-  }
+  if (CORE_STATE.BOT_IS_STARTING && !force) return;
+  if (CORE_STATE.BOT_POLLING_ACTIVE && !force) return;
+  if (!force && now - CORE_STATE.BOT_LAST_START_AT < 7000) return;
 
   CORE_STATE.BOT_IS_STARTING = true;
   CORE_STATE.BOT_LAST_START_AT = now;
 
   try {
-    console.log("🔄 Arrancando bot limpio...");
-
     clearScheduledRestart();
-
     await hardStopBot();
     await new Promise((r) => setTimeout(r, 2000));
 
@@ -190,9 +137,6 @@ async function startBotSafe(force = false) {
   }
 }
 
-// ===============================
-// LISTENER NETFLIX
-// ===============================
 function startNetflixListenerIfLeader() {
   if (CORE_STATE.NETFLIX_LISTENER_STARTED) return;
 
@@ -209,21 +153,12 @@ function startNetflixListenerIfLeader() {
   }
 }
 
-// ===============================
-// BOOT CONTROLADO
-// ===============================
 async function bootCore() {
-  try {
-    await hardStopBot();
-  } catch (_) {}
-
+  try { await hardStopBot(); } catch (_) {}
   startNetflixListenerIfLeader();
   await startBotSafe();
 }
 
-// ===============================
-// CONSTANTES
-// ===============================
 const PLATAFORMAS = [
   "netflix",
   "vipnetflix",
@@ -236,27 +171,20 @@ const PLATAFORMAS = [
   "vix",
   "appletv",
   "universal",
-
   "spotify",
   "youtube",
   "deezer",
-
   "oleadatv1",
   "oleadatv3",
   "iptv1",
   "iptv3",
   "iptv4",
-
   "canva",
   "gemini",
   "chatgpt",
 ];
 
 const PAGE_SIZE = 10;
-
-// ===============================
-// FINANZAS CONFIG GLOBAL
-// ===============================
 const FINANZAS_COLLECTION = "finanzas_movimientos";
 
 const FIN_BANCOS = [
@@ -286,9 +214,6 @@ const FIN_MOTIVOS_EGRESO = [
 global.FIN_BANCOS = FIN_BANCOS;
 global.FIN_MOTIVOS_EGRESO = FIN_MOTIVOS_EGRESO;
 
-// ===============================
-// HEALTH CORE
-// ===============================
 function getCoreHealth() {
   return {
     ok: true,
@@ -300,29 +225,23 @@ function getCoreHealth() {
   };
 }
 
-// ===============================
-// EXPORTS
-// ===============================
 module.exports = {
   bot,
   admin,
   db,
   ExcelJS,
-
   BOT_TOKEN,
   FIREBASE_PROJECT_ID,
   FIREBASE_CLIENT_EMAIL,
   FIREBASE_PRIVATE_KEY,
   SUPER_ADMIN,
   TZ,
-
   CORE_STATE,
   PLATAFORMAS,
   PAGE_SIZE,
   FINANZAS_COLLECTION,
   FIN_BANCOS,
   FIN_MOTIVOS_EGRESO,
-
   releaseRuntimeLock,
   hardStopBot,
   startBotSafe,
