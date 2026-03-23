@@ -1,13 +1,11 @@
-/* ✅ SUBLICUENTAS TG BOT — PARTE 6/6
+/* ✅ SUBLICUENTAS TG BOT — PARTE 6/6 CORREGIDA
    HANDLERS / COMANDOS / CALLBACKS / MESSAGE / AUTOTXT / HARDEN / HTTP
    -------------------------------------------------------------------
-   Este archivo registra:
-   - comandos
-   - callback_query
-   - message handler
-   - auto TXT 7AM
-   - harden de proceso
-   - servidor HTTP /health
+   Compatible con:
+   - inventario por categorías
+   - plataformas nuevas: deezer, gemini, chatgpt
+   - accesos por correo o usuario según plataforma
+   - parte 1, 2, 3, 4 y 5 actualizadas
 */
 
 const http = require("http");
@@ -53,10 +51,13 @@ const {
   getMonthKeyFromDMY,
   parseDMYtoTS,
   moneyLps,
-  moneyNumber,
   hoyDMY,
   addDaysDMY,
   logErr,
+  getIdentLabel,
+  getAccessTypeLabel,
+  validateIdentByPlatform,
+  normalizeIdentByPlatform,
 } = require("./index_02_utils_roles");
 
 const {
@@ -107,6 +108,10 @@ const {
   menuVendedor,
   menuVendedorFromCommand,
   menuInventario,
+  menuInventarioVideo,
+  menuInventarioMusica,
+  menuInventarioIptv,
+  menuInventarioDisenoIA,
   menuClientes,
   menuPagos,
   menuRenovaciones,
@@ -135,6 +140,10 @@ const {
 // ===============================
 function hasRuntimeLock() {
   return CORE_STATE.HAS_RUNTIME_LOCK === true;
+}
+
+function identIcon(plataforma = "") {
+  return getIdentLabel(plataforma) === "Usuario" ? "👤" : "📧";
 }
 
 async function listarRevendedores(chatId) {
@@ -259,8 +268,8 @@ bot.onText(/\/sincronizar_todo/i, async (msg) => {
         if (!s.correo || !s.plataforma) continue;
 
         const plat = normalizarPlataforma(s.plataforma);
-        const mail = String(s.correo).trim().toLowerCase();
-        const docId = docIdInventario(mail, plat);
+        const acceso = String(s.correo).trim().toLowerCase();
+        const docId = docIdInventario(acceso, plat);
 
         const refInv = db.collection("inventario").doc(docId);
         const docInv = await refInv.get();
@@ -308,10 +317,10 @@ bot.onText(/\/sincronizar_todo/i, async (msg) => {
       }
     }
 
-    let reporte = "✅ *Sincronización Completada con Éxito*\n\n";
-    reporte += `👤 PERFILES emparejados: *${perfilesEmparejados}*\n`;
-    reporte += `📧 CUENTAS actualizadas: *${cuentasAfectadas.size}*\n\n`;
-    reporte += "💡 _Su base de datos ahora está 100% conectada._";
+    let reporte = "✅ *Sincronización completada con éxito*\n\n";
+    reporte += `👤 Perfiles emparejados: *${perfilesEmparejados}*\n`;
+    reporte += `📦 Cuentas actualizadas: *${cuentasAfectadas.size}*\n\n`;
+    reporte += "💡 _La base quedó sincronizada._";
 
     return bot.sendMessage(chatId, reporte, { parse_mode: "Markdown" });
   } catch (error) {
@@ -804,7 +813,10 @@ bot.onText(/\/stock/i, async (msg) => {
 });
 
 // ===============================
-// AGREGAR CORREO INVENTARIO
+// AGREGAR CUENTA INVENTARIO
+// /addcorreo plataforma acceso [capacidad]
+// Nota interna: el campo se sigue guardando en "correo"
+// aunque para ciertas plataformas sea usuario.
 // ===============================
 bot.onText(/\/addcorreo\s+(\S+)\s+(\S+)(?:\s+(\d+))?/i, async (msg, match) => {
   if (!hasRuntimeLock()) return;
@@ -817,35 +829,37 @@ bot.onText(/\/addcorreo\s+(\S+)\s+(\S+)(?:\s+(\d+))?/i, async (msg, match) => {
   }
 
   const platRaw = match[1];
-  const correoRaw = match[2];
+  const accesoRaw = match[2];
   const capacidadRaw = match[3];
 
   const plat = normalizarPlataforma(platRaw);
   if (!esPlataformaValida(plat)) {
     return bot.sendMessage(
       chatId,
-      "⚠️ *Plataforma no válida.*\nEjemplos válidos: netflix, disneyp, hbomax...",
+      "⚠️ *Plataforma no válida.*",
       { parse_mode: "Markdown" }
     );
   }
 
-  const mail = String(correoRaw).toLowerCase().trim();
-  if (!isEmailLike(mail)) {
+  const label = getIdentLabel(plat);
+  const acceso = normalizeIdentByPlatform(plat, accesoRaw);
+
+  if (!validateIdentByPlatform(plat, acceso)) {
     return bot.sendMessage(
       chatId,
-      "⚠️ *Formato de correo inválido.* Asegúrese de que lleve el @.",
+      `⚠️ *${escMD(label)} inválido.*\nRevise el formato para esta plataforma.`,
       { parse_mode: "Markdown" }
     );
   }
 
-  const idInv = docIdInventario(mail, plat);
+  const idInv = docIdInventario(acceso, plat);
   const ref = db.collection("inventario").doc(idInv);
   const doc = await ref.get();
 
   if (doc.exists) {
     return bot.sendMessage(
       chatId,
-      "⚠️ *Este correo ya existe* en el inventario para esta plataforma.",
+      `⚠️ *Esta cuenta ya existe* en el inventario para *${escMD(plat)}*.`,
       { parse_mode: "Markdown" }
     );
   }
@@ -854,28 +868,34 @@ bot.onText(/\/addcorreo\s+(\S+)\s+(\S+)(?:\s+(\d+))?/i, async (msg, match) => {
   if (!capacidadRaw || isNaN(capacidad) || capacidad <= 0) {
     const { getTotalPorPlataforma } = require("./index_02_utils_roles");
     const total = await getTotalPorPlataforma(plat);
-    capacidad = total || 5;
+    capacidad = total || 1;
   }
 
   await ref.set({
     plataforma: plat,
-    correo: mail,
+    correo: acceso,
     capacidad,
     clientes: [],
     ocupados: 0,
     disponibles: capacidad,
     disp: capacidad,
     estado: "activa",
-    clave: "Sin clave",
+    clave: getAccessTypeLabel(plat) === "Solo correo" ? "" : "Sin clave",
     createdAt: admin.firestore.FieldValue.serverTimestamp(),
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
   });
 
-  return bot.sendMessage(
-    chatId,
-    `✅ *NUEVA CUENTA AGREGADA AL INVENTARIO*\n\n📌 *Plataforma:* ${plat.toUpperCase()}\n📧 *Correo:* ${mail}\n👥 *Pantallas totales:* ${capacidad}\n\n_💡 Ya puede asignarle clientes a este correo desde el Wizard._`,
-    { parse_mode: "Markdown" }
-  );
+  let out = `✅ *NUEVA CUENTA AGREGADA AL INVENTARIO*\n\n`;
+  out += `📌 *Plataforma:* ${escMD(plat.toUpperCase())}\n`;
+  out += `🔐 *Tipo de acceso:* ${escMD(getAccessTypeLabel(plat))}\n`;
+  out += `${identIcon(plat)} *${escMD(label)}:* ${escMD(acceso)}\n`;
+  if (getAccessTypeLabel(plat) !== "Solo correo") {
+    out += `🔑 *Clave inicial:* Sin clave\n`;
+  }
+  out += `👥 *Capacidad:* ${capacidad}\n\n`;
+  out += `_💡 Ya puede editar la clave o asignar clientes._`;
+
+  return bot.sendMessage(chatId, out, { parse_mode: "Markdown" });
 });
 
 // ===============================
@@ -932,6 +952,11 @@ bot.on("callback_query", async (q) => {
 
     if (adminOk) {
       if (data === "menu:inventario") return menuInventario(chatId);
+      if (data === "menu:inventario:video") return menuInventarioVideo(chatId);
+      if (data === "menu:inventario:musica") return menuInventarioMusica(chatId);
+      if (data === "menu:inventario:iptv") return menuInventarioIptv(chatId);
+      if (data === "menu:inventario:designai") return menuInventarioDisenoIA(chatId);
+
       if (data === "menu:clientes") return menuClientes(chatId);
       if (data === "menu:pagos") return menuPagos(chatId);
       if (data === "menu:renovaciones") return menuRenovaciones(chatId, userId);
@@ -1241,7 +1266,7 @@ bot.on("callback_query", async (q) => {
       if (data === "menu:buscar") {
         return upsertPanel(
           chatId,
-          "🔎 *BUSCAR*\n\nUse:\n• /buscar NOMBRE\n• /buscar TELEFONO\n\nO directo:\n• /NOMBRE\n• /TELEFONO",
+          "🔎 *BUSCAR*\n\nUse:\n• /buscar NOMBRE\n• /buscar TELEFONO\n\nTambién puede escribir directamente:\n• /NOMBRE\n• /TELEFONO\n• /CORREO\n• /USUARIO",
           { inline_keyboard: [[{ text: "🏠 Inicio", callback_data: "go:inicio" }]] },
           "Markdown"
         );
@@ -1259,29 +1284,29 @@ bot.on("callback_query", async (q) => {
       }
 
       if (data.startsWith("inv:open:")) {
-        const [, , plat, correoEnc] = data.split(":");
-        const correo = decodeURIComponent(correoEnc || "");
+        const [, , plat, accesoEnc] = data.split(":");
+        const acceso = decodeURIComponent(accesoEnc || "");
         pending.set(String(chatId), {
           mode: "invSubmenuCtx",
           plat: normalizarPlataforma(plat),
-          correo: String(correo).toLowerCase(),
+          correo: String(acceso).toLowerCase(),
         });
-        return enviarSubmenuInventario(chatId, plat, correo);
+        return enviarSubmenuInventario(chatId, plat, acceso);
       }
 
       if (data.startsWith("inv:menu:sumar:")) {
-        const [, , , plat, correoEnc] = data.split(":");
-        const correo = decodeURIComponent(correoEnc || "");
-        pending.set(String(chatId), { mode: "invSumarQty", plat, correo });
+        const [, , , plat, accesoEnc] = data.split(":");
+        const acceso = decodeURIComponent(accesoEnc || "");
+        pending.set(String(chatId), { mode: "invSumarQty", plat, correo: acceso });
         return upsertPanel(
           chatId,
-          `➕ *Agregar perfil*\n📌 ${String(plat).toUpperCase()}\n📧 ${escMD(
-            correo
-          )}\n\nEscriba cantidad a *SUMAR* (ej: 1):`,
+          `➕ *Agregar perfil*\n📌 ${String(plat).toUpperCase()}\n${identIcon(plat)} ${escMD(
+            getIdentLabel(plat)
+          )}: ${escMD(acceso)}\n\nEscriba cantidad a *SUMAR* (ej: 1):`,
           {
             inline_keyboard: [[{
               text: "↩️ Cancelar",
-              callback_data: `inv:menu:cancel:${plat}:${encodeURIComponent(correo)}`,
+              callback_data: `inv:menu:cancel:${plat}:${encodeURIComponent(acceso)}`,
             }]],
           },
           "Markdown"
@@ -1289,18 +1314,18 @@ bot.on("callback_query", async (q) => {
       }
 
       if (data.startsWith("inv:menu:restar:")) {
-        const [, , , plat, correoEnc] = data.split(":");
-        const correo = decodeURIComponent(correoEnc || "");
-        pending.set(String(chatId), { mode: "invRestarQty", plat, correo });
+        const [, , , plat, accesoEnc] = data.split(":");
+        const acceso = decodeURIComponent(accesoEnc || "");
+        pending.set(String(chatId), { mode: "invRestarQty", plat, correo: acceso });
         return upsertPanel(
           chatId,
-          `➖ *Quitar perfil*\n📌 ${String(plat).toUpperCase()}\n📧 ${escMD(
-            correo
-          )}\n\nEscriba cantidad a *RESTAR* (ej: 1):`,
+          `➖ *Quitar perfil*\n📌 ${String(plat).toUpperCase()}\n${identIcon(plat)} ${escMD(
+            getIdentLabel(plat)
+          )}: ${escMD(acceso)}\n\nEscriba cantidad a *RESTAR* (ej: 1):`,
           {
             inline_keyboard: [[{
               text: "↩️ Cancelar",
-              callback_data: `inv:menu:cancel:${plat}:${encodeURIComponent(correo)}`,
+              callback_data: `inv:menu:cancel:${plat}:${encodeURIComponent(acceso)}`,
             }]],
           },
           "Markdown"
@@ -1308,18 +1333,18 @@ bot.on("callback_query", async (q) => {
       }
 
       if (data.startsWith("inv:menu:clave:")) {
-        const [, , , plat, correoEnc] = data.split(":");
-        const correo = decodeURIComponent(correoEnc || "");
-        pending.set(String(chatId), { mode: "invEditClave", plat, correo });
+        const [, , , plat, accesoEnc] = data.split(":");
+        const acceso = decodeURIComponent(accesoEnc || "");
+        pending.set(String(chatId), { mode: "invEditClave", plat, correo: acceso });
         return upsertPanel(
           chatId,
-          `✏️ *Editar clave*\n📌 ${String(plat).toUpperCase()}\n📧 ${escMD(
-            correo
-          )}\n\nEscriba la nueva clave:`,
+          `✏️ *Editar clave*\n📌 ${String(plat).toUpperCase()}\n${identIcon(plat)} ${escMD(
+            getIdentLabel(plat)
+          )}: ${escMD(acceso)}\n\nEscriba la nueva clave:`,
           {
             inline_keyboard: [[{
               text: "↩️ Cancelar",
-              callback_data: `inv:menu:cancel:${plat}:${encodeURIComponent(correo)}`,
+              callback_data: `inv:menu:cancel:${plat}:${encodeURIComponent(acceso)}`,
             }]],
           },
           "Markdown"
@@ -1327,32 +1352,34 @@ bot.on("callback_query", async (q) => {
       }
 
       if (data.startsWith("inv:menu:cancel:")) {
-        const [, , , plat, correoEnc] = data.split(":");
-        const correo = decodeURIComponent(correoEnc || "");
+        const [, , , plat, accesoEnc] = data.split(":");
+        const acceso = decodeURIComponent(accesoEnc || "");
         pending.delete(String(chatId));
         pending.set(String(chatId), {
           mode: "invSubmenuCtx",
           plat: normalizarPlataforma(plat),
-          correo: String(correo).toLowerCase(),
+          correo: String(acceso).toLowerCase(),
         });
-        return enviarSubmenuInventario(chatId, plat, correo);
+        return enviarSubmenuInventario(chatId, plat, acceso);
       }
 
       if (data.startsWith("inv:menu:borrar:")) {
-        const [, , , plat, correoEnc] = data.split(":");
-        const correo = decodeURIComponent(correoEnc || "");
+        const [, , , plat, accesoEnc] = data.split(":");
+        const acceso = decodeURIComponent(accesoEnc || "");
         return upsertPanel(
           chatId,
-          `🗑️ Confirmar *borrar correo*?\n📌 ${String(plat).toUpperCase()}\n📧 ${escMD(correo)}`,
+          `🗑️ Confirmar *borrar cuenta*?\n📌 ${String(plat).toUpperCase()}\n${identIcon(
+            plat
+          )} ${escMD(getIdentLabel(plat))}: ${escMD(acceso)}`,
           {
             inline_keyboard: [
               [{
                 text: "✅ Confirmar",
-                callback_data: `inv:menu:borrarok:${normalizarPlataforma(plat)}:${encodeURIComponent(String(correo).toLowerCase())}`,
+                callback_data: `inv:menu:borrarok:${normalizarPlataforma(plat)}:${encodeURIComponent(String(acceso).toLowerCase())}`,
               }],
               [{
                 text: "⬅️ Cancelar",
-                callback_data: `inv:menu:cancel:${plat}:${encodeURIComponent(correo)}`,
+                callback_data: `inv:menu:cancel:${plat}:${encodeURIComponent(acceso)}`,
               }],
             ],
           },
@@ -1361,47 +1388,47 @@ bot.on("callback_query", async (q) => {
       }
 
       if (data.startsWith("inv:menu:borrarok:")) {
-        const [, , , plat, correoEnc] = data.split(":");
-        const correo = decodeURIComponent(correoEnc || "");
-        const ref = db.collection("inventario").doc(docIdInventario(correo, plat));
+        const [, , , plat, accesoEnc] = data.split(":");
+        const acceso = decodeURIComponent(accesoEnc || "");
+        const ref = db.collection("inventario").doc(docIdInventario(acceso, plat));
         const doc = await ref.get();
-        if (!doc.exists) return bot.sendMessage(chatId, "⚠️ No existe ese correo en inventario.");
+        if (!doc.exists) return bot.sendMessage(chatId, "⚠️ No existe esa cuenta en inventario.");
         await ref.delete();
         pending.delete(String(chatId));
         return enviarInventarioPlataforma(chatId, plat, 0);
       }
 
       if (data.startsWith("mail_panel|")) {
-        const [, plataforma, correoEnc] = data.split("|");
-        const correo = decodeURIComponent(correoEnc || "");
-        return mostrarPanelCorreo(chatId, plataforma, correo);
+        const [, plataforma, accesoEnc] = data.split("|");
+        const acceso = decodeURIComponent(accesoEnc || "");
+        return mostrarPanelCorreo(chatId, plataforma, acceso);
       }
 
       if (data.startsWith("mail_menu_clientes|")) {
-        const [, plataforma, correoEnc] = data.split("|");
-        const correo = decodeURIComponent(correoEnc || "");
-        return mostrarMenuClientesCorreo(chatId, plataforma, correo);
+        const [, plataforma, accesoEnc] = data.split("|");
+        const acceso = decodeURIComponent(accesoEnc || "");
+        return mostrarMenuClientesCorreo(chatId, plataforma, acceso);
       }
 
       if (data.startsWith("mail_menu_codigos|")) {
-        const [, plataforma, correoEnc] = data.split("|");
-        const correo = decodeURIComponent(correoEnc || "");
-        return responderMenuCodigosNetflix(chatId, plataforma, correo);
+        const [, plataforma, accesoEnc] = data.split("|");
+        const acceso = decodeURIComponent(accesoEnc || "");
+        return responderMenuCodigosNetflix(chatId, plataforma, acceso);
       }
 
       if (data.startsWith("nf_code|")) {
         const parts = data.split("|");
         const tipo = parts[1] || "";
-        const correo = decodeURIComponent(parts[2] || "");
-        return responderCodigoNetflix(chatId, correo, tipo);
+        const acceso = decodeURIComponent(parts[2] || "");
+        return responderCodigoNetflix(chatId, acceso, tipo);
       }
 
       if (data.startsWith("mail_ver_clientes|")) {
-        const [, plataforma, correoEnc] = data.split("|");
-        const correo = decodeURIComponent(correoEnc || "");
+        const [, plataforma, accesoEnc] = data.split("|");
+        const acceso = decodeURIComponent(accesoEnc || "");
 
-        const found = await buscarCorreoInventarioPorPlatCorreo(plataforma, correo);
-        if (!found) return bot.sendMessage(chatId, "❌ El correo no existe.");
+        const found = await buscarCorreoInventarioPorPlatCorreo(plataforma, acceso);
+        if (!found) return bot.sendMessage(chatId, "❌ La cuenta no existe.");
 
         const correoData = found.data || {};
         const clientes = Array.isArray(correoData.clientes) ? correoData.clientes : [];
@@ -1410,8 +1437,8 @@ bot.on("callback_query", async (q) => {
         const disponibles = Math.max(0, capacidad - ocupados);
         const estado = disponibles === 0 ? "LLENA" : "CON ESPACIO";
 
-        let txt = "👥 *Clientes en este correo*\n\n";
-        txt += `📧 *${escMD(correo)}*\n`;
+        let txt = "👥 *Clientes en esta cuenta*\n\n";
+        txt += `${identIcon(plataforma)} *${escMD(getIdentLabel(plataforma))}:* ${escMD(acceso)}\n`;
         txt += `📌 *${escMD(String(plataforma).toUpperCase())}*\n\n`;
 
         if (!clientes.length) {
@@ -1433,8 +1460,8 @@ bot.on("callback_query", async (q) => {
           {
             inline_keyboard: [
               [{
-                text: "⬅️ Volver al correo",
-                callback_data: `mail_panel|${normalizarPlataforma(plataforma)}|${encodeURIComponent(correo)}`,
+                text: "⬅️ Volver a la cuenta",
+                callback_data: `mail_panel|${normalizarPlataforma(plataforma)}|${encodeURIComponent(acceso)}`,
               }],
               [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
             ],
@@ -1444,11 +1471,11 @@ bot.on("callback_query", async (q) => {
       }
 
       if (data.startsWith("mail_add_cliente|")) {
-        const [, plataforma, correoEnc] = data.split("|");
-        const correo = decodeURIComponent(correoEnc || "");
+        const [, plataforma, accesoEnc] = data.split("|");
+        const acceso = decodeURIComponent(accesoEnc || "");
 
-        const found = await buscarCorreoInventarioPorPlatCorreo(plataforma, correo);
-        if (!found) return bot.sendMessage(chatId, "❌ El correo no existe.");
+        const found = await buscarCorreoInventarioPorPlatCorreo(plataforma, acceso);
+        if (!found) return bot.sendMessage(chatId, "❌ La cuenta no existe.");
 
         const correoData = found.data || {};
         const clientes = Array.isArray(correoData.clientes) ? correoData.clientes : [];
@@ -1466,7 +1493,7 @@ bot.on("callback_query", async (q) => {
         pending.set(String(chatId), {
           mode: "mailAddClienteNombre",
           plataforma: normalizarPlataforma(plataforma),
-          correo: String(correo).toLowerCase(),
+          correo: String(acceso).toLowerCase(),
         });
 
         return bot.sendMessage(chatId, "👤 *Agregar cliente*\n\nEscriba el nombre del cliente:", {
@@ -1475,52 +1502,54 @@ bot.on("callback_query", async (q) => {
       }
 
       if (data.startsWith("mail_del_cliente|")) {
-        const [, plataforma, correoEnc] = data.split("|");
-        const correo = decodeURIComponent(correoEnc || "");
+        const [, plataforma, accesoEnc] = data.split("|");
+        const acceso = decodeURIComponent(accesoEnc || "");
 
-        const found = await buscarCorreoInventarioPorPlatCorreo(plataforma, correo);
-        if (!found) return bot.sendMessage(chatId, "❌ El correo no existe.");
+        const found = await buscarCorreoInventarioPorPlatCorreo(plataforma, acceso);
+        if (!found) return bot.sendMessage(chatId, "❌ La cuenta no existe.");
 
         const correoData = found.data || {};
         const clientes = Array.isArray(correoData.clientes) ? correoData.clientes : [];
 
         if (!clientes.length) {
-          return bot.sendMessage(chatId, "⚠️ Este correo no tiene clientes.");
+          return bot.sendMessage(chatId, "⚠️ Esta cuenta no tiene clientes.");
         }
 
         const kb = clientes.map((c, i) => [
           {
             text: `${i + 1}. ${c.nombre || "Sin nombre"} — PIN ${c.pin || "----"}`,
-            callback_data: `mail_del_cliente_ok|${normalizarPlataforma(plataforma)}|${encodeURIComponent(correo)}|${i}`,
+            callback_data: `mail_del_cliente_ok|${normalizarPlataforma(plataforma)}|${encodeURIComponent(acceso)}|${i}`,
           },
         ]);
 
         kb.push([{
           text: "⬅️ Volver",
-          callback_data: `mail_panel|${normalizarPlataforma(plataforma)}|${encodeURIComponent(correo)}`,
+          callback_data: `mail_panel|${normalizarPlataforma(plataforma)}|${encodeURIComponent(acceso)}`,
         }]);
 
         return upsertPanel(
           chatId,
-          `➖ *Quitar cliente*\n\n📧 *${escMD(correo)}*\n\nSeleccione el cliente que desea quitar:`,
+          `➖ *Quitar cliente*\n\n${identIcon(plataforma)} *${escMD(
+            getIdentLabel(plataforma)
+          )}:* ${escMD(acceso)}\n\nSeleccione el cliente que desea quitar:`,
           { inline_keyboard: kb },
           "Markdown"
         );
       }
 
       if (data.startsWith("mail_del_cliente_ok|")) {
-        const [, plataforma, correoEnc, indexStr] = data.split("|");
-        const correo = decodeURIComponent(correoEnc || "");
+        const [, plataforma, accesoEnc, indexStr] = data.split("|");
+        const acceso = decodeURIComponent(accesoEnc || "");
         const index = Number(indexStr);
 
-        const found = await buscarCorreoInventarioPorPlatCorreo(plataforma, correo);
-        if (!found) return bot.sendMessage(chatId, "❌ El correo no existe.");
+        const found = await buscarCorreoInventarioPorPlatCorreo(plataforma, acceso);
+        if (!found) return bot.sendMessage(chatId, "❌ La cuenta no existe.");
 
         const ref = found.ref;
         const correoData = found.data || {};
         let clientes = Array.isArray(correoData.clientes) ? correoData.clientes.slice() : [];
 
-        if (!clientes.length) return bot.sendMessage(chatId, "⚠️ Este correo ya no tiene clientes.");
+        if (!clientes.length) return bot.sendMessage(chatId, "⚠️ Esta cuenta ya no tiene clientes.");
         if (isNaN(index) || index < 0 || index >= clientes.length) {
           return bot.sendMessage(chatId, "❌ Cliente inválido.");
         }
@@ -1562,53 +1591,55 @@ bot.on("callback_query", async (q) => {
           { parse_mode: "Markdown" }
         );
 
-        return mostrarPanelCorreo(chatId, plataforma, correo);
+        return mostrarPanelCorreo(chatId, plataforma, acceso);
       }
 
       if (data.startsWith("mail_edit_pin|")) {
-        const [, plataforma, correoEnc] = data.split("|");
-        const correo = decodeURIComponent(correoEnc || "");
+        const [, plataforma, accesoEnc] = data.split("|");
+        const acceso = decodeURIComponent(accesoEnc || "");
 
-        const found = await buscarCorreoInventarioPorPlatCorreo(plataforma, correo);
-        if (!found) return bot.sendMessage(chatId, "❌ El correo no existe.");
+        const found = await buscarCorreoInventarioPorPlatCorreo(plataforma, acceso);
+        if (!found) return bot.sendMessage(chatId, "❌ La cuenta no existe.");
 
         const correoData = found.data || {};
         const clientes = Array.isArray(correoData.clientes) ? correoData.clientes : [];
 
-        if (!clientes.length) return bot.sendMessage(chatId, "⚠️ Este correo no tiene clientes.");
+        if (!clientes.length) return bot.sendMessage(chatId, "⚠️ Esta cuenta no tiene clientes.");
 
         const kb = clientes.map((c, i) => [
           {
             text: `${i + 1}. ${c.nombre || "Sin nombre"} — PIN ${c.pin || "----"}`,
-            callback_data: `mail_edit_pin_sel|${normalizarPlataforma(plataforma)}|${encodeURIComponent(correo)}|${i}`,
+            callback_data: `mail_edit_pin_sel|${normalizarPlataforma(plataforma)}|${encodeURIComponent(acceso)}|${i}`,
           },
         ]);
 
         kb.push([{
           text: "⬅️ Volver",
-          callback_data: `mail_panel|${normalizarPlataforma(plataforma)}|${encodeURIComponent(correo)}`,
+          callback_data: `mail_panel|${normalizarPlataforma(plataforma)}|${encodeURIComponent(acceso)}`,
         }]);
 
         return upsertPanel(
           chatId,
-          `🔐 *Editar PIN*\n\n📧 *${escMD(correo)}*\n\nSeleccione el cliente:`,
+          `🔐 *Editar PIN*\n\n${identIcon(plataforma)} *${escMD(
+            getIdentLabel(plataforma)
+          )}:* ${escMD(acceso)}\n\nSeleccione el cliente:`,
           { inline_keyboard: kb },
           "Markdown"
         );
       }
 
       if (data.startsWith("mail_edit_pin_sel|")) {
-        const [, plataforma, correoEnc, indexStr] = data.split("|");
-        const correo = decodeURIComponent(correoEnc || "");
+        const [, plataforma, accesoEnc, indexStr] = data.split("|");
+        const acceso = decodeURIComponent(accesoEnc || "");
         const clienteIndex = Number(indexStr);
 
-        const found = await buscarCorreoInventarioPorPlatCorreo(plataforma, correo);
-        if (!found) return bot.sendMessage(chatId, "❌ El correo no existe.");
+        const found = await buscarCorreoInventarioPorPlatCorreo(plataforma, acceso);
+        if (!found) return bot.sendMessage(chatId, "❌ La cuenta no existe.");
 
         const correoData = found.data || {};
         const clientes = Array.isArray(correoData.clientes) ? correoData.clientes : [];
 
-        if (!clientes.length) return bot.sendMessage(chatId, "⚠️ Este correo no tiene clientes.");
+        if (!clientes.length) return bot.sendMessage(chatId, "⚠️ Esta cuenta no tiene clientes.");
         if (isNaN(clienteIndex) || clienteIndex < 0 || clienteIndex >= clientes.length) {
           return bot.sendMessage(chatId, "❌ Cliente inválido.");
         }
@@ -1618,7 +1649,7 @@ bot.on("callback_query", async (q) => {
         pending.set(String(chatId), {
           mode: "mailEditPin",
           plataforma: normalizarPlataforma(plataforma),
-          correo: String(correo).toLowerCase(),
+          correo: String(acceso).toLowerCase(),
           clienteIndex,
         });
 
@@ -1633,11 +1664,11 @@ bot.on("callback_query", async (q) => {
       }
 
       if (data.startsWith("mail_edit_clave|")) {
-        const [, plataforma, correoEnc] = data.split("|");
-        const correo = decodeURIComponent(correoEnc || "");
+        const [, plataforma, accesoEnc] = data.split("|");
+        const acceso = decodeURIComponent(accesoEnc || "");
 
-        const found = await buscarCorreoInventarioPorPlatCorreo(plataforma, correo);
-        if (!found) return bot.sendMessage(chatId, "❌ El correo no existe.");
+        const found = await buscarCorreoInventarioPorPlatCorreo(plataforma, acceso);
+        if (!found) return bot.sendMessage(chatId, "❌ La cuenta no existe.");
 
         const correoData = found.data || {};
         const claveActual = correoData.clave || "Sin clave";
@@ -1645,40 +1676,41 @@ bot.on("callback_query", async (q) => {
         pending.set(String(chatId), {
           mode: "mailEditClaveCorreo",
           plataforma: normalizarPlataforma(plataforma),
-          correo: String(correo).toLowerCase(),
+          correo: String(acceso).toLowerCase(),
         });
 
         return bot.sendMessage(
           chatId,
-          "✏️ *Editar clave del correo*\n\n" +
-            `📧 *Correo:* ${escMD(correo)}\n` +
+          "✏️ *Editar clave de la cuenta*\n\n" +
+            `${identIcon(plataforma)} *${escMD(getIdentLabel(plataforma))}:* ${escMD(acceso)}\n` +
             `🔑 *Clave actual:* ${escMD(claveActual)}\n\n` +
-            "Escriba la nueva clave del correo:",
+            "Escriba la nueva clave:",
           { parse_mode: "Markdown" }
         );
       }
 
       if (data.startsWith("mail_delete|")) {
-        const [, plataforma, correoEnc] = data.split("|");
-        const correo = decodeURIComponent(correoEnc || "");
+        const [, plataforma, accesoEnc] = data.split("|");
+        const acceso = decodeURIComponent(accesoEnc || "");
 
-        const found = await buscarCorreoInventarioPorPlatCorreo(plataforma, correo);
-        if (!found) return bot.sendMessage(chatId, "❌ Este correo ya no existe.");
+        const found = await buscarCorreoInventarioPorPlatCorreo(plataforma, acceso);
+        if (!found) return bot.sendMessage(chatId, "❌ Esta cuenta ya no existe.");
 
         return upsertPanel(
           chatId,
           "⚠️ *Confirmar eliminación*\n\n" +
-            `📧 *Correo:* ${escMD(correo)}\n\n` +
+            `📌 *Plataforma:* ${escMD(normalizarPlataforma(plataforma).toUpperCase())}\n` +
+            `${identIcon(plataforma)} *${escMD(getIdentLabel(plataforma))}:* ${escMD(acceso)}\n\n` +
             "Esta acción eliminará la cuenta del inventario.\n\n¿Está seguro que desea borrarla?",
           {
             inline_keyboard: [
               [{
                 text: "✅ Sí borrar",
-                callback_data: `mail_delete_confirm|${normalizarPlataforma(plataforma)}|${encodeURIComponent(correo)}`,
+                callback_data: `mail_delete_confirm|${normalizarPlataforma(plataforma)}|${encodeURIComponent(acceso)}`,
               }],
               [{
                 text: "❌ Cancelar",
-                callback_data: `mail_panel|${normalizarPlataforma(plataforma)}|${encodeURIComponent(correo)}`,
+                callback_data: `mail_panel|${normalizarPlataforma(plataforma)}|${encodeURIComponent(acceso)}`,
               }],
             ],
           },
@@ -1687,10 +1719,10 @@ bot.on("callback_query", async (q) => {
       }
 
       if (data.startsWith("mail_delete_confirm|")) {
-        const [, plataforma, correoEnc] = data.split("|");
-        const correo = decodeURIComponent(correoEnc || "");
+        const [, plataforma, accesoEnc] = data.split("|");
+        const acceso = decodeURIComponent(accesoEnc || "");
 
-        const found = await buscarCorreoInventarioPorPlatCorreo(plataforma, correo);
+        const found = await buscarCorreoInventarioPorPlatCorreo(plataforma, acceso);
         if (!found) return mostrarListaCorreosPlataforma(chatId, plataforma);
 
         const ref = found.ref;
@@ -1700,7 +1732,7 @@ bot.on("callback_query", async (q) => {
         if (clientes.length > 0) {
           await bot.sendMessage(
             chatId,
-            "⚠️ Este correo tenía clientes asignados. Se eliminará igualmente del inventario."
+            "⚠️ Esta cuenta tenía clientes asignados. Se eliminará igualmente del inventario."
           );
         }
 
@@ -1761,7 +1793,10 @@ bot.on("callback_query", async (q) => {
         st.step = 4;
 
         wizard.set(String(chatId), st);
-        return bot.sendMessage(chatId, "(Servicio 2/5) Correo de la cuenta:");
+        return bot.sendMessage(
+          chatId,
+          `(Servicio 2/5) ${getIdentLabel(plat)} de la cuenta:`
+        );
       }
 
       if (data.startsWith("wiz:addmore:")) {
@@ -1856,7 +1891,7 @@ bot.on("callback_query", async (q) => {
 
         return upsertPanel(
           chatId,
-          `📧 *Correo* (${plat})\nEscriba el correo:`,
+          `${identIcon(plat)} *${getIdentLabel(plat)}* (${plat})\nEscriba el ${getIdentLabel(plat).toLowerCase()}:`,
           { inline_keyboard: [[{ text: "⬅️ Cancelar", callback_data: `cli:view:${clientId}` }]] },
           "Markdown"
         );
@@ -1882,21 +1917,37 @@ bot.on("callback_query", async (q) => {
           );
         }
 
-        if (field === "mail") pending.set(String(chatId), { mode: "cliServEditMail", clientId, idx });
+        let platActual = "";
+        if (field === "mail") {
+          const c = await getCliente(clientId);
+          if (!c) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
+          const servicios = Array.isArray(c.servicios) ? c.servicios : [];
+          if (idx < 0 || idx >= servicios.length) return bot.sendMessage(chatId, "⚠️ Servicio inválido.");
+          platActual = normalizarPlataforma(servicios[idx]?.plataforma || "");
+          pending.set(String(chatId), { mode: "cliServEditMail", clientId, idx, plat: platActual });
+        }
+
         if (field === "pin") pending.set(String(chatId), { mode: "cliServEditPin", clientId, idx });
         if (field === "precio") pending.set(String(chatId), { mode: "cliServEditPrecio", clientId, idx });
         if (field === "fecha") pending.set(String(chatId), { mode: "cliServEditFecha", clientId, idx });
 
         const titulo =
-          field === "mail" ? "📧 *Cambiar correo*" :
-          field === "pin" ? "🔐 *Cambiar pin*" :
-          field === "precio" ? "💰 *Cambiar precio*" :
-          "📅 *Cambiar fecha*";
+          field === "mail"
+            ? `${identIcon(platActual)} *Cambiar ${getIdentLabel(platActual).toLowerCase()}*`
+            : field === "pin"
+            ? "🔐 *Cambiar clave/pin*"
+            : field === "precio"
+            ? "💰 *Cambiar precio*"
+            : "📅 *Cambiar fecha*";
 
         const hint =
-          field === "precio" ? "Escriba el precio (solo número):" :
-          field === "fecha" ? "Escriba dd/mm/yyyy:" :
-          "Escriba el nuevo valor:";
+          field === "mail"
+            ? `Escriba el nuevo ${getIdentLabel(platActual).toLowerCase()}:`
+            : field === "precio"
+            ? "Escriba el precio (solo número):"
+            : field === "fecha"
+            ? "Escriba dd/mm/yyyy:"
+            : "Escriba el nuevo valor:";
 
         return upsertPanel(
           chatId,
@@ -1971,10 +2022,10 @@ bot.on("callback_query", async (q) => {
 
         const servicioABorrar = servicios[idx];
         const plat = normalizarPlataforma(servicioABorrar.plataforma);
-        const mail = String(servicioABorrar.correo || "").trim().toLowerCase();
+        const acceso = String(servicioABorrar.correo || "").trim().toLowerCase();
         const nombreCliente = c.nombrePerfil || "";
 
-        const refInv = db.collection("inventario").doc(docIdInventario(mail, plat));
+        const refInv = db.collection("inventario").doc(docIdInventario(acceso, plat));
         const docInv = await refInv.get();
 
         if (docInv.exists) {
@@ -2069,7 +2120,7 @@ bot.on("callback_query", async (q) => {
         const texto =
           `🔄 *RENOVAR SERVICIO #${idx + 1}*\n` +
           `📌 ${escMD(s.plataforma || "-")}\n` +
-          `📧 ${escMD(s.correo || "-")}\n` +
+          `${identIcon(s.plataforma || "")} ${escMD(s.correo || "-")}\n` +
           `📅 Actual: *${escMD(s.fechaRenovacion || "-")}*`;
 
         return upsertPanel(
@@ -2266,46 +2317,6 @@ bot.on("message", async (msg) => {
     if (text.startsWith("/")) {
       if (!adminOk && !vendOk) return bot.sendMessage(chatId, "⛔ Acceso denegado");
 
-      const rawText = String(text || "").trim();
-
-      if (adminOk) {
-        const posibleCorreo = rawText.slice(1).trim().toLowerCase();
-
-        if (isEmailLike(posibleCorreo)) {
-          const hits = await buscarInventarioPorCorreo(posibleCorreo);
-
-          if (hits.length === 1) {
-            pending.set(String(chatId), {
-              mode: "invSubmenuCtx",
-              plat: normalizarPlataforma(hits[0].plataforma),
-              correo: posibleCorreo,
-            });
-            return enviarSubmenuInventario(chatId, hits[0].plataforma, posibleCorreo);
-          }
-
-          if (hits.length > 1) {
-            const kb = hits.map((x) => [
-              {
-                text: `📌 ${String(x.plataforma).toUpperCase()}`,
-                callback_data: `inv:open:${normalizarPlataforma(x.plataforma)}:${encodeURIComponent(posibleCorreo)}`,
-              },
-            ]);
-            kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
-
-            return bot.sendMessage(
-              chatId,
-              `📧 ${escMD(posibleCorreo)}\nSeleccione plataforma:`,
-              {
-                parse_mode: "Markdown",
-                reply_markup: { inline_keyboard: kb },
-              }
-            );
-          }
-
-          return bot.sendMessage(chatId, "⚠️ Correo no encontrado en inventario.");
-        }
-      }
-
       const cmd = limpiarQuery(text);
       const first = cmd.split(" ")[0];
 
@@ -2357,8 +2368,40 @@ bot.on("message", async (msg) => {
       ]);
 
       if (adminOk && !comandosReservados.has(first)) {
-        const query = cmd.trim();
+        const query = normalizeIdentByPlatform("", cmd.trim());
 
+        // 1) Intentar abrir cuenta de inventario por acceso exacto
+        const hits = await buscarInventarioPorCorreo(query);
+
+        if (hits.length === 1) {
+          pending.set(String(chatId), {
+            mode: "invSubmenuCtx",
+            plat: normalizarPlataforma(hits[0].plataforma),
+            correo: query,
+          });
+          return enviarSubmenuInventario(chatId, hits[0].plataforma, query);
+        }
+
+        if (hits.length > 1) {
+          const kb = hits.map((x) => [
+            {
+              text: `📌 ${String(x.plataforma).toUpperCase()}`,
+              callback_data: `inv:open:${normalizarPlataforma(x.plataforma)}:${encodeURIComponent(query)}`,
+            },
+          ]);
+          kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
+
+          return bot.sendMessage(
+            chatId,
+            `🔎 *Coincidencias de inventario*\n\nAcceso: ${escMD(query)}\nSeleccione plataforma:`,
+            {
+              parse_mode: "Markdown",
+              reply_markup: { inline_keyboard: kb },
+            }
+          );
+        }
+
+        // 2) Si no era inventario, buscar cliente
         if (onlyDigits(query).length >= 7) {
           const resultados = await buscarPorTelefonoTodos(query);
           const dedup = dedupeClientes(resultados);
@@ -2693,7 +2736,7 @@ bot.on("message", async (msg) => {
         pending.delete(String(chatId));
 
         const found = await buscarCorreoInventarioPorPlatCorreo(p.plataforma, p.correo);
-        if (!found) return bot.sendMessage(chatId, "❌ El correo no existe.");
+        if (!found) return bot.sendMessage(chatId, "❌ La cuenta no existe.");
 
         const ref = found.ref;
         const correoData = found.data || {};
@@ -2750,7 +2793,7 @@ bot.on("message", async (msg) => {
         pending.delete(String(chatId));
 
         const found = await buscarCorreoInventarioPorPlatCorreo(p.plataforma, p.correo);
-        if (!found) return bot.sendMessage(chatId, "❌ El correo no existe.");
+        if (!found) return bot.sendMessage(chatId, "❌ La cuenta no existe.");
 
         const ref = found.ref;
         const correoData = found.data || {};
@@ -2783,7 +2826,7 @@ bot.on("message", async (msg) => {
         pending.delete(String(chatId));
 
         const found = await buscarCorreoInventarioPorPlatCorreo(p.plataforma, p.correo);
-        if (!found) return bot.sendMessage(chatId, "❌ El correo no existe.");
+        if (!found) return bot.sendMessage(chatId, "❌ La cuenta no existe.");
 
         await found.ref.set(
           {
@@ -2793,7 +2836,7 @@ bot.on("message", async (msg) => {
           { merge: true }
         );
 
-        await bot.sendMessage(chatId, "✅ Clave del correo actualizada.");
+        await bot.sendMessage(chatId, "✅ Clave de la cuenta actualizada.");
         return mostrarPanelCorreo(chatId, p.plataforma, p.correo);
       }
 
@@ -2805,12 +2848,12 @@ bot.on("message", async (msg) => {
 
         pending.delete(String(chatId));
 
-        const correo = String(p.correo).toLowerCase();
+        const acceso = String(p.correo).toLowerCase();
         const plat = normalizarPlataforma(p.plat);
 
-        const ref = db.collection("inventario").doc(docIdInventario(correo, plat));
+        const ref = db.collection("inventario").doc(docIdInventario(acceso, plat));
         const doc = await ref.get();
-        if (!doc.exists) return bot.sendMessage(chatId, "⚠️ Ese correo no existe en inventario.");
+        if (!doc.exists) return bot.sendMessage(chatId, "⚠️ Esa cuenta no existe en inventario.");
 
         const d = doc.data() || {};
         const capacidad = Number(d.capacidad || d.total || getCapacidadCorreo(d, plat) || 0);
@@ -2831,8 +2874,8 @@ bot.on("message", async (msg) => {
           { merge: true }
         );
 
-        pending.set(String(chatId), { mode: "invSubmenuCtx", plat, correo });
-        return enviarSubmenuInventario(chatId, plat, correo);
+        pending.set(String(chatId), { mode: "invSubmenuCtx", plat, correo: acceso });
+        return enviarSubmenuInventario(chatId, plat, acceso);
       }
 
       if (p.mode === "invRestarQty") {
@@ -2843,12 +2886,12 @@ bot.on("message", async (msg) => {
 
         pending.delete(String(chatId));
 
-        const correo = String(p.correo).toLowerCase();
+        const acceso = String(p.correo).toLowerCase();
         const plat = normalizarPlataforma(p.plat);
 
-        const ref = db.collection("inventario").doc(docIdInventario(correo, plat));
+        const ref = db.collection("inventario").doc(docIdInventario(acceso, plat));
         const doc = await ref.get();
-        if (!doc.exists) return bot.sendMessage(chatId, "⚠️ Ese correo no existe en inventario.");
+        if (!doc.exists) return bot.sendMessage(chatId, "⚠️ Esa cuenta no existe en inventario.");
 
         const d = doc.data() || {};
         const clientes = Array.isArray(d.clientes) ? d.clientes : [];
@@ -2879,14 +2922,14 @@ bot.on("message", async (msg) => {
           ...d,
           disp: disponibles,
           plataforma: plat,
-          correo,
+          correo: acceso,
           capacidad: nuevaCapacidad,
         };
 
         await aplicarAutoLleno(chatId, ref, antes, despues);
 
-        pending.set(String(chatId), { mode: "invSubmenuCtx", plat, correo });
-        return enviarSubmenuInventario(chatId, plat, correo);
+        pending.set(String(chatId), { mode: "invSubmenuCtx", plat, correo: acceso });
+        return enviarSubmenuInventario(chatId, plat, acceso);
       }
 
       if (p.mode === "invEditClave") {
@@ -2894,12 +2937,12 @@ bot.on("message", async (msg) => {
 
         pending.delete(String(chatId));
 
-        const correo = String(p.correo).toLowerCase();
+        const acceso = String(p.correo).toLowerCase();
         const plat = normalizarPlataforma(p.plat);
 
-        const ref = db.collection("inventario").doc(docIdInventario(correo, plat));
+        const ref = db.collection("inventario").doc(docIdInventario(acceso, plat));
         const doc = await ref.get();
-        if (!doc.exists) return bot.sendMessage(chatId, "⚠️ Ese correo no existe en inventario.");
+        if (!doc.exists) return bot.sendMessage(chatId, "⚠️ Esa cuenta no existe en inventario.");
 
         await ref.set(
           {
@@ -2909,8 +2952,8 @@ bot.on("message", async (msg) => {
           { merge: true }
         );
 
-        pending.set(String(chatId), { mode: "invSubmenuCtx", plat, correo });
-        return enviarSubmenuInventario(chatId, plat, correo);
+        pending.set(String(chatId), { mode: "invSubmenuCtx", plat, correo: acceso });
+        return enviarSubmenuInventario(chatId, plat, acceso);
       }
 
       if (p.mode === "cliRenovarFechaManual") {
@@ -3019,16 +3062,19 @@ bot.on("message", async (msg) => {
       }
 
       if (p.mode === "cliAddServMail") {
-        if (!t.includes("@")) return bot.sendMessage(chatId, "⚠️ Correo inválido. Escriba el correo:");
+        const label = getIdentLabel(p.plat);
+        if (!validateIdentByPlatform(p.plat, t)) {
+          return bot.sendMessage(chatId, `⚠️ ${label} inválido. Escriba el ${label.toLowerCase()}:`);
+        }
 
         pending.set(String(chatId), {
           mode: "cliAddServPin",
           clientId: p.clientId,
           plat: p.plat,
-          mail: t.toLowerCase(),
+          mail: normalizeIdentByPlatform(p.plat, t),
         });
 
-        return bot.sendMessage(chatId, "🔐 Escriba el pin/clave:");
+        return bot.sendMessage(chatId, "🔐 Escriba la clave/pin:");
       }
 
       if (p.mode === "cliAddServPin") {
@@ -3078,10 +3124,15 @@ bot.on("message", async (msg) => {
       }
 
       if (p.mode === "cliServEditMail") {
-        if (!t.includes("@")) return bot.sendMessage(chatId, "⚠️ Correo inválido.");
+        const label = getIdentLabel(p.plat || "");
+        if (!validateIdentByPlatform(p.plat || "", t)) {
+          return bot.sendMessage(chatId, `⚠️ ${label} inválido.`);
+        }
 
         pending.delete(String(chatId));
-        await patchServicio(p.clientId, p.idx, { correo: t.toLowerCase() });
+        await patchServicio(p.clientId, p.idx, {
+          correo: normalizeIdentByPlatform(p.plat || "", t),
+        });
         return menuServicio(chatId, p.clientId, p.idx);
       }
 
