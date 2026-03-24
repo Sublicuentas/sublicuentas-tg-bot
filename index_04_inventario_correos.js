@@ -284,40 +284,81 @@ async function buscarCorreoInventarioPorPlatCorreo(plataforma = "", acceso = "")
 // ===============================
 // VISTAS INVENTARIO
 // ===============================
+async function getInventarioRowsByPlataforma(plataforma = "") {
+  const plat = normalizarPlataforma(plataforma);
+  const snap = await db.collection("inventario").where("plataforma", "==", plat).get();
+  const rows = snap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
+
+  rows.sort((a, b) => {
+    const da = getDisponibles(a, plat);
+    const dbb = getDisponibles(b, plat);
+    if (dbb !== da) return dbb - da;
+    return String(a.correo || "").localeCompare(String(b.correo || ""), "es", { sensitivity: "base" });
+  });
+
+  return rows;
+}
+
 async function enviarInventarioPlataforma(chatId, plataforma = "", page = 0) {
   const plat = normalizarPlataforma(plataforma);
-  const pageSize = 10;
 
   try {
-    const snap = await db.collection("inventario").where("plataforma", "==", plat).get();
-    const rows = snap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
+    const rows = await getInventarioRowsByPlataforma(plat);
+    const disponibles = rows.filter((r) => getDisponibles(r, plat) > 0);
+    const llenas = rows.filter((r) => getDisponibles(r, plat) <= 0);
 
-    rows.sort((a, b) => {
-      const aDisp = getDisponibles(a, plat);
-      const bDisp = getDisponibles(b, plat);
+    let txt = `📦 *${escMD(humanPlatSafe(plat).toUpperCase())}*
 
-      const aConEspacio = aDisp > 0 ? 1 : 0;
-      const bConEspacio = bDisp > 0 ? 1 : 0;
-      if (bConEspacio !== aConEspacio) return bConEspacio - aConEspacio;
+`;
+    txt += `Seleccione qué desea ver:
 
-      if (bDisp !== aDisp) return bDisp - aDisp;
+`;
+    txt += `🟢 *Disponibles:* ${disponibles.length}
+`;
+    txt += `🔴 *Llenas:* ${llenas.length}`;
 
-      const aOcc = getOcupados(a);
-      const bOcc = getOcupados(b);
-      if (aOcc !== bOcc) return aOcc - bOcc;
+    return upsertPanel(
+      chatId,
+      txt,
+      [
+        [
+          { text: `🟢 Disponibles (${disponibles.length})`, callback_data: `invf:${plat}:disponibles:0` },
+          { text: `🔴 Llenas (${llenas.length})`, callback_data: `invf:${plat}:llenas:0` },
+        ],
+        [
+          { text: "⬅️ Volver Inventario", callback_data: "menu:inventario" },
+          { text: "🏠 Inicio", callback_data: "go:inicio" },
+        ],
+      ]
+    );
+  } catch (e) {
+    logErr("enviarInventarioPlataforma.selector", e);
+    return bot.sendMessage(chatId, "⚠️ Error al abrir inventario de esa plataforma.");
+  }
+}
 
-      return String(a.correo || "").localeCompare(String(b.correo || ""), "es", { sensitivity: "base" });
-    });
+async function enviarInventarioPlataformaEstado(chatId, plataforma = "", filtro = "disponibles", page = 0) {
+  const plat = normalizarPlataforma(plataforma);
+  const pageSize = 10;
+  const filtroNorm = String(filtro || "").toLowerCase() === "llenas" ? "llenas" : "disponibles";
+
+  try {
+    const rowsAll = await getInventarioRowsByPlataforma(plat);
+    const rows = filtroNorm === "llenas"
+      ? rowsAll.filter((r) => getDisponibles(r, plat) <= 0)
+      : rowsAll.filter((r) => getDisponibles(r, plat) > 0);
 
     if (!rows.length) {
       return upsertPanel(
         chatId,
         `📦 *${escMD(humanPlatSafe(plat).toUpperCase())}*
 
-_No hay cuentas en inventario para esta plataforma._`,
+_No hay cuentas en la sección ${filtroNorm === "llenas" ? "llenas" : "disponibles"}._`,
         [
-          [{ text: "⬅️ Volver Inventario", callback_data: "menu:inventario" }],
-          [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
+          [
+            { text: "⬅️ Volver plataforma", callback_data: `inv:${plat}:0` },
+            { text: "🏠 Inicio", callback_data: "go:inicio" },
+          ],
         ]
       );
     }
@@ -327,38 +368,23 @@ _No hay cuentas en inventario para esta plataforma._`,
     const start = safePage * pageSize;
     const slice = rows.slice(start, start + pageSize);
 
-    const conEspacioTotal = rows.filter((r) => getDisponibles(r, plat) > 0).length;
-    const llenasTotal = rows.length - conEspacioTotal;
+    const emojiEstado = filtroNorm === "llenas" ? "🔴" : "🟢";
+    const tituloEstado = filtroNorm === "llenas" ? "LLENAS" : "DISPONIBLES";
 
     let txt = `📦 *${escMD(humanPlatSafe(plat).toUpperCase())}*
 `;
+    txt += `${emojiEstado} *${tituloEstado}*
+`;
     txt += `Página *${safePage + 1}/${totalPages}*
-`;
-    txt += `🟢 Con espacio: *${conEspacioTotal}*
-`;
-    txt += `🔴 Llenas: *${llenasTotal}*
 
 `;
 
-    let seccionActual = "";
     slice.forEach((r, idx) => {
       const ident = String(r.correo || "");
-      const { capacidad, ocupados, disponibles, estado } = formatCuentaResumen(r, plat);
-      const nuevaSeccion = disponibles > 0 ? "con_espacio" : "llenas";
-
-      if (nuevaSeccion !== seccionActual) {
-        seccionActual = nuevaSeccion;
-        txt += nuevaSeccion === "con_espacio"
-          ? `🟢 *CUENTAS CON ESPACIO*
-`
-          : `
-🔴 *CUENTAS LLENAS*
+      const { capacidad, ocupados, disponibles } = formatCuentaResumen(r, plat);
+      txt += `*${start + idx + 1}.* ${filtroNorm === "llenas" ? "🔴" : "🟢"} ${getIdentIcon(plat)} ${escMD(ident)}
 `;
-      }
-
-      txt += `*${start + idx + 1}.* ${getIdentIcon(plat)} ${escMD(ident)}
-`;
-      txt += `   👥 ${ocupados}/${capacidad} • ✅ ${disponibles} • ${estado}
+      txt += `   👥 ${ocupados}/${capacidad} • ✅ ${disponibles}
 `;
       if (r.clave) txt += `   🔑 ${escMD(String(r.clave))}
 `;
@@ -366,23 +392,25 @@ _No hay cuentas en inventario para esta plataforma._`,
 
     const kb = slice.map((r) => [
       {
-        text: `${getDisponibles(r, plat) > 0 ? "🟢" : "🔴"} ${String(r.correo || "")} • ${getDisponibles(r, plat)}/${getCapacidadCorreo(r, plat)}`,
+        text: `${filtroNorm === "llenas" ? "🔴" : "🟢"} ${String(r.correo || "")} • ${getDisponibles(r, plat)}/${getCapacidadCorreo(r, plat)}`,
         callback_data: `inv:open:${plat}:${encodeURIComponent(String(r.correo || ""))}`,
       },
     ]);
 
     const nav = [];
-    if (safePage > 0) nav.push({ text: "⬅️ Anterior", callback_data: `inv:${plat}:${safePage - 1}` });
-    if (safePage < totalPages - 1) nav.push({ text: "Siguiente ➡️", callback_data: `inv:${plat}:${safePage + 1}` });
+    if (safePage > 0) nav.push({ text: "⬅️ Anterior", callback_data: `invf:${plat}:${filtroNorm}:${safePage - 1}` });
+    if (safePage < totalPages - 1) nav.push({ text: "Siguiente ➡️", callback_data: `invf:${plat}:${filtroNorm}:${safePage + 1}` });
     if (nav.length) kb.push(nav);
 
-    kb.push([{ text: "⬅️ Volver Inventario", callback_data: "menu:inventario" }]);
-    kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
+    kb.push([
+      { text: "⬅️ Volver plataforma", callback_data: `inv:${plat}:0` },
+      { text: "🏠 Inicio", callback_data: "go:inicio" },
+    ]);
 
     return upsertPanel(chatId, txt, kb);
   } catch (e) {
-    logErr("enviarInventarioPlataforma", e);
-    return bot.sendMessage(chatId, "⚠️ Error al abrir inventario de esa plataforma.");
+    logErr("enviarInventarioPlataformaEstado", e);
+    return bot.sendMessage(chatId, "⚠️ Error al listar cuentas de esa plataforma.");
   }
 }
 
@@ -670,6 +698,7 @@ async function aplicarAutoLleno(chatId, ref, antes = {}, despues = {}) {
 module.exports = {
   buscarInventarioPorCorreo,
   enviarInventarioPlataforma,
+  enviarInventarioPlataformaEstado,
   mostrarStockGeneral,
   enviarSubmenuInventario,
   buscarCorreoInventarioPorPlatCorreo,
