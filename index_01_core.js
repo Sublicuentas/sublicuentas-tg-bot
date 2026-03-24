@@ -10,6 +10,9 @@
    - Constantes de plataformas
    - Finanzas
    - Estado global runtime
+
+   ✅ AJUSTE CLAVE:
+   - FINANZAS_COLLECTION = "finanzas_movimientos"
 */
 
 const TelegramBot = require("node-telegram-bot-api");
@@ -98,7 +101,7 @@ const CLIENTES_COLLECTION = "clientes";
 const REVENDEDORES_COLLECTION = "revendedores";
 const ADMINS_COLLECTION = "admins";
 const CONFIG_COLLECTION = "config";
-const FINANZAS_COLLECTION = "finanzas";
+const FINANZAS_COLLECTION = "finanzas_movimientos";
 
 // ===============================
 // FINANZAS
