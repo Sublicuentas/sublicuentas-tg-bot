@@ -9,6 +9,8 @@
    - helpers faltantes blindados con fallback
    - vinculación de revendedor corregida por nombre
    - callback_query blindado
+   - PLATAFORMAS objeto/array corregido
+   - runtimeLock compatible con core viejo y nuevo
 */
 
 const http = require("http");
@@ -38,7 +40,7 @@ const {
   upsertPanel: upsertPanelBase,
   wizard,
   pending,
-  limpiarQuery: answerCallbackSilently,
+  limpiarQuery,
   normalizarPlataforma,
   esPlataformaValida,
   isEmailLike,
@@ -130,7 +132,7 @@ const {
 // HELPERS LOCALES / FALLBACKS
 // ===============================
 function hasRuntimeLock() {
-  return CORE_STATE.HAS_RUNTIME_LOCK === true;
+  return CORE_STATE?.HAS_RUNTIME_LOCK === true || CORE_STATE?.runtimeLock === true;
 }
 
 function escapeRegex(txt = "") {
@@ -236,6 +238,28 @@ function getTotalPorPlataformaLocal(plat = "") {
 
 function identIcon(plataforma = "") {
   return getIdentLabelLocal(plataforma) === "Usuario" ? "👤" : "📧";
+}
+
+const PLATFORM_KEYS = Array.isArray(PLATAFORMAS)
+  ? PLATAFORMAS
+  : Object.keys(PLATAFORMAS || {});
+
+async function answerCallbackSilentlySafe(q) {
+  try {
+    if (q?.id) await bot.answerCallbackQuery(q.id);
+  } catch (_) {}
+}
+
+function resetChatState(chatId) {
+  try {
+    pending?.delete?.(String(chatId));
+  } catch (_) {}
+  try {
+    wizard?.delete?.(String(chatId));
+  } catch (_) {}
+  try {
+    panelMsgId?.delete?.(String(chatId));
+  } catch (_) {}
 }
 
 async function upsertPanel(chatId, text, keyboardArg = [], parseMode = "Markdown") {
@@ -948,9 +972,7 @@ bot.onText(/^\/start(?:@\w+)?$/i, async (msg) => {
   const userId = msg.from.id;
 
   try {
-    pending.delete(String(chatId));
-    wizard.delete(String(chatId));
-    panelMsgId.delete(String(chatId));
+    resetChatState(chatId);
 
     if (await isAdmin(userId)) return menuPrincipal(chatId);
     if (await isVendedor(userId)) return menuVendedor(chatId);
@@ -969,9 +991,7 @@ bot.onText(/^\/menu(?:@\w+)?$/i, async (msg) => {
   const userId = msg.from.id;
 
   try {
-    pending.delete(String(chatId));
-    wizard.delete(String(chatId));
-    panelMsgId.delete(String(chatId));
+    resetChatState(chatId);
 
     if (await isAdmin(userId)) return menuPrincipal(chatId);
     if (await isVendedor(userId)) return menuVendedor(chatId);
@@ -988,7 +1008,7 @@ bot.onText(/^\/menu(?:@\w+)?$/i, async (msg) => {
 // ===============================
 // ATAJOS INVENTARIO
 // ===============================
-PLATAFORMAS.forEach((p) => {
+PLATFORM_KEYS.forEach((p) => {
   const safeP = escapeRegex(String(p));
 
   bot.onText(new RegExp(`^\\/${safeP}(?:@\\w+)?(?:\\s+.*)?$`, "i"), async (msg) => {
@@ -1103,9 +1123,7 @@ bot.on("callback_query", async (q) => {
   const data = String(q.data || "");
 
   try {
-    try {
-      await answerCallbackSilently(bot, q);
-    } catch (_) {}
+    await answerCallbackSilentlySafe(q);
 
     if (!chatId) return;
     if (!(await userHasAccessById(chatId, userId))) return;
@@ -1120,7 +1138,7 @@ bot.on("callback_query", async (q) => {
     if (data === "noop") return;
 
     if (data === "go:inicio") {
-      pending.delete(String(chatId));
+      resetChatState(chatId);
       if (adminOk) return menuPrincipal(chatId);
       return menuVendedor(chatId);
     }
@@ -2436,7 +2454,7 @@ bot.on("message", async (msg) => {
       if (!adminOk && !vendOk) return bot.sendMessage(chatId, "⛔ Acceso denegado");
 
       const cmd = limpiarComandoTexto(text);
-      const first = cmd.split(" ")[0];
+      const first = String(cmd || "").split(" ")[0];
 
       const vendedorCmd = new Set([
         "menu",
@@ -2482,7 +2500,7 @@ bot.on("message", async (msg) => {
         "cierre_caja",
         "excel_finanzas",
         "editar_movimiento",
-        ...PLATAFORMAS,
+        ...PLATFORM_KEYS,
       ]);
 
       if (adminOk && !comandosReservados.has(first)) {
@@ -2635,7 +2653,7 @@ bot.on("message", async (msg) => {
           monto: p.monto,
           banco: p.banco,
           plataforma: p.plataforma,
-          detalle: t,
+          detalle: p.detalle || t,
         });
         return bot.sendMessage(chatId, "📅 Escriba la fecha del ingreso en formato dd/mm/yyyy o escriba hoy:");
       }
@@ -3427,8 +3445,8 @@ process.on("uncaughtException", (err) => {
 process.on("SIGINT", async () => {
   console.log("⚠️ SIGINT recibido, cerrando polling...");
   try {
-    await hardStopBot().catch(() => {});
-    await releaseRuntimeLock().catch(() => {});
+    hardStopBot();
+    releaseRuntimeLock();
   } catch (_) {}
   process.exit(0);
 });
@@ -3436,8 +3454,8 @@ process.on("SIGINT", async () => {
 process.on("SIGTERM", async () => {
   console.log("⚠️ SIGTERM recibido, cerrando polling...");
   try {
-    await hardStopBot().catch(() => {});
-    await releaseRuntimeLock().catch(() => {});
+    hardStopBot();
+    releaseRuntimeLock();
   } catch (_) {}
   process.exit(0);
 });
