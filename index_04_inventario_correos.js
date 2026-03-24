@@ -1,299 +1,645 @@
-/* ✅ PARTE 4/6 — actualizado */
+/* ✅ SUBLICUENTAS TG BOT — PARTE 4/6 CORREGIDA Y COMPATIBLE
+   INVENTARIO / CUENTAS / PANEL POR CORREO-USUARIO
+   -----------------------------------------------
+   Compatible con index_05_finanzas_menus_2filas y index_06_handlers_columna_corregido
+*/
 
-const { bot, admin, db, TZ, PAGE_SIZE, PLATAFORMAS } = require("./index_01_core");
 const {
-  normalizarPlataforma, esPlataformaValida, docIdInventario, fmtEstado, escMD, safeBtnLabel,
-  logErr, upsertPanel, getTotalPorPlataforma, getIdentLabel, getAccessTypeLabel,
+  bot,
+  admin,
+  db,
+  PLATAFORMAS,
+} = require("./index_01_core");
+
+const {
+  escMD,
+  upsertPanel,
+  normalizarPlataforma,
+  isEmailLike,
+  logErr,
 } = require("./index_02_utils_roles");
-const { humanPlataforma } = require("./index_03_clientes_crm");
 
-async function buscarInventarioPorCorreo(correo) {
-  const mail = String(correo || "").trim().toLowerCase();
-  const snap = await db.collection("inventario").where("correo", "==", mail).limit(50).get();
-  return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+// ===============================
+// HELPERS BASE
+// ===============================
+const PLATFORM_KEYS = Array.isArray(PLATAFORMAS)
+  ? PLATAFORMAS
+  : Object.keys(PLATAFORMAS || {});
+
+function platMeta(key = "") {
+  if (Array.isArray(PLATAFORMAS)) return {};
+  return PLATAFORMAS[String(key || "").trim()] || {};
 }
-function getCapacidadCorreo(data = {}, plataforma = "") {
-  const desdeData = Number(data.capacidad || data.total || 0);
-  if (Number.isFinite(desdeData) && desdeData > 0) return desdeData;
-  const plat = normalizarPlataforma(plataforma);
-  const mapa = {
-    netflix: 5, vipnetflix: 1, disney: 6, disneyp: 6, disneyplus: 6, disneys: 3,
-    max: 5, hbomax: 5, primevideo: 5, prime: 5, paramount: 5, vix: 4, crunchyroll: 5,
-    appletv: 4, universal: 4, spotify: 1, youtube: 1, deezer: 1, canva: 1, gemini: 1,
-    chatgpt: 1, oleadatv1: 1, oleadatv3: 3, iptv1: 1, iptv3: 3, iptv4: 4,
+
+function humanPlatSafe(key = "") {
+  const k = String(key || "").trim().toLowerCase();
+  const labels = {
+    netflix: "Netflix",
+    vipnetflix: "Netflix VIP",
+    disneyp: "Disney Premium",
+    disneys: "Disney Standard",
+    hbomax: "HBO Max",
+    primevideo: "Prime Video",
+    paramount: "Paramount+",
+    crunchyroll: "Crunchyroll",
+    vix: "Vix",
+    appletv: "Apple TV",
+    universal: "Universal+",
+    spotify: "Spotify",
+    youtube: "YouTube",
+    deezer: "Deezer",
+    oleadatv1: "Oleada 1",
+    oleadatv3: "Oleada 3",
+    iptv1: "IPTV 1",
+    iptv3: "IPTV 3",
+    iptv4: "IPTV 4",
+    canva: "Canva",
+    gemini: "Gemini",
+    chatgpt: "ChatGPT",
   };
-  return mapa[plat] || 1;
+  return labels[k] || platMeta(k)?.nombre || k;
 }
-async function aplicarAutoLleno(chatId, ref, dataAntes, dataDespues) {
-  const antes = Number(dataAntes?.disp ?? 0);
-  const despues = Number(dataDespues?.disp ?? 0);
-  if (despues <= 0) {
-    await ref.set({ disp: 0, estado: "llena", updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
-    if (antes > 0) {
-      return bot.sendMessage(chatId, `🚨 *ALERTA STOCK*\n${String(dataDespues.plataforma).toUpperCase()} quedó en *0*.\n📧 ${dataDespues.correo}\n✅ Estado: *LLENA*`, { parse_mode: "Markdown" });
-    }
-  }
-}
-async function inventarioPlataformaTexto(plataforma, page) {
-  const p = normalizarPlataforma(plataforma);
-  const totalDefault = await getTotalPorPlataforma(p);
-  const snap = await db.collection("inventario").where("plataforma", "==", p).limit(500).get();
-  const docs = snap.docs.map((d) => {
-    const data = d.data() || {};
-    const clientes = Array.isArray(data.clientes) ? data.clientes : [];
-    const capacidad = Number(data.capacidad || data.total || totalDefault || getCapacidadCorreo(data, p) || 0);
-    const ocupados = clientes.length;
-    const disponibles = Math.max(0, capacidad - ocupados);
-    const estado = disponibles === 0 ? "llena" : "activa";
-    return { id: d.id, ...data, capacidad, ocupados, disp: disponibles, disponibles, estado };
-  }).filter((x) => Number(x.disp || 0) > 0).sort((a, b) => Number(b.disp || 0) !== Number(a.disp || 0) ? Number(b.disp || 0) - Number(a.disp || 0) : String(a.correo || "").localeCompare(String(b.correo || "")));
-  const totalItems = docs.length;
-  const totalPages = Math.max(1, Math.ceil(totalItems / PAGE_SIZE));
-  const safePage = Math.min(Math.max(Number(page) || 0, 0), totalPages - 1);
-  const start = safePage * PAGE_SIZE;
-  const end = Math.min(start + PAGE_SIZE, totalItems);
-  const slice = docs.slice(start, end);
-  let texto = `📌 *${humanPlataforma(p).toUpperCase()} — INVENTARIO*\n`;
-  texto += `Mostrando ${totalItems === 0 ? 0 : start + 1}-${end} de ${totalItems}\n\n`;
-  if (slice.length === 0) texto += "⚠️ No hay cuentas con espacio disponible.\n";
-  else {
-    let i = start + 1;
-    for (const d of slice) {
-      texto += `${i}) ${d.correo} — 🔑 ${d?.clave ? d.clave : "Sin clave"} — ${d.ocupados}/${d.capacidad} — ${fmtEstado(d.estado)}\n`;
-      i++;
-    }
-    texto += "\n━━━━━━━━━━━━━━\n📌 Para abrir una cuenta: escriba /dato_de_acceso\n";
-  }
-  texto += `\n📄 Página: ${safePage + 1}/${totalPages}`;
-  return { texto, safePage, totalPages };
-}
-async function enviarInventarioPlataforma(chatId, plataforma, page) {
-  const p = normalizarPlataforma(plataforma);
-  if (!esPlataformaValida(p)) {
-    return upsertPanel(chatId, "⚠️ Plataforma inválida.", { inline_keyboard: [[{ text: "🏠 Inicio", callback_data: "go:inicio" }]] }, "Markdown");
-  }
-  const { texto, safePage, totalPages } = await inventarioPlataformaTexto(p, page);
-  const canBack = safePage > 0;
-  const canNext = safePage < totalPages - 1;
-  return upsertPanel(chatId, texto, {
-    inline_keyboard: [
-      [
-        { text: "⬅️ Atrás", callback_data: canBack ? `inv:${p}:${safePage - 1}` : "noop" },
-        { text: "🏠 Inicio", callback_data: "go:inicio" },
-        { text: "➡️ Siguiente", callback_data: canNext ? `inv:${p}:${safePage + 1}` : "noop" },
-      ],
-      [{ text: "🔄 Actualizar", callback_data: `inv:${p}:${safePage}` }],
-      [{ text: "⬅️ Volver Inventario", callback_data: "menu:inventario" }],
-    ],
-  }, "Markdown");
-}
-async function mostrarStockGeneral(chatId) {
-  const lines = [];
-  for (const p of PLATAFORMAS) {
-    const snap = await db.collection("inventario").where("plataforma", "==", p).limit(500).get();
-    let libres = 0;
-    snap.forEach((d) => {
-      const data = d.data() || {};
-      const clientes = Array.isArray(data.clientes) ? data.clientes : [];
-      const capacidad = Number(data.capacidad || data.total || getCapacidadCorreo(data, p) || 0);
-      libres += Math.max(0, capacidad - clientes.length);
-    });
-    lines.push(`✅ *${humanPlataforma(p)}*: ${libres} libres`);
-  }
-  const texto = `📦 *STOCK GENERAL*\n\n${lines.join("\n")}`;
-  return bot.sendMessage(chatId, texto, { parse_mode: "Markdown" });
-}
-async function enviarSubmenuInventario(chatId, plataforma, correo) { return mostrarPanelCorreo(chatId, plataforma, correo); }
 
-async function buscarCorreoInventarioPorPlatCorreo(plataforma, correo) {
-  const plat = normalizarPlataforma(plataforma);
-  const mail = String(correo || "").trim().toLowerCase();
-  const directRef = db.collection("inventario").doc(docIdInventario(mail, plat));
-  const directSnap = await directRef.get();
-  if (directSnap.exists) return { id: directSnap.id, ref: directRef, data: directSnap.data() || {} };
-  const snap = await db.collection("inventario").where("plataforma", "==", plat).where("correo", "==", mail).limit(1).get();
-  if (!snap.empty) { const d = snap.docs[0]; return { id: d.id, ref: d.ref, data: d.data() || {} }; }
-  return null;
+function isUserPlatform(plataforma = "") {
+  const p = normalizarPlataforma(plataforma);
+  return ["oleadatv1", "oleadatv3", "iptv1", "iptv3", "iptv4"].includes(p);
 }
-async function mostrarListaCorreosPlataforma(chatId, plataforma) {
-  const plat = normalizarPlataforma(plataforma);
-  const snap = await db.collection("inventario").where("plataforma", "==", plat).limit(500).get();
-  if (snap.empty) {
-    return upsertPanel(chatId, `📭 *${escMD(humanPlataforma(plat).toUpperCase())}*\n\nNo hay cuentas registradas en esta plataforma.`, { inline_keyboard: [[{ text: "🏠 Inicio", callback_data: "go:inicio" }]] }, "Markdown");
-  }
-  const docs = snap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
-  docs.sort((a, b) => String(a.correo || "").toLowerCase().localeCompare(String(b.correo || "").toLowerCase()));
-  let txt = `📂 *${escMD(humanPlataforma(plat).toUpperCase())}*\n\nSeleccione una cuenta:\n`;
-  const kb = docs.map((item) => {
-    const clientes = Array.isArray(item.clientes) ? item.clientes : [];
-    const capacidad = getCapacidadCorreo(item, plat);
-    const ocupados = clientes.length;
-    const disponibles = Math.max(0, capacidad - ocupados);
-    const estado = disponibles === 0 ? "LLENA" : "CON ESPACIO";
-    return [{ text: safeBtnLabel(`${item.correo || "cuenta"} | ${ocupados}/${capacidad} | ${estado}`, 60), callback_data: `mail_panel|${plat}|${encodeURIComponent(item.correo || "")}` }];
-  });
-  kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
-  return upsertPanel(chatId, txt, { inline_keyboard: kb }, "Markdown");
+
+function isNetflixPlatform(plataforma = "") {
+  const p = normalizarPlataforma(plataforma);
+  return p === "netflix" || p === "vipnetflix";
 }
-async function mostrarMenuClientesCorreo(chatId, plataforma, correo) {
-  const plat = normalizarPlataforma(plataforma);
-  const ident = String(correo || "").trim().toLowerCase();
-  const kb = [
-    [{ text: "👥 Ver clientes", callback_data: `mail_ver_clientes|${plat}|${encodeURIComponent(ident)}` }],
-    [{ text: "➕ Agregar cliente", callback_data: `mail_add_cliente|${plat}|${encodeURIComponent(ident)}` }],
-    [{ text: "➖ Quitar cliente", callback_data: `mail_del_cliente|${plat}|${encodeURIComponent(ident)}` }],
-    [{ text: "🔐 Editar PIN", callback_data: `mail_edit_pin|${plat}|${encodeURIComponent(ident)}` }],
+
+function getIdentLabel(plataforma = "") {
+  return isUserPlatform(plataforma) ? "Usuario" : "Correo";
+}
+
+function getIdentIcon(plataforma = "") {
+  return isUserPlatform(plataforma) ? "👤" : "📧";
+}
+
+function getAccessTypeLabel(plataforma = "") {
+  const p = normalizarPlataforma(plataforma);
+  if (p === "canva") return "Solo correo";
+  if (isUserPlatform(p)) return "Usuario + clave";
+  return "Correo + clave";
+}
+
+function normalizeAccess(plataforma = "", acceso = "") {
+  const p = normalizarPlataforma(plataforma);
+  const v = String(acceso || "").trim();
+  if (isUserPlatform(p)) return v;
+  return v.toLowerCase();
+}
+
+function docIdInventario(acceso = "", plataforma = "") {
+  const p = normalizarPlataforma(plataforma);
+  const a = normalizeAccess(p, acceso)
+    .toLowerCase()
+    .replace(/[.#$/\[\]\s]+/g, "_");
+  return `${p}__${a}`;
+}
+
+function getCapacidadCorreo(data = {}, plataforma = "") {
+  const p = normalizarPlataforma(plataforma || data.plataforma || "");
+  const defaults = {
+    netflix: 5,
+    vipnetflix: 1,
+    disneyp: 6,
+    disneys: 5,
+    hbomax: 5,
+    primevideo: 5,
+    paramount: 5,
+    crunchyroll: 5,
+    vix: 4,
+    appletv: 4,
+    universal: 4,
+    spotify: 1,
+    youtube: 1,
+    deezer: 1,
+    oleadatv1: 1,
+    oleadatv3: 3,
+    iptv1: 1,
+    iptv3: 3,
+    iptv4: 4,
+    canva: 1,
+    gemini: 1,
+    chatgpt: 1,
+  };
+
+  const n = Number(data.capacidad || data.total || 0);
+  if (Number.isFinite(n) && n > 0) return n;
+  return defaults[p] || 1;
+}
+
+function getClientesArray(data = {}) {
+  return Array.isArray(data.clientes) ? data.clientes : [];
+}
+
+function getOcupados(data = {}) {
+  const n = Number(data.ocupados);
+  if (Number.isFinite(n) && n >= 0) return n;
+  return getClientesArray(data).length;
+}
+
+function getDisponibles(data = {}, plataforma = "") {
+  const n = Number(data.disponibles ?? data.disp);
+  if (Number.isFinite(n) && n >= 0) return n;
+  const capacidad = getCapacidadCorreo(data, plataforma);
+  const ocupados = getOcupados(data);
+  return Math.max(0, capacidad - ocupados);
+}
+
+function getEstado(data = {}, plataforma = "") {
+  const disp = getDisponibles(data, plataforma);
+  return disp <= 0 ? "llena" : "activa";
+}
+
+function boolHasCodes(data = {}) {
+  const keys = [
+    "codigo", "code", "codigo_hogar", "hogarCode", "hogar_code",
+    "codigo_temporal", "tempCode", "pin_hogar", "pin_temporal",
   ];
-  if (getAccessTypeLabel(plat) !== "Solo correo") kb.push([{ text: "✏️ Editar clave de la cuenta", callback_data: `mail_edit_clave|${plat}|${encodeURIComponent(ident)}` }]);
-  kb.push([{ text: "⬅️ Volver al detalle", callback_data: `mail_panel|${plat}|${encodeURIComponent(ident)}` }]);
-  kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
-  return upsertPanel(chatId, "👥 *CLIENTES*\n\nSeleccione una opción:", { inline_keyboard: kb }, "Markdown");
+  return keys.some((k) => data[k]);
 }
-async function mostrarMenuCodigosNetflix(chatId, plataforma, correo) { return responderMenuCodigosNetflix(chatId, plataforma, correo); }
-async function mostrarPanelCorreo(chatId, plataforma, correo) {
+
+function formatCuentaResumen(data = {}, plataforma = "") {
+  const capacidad = getCapacidadCorreo(data, plataforma);
+  const ocupados = getOcupados(data);
+  const disponibles = getDisponibles(data, plataforma);
+  const estado = getEstado(data, plataforma) === "llena" ? "🔴 LLENA" : "🟢 ACTIVA";
+  return { capacidad, ocupados, disponibles, estado };
+}
+
+function normalizeLooseText(txt = "") {
+  return String(txt || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function pairButtons(buttons = []) {
+  const rows = [];
+  for (let i = 0; i < buttons.length; i += 2) {
+    rows.push(buttons.slice(i, i + 2));
+  }
+  return rows;
+}
+
+function scoreMatch(value = "", query = "") {
+  const v = normalizeLooseText(value);
+  const q = normalizeLooseText(query);
+  if (!v || !q) return 0;
+  if (v === q) return 100;
+  if (v.startsWith(q)) return 80;
+  if (v.includes(q)) return 50;
+  return 0;
+}
+
+// ===============================
+// BÚSQUEDAS INVENTARIO
+// ===============================
+async function buscarInventarioPorCorreo(query = "") {
+  const q = String(query || "").trim();
+  if (!q) return [];
+
+  try {
+    const snap = await db.collection("inventario").get();
+    const out = [];
+
+    snap.forEach((doc) => {
+      const data = doc.data() || {};
+      const plat = normalizarPlataforma(data.plataforma || "");
+      const acceso = String(data.correo || data.usuario || "");
+      const clave = String(data.clave || "");
+      const nombrePlat = humanPlatSafe(plat);
+
+      let score = 0;
+      score = Math.max(score, scoreMatch(acceso, q));
+      score = Math.max(score, scoreMatch(clave, q));
+      score = Math.max(score, scoreMatch(nombrePlat, q));
+      score = Math.max(score, scoreMatch(plat, q));
+
+      if (score > 0) {
+        out.push({
+          id: doc.id,
+          ...data,
+          plataforma: plat,
+          _score: score,
+        });
+      }
+    });
+
+    out.sort((a, b) => {
+      if ((b._score || 0) !== (a._score || 0)) return (b._score || 0) - (a._score || 0);
+      const da = getDisponibles(a, a.plataforma);
+      const dbb = getDisponibles(b, b.plataforma);
+      if (dbb !== da) return dbb - da;
+      return String(a.correo || "").localeCompare(String(b.correo || ""), "es", { sensitivity: "base" });
+    });
+
+    return out.slice(0, 30);
+  } catch (e) {
+    logErr("buscarInventarioPorCorreo", e);
+    return [];
+  }
+}
+
+async function buscarCorreoInventarioPorPlatCorreo(plataforma = "", acceso = "") {
   const plat = normalizarPlataforma(plataforma);
-  const ident = String(correo || "").trim().toLowerCase();
-  const found = await buscarCorreoInventarioPorPlatCorreo(plat, ident);
-  if (!found) return bot.sendMessage(chatId, "❌ Esta cuenta no existe.");
+  const ident = String(acceso || "").trim();
+  if (!plat || !ident) return null;
+
+  try {
+    const id = docIdInventario(ident, plat);
+    const byId = await db.collection("inventario").doc(id).get();
+    if (byId.exists) {
+      return { id: byId.id, ref: byId.ref, data: byId.data() || {} };
+    }
+
+    const snap = await db.collection("inventario").where("plataforma", "==", plat).get();
+    const exactNorm = normalizeAccess(plat, ident);
+    let partial = null;
+
+    for (const doc of snap.docs) {
+      const data = doc.data() || {};
+      const stored = normalizeAccess(plat, data.correo || data.usuario || "");
+      if (stored === exactNorm) {
+        return { id: doc.id, ref: doc.ref, data };
+      }
+      if (!partial && stored.includes(normalizeLooseText(exactNorm))) {
+        partial = { id: doc.id, ref: doc.ref, data };
+      }
+    }
+
+    return partial;
+  } catch (e) {
+    logErr("buscarCorreoInventarioPorPlatCorreo", e);
+    return null;
+  }
+}
+
+// ===============================
+// VISTAS INVENTARIO
+// ===============================
+async function enviarInventarioPlataforma(chatId, plataforma = "", page = 0) {
+  const plat = normalizarPlataforma(plataforma);
+  const pageSize = 10;
+
+  try {
+    const snap = await db.collection("inventario").where("plataforma", "==", plat).get();
+    const rows = snap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
+
+    rows.sort((a, b) => {
+      const da = getDisponibles(a, plat);
+      const dbb = getDisponibles(b, plat);
+      if (dbb !== da) return dbb - da;
+      return String(a.correo || "").localeCompare(String(b.correo || ""), "es", { sensitivity: "base" });
+    });
+
+    if (!rows.length) {
+      return upsertPanel(
+        chatId,
+        `📦 *${escMD(humanPlatSafe(plat).toUpperCase())}*\n\n_No hay cuentas en inventario para esta plataforma._`,
+        [
+          [{ text: "⬅️ Volver Inventario", callback_data: "menu:inventario" }],
+          [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
+        ]
+      );
+    }
+
+    const totalPages = Math.max(1, Math.ceil(rows.length / pageSize));
+    const safePage = Math.max(0, Math.min(Number(page || 0), totalPages - 1));
+    const start = safePage * pageSize;
+    const slice = rows.slice(start, start + pageSize);
+
+    let txt = `📦 *${escMD(humanPlatSafe(plat).toUpperCase())}*\n`;
+    txt += `Página *${safePage + 1}/${totalPages}*\n\n`;
+
+    slice.forEach((r, idx) => {
+      const ident = String(r.correo || "");
+      const { capacidad, ocupados, disponibles, estado } = formatCuentaResumen(r, plat);
+      txt += `*${start + idx + 1}.* ${getIdentIcon(plat)} ${escMD(ident)}\n`;
+      txt += `   👥 ${ocupados}/${capacidad} • ✅ ${disponibles} • ${estado}\n`;
+      if (r.clave) txt += `   🔑 ${escMD(String(r.clave))}\n`;
+    });
+
+    const kb = slice.map((r) => [
+      {
+        text: `${getIdentIcon(plat)} ${String(r.correo || "")} • ${getDisponibles(r, plat)}/${getCapacidadCorreo(r, plat)}`,
+        callback_data: `inv:open:${plat}:${encodeURIComponent(String(r.correo || ""))}`,
+      },
+    ]);
+
+    const nav = [];
+    if (safePage > 0) nav.push({ text: "⬅️ Anterior", callback_data: `inv:${plat}:${safePage - 1}` });
+    if (safePage < totalPages - 1) nav.push({ text: "Siguiente ➡️", callback_data: `inv:${plat}:${safePage + 1}` });
+    if (nav.length) kb.push(nav);
+
+    kb.push([{ text: "⬅️ Volver Inventario", callback_data: "menu:inventario" }]);
+    kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
+
+    return upsertPanel(chatId, txt, kb);
+  } catch (e) {
+    logErr("enviarInventarioPlataforma", e);
+    return bot.sendMessage(chatId, "⚠️ Error al abrir inventario de esa plataforma.");
+  }
+}
+
+async function mostrarListaCorreosPlataforma(chatId, plataforma = "") {
+  return enviarInventarioPlataforma(chatId, plataforma, 0);
+}
+
+async function mostrarStockGeneral(chatId) {
+  try {
+    const snap = await db.collection("inventario").get();
+    const map = {};
+
+    snap.forEach((doc) => {
+      const data = doc.data() || {};
+      const plat = normalizarPlataforma(data.plataforma || "");
+      if (!plat) return;
+      if (!map[plat]) {
+        map[plat] = {
+          cuentas: 0,
+          capacidad: 0,
+          ocupados: 0,
+          disponibles: 0,
+        };
+      }
+      map[plat].cuentas += 1;
+      map[plat].capacidad += getCapacidadCorreo(data, plat);
+      map[plat].ocupados += getOcupados(data);
+      map[plat].disponibles += getDisponibles(data, plat);
+    });
+
+    const keys = Object.keys(map).sort((a, b) => {
+      return humanPlatSafe(a).localeCompare(humanPlatSafe(b), "es", { sensitivity: "base" });
+    });
+
+    let txt = "📊 *STOCK GENERAL*\n\n";
+    if (!keys.length) {
+      txt += "_No hay cuentas cargadas en inventario._";
+    } else {
+      for (const k of keys) {
+        const x = map[k];
+        txt += `*${escMD(humanPlatSafe(k))}*\n`;
+        txt += `   📦 Cuentas: ${x.cuentas}\n`;
+        txt += `   👥 Ocupados: ${x.ocupados}/${x.capacidad}\n`;
+        txt += `   ✅ Disponibles: ${x.disponibles}\n\n`;
+      }
+    }
+
+    return upsertPanel(
+      chatId,
+      txt,
+      [
+        [{ text: "⬅️ Volver Inventario", callback_data: "menu:inventario" }],
+        [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
+      ]
+    );
+  } catch (e) {
+    logErr("mostrarStockGeneral", e);
+    return bot.sendMessage(chatId, "⚠️ Error al generar stock general.");
+  }
+}
+
+async function mostrarPanelCorreo(chatId, plataforma = "", acceso = "") {
+  const plat = normalizarPlataforma(plataforma);
+  const found = await buscarCorreoInventarioPorPlatCorreo(plat, acceso);
+  if (!found) return bot.sendMessage(chatId, "⚠️ Esa cuenta no existe en inventario.");
+
   const data = found.data || {};
-  const clientes = Array.isArray(data.clientes) ? data.clientes : [];
-  const capacidad = getCapacidadCorreo(data, plat);
-  const ocupados = clientes.length;
-  const disponibles = Math.max(0, capacidad - ocupados);
-  const estadoDb = disponibles === 0 ? "llena" : "activa";
-  const estadoView = disponibles === 0 ? "LLENA" : "CON ESPACIO";
-  if (
-    Number(data.disp || 0) !== disponibles || String(data.estado || "") !== estadoDb ||
-    Number(data.ocupados || 0) !== ocupados || Number(data.disponibles || 0) !== disponibles ||
-    Number(data.capacidad || 0) !== capacidad
-  ) {
-    await found.ref.set({ ocupados, disponibles, disp: disponibles, estado: estadoDb, capacidad, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+  const ident = String(data.correo || acceso || "");
+  const clave = String(data.clave || "Sin clave");
+  const { capacidad, ocupados, disponibles, estado } = formatCuentaResumen(data, plat);
+
+  let txt = `📦 *PANEL DE CUENTA*\n\n`;
+  txt += `📌 *Plataforma:* ${escMD(humanPlatSafe(plat))}\n`;
+  txt += `${getIdentIcon(plat)} *${escMD(getIdentLabel(plat))}:* ${escMD(ident)}\n`;
+  txt += `🔐 *Tipo:* ${escMD(getAccessTypeLabel(plat))}\n`;
+  txt += `🔑 *Clave:* ${escMD(clave)}\n`;
+  txt += `👥 *Ocupados:* ${ocupados}/${capacidad}\n`;
+  txt += `✅ *Disponibles:* ${disponibles}\n`;
+  txt += `📊 *Estado:* ${escMD(estado)}\n`;
+
+  if (isNetflixPlatform(plat) && boolHasCodes(data)) {
+    txt += `\n💡 Esta cuenta tiene datos/códigos de Netflix disponibles.`;
   }
-  let txt = `📦 *${escMD(humanPlataforma(plat))}*\n\n`;
-  txt += `🔐 *Acceso:* ${escMD(getAccessTypeLabel(plat))}\n`;
-  txt += `${getIdentLabel(plat) === "Usuario" ? "👤" : "📧"} *${escMD(getIdentLabel(plat))}:* ${escMD(ident)}\n`;
-  if (getAccessTypeLabel(plat) !== "Solo correo") txt += `🔑 *Clave:* ${escMD(data.clave || "Sin clave")}\n`;
-  txt += `\n👤 *Ocupados:* ${ocupados}/${capacidad}\n✅ *Disponibles:* ${disponibles}\n📊 *Estado:* ${escMD(estadoView)}`;
-  const kb = [[{ text: "👥 CLIENTES", callback_data: `mail_menu_clientes|${plat}|${encodeURIComponent(ident)}` }]];
-  if (plat === "netflix" || plat === "vipnetflix") kb.push([{ text: "🎬 CÓDIGOS NETFLIX", callback_data: `mail_menu_codigos|${plat}|${encodeURIComponent(ident)}` }]);
-  kb.push([{ text: "🗑️ Borrar cuenta", callback_data: `mail_delete|${plat}|${encodeURIComponent(ident)}` }]);
-  kb.push([{ text: "⬅️ Volver Inventario", callback_data: `inv:${plat}:0` }]);
-  kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
-  return upsertPanel(chatId, txt, { inline_keyboard: kb }, "Markdown");
+
+  const kb = [
+    [{ text: "👥 Menú clientes", callback_data: `mail_menu_clientes|${plat}|${encodeURIComponent(ident)}` }],
+    [{ text: "👥 Ver clientes", callback_data: `mail_ver_clientes|${plat}|${encodeURIComponent(ident)}` }],
+  ];
+
+  if (isNetflixPlatform(plat) && boolHasCodes(data)) {
+    kb.push([{ text: "🔑 Ver códigos Netflix", callback_data: `mail_menu_codigos|${plat}|${encodeURIComponent(ident)}` }]);
+  }
+
+  kb.push([
+    { text: "✏️ Editar clave", callback_data: `mail_edit_clave|${plat}|${encodeURIComponent(ident)}` },
+    { text: "🗑️ Borrar cuenta", callback_data: `mail_delete|${plat}|${encodeURIComponent(ident)}` },
+  ]);
+
+  kb.push([
+    { text: "⬅️ Volver plataforma", callback_data: `inv:${plat}:0` },
+    { text: "🏠 Inicio", callback_data: "go:inicio" },
+  ]);
+
+  return upsertPanel(chatId, txt, kb);
 }
 
-function tsToMillisNetflix(v) {
-  try {
-    if (!v) return 0;
-    if (typeof v?.toDate === "function") return v.toDate().getTime();
-    if (v instanceof Date) return v.getTime();
-    const t = new Date(v).getTime();
-    return Number.isFinite(t) ? t : 0;
-  } catch (_) { return 0; }
+async function enviarSubmenuInventario(chatId, plataforma = "", acceso = "") {
+  return mostrarPanelCorreo(chatId, plataforma, acceso);
 }
-async function obtenerUltimoCodigoNetflix(correo, tipo) {
-  const mail = String(correo || "").trim().toLowerCase();
-  if (!mail || !tipo) return null;
-  let snap = null;
-  try {
-    snap = await db.collection("codigos_netflix").where("correo", "==", mail).where("tipo", "==", tipo).orderBy("fecha", "desc").limit(1).get();
-  } catch (_) {
-    const alt = await db.collection("codigos_netflix").where("correo", "==", mail).where("tipo", "==", tipo).limit(50).get();
-    const docs = alt.docs.map((d) => ({ id: d.id, ...(d.data() || {}) })).sort((a, b) => tsToMillisNetflix(b.fecha || b.createdAt || b.updatedAt) - tsToMillisNetflix(a.fecha || a.createdAt || a.updatedAt));
-    return docs.length ? docs[0] : null;
-  }
-  if (snap.empty) return null;
-  const d = snap.docs[0];
-  return { id: d.id, ...(d.data() || {}) };
-}
-async function obtenerUltimoCodigoNetflixGeneral(correo) {
-  const mail = String(correo || "").trim().toLowerCase();
-  if (!mail) return null;
-  let snap = null;
-  try {
-    snap = await db.collection("codigos_netflix").where("correo", "==", mail).orderBy("fecha", "desc").limit(1).get();
-  } catch (_) {
-    const alt = await db.collection("codigos_netflix").where("correo", "==", mail).limit(50).get();
-    const docs = alt.docs.map((d) => ({ id: d.id, ...(d.data() || {}) })).sort((a, b) => tsToMillisNetflix(b.fecha || b.createdAt || b.updatedAt) - tsToMillisNetflix(a.fecha || a.createdAt || a.updatedAt));
-    return docs.length ? docs[0] : null;
-  }
-  if (snap.empty) return null;
-  const d = snap.docs[0];
-  return { id: d.id, ...(d.data() || {}) };
-}
-function labelTipoCodigoNetflix(tipo = "") {
-  const t = String(tipo || "").toLowerCase();
-  if (t === "signin") return "🔐 Inicio sesión";
-  if (t === "temporal") return "⏳ Código temporal";
-  if (t === "hogar") return "🏠 Código hogar";
-  if (t === "verification") return "✅ Verificación";
-  return "📩 Código";
-}
-function fmtFechaCodigoNetflix(fecha) {
-  if (!fecha) return "-";
-  try {
-    let dt = null;
-    if (typeof fecha?.toDate === "function") dt = fecha.toDate();
-    else if (fecha instanceof Date) dt = fecha;
-    else dt = new Date(fecha);
-    if (isNaN(dt.getTime())) return String(fecha);
-    return new Intl.DateTimeFormat("es-HN", {
-      timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit",
-      minute: "2-digit", second: "2-digit", hour12: false,
-    }).format(dt);
-  } catch (_) { return String(fecha); }
-}
-async function marcarCodigoNetflixUsado(docId) {
-  if (!docId) return;
-  try {
-    await db.collection("codigos_netflix").doc(String(docId)).set({
-      usado: true,
-      usadoAt: admin.firestore.FieldValue.serverTimestamp(),
-    }, { merge: true });
-  } catch (e) { logErr("Error marcando codigo usado:", e?.message || e); }
-}
-async function responderCodigoNetflix(chatId, correo, tipo) {
-  const mail = String(correo || "").trim().toLowerCase();
-  const data = tipo === "ultimo" ? await obtenerUltimoCodigoNetflixGeneral(mail) : await obtenerUltimoCodigoNetflix(mail, tipo);
-  if (!data) {
-    return bot.sendMessage(chatId, `🎬 *CÓDIGOS NETFLIX*\n\n📧 *${escMD(mail)}*\n🧩 *Tipo:* ${escMD(tipo === "ultimo" ? "último disponible" : tipo)}\n\n⚠️ No encontré códigos disponibles.`, { parse_mode: "Markdown" });
-  }
-  const tipoReal = String(data.tipo || tipo || "ultimo").toLowerCase();
-  const codigo = String(data.codigo || "").trim();
-  const fuente = String(data.fuente || "-").trim();
-  const fechaFmt = fmtFechaCodigoNetflix(data.fecha || data.createdAt || data.updatedAt);
-  const usado = data.usado === true ? "Sí" : "No";
-  let txt = "🎬 *CÓDIGOS NETFLIX*\n\n";
-  txt += `📧 *${escMD(mail)}*\n`;
-  txt += `🧩 *Tipo:* ${escMD(labelTipoCodigoNetflix(tipoReal))}\n`;
-  txt += `🔢 *Código:* \`${codigo || "-"}\`\n`;
-  txt += `🕒 *Fecha:* ${escMD(fechaFmt)}\n`;
-  txt += `📥 *Fuente:* ${escMD(fuente || "-")}\n`;
-  txt += `✅ *Usado:* ${escMD(usado)}`;
-  await bot.sendMessage(chatId, txt, { parse_mode: "Markdown" });
-  if (data.id) await marcarCodigoNetflixUsado(data.id);
-}
-async function responderMenuCodigosNetflix(chatId, plataforma, correo) {
+
+async function mostrarMenuClientesCorreo(chatId, plataforma = "", acceso = "") {
   const plat = normalizarPlataforma(plataforma);
-  const mail = String(correo || "").trim().toLowerCase();
-  if (plat !== "netflix" && plat !== "vipnetflix") return bot.sendMessage(chatId, "⚠️ Este menú de códigos solo aplica para Netflix.");
-  return upsertPanel(chatId, "🎬 *CÓDIGOS NETFLIX*\n\nSeleccione una opción:", {
-    inline_keyboard: [
-      [{ text: "📩 Último código", callback_data: `nf_code|ultimo|${encodeURIComponent(mail)}|${plat}` }],
-      [{ text: "🔐 Inicio sesión", callback_data: `nf_code|signin|${encodeURIComponent(mail)}|${plat}` }],
-      [{ text: "⏳ Código temporal", callback_data: `nf_code|temporal|${encodeURIComponent(mail)}|${plat}` }],
-      [{ text: "🏠 Código hogar", callback_data: `nf_code|hogar|${encodeURIComponent(mail)}|${plat}` }],
-      [{ text: "✅ Verificación", callback_data: `nf_code|verification|${encodeURIComponent(mail)}|${plat}` }],
-      [{ text: "⬅️ Volver al correo", callback_data: `mail_panel|${plat}|${encodeURIComponent(mail)}` }],
-      [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
-    ],
-  }, "Markdown");
+  const found = await buscarCorreoInventarioPorPlatCorreo(plat, acceso);
+  if (!found) return bot.sendMessage(chatId, "⚠️ Esa cuenta no existe en inventario.");
+
+  const data = found.data || {};
+  const ident = String(data.correo || acceso || "");
+  const { capacidad, ocupados, disponibles, estado } = formatCuentaResumen(data, plat);
+
+  const txt =
+    `👥 *CLIENTES DE LA CUENTA*\n\n` +
+    `📌 *Plataforma:* ${escMD(humanPlatSafe(plat))}\n` +
+    `${getIdentIcon(plat)} *${escMD(getIdentLabel(plat))}:* ${escMD(ident)}\n` +
+    `👥 *Ocupados:* ${ocupados}/${capacidad}\n` +
+    `✅ *Disponibles:* ${disponibles}\n` +
+    `📊 *Estado:* ${escMD(estado)}\n\n` +
+    `Seleccione una acción:`;
+
+  return upsertPanel(
+    chatId,
+    txt,
+    [
+      [
+        { text: "➕ Agregar cliente", callback_data: `mail_add_cliente|${plat}|${encodeURIComponent(ident)}` },
+        { text: "➖ Quitar cliente", callback_data: `mail_del_cliente|${plat}|${encodeURIComponent(ident)}` },
+      ],
+      [
+        { text: "🔐 Editar PIN cliente", callback_data: `mail_edit_pin|${plat}|${encodeURIComponent(ident)}` },
+        { text: "👥 Ver clientes", callback_data: `mail_ver_clientes|${plat}|${encodeURIComponent(ident)}` },
+      ],
+      [
+        { text: "⬅️ Volver cuenta", callback_data: `mail_panel|${plat}|${encodeURIComponent(ident)}` },
+        { text: "🏠 Inicio", callback_data: "go:inicio" },
+      ],
+    ]
+  );
 }
 
+// ===============================
+// NETFLIX CÓDIGOS
+// ===============================
+async function responderMenuCodigosNetflix(chatId, plataforma = "", acceso = "") {
+  const plat = normalizarPlataforma(plataforma);
+  const found = await buscarCorreoInventarioPorPlatCorreo(plat, acceso);
+  if (!found) return bot.sendMessage(chatId, "⚠️ Esa cuenta no existe en inventario.");
+
+  const data = found.data || {};
+  const ident = String(data.correo || acceso || "");
+
+  const txt =
+    `🔑 *CÓDIGOS / DATOS NETFLIX*\n\n` +
+    `📌 *Plataforma:* ${escMD(humanPlatSafe(plat))}\n` +
+    `📧 *Cuenta:* ${escMD(ident)}\n\n` +
+    `Seleccione qué desea ver:`;
+
+  const kb = [
+    [
+      { text: "🔐 Login", callback_data: `nf_code|login|${encodeURIComponent(ident)}` },
+      { text: "🏠 Código hogar", callback_data: `nf_code|hogar|${encodeURIComponent(ident)}` },
+    ],
+    [
+      { text: "⏱️ Código temporal", callback_data: `nf_code|temporal|${encodeURIComponent(ident)}` },
+      { text: "📌 PIN / perfil", callback_data: `nf_code|pin|${encodeURIComponent(ident)}` },
+    ],
+    [
+      { text: "⬅️ Volver cuenta", callback_data: `mail_panel|${plat}|${encodeURIComponent(ident)}` },
+      { text: "🏠 Inicio", callback_data: "go:inicio" },
+    ],
+  ];
+
+  return upsertPanel(chatId, txt, kb);
+}
+
+async function responderCodigoNetflix(chatId, acceso = "", tipo = "") {
+  const ident = String(acceso || "").trim();
+  const tipoNorm = String(tipo || "").trim().toLowerCase();
+
+  const plats = ["netflix", "vipnetflix"];
+  let found = null;
+  for (const p of plats) {
+    found = await buscarCorreoInventarioPorPlatCorreo(p, ident);
+    if (found) break;
+  }
+
+  if (!found) return bot.sendMessage(chatId, "⚠️ No encontré esa cuenta de Netflix.");
+
+  const data = found.data || {};
+  const plat = normalizarPlataforma(data.plataforma || "");
+
+  const maps = {
+    login: [
+      ["Correo", data.correo || ident],
+      ["Clave", data.clave || "Sin clave"],
+    ],
+    hogar: [
+      ["Código hogar", data.codigo_hogar || data.hogarCode || data.hogar_code || data.hogar || "No disponible"],
+    ],
+    temporal: [
+      ["Código temporal", data.codigo_temporal || data.tempCode || data.temporal || data.codigo || data.code || "No disponible"],
+    ],
+    pin: [
+      ["PIN", data.pin || data.pin_hogar || data.pin_temporal || "No disponible"],
+      ["Perfil", data.perfil || data.profile || "No disponible"],
+    ],
+  };
+
+  const rows = maps[tipoNorm] || [["Dato", "No disponible"]];
+  let txt = `🔑 *NETFLIX — ${escMD(tipoNorm.toUpperCase())}*\n\n`;
+  txt += `📧 *Cuenta:* ${escMD(String(data.correo || ident))}\n`;
+  txt += `📌 *Plataforma:* ${escMD(humanPlatSafe(plat))}\n\n`;
+
+  rows.forEach(([k, v]) => {
+    txt += `*${escMD(String(k))}:* ${escMD(String(v || "No disponible"))}\n`;
+  });
+
+  return upsertPanel(
+    chatId,
+    txt,
+    [
+      [
+        { text: "⬅️ Volver códigos", callback_data: `mail_menu_codigos|${plat}|${encodeURIComponent(String(data.correo || ident))}` },
+        { text: "🏠 Inicio", callback_data: "go:inicio" },
+      ],
+    ]
+  );
+}
+
+// ===============================
+// AUTO LLENO
+// ===============================
+async function aplicarAutoLleno(chatId, ref, antes = {}, despues = {}) {
+  try {
+    const plat = normalizarPlataforma(despues.plataforma || antes.plataforma || "");
+    const ident = String(despues.correo || antes.correo || "");
+    const beforeDisp = getDisponibles(antes, plat);
+    const afterDisp = getDisponibles(despues, plat);
+    const newEstado = afterDisp <= 0 ? "llena" : "activa";
+
+    await ref.set(
+      {
+        estado: newEstado,
+        disponibles: afterDisp,
+        disp: afterDisp,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+
+    if (beforeDisp > 0 && afterDisp <= 0 && chatId) {
+      await bot.sendMessage(
+        chatId,
+        `🔴 *CUENTA LLENA*\n\n📌 ${escMD(humanPlatSafe(plat))}\n${getIdentIcon(plat)} ${escMD(ident)}`,
+        { parse_mode: "Markdown" }
+      );
+    }
+
+    if (beforeDisp <= 0 && afterDisp > 0 && chatId) {
+      await bot.sendMessage(
+        chatId,
+        `🟢 *CUENTA CON ESPACIO*\n\n📌 ${escMD(humanPlatSafe(plat))}\n${getIdentIcon(plat)} ${escMD(ident)}\n✅ Disponibles: ${afterDisp}`,
+        { parse_mode: "Markdown" }
+      );
+    }
+
+    return true;
+  } catch (e) {
+    logErr("aplicarAutoLleno", e);
+    return false;
+  }
+}
+
+// ===============================
+// EXPORTS
+// ===============================
 module.exports = {
-  buscarInventarioPorCorreo, getCapacidadCorreo, aplicarAutoLleno, inventarioPlataformaTexto,
-  enviarInventarioPlataforma, mostrarStockGeneral, enviarSubmenuInventario, buscarCorreoInventarioPorPlatCorreo,
-  mostrarListaCorreosPlataforma, mostrarMenuClientesCorreo, mostrarMenuCodigosNetflix, mostrarPanelCorreo,
-  tsToMillisNetflix, obtenerUltimoCodigoNetflix, obtenerUltimoCodigoNetflixGeneral, labelTipoCodigoNetflix,
-  fmtFechaCodigoNetflix, marcarCodigoNetflixUsado, responderCodigoNetflix, responderMenuCodigosNetflix,
+  buscarInventarioPorCorreo,
+  enviarInventarioPlataforma,
+  mostrarStockGeneral,
+  enviarSubmenuInventario,
+  buscarCorreoInventarioPorPlatCorreo,
+  mostrarMenuClientesCorreo,
+  mostrarListaCorreosPlataforma,
+  mostrarPanelCorreo,
+  responderMenuCodigosNetflix,
+  responderCodigoNetflix,
+  getCapacidadCorreo,
+  aplicarAutoLleno,
 };
