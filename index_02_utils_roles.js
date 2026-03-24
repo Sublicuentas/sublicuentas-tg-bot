@@ -1,249 +1,209 @@
-/* ✅ SUBLICUENTAS TG BOT — PARTE 2/6 CORREGIDA
-   UTILS / ROLES / PANEL / HELPERS GENERALES
-   ------------------------------------------
-   ✅ ROLES: admin / super admin / vendedor
-   ✅ PANEL ANCLADO + edición segura
-   ✅ WIZARD + PENDING STATE
-   ✅ HELPERS: fechas, dinero, texto, plataformas
-   ✅ NORMALIZACIONES Y VALIDACIONES
+/* ✅ SUBLICUENTAS TG BOT — PARTE 2/6 ACTUALIZADA
+   UTILS / ROLES / HELPERS / FORMATOS / PANEL STATE
+   ------------------------------------------------
+   Compatible con partes 3, 4, 5 y 6 finales
+   Incluye:
+   - admins / vendedores
+   - helpers de texto y fechas
+   - parseos de finanzas
+   - paneles anclados
+   - maps globales (wizard, pending, panelMsgId)
+   - fix global de escMD sin plecas raras
 */
+
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
 
 const {
   bot,
   admin,
   db,
-  TZ,
-  PLATAFORMAS,
   SUPER_ADMIN,
+  PLATAFORMAS,
+  ADMINS_COLLECTION,
+  REVENDEDORES_COLLECTION,
 } = require("./index_01_core");
 
 // ===============================
-// ESTADO EN MEMORIA
+// STATE GLOBAL
 // ===============================
-const panelMsgId = new Map();      // chatId -> message_id del panel principal
-const panelBindings = new Map();   // `${chatId}:${messageId}` -> true
-const wizard = new Map();          // userId -> estado wizard
-const pending = new Map();         // userId -> estado temporal
+if (!global.__SUBLICUENTAS_PANEL_MSG_ID__) global.__SUBLICUENTAS_PANEL_MSG_ID__ = new Map();
+if (!global.__SUBLICUENTAS_PENDING__) global.__SUBLICUENTAS_PENDING__ = new Map();
+if (!global.__SUBLICUENTAS_WIZARD__) global.__SUBLICUENTAS_WIZARD__ = new Map();
+
+const panelMsgId = global.__SUBLICUENTAS_PANEL_MSG_ID__;
+const pending = global.__SUBLICUENTAS_PENDING__;
+const wizard = global.__SUBLICUENTAS_WIZARD__;
 
 // ===============================
-// LOG / ERROR
+// LOG
 // ===============================
-function logErr(tag, err) {
-  const msg = err?.response?.body || err?.message || err;
-  console.error(`❌ [${tag}]`, msg);
+function logErr(label = "", err = null) {
+  try {
+    console.error(`❌ ${label}:`, err?.stack || err?.message || err);
+  } catch (_) {
+    console.error(`❌ ${label}:`, err);
+  }
 }
 
-function sleep(ms = 250) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 // ===============================
-// TEXTO / NORMALIZACIÓN
+// TEXTO
 // ===============================
-function normTxt(v = "") {
-  return String(v || "")
+function stripAcentos(text = "") {
+  return String(text || "")
     .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[\u0300-\u036f]/g, "");
+}
+
+function normTxt(text = "") {
+  return stripAcentos(String(text || ""))
     .toLowerCase()
-    .replace(/\s+/g, " ")
-    .trim();
+    .trim()
+    .replace(/\s+/g, " ");
 }
 
-function onlyDigits(v = "") {
-  return String(v || "").replace(/\D+/g, "");
+function limpiarQuery(text = "") {
+  return String(text || "").trim().replace(/\s+/g, " ");
 }
 
-function isEmailLike(v = "") {
-  const s = String(v || "").trim();
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/i.test(s);
+function onlyDigits(text = "") {
+  return String(text || "").replace(/\D+/g, "");
 }
 
-function escMD(s = "") {
-  return String(s || "").replace(/([_\*\[\]\(\)~`>#+\-=|{}\.!\\])/g, "\\$1");
+function isEmailLike(text = "") {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/i.test(String(text || "").trim());
 }
 
-function toTitleCase(str = "") {
-  return String(str || "")
-    .toLowerCase()
-    .split(" ")
-    .filter(Boolean)
-    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-    .join(" ");
+function esTelefono(text = "") {
+  const d = onlyDigits(text);
+  return d.length >= 7 && d.length <= 15;
 }
 
-function chunkArray(arr = [], size = 10) {
-  const out = [];
-  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
-  return out;
+function safeBtnLabel(text = "", max = 58) {
+  const s = String(text || "").replace(/\s+/g, " ").trim();
+  if (s.length <= max) return s;
+  return `${s.slice(0, Math.max(0, max - 1)).trim()}…`;
+}
+
+// FIX GLOBAL: no escapar . + - @ / etc para Markdown simple
+function escMD(text = "") {
+  return String(text || "")
+    .replace(/\\/g, "\\\\")
+    .replace(/\*/g, "\\*")
+    .replace(/_/g, "\\_")
+    .replace(/`/g, "\\`")
+    .replace(/\[/g, "\\[");
 }
 
 // ===============================
-// FECHAS / HORAS
+// FECHAS
 // ===============================
-function pad2(n) {
-  return String(Number(n) || 0).padStart(2, "0");
-}
-
-function getNowParts() {
-  const now = new Date();
-  const fmt = new Intl.DateTimeFormat("en-GB", {
-    timeZone: TZ,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false,
-  });
-
-  const parts = Object.fromEntries(fmt.formatToParts(now).map((p) => [p.type, p.value]));
-  return {
-    dd: parts.day,
-    mm: parts.month,
-    yyyy: parts.year,
-    hh: parts.hour,
-    min: parts.minute,
-    ss: parts.second,
-  };
-}
-
-function hoyDMY() {
-  const p = getNowParts();
-  return `${p.dd}/${p.mm}/${p.yyyy}`;
-}
-
-function ahoraHM() {
-  const p = getNowParts();
-  return `${p.hh}:${p.min}`;
-}
-
-function isFechaDMY(v = "") {
-  const s = String(v || "").trim();
-  if (!/^\d{2}\/\d{2}\/\d{4}$/.test(s)) return false;
-
-  const [dd, mm, yyyy] = s.split("/").map(Number);
-  if (yyyy < 2020 || yyyy > 2100) return false;
-  if (mm < 1 || mm > 12) return false;
-  if (dd < 1 || dd > 31) return false;
-
-  const dt = new Date(Date.UTC(yyyy, mm - 1, dd));
+function isFechaDMY(text = "") {
+  const s = String(text || "").trim();
+  const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (!m) return false;
+  const dd = Number(m[1]);
+  const mm = Number(m[2]);
+  const yyyy = Number(m[3]);
+  const dt = new Date(yyyy, mm - 1, dd, 12, 0, 0, 0);
   return (
-    dt.getUTCFullYear() === yyyy &&
-    dt.getUTCMonth() === mm - 1 &&
-    dt.getUTCDate() === dd
+    dt.getFullYear() === yyyy &&
+    dt.getMonth() === mm - 1 &&
+    dt.getDate() === dd
   );
 }
 
+function normalizeDMY(text = "") {
+  if (!isFechaDMY(text)) return "";
+  const [dd, mm, yyyy] = String(text || "").trim().split("/").map(Number);
+  return `${String(dd).padStart(2, "0")}/${String(mm).padStart(2, "0")}/${String(yyyy)}`;
+}
+
+function hoyDMY() {
+  const now = new Date();
+  const dd = String(now.getDate()).padStart(2, "0");
+  const mm = String(now.getMonth() + 1).padStart(2, "0");
+  const yyyy = String(now.getFullYear());
+  return `${dd}/${mm}/${yyyy}`;
+}
+
 function parseFechaFinanceInput(raw = "") {
-  const s = String(raw || "").trim().replace(/[-.]/g, "/");
+  const s = String(raw || "").trim().toLowerCase();
   if (!s) return null;
+  if (s === "hoy") return hoyDMY();
 
-  if (/^\d{2}\/\d{2}\/\d{4}$/.test(s)) {
-    return isFechaDMY(s) ? s : null;
-  }
+  const clean = s.replace(/[-.]/g, "/");
+  const m = clean.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (!m) return null;
 
-  if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(s)) {
-    let [d, m, y] = s.split("/");
-    d = pad2(d);
-    m = pad2(m);
-    const out = `${d}/${m}/${y}`;
-    return isFechaDMY(out) ? out : null;
-  }
-
-  if (/^\d{8}$/.test(s)) {
-    const out = `${s.slice(0, 2)}/${s.slice(2, 4)}/${s.slice(4, 8)}`;
-    return isFechaDMY(out) ? out : null;
-  }
-
-  return null;
-}
-
-function parseDMYtoDate(dmy = "") {
-  if (!isFechaDMY(dmy)) return null;
-  const [dd, mm, yyyy] = dmy.split("/").map(Number);
-  return new Date(Date.UTC(yyyy, mm - 1, dd, 12, 0, 0));
-}
-
-function parseDMYtoTS(dmy = "") {
-  const dt = parseDMYtoDate(dmy);
-  if (!dt) return null;
-  return admin.firestore.Timestamp.fromDate(dt);
+  const dd = String(Number(m[1])).padStart(2, "0");
+  const mm = String(Number(m[2])).padStart(2, "0");
+  const yyyy = String(m[3]);
+  const out = `${dd}/${mm}/${yyyy}`;
+  return isFechaDMY(out) ? out : null;
 }
 
 function ymdFromDMY(dmy = "") {
-  if (!isFechaDMY(dmy)) return null;
-  const [dd, mm, yyyy] = dmy.split("/");
+  const f = normalizeDMY(dmy);
+  if (!f) return "";
+  const [dd, mm, yyyy] = f.split("/");
   return `${yyyy}-${mm}-${dd}`;
 }
 
+function parseDMYtoTS(dmy = "") {
+  const f = normalizeDMY(dmy);
+  if (!f) return 0;
+  const [dd, mm, yyyy] = f.split("/").map(Number);
+  return new Date(yyyy, mm - 1, dd, 12, 0, 0, 0).getTime();
+}
+
 function startOfDayTS(dmy = "") {
-  if (!isFechaDMY(dmy)) return null;
-  const [dd, mm, yyyy] = dmy.split("/").map(Number);
-  const dt = new Date(Date.UTC(yyyy, mm - 1, dd, 0, 0, 0, 0));
-  return admin.firestore.Timestamp.fromDate(dt);
+  const f = normalizeDMY(dmy);
+  if (!f) return 0;
+  const [dd, mm, yyyy] = f.split("/").map(Number);
+  return new Date(yyyy, mm - 1, dd, 0, 0, 0, 0).getTime();
 }
 
 function endOfDayTS(dmy = "") {
-  if (!isFechaDMY(dmy)) return null;
-  const [dd, mm, yyyy] = dmy.split("/").map(Number);
-  const dt = new Date(Date.UTC(yyyy, mm - 1, dd, 23, 59, 59, 999));
-  return admin.firestore.Timestamp.fromDate(dt);
+  const f = normalizeDMY(dmy);
+  if (!f) return 0;
+  const [dd, mm, yyyy] = f.split("/").map(Number);
+  return new Date(yyyy, mm - 1, dd, 23, 59, 59, 999).getTime();
+}
+
+function addDaysDMY(dmy = "", days = 0) {
+  const f = normalizeDMY(dmy || hoyDMY());
+  if (!f) return hoyDMY();
+  const [dd, mm, yyyy] = f.split("/").map(Number);
+  const dt = new Date(yyyy, mm - 1, dd, 12, 0, 0, 0);
+  dt.setDate(dt.getDate() + Number(days || 0));
+  return `${String(dt.getDate()).padStart(2, "0")}/${String(dt.getMonth() + 1).padStart(2, "0")}/${String(dt.getFullYear())}`;
 }
 
 function getMonthKeyFromDMY(dmy = "") {
-  if (!isFechaDMY(dmy)) return null;
-  const [, mm, yyyy] = dmy.split("/");
+  const f = normalizeDMY(dmy);
+  if (!f) return "";
+  const [, mm, yyyy] = f.split("/");
   return `${yyyy}-${mm}`;
 }
 
 function parseMonthInputToKey(raw = "") {
-  const s = String(raw || "").trim();
-  if (!s) return getMonthKeyFromDMY(hoyDMY());
-
-  if (/^\d{4}-\d{2}$/.test(s)) return s;
-
-  if (/^\d{2}\/\d{4}$/.test(s)) {
-    const [mm, yyyy] = s.split("/");
-    return `${yyyy}-${mm}`;
-  }
-
-  if (/^\d{1,2}\/\d{4}$/.test(s)) {
-    let [mm, yyyy] = s.split("/");
-    mm = pad2(mm);
-    return `${yyyy}-${mm}`;
-  }
-
-  const n = normTxt(s);
-  const meses = {
-    enero: "01",
-    febrero: "02",
-    marzo: "03",
-    abril: "04",
-    mayo: "05",
-    junio: "06",
-    julio: "07",
-    agosto: "08",
-    septiembre: "09",
-    setiembre: "09",
-    octubre: "10",
-    noviembre: "11",
-    diciembre: "12",
-  };
-
-  for (const [name, mm] of Object.entries(meses)) {
-    const rx = new RegExp(`^${name}\\s+(\\d{4})$`, "i");
-    const m = n.match(rx);
-    if (m) return `${m[1]}-${mm}`;
-  }
-
-  return null;
+  const s = String(raw || "").trim().replace(/[-.]/g, "/");
+  const m = s.match(/^(\d{1,2})\/(\d{4})$/);
+  if (!m) return null;
+  const mm = String(Number(m[1])).padStart(2, "0");
+  const yyyy = String(m[2]);
+  return `${yyyy}-${mm}`;
 }
 
 function getMonthLabelFromKey(key = "") {
-  if (!/^\d{4}-\d{2}$/.test(String(key || ""))) return String(key || "");
-  const [yyyy, mm] = String(key).split("-");
-  const mapa = {
+  const s = String(key || "").trim();
+  const m = s.match(/^(\d{4})-(\d{2})$/);
+  if (!m) return s || "-";
+  const yyyy = m[1];
+  const mm = m[2];
+  const meses = {
     "01": "Enero",
     "02": "Febrero",
     "03": "Marzo",
@@ -257,415 +217,371 @@ function getMonthLabelFromKey(key = "") {
     "11": "Noviembre",
     "12": "Diciembre",
   };
-  return `${mapa[mm] || mm} ${yyyy}`;
+  return `${meses[mm] || mm} ${yyyy}`;
 }
 
 // ===============================
-// DINERO / NÚMEROS
+// DINERO
 // ===============================
 function parseMontoNumber(raw = "") {
-  if (raw === null || raw === undefined) return NaN;
-  let s = String(raw).trim();
-  if (!s) return NaN;
-
-  s = s
-    .replace(/lps|lempiras?|hnl|,/gi, "")
-    .replace(/\s+/g, "")
-    .replace(/[^\d.\-]/g, "");
-
-  const n = Number(s);
+  const s = String(raw || "").trim().replace(/,/g, ".");
+  const clean = s.replace(/[^\d.-]/g, "");
+  const n = Number(clean);
   return Number.isFinite(n) ? n : NaN;
 }
 
-function moneyNumber(v = 0) {
-  const n = Number(v || 0);
-  return Number.isFinite(n) ? Number(n.toFixed(2)) : 0;
+function moneyNumber(raw = 0) {
+  const n = Number(raw || 0);
+  return Number.isFinite(n) ? n : 0;
 }
 
-function moneyLps(v = 0) {
-  const n = moneyNumber(v);
+function moneyLps(raw = 0) {
+  const n = moneyNumber(raw);
   return `${n.toFixed(2)} Lps`;
 }
 
 // ===============================
-// PLATAFORMAS
+// PLATAFORMAS / INVENTARIO
 // ===============================
-function normalizarPlataforma(raw = "") {
-  const s = normTxt(raw)
-    .replace(/\+/g, "plus")
-    .replace(/\./g, "")
-    .replace(/\s+/g, "");
+const PLATFORM_KEYS = Array.isArray(PLATAFORMAS)
+  ? PLATAFORMAS.map((x) => String(x || "").trim().toLowerCase())
+  : Object.keys(PLATAFORMAS || {}).map((x) => String(x || "").trim().toLowerCase());
 
-  const alias = {
-    netflix: "netflix",
-    vipnetflix: "vipnetflix",
-    disneyp: "disneyp",
-    disneypremium: "disneyp",
-    disneys: "disneys",
-    disneystandard: "disneys",
-    hbomax: "hbomax",
-    hbo: "hbomax",
-    max: "hbomax",
-    primevideo: "primevideo",
-    prime: "primevideo",
-    paramount: "paramount",
-    paramountplus: "paramount",
-    crunchyroll: "crunchyroll",
-    vix: "vix",
-    appletv: "appletv",
-    appletvplus: "appletv",
-    universal: "universal",
-    universalplus: "universal",
-    spotify: "spotify",
-    youtube: "youtube",
-    youtubepremium: "youtube",
-    deezer: "deezer",
-    canva: "canva",
-    gemini: "gemini",
-    chatgpt: "chatgpt",
-    oleada1: "oleadatv1",
-    oleada3: "oleadatv3",
-    oleadatv1: "oleadatv1",
-    oleadatv3: "oleadatv3",
-    iptv1: "iptv1",
-    iptv3: "iptv3",
-    iptv4: "iptv4",
-  };
-
-  return alias[s] || s;
-}
-
-function esPlataformaValida(raw = "") {
-  const p = normalizarPlataforma(raw);
-  return Array.isArray(PLATAFORMAS) && PLATAFORMAS.includes(p);
-}
-
-function humanPlataformaSimple(raw = "") {
-  const p = normalizarPlataforma(raw);
+function normalizarPlataforma(text = "") {
+  const k = normTxt(text).replace(/\s+/g, "");
   const map = {
-    netflix: "Netflix",
-    vipnetflix: "Vipnetflix",
-    disneyp: "Disneyp",
-    disneys: "Disneys",
-    hbomax: "Hbomax",
-    primevideo: "Prime video",
-    paramount: "Paramount+",
-    crunchyroll: "Crunchyroll",
-    vix: "Vix correo y clave",
-    appletv: "Appletv correo y clave",
-    universal: "Universal correo y clave",
-    spotify: "Spotify correo y clave",
-    youtube: "Youtube correo y clave",
-    deezer: "Deezer correo y clave",
-    oleadatv1: "Oleada 1",
-    oleadatv3: "Oleada 3",
-    iptv1: "Iptv 1",
-    iptv3: "Iptv 3",
-    iptv4: "Iptv 4",
-    canva: "Canva",
-    gemini: "Gemini",
-    chatgpt: "Chatgpt",
+    "netflix": "netflix",
+    "vipnetflix": "vipnetflix",
+    "vip netflix": "vipnetflix",
+    "disneyp": "disneyp",
+    "disneypremium": "disneyp",
+    "disney premium": "disneyp",
+    "disneys": "disneys",
+    "disneystandard": "disneys",
+    "disney standard": "disneys",
+    "hbomax": "hbomax",
+    "hbo max": "hbomax",
+    "primevideo": "primevideo",
+    "prime video": "primevideo",
+    "paramount": "paramount",
+    "paramount+": "paramount",
+    "crunchyroll": "crunchyroll",
+    "vix": "vix",
+    "appletv": "appletv",
+    "apple tv": "appletv",
+    "universal": "universal",
+    "universal+": "universal",
+    "spotify": "spotify",
+    "youtube": "youtube",
+    "deezer": "deezer",
+    "oleada1": "oleadatv1",
+    "oleadatv1": "oleadatv1",
+    "oleada 1": "oleadatv1",
+    "oleada3": "oleadatv3",
+    "oleadatv3": "oleadatv3",
+    "oleada 3": "oleadatv3",
+    "iptv1": "iptv1",
+    "iptv 1": "iptv1",
+    "iptv3": "iptv3",
+    "iptv 3": "iptv3",
+    "iptv4": "iptv4",
+    "iptv 4": "iptv4",
+    "canva": "canva",
+    "gemini": "gemini",
+    "chatgpt": "chatgpt",
   };
-  return map[p] || toTitleCase(String(raw || p));
+  return map[k] || k;
 }
 
-function plataformaRequiereCorreo(raw = "") {
-  const p = normalizarPlataforma(raw);
-  const noCorreo = new Set(["oleadatv1", "oleadatv3", "iptv1", "iptv3", "iptv4"]);
-  return !noCorreo.has(p);
+function esPlataformaValida(text = "") {
+  return PLATFORM_KEYS.includes(normalizarPlataforma(text));
 }
 
-function plataformaRequiereClave(raw = "") {
-  const p = normalizarPlataforma(raw);
-  return p !== "canva";
+function getIdentLabel(plataforma = "") {
+  const p = normalizarPlataforma(plataforma);
+  if (["oleadatv1", "oleadatv3", "iptv1", "iptv3", "iptv4"].includes(p)) return "Usuario";
+  return "Correo";
 }
 
-function plataformaEsUsuarioClave(raw = "") {
-  const p = normalizarPlataforma(raw);
-  return ["oleadatv1", "oleadatv3", "iptv1", "iptv3", "iptv4"].includes(p);
-}
-
-// ===============================
-// ROLES / ACCESO
-// ===============================
-async function isSuperAdmin(userId) {
-  const uid = String(userId || "").trim();
-  if (!uid) return false;
-
-  if (uid === String(SUPER_ADMIN || "").trim()) return true;
-
-  try {
-    const snap = await db.collection("admins").doc(uid).get();
-    if (!snap.exists) return false;
-    const d = snap.data() || {};
-    return d.superAdmin === true || d.role === "superadmin" || d.role === "super_admin";
-  } catch (e) {
-    logErr("isSuperAdmin", e);
-    return false;
+function normalizeIdentByPlatform(plataforma = "", ident = "") {
+  const p = normalizarPlataforma(plataforma);
+  const v = String(ident || "").trim();
+  if (["oleadatv1", "oleadatv3", "iptv1", "iptv3", "iptv4"].includes(p)) {
+    return v;
   }
+  return v.toLowerCase();
+}
+
+function validateIdentByPlatform(plataforma = "", ident = "") {
+  const p = normalizarPlataforma(plataforma);
+  const v = String(ident || "").trim();
+  if (!v) return false;
+  if (["oleadatv1", "oleadatv3", "iptv1", "iptv3", "iptv4"].includes(p)) {
+    return v.length >= 3 && !/\s/.test(v);
+  }
+  return isEmailLike(v);
+}
+
+function docIdInventario(ident = "", plataforma = "") {
+  const p = normalizarPlataforma(plataforma);
+  const i = normalizeIdentByPlatform(p, ident)
+    .toLowerCase()
+    .replace(/[.#$/\[\]\s]+/g, "_");
+  return `${p}__${i}`;
+}
+
+// ===============================
+// ROLES
+// ===============================
+function normalizeRevendedorDoc(docOrData = {}) {
+  const data = typeof docOrData.data === "function" ? (docOrData.data() || {}) : (docOrData || {});
+  const id = typeof docOrData.id !== "undefined" ? docOrData.id : data.id;
+  return {
+    id: String(id || "").trim(),
+    nombre: String(data.nombre || "").trim(),
+    nombre_norm: normTxt(data.nombre || data.nombre_norm || ""),
+    telegramId: String(data.telegramId || "").trim(),
+    activo: data.activo !== false,
+    autoLastSent: String(data.autoLastSent || "").trim(),
+    createdAt: data.createdAt || null,
+    updatedAt: data.updatedAt || null,
+  };
+}
+
+async function isSuperAdmin(userId) {
+  return String(userId || "").trim() === String(SUPER_ADMIN || "").trim();
 }
 
 async function isAdmin(userId) {
   const uid = String(userId || "").trim();
   if (!uid) return false;
-
   if (await isSuperAdmin(uid)) return true;
 
   try {
-    const snap = await db.collection("admins").doc(uid).get();
-    if (!snap.exists) return false;
-    const d = snap.data() || {};
-    return d.activo !== false;
+    const doc = await db.collection(ADMINS_COLLECTION || "admins").doc(uid).get();
+    if (doc.exists) {
+      const data = doc.data() || {};
+      return data.activo !== false;
+    }
   } catch (e) {
     logErr("isAdmin", e);
-    return false;
   }
+  return false;
 }
 
-async function getRevendedorPorTelegramId(telegramId) {
-  const tid = String(telegramId || "").trim();
-  if (!tid) return null;
+async function getRevendedorPorTelegramId(userId) {
+  const uid = String(userId || "").trim();
+  if (!uid) return null;
 
   try {
-    const snap = await db
-      .collection("revendedores")
-      .where("telegramId", "==", tid)
+    const snap = await db.collection(REVENDEDORES_COLLECTION || "revendedores")
+      .where("telegramId", "==", uid)
       .limit(1)
       .get();
 
-    if (snap.empty) return null;
+    if (!snap.empty) {
+      const row = normalizeRevendedorDoc(snap.docs[0]);
+      if (row.activo) return row;
+    }
+  } catch (_) {}
 
-    const d = snap.docs[0];
-    return { id: d.id, ...(d.data() || {}) };
+  try {
+    const snap = await db.collection(REVENDEDORES_COLLECTION || "revendedores").get();
+    for (const d of snap.docs) {
+      const row = normalizeRevendedorDoc(d);
+      if (String(row.telegramId) === uid && row.activo) return row;
+    }
   } catch (e) {
     logErr("getRevendedorPorTelegramId", e);
-    return null;
   }
+
+  return null;
 }
 
 async function isVendedor(userId) {
-  const r = await getRevendedorPorTelegramId(userId);
-  return !!(r && r.activo !== false);
+  const row = await getRevendedorPorTelegramId(userId);
+  return !!(row && row.activo);
 }
 
-function normalizeRevendedorDoc(doc = {}) {
-  const nombre = String(doc.nombre || "").trim();
-  return {
-    nombre,
-    nombre_norm: normTxt(nombre),
-    telegramId: doc.telegramId ? String(doc.telegramId).trim() : "",
-    activo: doc.activo !== false,
-    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-  };
-}
+async function setTelegramIdToRevendedor(docId, telegramId) {
+  const id = String(docId || "").trim();
+  const tg = String(telegramId || "").trim();
+  if (!id || !tg) throw new Error("DocId o telegramId inválido");
 
-async function setTelegramIdToRevendedor(refOrId, telegramId) {
-  const tid = String(telegramId || "").trim();
-  if (!tid) throw new Error("Telegram ID inválido");
-
-  const ref = typeof refOrId === "string"
-    ? db.collection("revendedores").doc(refOrId)
-    : refOrId;
-
-  await ref.set(
+  await db.collection(REVENDEDORES_COLLECTION || "revendedores").doc(id).set(
     {
-      telegramId: tid,
+      telegramId: tg,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     },
     { merge: true }
   );
 
-  const snap = await ref.get();
-  return { id: snap.id, ...(snap.data() || {}) };
+  return true;
 }
 
-async function allowMsg(msg) {
-  const chatId = msg?.chat?.id;
-  const userId = msg?.from?.id;
-  if (!chatId || !userId) return false;
-
-  if (await isAdmin(userId)) return true;
-  if (await isVendedor(userId)) return true;
+// ===============================
+// TXT / DOCUMENTOS
+// ===============================
+async function enviarTxtComoArchivo(chatId, text = "", filename = "archivo.txt") {
+  const safeName = String(filename || "archivo.txt").replace(/[^\w.\-]+/g, "_");
+  const tempPath = path.join(os.tmpdir(), `${Date.now()}_${safeName}`);
 
   try {
-    await bot.sendMessage(chatId, "⛔ Acceso denegado");
-  } catch (e) {
-    logErr("allowMsg", e);
+    fs.writeFileSync(tempPath, String(text || ""), "utf8");
+    await bot.sendDocument(chatId, tempPath);
+  } finally {
+    try { fs.unlinkSync(tempPath); } catch (_) {}
   }
-  return false;
+}
+
+async function sendCommandAnchoredPanel(chatId, text, keyboardArg = [], parseMode = "Markdown") {
+  return upsertPanel(chatId, text, keyboardArg, parseMode);
 }
 
 // ===============================
-// PANEL / CALLBACK / UX
+// PANEL ANCLADO
 // ===============================
-function bindPanelFromCallback(query) {
+function buildReplyMarkup(keyboardArg) {
+  if (Array.isArray(keyboardArg)) {
+    return { inline_keyboard: keyboardArg };
+  }
+  if (keyboardArg && keyboardArg.inline_keyboard) {
+    return keyboardArg;
+  }
+  if (keyboardArg && keyboardArg.reply_markup) {
+    return keyboardArg.reply_markup;
+  }
+  return { inline_keyboard: [] };
+}
+
+async function upsertPanel(chatId, text, keyboardArg = [], parseMode = "Markdown") {
+  const reply_markup = buildReplyMarkup(keyboardArg);
+  const key = String(chatId);
+
+  const payload = {
+    parse_mode: parseMode,
+    reply_markup,
+    disable_web_page_preview: true,
+  };
+
+  const oldMsgId = panelMsgId.get(key);
+
+  if (oldMsgId) {
+    try {
+      await bot.editMessageText(String(text || ""), {
+        chat_id: chatId,
+        message_id: oldMsgId,
+        ...payload,
+      });
+      try {
+        await bot.editMessageReplyMarkup(reply_markup, {
+          chat_id: chatId,
+          message_id: oldMsgId,
+        });
+      } catch (_) {}
+      return { chat: { id: chatId }, message_id: oldMsgId };
+    } catch (_) {}
+  }
+
+  const sent = await bot.sendMessage(chatId, String(text || ""), payload);
+  panelMsgId.set(key, sent.message_id);
+  return sent;
+}
+
+function bindPanelFromCallback(query = {}) {
   try {
     const chatId = query?.message?.chat?.id;
     const messageId = query?.message?.message_id;
-    if (!chatId || !messageId) return;
-    panelMsgId.set(chatId, messageId);
-    panelBindings.set(`${chatId}:${messageId}`, true);
-  } catch (e) {
-    logErr("bindPanelFromCallback", e);
-  }
-}
-
-async function limpiarQuery(botRef, query, opts = {}) {
-  try {
-    const text = opts?.text || "";
-    return await botRef.answerCallbackQuery(query.id, text ? { text } : {});
-  } catch (_) {
-    return null;
-  }
-}
-
-async function safeEditMessageText(chatId, messageId, text, extra = {}) {
-  try {
-    return await bot.editMessageText(text, {
-      chat_id: chatId,
-      message_id: messageId,
-      parse_mode: "Markdown",
-      ...extra,
-    });
-  } catch (e) {
-    const desc = String(e?.response?.body?.description || e?.message || "");
-
-    if (/message is not modified/i.test(desc)) return null;
-    if (/message to edit not found/i.test(desc)) return null;
-    if (/message can't be edited/i.test(desc)) return null;
-    throw e;
-  }
-}
-
-async function upsertPanel(chatId, text, keyboard = []) {
-  const reply_markup = { inline_keyboard: keyboard };
-  const knownMessageId = panelMsgId.get(chatId);
-
-  if (knownMessageId) {
-    try {
-      await safeEditMessageText(chatId, knownMessageId, text, { reply_markup });
-      panelBindings.set(`${chatId}:${knownMessageId}`, true);
-      return { chat: { id: chatId }, message_id: knownMessageId, reused: true };
-    } catch (e) {
-      logErr("upsertPanel.edit", e);
-    }
-  }
-
-  try {
-    const sent = await bot.sendMessage(chatId, text, {
-      parse_mode: "Markdown",
-      reply_markup,
-    });
-
-    panelMsgId.set(chatId, sent.message_id);
-    panelBindings.set(`${chatId}:${sent.message_id}`, true);
-    return sent;
-  } catch (e) {
-    logErr("upsertPanel.send", e);
-    throw e;
-  }
-}
-
-async function sendCommandAnchoredPanel(chatId, text, keyboard = []) {
-  try {
-    const sent = await bot.sendMessage(chatId, text, {
-      parse_mode: "Markdown",
-      reply_markup: { inline_keyboard: keyboard },
-    });
-
-    panelMsgId.set(chatId, sent.message_id);
-    panelBindings.set(`${chatId}:${sent.message_id}`, true);
-    return sent;
-  } catch (e) {
-    logErr("sendCommandAnchoredPanel", e);
-    throw e;
-  }
+    if (chatId && messageId) panelMsgId.set(String(chatId), messageId);
+  } catch (_) {}
 }
 
 // ===============================
-// DOC HELPERS / FIRESTORE
+// WIZARD HELPERS
 // ===============================
-async function docExists(collectionName, docId) {
-  const snap = await db.collection(collectionName).doc(String(docId)).get();
-  return snap.exists;
+function w(chatId) {
+  return wizard.get(String(chatId));
 }
 
-async function getDocData(collectionName, docId) {
-  const snap = await db.collection(collectionName).doc(String(docId)).get();
-  if (!snap.exists) return null;
-  return { id: snap.id, ...(snap.data() || {}) };
+function wset(chatId, value) {
+  wizard.set(String(chatId), value);
+  return value;
 }
 
-async function deleteDocSafe(collectionName, docId) {
-  const ref = db.collection(collectionName).doc(String(docId));
-  const snap = await ref.get();
-  if (!snap.exists) return false;
-  await ref.delete();
-  return true;
+function wclear(chatId) {
+  wizard.delete(String(chatId));
 }
 
 // ===============================
 // EXPORTS
 // ===============================
 module.exports = {
-  // estado
-  panelMsgId,
-  wizard,
-  pending,
+  // core refs
+  bot,
+  admin,
+  db,
 
-  // logs / comunes
+  // state maps
+  panelMsgId,
+  pending,
+  wizard,
+
+  // log
   logErr,
-  sleep,
-  escMD,
+
+  // texto
+  stripAcentos,
   normTxt,
+  limpiarQuery,
   onlyDigits,
   isEmailLike,
-  toTitleCase,
-  chunkArray,
+  esTelefono,
+  safeBtnLabel,
+  escMD,
 
   // fechas
-  hoyDMY,
-  ahoraHM,
   isFechaDMY,
+  normalizeDMY,
+  hoyDMY,
   parseFechaFinanceInput,
-  parseDMYtoTS,
   ymdFromDMY,
+  parseDMYtoTS,
   startOfDayTS,
   endOfDayTS,
+  addDaysDMY,
   getMonthKeyFromDMY,
   parseMonthInputToKey,
   getMonthLabelFromKey,
 
-  // números / dinero
+  // dinero
   parseMontoNumber,
   moneyNumber,
   moneyLps,
 
-  // plataformas
+  // plataformas / inventario
   normalizarPlataforma,
   esPlataformaValida,
-  humanPlataformaSimple,
-  plataformaRequiereCorreo,
-  plataformaRequiereClave,
-  plataformaEsUsuarioClave,
+  getIdentLabel,
+  normalizeIdentByPlatform,
+  validateIdentByPlatform,
+  docIdInventario,
 
   // roles
-  allowMsg,
-  isAdmin,
+  normalizeRevendedorDoc,
   isSuperAdmin,
+  isAdmin,
   isVendedor,
   getRevendedorPorTelegramId,
   setTelegramIdToRevendedor,
-  normalizeRevendedorDoc,
 
-  // panel
-  bindPanelFromCallback,
-  limpiarQuery,
-  upsertPanel,
+  // panel / archivos
+  enviarTxtComoArchivo,
   sendCommandAnchoredPanel,
+  upsertPanel,
+  bindPanelFromCallback,
 
-  // firestore utils
-  docExists,
-  getDocData,
-  deleteDocSafe,
+  // wizard
+  w,
+  wset,
+  wclear,
 };
