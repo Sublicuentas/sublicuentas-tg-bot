@@ -637,37 +637,161 @@ async function wizardNext(chatId, text) {
 // ===============================
 // BÚSQUEDA CLIENTES
 // ===============================
+// ===============================
+// BÚSQUEDA CLIENTES (AJUSTADA A TU FIRESTORE REAL)
+// ===============================
+function flattenClienteTexts(value, acc = []) {
+  if (value == null) return acc;
+
+  if (Array.isArray(value)) {
+    value.forEach((v) => flattenClienteTexts(v, acc));
+    return acc;
+  }
+
+  if (typeof value === "object") {
+    Object.values(value).forEach((v) => flattenClienteTexts(v, acc));
+    return acc;
+  }
+
+  acc.push(String(value));
+  return acc;
+}
+
+function clienteNombrePrincipal(c = {}) {
+  return String(
+    c.nombrePerfil ||
+    c.nombre ||
+    c.perfil ||
+    c.cliente ||
+    c.fullName ||
+    c.name ||
+    ""
+  ).trim();
+}
+
+function clienteTelefonoPrincipal(c = {}) {
+  return String(
+    c.telefono ||
+    c.telefono_norm ||
+    c.phone ||
+    c.celular ||
+    c.numero ||
+    c.whatsapp ||
+    ""
+  ).trim();
+}
+
+function clienteVendedorPrincipal(c = {}) {
+  return String(
+    c.vendedor ||
+    c.vendedor_norm ||
+    c.seller ||
+    c.revendedor ||
+    ""
+  ).trim();
+}
+
+function scoreClienteBusqueda(c = {}, qNorm = "", qDigits = "") {
+  const nombre = normTxt(clienteNombrePrincipal(c) || c.nombre_norm || "");
+  const vendedor = normTxt(clienteVendedorPrincipal(c) || c.vendedor_norm || "");
+  const telefono = onlyDigits(clienteTelefonoPrincipal(c) || c.telefono_norm || "");
+
+  const servicios = Array.isArray(c.servicios) ? c.servicios : [];
+  const correosServicios = servicios.map((s) => String(s?.correo || "")).join(" | ");
+  const flatTexts = flattenClienteTexts(c, []).join(" | ") + " | " + correosServicios;
+  const flatNorm = normTxt(flatTexts);
+  const flatDigits = onlyDigits(flatTexts);
+
+  let score = 0;
+
+  if (qDigits) {
+    if (telefono === qDigits) score = Math.max(score, 300);
+    else if (telefono.includes(qDigits)) score = Math.max(score, 260);
+
+    if (flatDigits.includes(qDigits)) score = Math.max(score, 170);
+  }
+
+  if (qNorm) {
+    if (nombre === qNorm) score = Math.max(score, 320);
+    else if (nombre.startsWith(qNorm)) score = Math.max(score, 280);
+    else if (nombre.includes(qNorm)) score = Math.max(score, 240);
+
+    if (vendedor === qNorm) score = Math.max(score, 150);
+    else if (vendedor.includes(qNorm)) score = Math.max(score, 120);
+
+    if (flatNorm.includes(qNorm)) score = Math.max(score, 180);
+
+    const tokens = qNorm.split(" ").filter(Boolean);
+    if (tokens.length >= 2) {
+      const hitsNombre = tokens.filter((t) => nombre.includes(t)).length;
+      if (hitsNombre === tokens.length) score = Math.max(score, 300);
+      else if (hitsNombre >= 1) score = Math.max(score, 220);
+
+      const hitsFlat = tokens.filter((t) => flatNorm.includes(t)).length;
+      if (hitsFlat === tokens.length) score = Math.max(score, 200);
+    }
+  }
+
+  return score;
+}
+
 async function buscarPorTelefonoTodos(telInput) {
   const tnorm = onlyDigits(telInput);
   if (!tnorm) return [];
 
   const encontrados = [];
+  const seen = new Set();
+
+  try {
+    const snapExact = await db.collection("clientes")
+      .where("telefono_norm", "==", tnorm)
+      .limit(50)
+      .get();
+
+    snapExact.forEach((doc) => {
+      if (seen.has(doc.id)) return;
+      seen.add(doc.id);
+      encontrados.push({ id: doc.id, ...(doc.data() || {}), _score: 320 });
+    });
+  } catch (_) {}
+
+  if (encontrados.length) {
+    return dedupeClientes(encontrados).slice(0, 50);
+  }
+
   const snap = await db.collection("clientes").get();
 
   snap.forEach((doc) => {
     const c = doc.data() || {};
-    const tel = String(c.telefono_norm || onlyDigits(c.telefono || "") || "").trim();
-
-    if (tel === tnorm || tel.includes(tnorm)) {
-      encontrados.push({ id: doc.id, ...c, _score: tel === tnorm ? 200 : 150 });
-      return;
-    }
+    const tel = onlyDigits(
+      c.telefono_norm ||
+      c.telefono ||
+      c.phone ||
+      c.celular ||
+      c.numero ||
+      c.whatsapp ||
+      ""
+    );
 
     const servicios = Array.isArray(c.servicios) ? c.servicios : [];
-    const hayMatchServicio = servicios.some((s) => {
-      const pin = onlyDigits(String(s?.pin || ""));
-      const correo = onlyDigits(String(s?.correo || ""));
-      return (pin && pin.includes(tnorm)) || (correo && correo.includes(tnorm));
-    });
+    const flatDigits = onlyDigits(
+      flattenClienteTexts(c, []).join(" ") + " " + servicios.map((s) => String(s?.correo || "")).join(" ")
+    );
 
-    if (hayMatchServicio) {
-      encontrados.push({ id: doc.id, ...c, _score: 80 });
+    let score = 0;
+
+    if (tel === tnorm) score = 300;
+    else if (tel.includes(tnorm)) score = 260;
+    else if (flatDigits.includes(tnorm)) score = 150;
+
+    if (score > 0) {
+      encontrados.push({ id: doc.id, ...c, _score: score });
     }
   });
 
   encontrados.sort((a, b) => {
     if ((b._score || 0) !== (a._score || 0)) return (b._score || 0) - (a._score || 0);
-    return normTxt(a.nombrePerfil || "").localeCompare(normTxt(b.nombrePerfil || ""));
+    return normTxt(clienteNombrePrincipal(a)).localeCompare(normTxt(clienteNombrePrincipal(b)));
   });
 
   return dedupeClientes(encontrados).slice(0, 50);
@@ -686,6 +810,27 @@ async function buscarClienteRobusto(queryLower) {
   }
 
   const encontrados = [];
+  const seen = new Set();
+
+  try {
+    const snapNombre = await db.collection("clientes")
+      .where("nombre_norm", ">=", qNorm)
+      .where("nombre_norm", "<=", qNorm + "\uf8ff")
+      .limit(25)
+      .get();
+
+    snapNombre.forEach((doc) => {
+      if (seen.has(doc.id)) return;
+      seen.add(doc.id);
+      encontrados.push({ id: doc.id, ...(doc.data() || {}), _score: 340 });
+    });
+  } catch (_) {}
+
+  if (encontrados.length) {
+    encontrados.sort((a, b) => normTxt(clienteNombrePrincipal(a)).localeCompare(normTxt(clienteNombrePrincipal(b))));
+    return dedupeClientes(encontrados).slice(0, 50);
+  }
+
   const snap = await db.collection("clientes").get();
 
   snap.forEach((doc) => {
@@ -696,7 +841,7 @@ async function buscarClienteRobusto(queryLower) {
 
   encontrados.sort((a, b) => {
     if ((b._score || 0) !== (a._score || 0)) return (b._score || 0) - (a._score || 0);
-    return normTxt(a.nombrePerfil || "").localeCompare(normTxt(b.nombrePerfil || ""));
+    return normTxt(clienteNombrePrincipal(a)).localeCompare(normTxt(clienteNombrePrincipal(b)));
   });
 
   return dedupeClientes(encontrados).slice(0, 50);
@@ -712,7 +857,7 @@ async function enviarListaResultadosClientes(chatId, resultados) {
   let txt = `📱 *RESULTADOS*\nSe encontraron *${dedup.length}* clientes.\n\n`;
   dedup.forEach((c, i) => {
     const servicios = Array.isArray(c.servicios) ? c.servicios.length : 0;
-    txt += `*${i + 1})* ${escMD(c.nombrePerfil || c.nombre || "-")} | ${escMD(c.telefono || "-")} | ${escMD(c.vendedor || "-")} | Servicios: ${servicios}\n`;
+    txt += `*${i + 1})* ${escMD(clienteNombrePrincipal(c) || "-")} | ${escMD(clienteTelefonoPrincipal(c) || "-")} | ${escMD(clienteVendedorPrincipal(c) || "-")} | Servicios: ${servicios}\n`;
   });
 
   if (txt.length > 3800) {
@@ -721,7 +866,7 @@ async function enviarListaResultadosClientes(chatId, resultados) {
 
   const kb = dedup.map((c, i) => [
     {
-      text: safeBtnLabel(`👤 ${i + 1}) ${c.nombrePerfil || c.nombre || "-"} (${c.telefono || "-"})`, 58),
+      text: safeBtnLabel(`👤 ${i + 1}) ${clienteNombrePrincipal(c) || "-"} (${clienteTelefonoPrincipal(c) || "-"})`, 58),
       callback_data: `cli:view:${c.id}`,
     },
   ]);
