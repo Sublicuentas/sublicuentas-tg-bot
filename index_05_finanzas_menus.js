@@ -1,16 +1,12 @@
-/* ✅ SUBLICUENTAS TG BOT — PARTE 5/6 CORREGIDA Y ALINEADA CON PARTE 6
+/* ✅ SUBLICUENTAS TG BOT — PARTE 5/6 CORREGIDA Y ORDENADA
    FINANZAS / REPORTES / EXCEL / MENÚS
    -----------------------------------
-   Ajustes aplicados:
-   - callback_data corregidos para coincidir con index_06_handlers
-   - exports corregidos para coincidir con index_06_handlers
-   - menús principales, vendedor, inventario, clientes, renovaciones y finanzas completos
-   - registrarIngresoTx / registrarEgresoTx agregados
-   - getMovimientosPorFecha / getMovimientosPorMes agregados
-   - reportes de fecha, bancos, top plataformas y cierre de caja agregados
-   - exportarFinanzasRangoExcel agregado
-   - eliminarMovimientoFinanzas agregado
-   - textos protegidos para que no se deformen los íconos ni acentos
+   Ajustes:
+   - Menús en filas de 2 donde aplica
+   - Reportes dentro de Finanzas
+   - Renovaciones dentro de Clientes
+   - Inventario con iconos y nombres bonitos
+   - Compatible con index_06_handlers actual
 */
 
 const fs = require("fs");
@@ -169,13 +165,13 @@ function textoConfirmarEliminacionMovimiento(m = {}) {
   const concepto = finConceptoLabel(m);
   const extra = finExtraLabel(m);
 
-  let txt = `\u{1F5D1}\uFE0F *CONFIRMAR ELIMINACI\u00D3N*\n\n`;
+  let txt = `🗑️ *CONFIRMAR ELIMINACIÓN*\n\n`;
   txt += `*Tipo:* ${escMD(tipo)}\n`;
   txt += `*Fecha:* ${escMD(fecha)}\n`;
   txt += `*Monto:* ${escMD(monto)}\n`;
   txt += `*Concepto:* ${escMD(concepto)}\n`;
   if (extra) txt += `*Extra:* ${escMD(extra)}\n`;
-  txt += `\n\u00BFDesea eliminar este movimiento?`;
+  txt += `\n¿Desea eliminar este movimiento?`;
 
   return txt;
 }
@@ -215,6 +211,36 @@ function categoryOfPlat(key = "") {
   return "video";
 }
 
+function inventoryLabel(key = "") {
+  const k = String(key || "").toLowerCase().trim();
+  const labels = {
+    netflix: "Netflix",
+    vipnetflix: "Netflix VIP",
+    disneyp: "Disney Premium",
+    disneys: "Disney Standard",
+    hbomax: "HBO Max",
+    primevideo: "Prime Video",
+    paramount: "Paramount+",
+    crunchyroll: "Crunchyroll",
+    vix: "Vix",
+    appletv: "Apple TV",
+    universal: "Universal+",
+    spotify: "Spotify",
+    youtube: "YouTube",
+    deezer: "Deezer",
+    oleadatv1: "Oleada 1",
+    oleadatv3: "Oleada 3",
+    iptv1: "IPTV 1",
+    iptv3: "IPTV 3",
+    iptv4: "IPTV 4",
+    canva: "Canva",
+    gemini: "Gemini",
+    chatgpt: "ChatGPT",
+  };
+
+  return labels[k] || humanPlatSafe(k);
+}
+
 function humanPlatSafe(key = "") {
   try {
     return humanPlataforma(key);
@@ -224,17 +250,20 @@ function humanPlatSafe(key = "") {
   }
 }
 
-function kbFromItems(items = []) {
+function pairButtons(buttons = []) {
   const rows = [];
-  for (const key of items) {
-    rows.push([
-      {
-        text: humanPlatSafe(key),
-        callback_data: `inv:${String(key)}:0`,
-      },
-    ]);
+  for (let i = 0; i < buttons.length; i += 2) {
+    rows.push(buttons.slice(i, i + 2));
   }
   return rows;
+}
+
+function kbFromItems(items = []) {
+  const buttons = items.map((key) => ({
+    text: inventoryLabel(key),
+    callback_data: `inv:${String(key)}:0`,
+  }));
+  return pairButtons(buttons);
 }
 
 // ===============================
@@ -243,12 +272,15 @@ function kbFromItems(items = []) {
 async function menuPrincipal(chatId) {
   return upsertPanel(
     chatId,
-    "\u{1F4CC} *MEN\u00DA PRINCIPAL*\n\nSeleccione una opci\u00F3n:",
+    "📌 *MENÚ PRINCIPAL*\n\nSeleccione una opción:",
     [
-      [{ text: "\u{1F4E6} Inventario", callback_data: "menu:inventario" }],
-      [{ text: "\u{1F465} Clientes / CRM", callback_data: "menu:clientes" }],
-      [{ text: "\u{1F4B0} Finanzas", callback_data: "menu:pagos" }],
-      [{ text: "\u{1F4CA} Reportes", callback_data: "fin:menu:reportes" }],
+      [
+        { text: "📦 Inventario", callback_data: "menu:inventario" },
+        { text: "👥 Clientes / CRM", callback_data: "menu:clientes" },
+      ],
+      [
+        { text: "💰 Finanzas", callback_data: "menu:pagos" },
+      ],
     ]
   );
 }
@@ -256,12 +288,16 @@ async function menuPrincipal(chatId) {
 async function menuVendedor(chatId) {
   return upsertPanel(
     chatId,
-    "\u{1F464} *MEN\u00DA VENDEDOR*\n\nSeleccione una opci\u00F3n:",
+    "👤 *MENÚ VENDEDOR*\n\nSeleccione una opción:",
     [
-      [{ text: "\u{1F4C5} Mis renovaciones", callback_data: "ren:mis" }],
-      [{ text: "\u{1F4C4} TXT Mis renovaciones", callback_data: "txt:mis" }],
-      [{ text: "\u{1F465} Mis clientes", callback_data: "vend:clientes" }],
-      [{ text: "\u{1F4DD} TXT Mis clientes", callback_data: "vend:clientes:txt" }],
+      [
+        { text: "📅 Mis renovaciones", callback_data: "ren:mis" },
+        { text: "📄 TXT renovaciones", callback_data: "txt:mis" },
+      ],
+      [
+        { text: "👥 Mis clientes", callback_data: "vend:clientes" },
+        { text: "📝 TXT mis clientes", callback_data: "vend:clientes:txt" },
+      ],
     ]
   );
 }
@@ -272,14 +308,20 @@ async function menuVendedor(chatId) {
 async function menuInventario(chatId) {
   return upsertPanel(
     chatId,
-    "\u{1F4E6} *INVENTARIO*\n\nSeleccione una categor\u00EDa:",
+    "📦 *INVENTARIO*\n\nSeleccione una categoría:",
     [
-      [{ text: "\u{1F3AC} Video", callback_data: "menu:inventario:video" }],
-      [{ text: "\u{1F3B5} M\u00FAsica", callback_data: "menu:inventario:musica" }],
-      [{ text: "\u{1F4E1} IPTV", callback_data: "menu:inventario:iptv" }],
-      [{ text: "\u{1F3A8} Dise\u00F1o e IA", callback_data: "menu:inventario:designai" }],
-      [{ text: "\u{1F4CA} Stock general", callback_data: "inv:general" }],
-      [{ text: "\u{1F3E0} Inicio", callback_data: "go:inicio" }],
+      [
+        { text: "🎬 Video", callback_data: "menu:inventario:video" },
+        { text: "🎵 Música", callback_data: "menu:inventario:musica" },
+      ],
+      [
+        { text: "📡 IPTV", callback_data: "menu:inventario:iptv" },
+        { text: "🎨 Diseño e IA", callback_data: "menu:inventario:designai" },
+      ],
+      [
+        { text: "📊 Stock general", callback_data: "inv:general" },
+        { text: "🏠 Inicio", callback_data: "go:inicio" },
+      ],
     ]
   );
 }
@@ -287,37 +329,45 @@ async function menuInventario(chatId) {
 async function menuInventarioVideo(chatId) {
   const items = PLATFORM_KEYS.filter((x) => categoryOfPlat(x) === "video");
   const kb = kbFromItems(items);
-  kb.push([{ text: "\u2B05\uFE0F Volver Inventario", callback_data: "menu:inventario" }]);
-  kb.push([{ text: "\u{1F3E0} Inicio", callback_data: "go:inicio" }]);
+  kb.push([
+    { text: "⬅️ Volver Inventario", callback_data: "menu:inventario" },
+    { text: "🏠 Inicio", callback_data: "go:inicio" },
+  ]);
 
-  return upsertPanel(chatId, "\u{1F3AC} *INVENTARIO VIDEO*\n\nSeleccione plataforma:", kb);
+  return upsertPanel(chatId, "🎬 *INVENTARIO VIDEO*\n\nSeleccione plataforma:", kb);
 }
 
 async function menuInventarioMusica(chatId) {
   const items = PLATFORM_KEYS.filter((x) => categoryOfPlat(x) === "musica");
   const kb = kbFromItems(items);
-  kb.push([{ text: "\u2B05\uFE0F Volver Inventario", callback_data: "menu:inventario" }]);
-  kb.push([{ text: "\u{1F3E0} Inicio", callback_data: "go:inicio" }]);
+  kb.push([
+    { text: "⬅️ Volver Inventario", callback_data: "menu:inventario" },
+    { text: "🏠 Inicio", callback_data: "go:inicio" },
+  ]);
 
-  return upsertPanel(chatId, "\u{1F3B5} *INVENTARIO M\u00DASICA*\n\nSeleccione plataforma:", kb);
+  return upsertPanel(chatId, "🎵 *INVENTARIO MÚSICA*\n\nSeleccione plataforma:", kb);
 }
 
 async function menuInventarioIptv(chatId) {
   const items = PLATFORM_KEYS.filter((x) => categoryOfPlat(x) === "iptv");
   const kb = kbFromItems(items);
-  kb.push([{ text: "\u2B05\uFE0F Volver Inventario", callback_data: "menu:inventario" }]);
-  kb.push([{ text: "\u{1F3E0} Inicio", callback_data: "go:inicio" }]);
+  kb.push([
+    { text: "⬅️ Volver Inventario", callback_data: "menu:inventario" },
+    { text: "🏠 Inicio", callback_data: "go:inicio" },
+  ]);
 
-  return upsertPanel(chatId, "\u{1F4E1} *INVENTARIO IPTV*\n\nSeleccione plataforma:", kb);
+  return upsertPanel(chatId, "📡 *INVENTARIO IPTV*\n\nSeleccione plataforma:", kb);
 }
 
 async function menuInventarioDisenoIA(chatId) {
   const items = PLATFORM_KEYS.filter((x) => categoryOfPlat(x) === "diseno_ia");
   const kb = kbFromItems(items);
-  kb.push([{ text: "\u2B05\uFE0F Volver Inventario", callback_data: "menu:inventario" }]);
-  kb.push([{ text: "\u{1F3E0} Inicio", callback_data: "go:inicio" }]);
+  kb.push([
+    { text: "⬅️ Volver Inventario", callback_data: "menu:inventario" },
+    { text: "🏠 Inicio", callback_data: "go:inicio" },
+  ]);
 
-  return upsertPanel(chatId, "\u{1F3A8} *INVENTARIO DISE\u00D1O E IA*\n\nSeleccione plataforma:", kb);
+  return upsertPanel(chatId, "🎨 *INVENTARIO DISEÑO E IA*\n\nSeleccione plataforma:", kb);
 }
 
 // ===============================
@@ -326,15 +376,23 @@ async function menuInventarioDisenoIA(chatId) {
 async function menuClientes(chatId) {
   return upsertPanel(
     chatId,
-    "\u{1F465} *CLIENTES / CRM*\n\nSeleccione una opci\u00F3n:",
+    "👥 *CLIENTES / CRM*\n\nSeleccione una opción:",
     [
-      [{ text: "\u2795 Nuevo cliente", callback_data: "cli:wiz:start" }],
-      [{ text: "\u{1F50E} Buscar cliente", callback_data: "menu:buscar" }],
-      [{ text: "\u{1F4C4} TXT clientes general", callback_data: "cli:txt:general" }],
-      [{ text: "\u{1F5C2}\uFE0F TXT por vendedor", callback_data: "cli:txt:vendedores_split" }],
-      [{ text: "\u{1F464} Revendedores", callback_data: "rev:lista" }],
-      [{ text: "\u{1F4C5} Renovaciones", callback_data: "menu:renovaciones" }],
-      [{ text: "\u{1F3E0} Inicio", callback_data: "go:inicio" }],
+      [
+        { text: "➕ Nuevo cliente", callback_data: "cli:wiz:start" },
+        { text: "🔎 Buscar cliente", callback_data: "menu:buscar" },
+      ],
+      [
+        { text: "📅 Renovaciones", callback_data: "menu:renovaciones" },
+        { text: "👤 Revendedores", callback_data: "rev:lista" },
+      ],
+      [
+        { text: "📄 TXT clientes", callback_data: "cli:txt:general" },
+        { text: "🗂️ TXT vendedores", callback_data: "cli:txt:vendedores_split" },
+      ],
+      [
+        { text: "🏠 Inicio", callback_data: "go:inicio" },
+      ],
     ]
   );
 }
@@ -345,13 +403,19 @@ async function menuClientes(chatId) {
 async function menuRenovaciones(chatId) {
   return upsertPanel(
     chatId,
-    "\u{1F4C5} *RENOVACIONES*\n\nSeleccione una opci\u00F3n:",
+    "📅 *RENOVACIONES*\n\nSeleccione una opción:",
     [
-      [{ text: "\u{1F4C5} Ver renovaciones de hoy", callback_data: "ren:hoy" }],
-      [{ text: "\u{1F4C4} TXT renovaciones de hoy", callback_data: "txt:hoy" }],
-      [{ text: "\u{1F4E4} Enviar TXT a todos hoy", callback_data: "txt:todos:hoy" }],
-      [{ text: "\u2B05\uFE0F Volver CRM", callback_data: "menu:clientes" }],
-      [{ text: "\u{1F3E0} Inicio", callback_data: "go:inicio" }],
+      [
+        { text: "📅 Ver hoy", callback_data: "ren:hoy" },
+        { text: "📄 TXT de hoy", callback_data: "txt:hoy" },
+      ],
+      [
+        { text: "📤 Enviar TXT a todos", callback_data: "txt:todos:hoy" },
+        { text: "⬅️ Volver CRM", callback_data: "menu:clientes" },
+      ],
+      [
+        { text: "🏠 Inicio", callback_data: "go:inicio" },
+      ],
     ]
   );
 }
@@ -362,14 +426,20 @@ async function menuRenovaciones(chatId) {
 async function menuPagos(chatId) {
   return upsertPanel(
     chatId,
-    "\u{1F4B0} *FINANZAS*\n\nSeleccione una opci\u00F3n:",
+    "💰 *FINANZAS*\n\nSeleccione una opción:",
     [
-      [{ text: "\u2795 Registrar ingreso", callback_data: "fin:menu:ingreso" }],
-      [{ text: "\u2796 Registrar egreso", callback_data: "fin:menu:egreso" }],
-      [{ text: "\u{1F4D2} Registro", callback_data: "fin:menu:registro" }],
-      [{ text: "\u{1F5D1}\uFE0F Eliminar movimiento", callback_data: "fin:menu:eliminar" }],
-      [{ text: "\u{1F4CA} Reportes", callback_data: "fin:menu:reportes" }],
-      [{ text: "\u{1F3E0} Inicio", callback_data: "go:inicio" }],
+      [
+        { text: "➕ Registrar ingreso", callback_data: "fin:menu:ingreso" },
+        { text: "➖ Registrar egreso", callback_data: "fin:menu:egreso" },
+      ],
+      [
+        { text: "📒 Registro", callback_data: "fin:menu:registro" },
+        { text: "🗑️ Eliminar movimiento", callback_data: "fin:menu:eliminar" },
+      ],
+      [
+        { text: "📊 Reportes", callback_data: "fin:menu:reportes" },
+        { text: "🏠 Inicio", callback_data: "go:inicio" },
+      ],
     ]
   );
 }
@@ -377,15 +447,23 @@ async function menuPagos(chatId) {
 async function menuFinRegistro(chatId) {
   return upsertPanel(
     chatId,
-    "\u{1F4D2} *REGISTRO DE FINANZAS*\n\nSeleccione una opci\u00F3n:",
+    "📒 *REGISTRO DE FINANZAS*\n\nSeleccione una opción:",
     [
-      [{ text: "\u2795 Registrar ingreso", callback_data: "fin:menu:ingreso" }],
-      [{ text: "\u2796 Registrar egreso", callback_data: "fin:menu:egreso" }],
-      [{ text: "\u{1F5D1}\uFE0F Eliminar movimiento", callback_data: "fin:menu:eliminar" }],
-      [{ text: "\u{1F4CA} Reportes", callback_data: "fin:menu:reportes" }],
-      [{ text: "\u{1F9FE} Cierre de caja", callback_data: "fin:menu:cierre" }],
-      [{ text: "\u2B05\uFE0F Volver Finanzas", callback_data: "menu:pagos" }],
-      [{ text: "\u{1F3E0} Inicio", callback_data: "go:inicio" }],
+      [
+        { text: "➕ Registrar ingreso", callback_data: "fin:menu:ingreso" },
+        { text: "➖ Registrar egreso", callback_data: "fin:menu:egreso" },
+      ],
+      [
+        { text: "🗑️ Eliminar movimiento", callback_data: "fin:menu:eliminar" },
+        { text: "🧾 Cierre de caja", callback_data: "fin:menu:cierre" },
+      ],
+      [
+        { text: "📊 Reportes", callback_data: "fin:menu:reportes" },
+        { text: "⬅️ Volver Finanzas", callback_data: "menu:pagos" },
+      ],
+      [
+        { text: "🏠 Inicio", callback_data: "go:inicio" },
+      ],
     ]
   );
 }
@@ -393,12 +471,16 @@ async function menuFinRegistro(chatId) {
 async function menuFinEliminarTipo(chatId) {
   return upsertPanel(
     chatId,
-    "\u{1F5D1}\uFE0F *ELIMINAR MOVIMIENTO POR FECHA*\n\nSeleccione qu\u00E9 desea buscar.\nLuego escribir\u00E1 una *fecha exacta* en formato *dd/mm/yyyy*.",
+    "🗑️ *ELIMINAR MOVIMIENTO POR FECHA*\n\nSeleccione qué desea buscar.\nLuego escribirá una *fecha exacta* en formato *dd/mm/yyyy*.",
     [
-      [{ text: "\u2795 Buscar ingresos", callback_data: "fin:menu:eliminar:ingreso" }],
-      [{ text: "\u2796 Buscar egresos", callback_data: "fin:menu:eliminar:egreso" }],
-      [{ text: "\u2B05\uFE0F Volver Finanzas", callback_data: "menu:pagos" }],
-      [{ text: "\u{1F3E0} Inicio", callback_data: "go:inicio" }],
+      [
+        { text: "➕ Buscar ingresos", callback_data: "fin:menu:eliminar:ingreso" },
+        { text: "➖ Buscar egresos", callback_data: "fin:menu:eliminar:egreso" },
+      ],
+      [
+        { text: "⬅️ Volver Finanzas", callback_data: "menu:pagos" },
+        { text: "🏠 Inicio", callback_data: "go:inicio" },
+      ],
     ]
   );
 }
@@ -406,14 +488,20 @@ async function menuFinEliminarTipo(chatId) {
 async function menuFinReportes(chatId) {
   return upsertPanel(
     chatId,
-    "\u{1F4CA} *REPORTES DE FINANZAS*\n\nSeleccione una opci\u00F3n:",
+    "📊 *REPORTES DE FINANZAS*\n\nSeleccione una opción:",
     [
-      [{ text: "\u{1F4C5} Resumen por fecha", callback_data: "fin:menu:resumen_fecha" }],
-      [{ text: "\u{1F3E6} Resumen por banco del mes", callback_data: "fin:menu:bancos_mes" }],
-      [{ text: "\u{1F3C6} Top plataformas del mes", callback_data: "fin:menu:top_plataformas" }],
-      [{ text: "\u{1F4E4} Exportar Excel por rango", callback_data: "fin:menu:excel_rango" }],
-      [{ text: "\u2B05\uFE0F Volver Finanzas", callback_data: "menu:pagos" }],
-      [{ text: "\u{1F3E0} Inicio", callback_data: "go:inicio" }],
+      [
+        { text: "📅 Resumen por fecha", callback_data: "fin:menu:resumen_fecha" },
+        { text: "🏦 Bancos del mes", callback_data: "fin:menu:bancos_mes" },
+      ],
+      [
+        { text: "🏆 Top plataformas", callback_data: "fin:menu:top_plataformas" },
+        { text: "📤 Excel por rango", callback_data: "fin:menu:excel_rango" },
+      ],
+      [
+        { text: "⬅️ Volver Finanzas", callback_data: "menu:pagos" },
+        { text: "🏠 Inicio", callback_data: "go:inicio" },
+      ],
     ]
   );
 }
@@ -422,27 +510,25 @@ async function menuFinReportes(chatId) {
 // KEYBOARDS FINANZAS
 // ===============================
 function kbBancosFinanzas() {
-  const rows = (Array.isArray(FIN_BANCOS) ? FIN_BANCOS : []).map((b) => [
-    {
-      text: String(b),
-      callback_data: `fin:ing:banco:${encodeURIComponent(String(b))}`,
-    },
-  ]);
+  const buttons = (Array.isArray(FIN_BANCOS) ? FIN_BANCOS : []).map((b) => ({
+    text: String(b),
+    callback_data: `fin:ing:banco:${encodeURIComponent(String(b))}`,
+  }));
 
-  rows.push([{ text: "\u{1F3E0} Inicio", callback_data: "go:inicio" }]);
+  const rows = pairButtons(buttons);
+  rows.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
 
   return { inline_keyboard: rows };
 }
 
 function kbMotivosFinanzas() {
-  const rows = (Array.isArray(FIN_MOTIVOS_EGRESO) ? FIN_MOTIVOS_EGRESO : []).map((m) => [
-    {
-      text: String(m),
-      callback_data: `fin:egr:motivo:${encodeURIComponent(String(m))}`,
-    },
-  ]);
+  const buttons = (Array.isArray(FIN_MOTIVOS_EGRESO) ? FIN_MOTIVOS_EGRESO : []).map((m) => ({
+    text: String(m),
+    callback_data: `fin:egr:motivo:${encodeURIComponent(String(m))}`,
+  }));
 
-  rows.push([{ text: "\u{1F3E0} Inicio", callback_data: "go:inicio" }]);
+  const rows = pairButtons(buttons);
+  rows.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
 
   return { inline_keyboard: rows };
 }
@@ -625,7 +711,7 @@ function resumenFinanzasTextoPorFecha(fecha, list = []) {
 
   const utilidad = ingresos - egresos;
 
-  let txt = `\u{1F4C5} *RESUMEN DEL ${escMD(fecha)}*\n\n`;
+  let txt = `📅 *RESUMEN DEL ${escMD(fecha)}*\n\n`;
   txt += `*Ingresos:* ${escMD(moneyLps(ingresos))}\n`;
   txt += `*Egresos:* ${escMD(moneyLps(egresos))}\n`;
   txt += `*Utilidad:* ${escMD(moneyLps(utilidad))}\n`;
@@ -636,7 +722,7 @@ function resumenFinanzasTextoPorFecha(fecha, list = []) {
     txt += rows
       .slice(0, 20)
       .map((r, i) => {
-        const tipo = String(r.tipo || "").toLowerCase() === "egreso" ? "\u2796" : "\u2795";
+        const tipo = String(r.tipo || "").toLowerCase() === "egreso" ? "➖" : "➕";
         return `${i + 1}. ${tipo} ${escMD(textoMovimientoParaEliminar(r))}`;
       })
       .join("\n");
@@ -666,7 +752,7 @@ function resumenBancosMesTexto(monthKey, list = []) {
 
   const items = Object.entries(map).sort((a, b) => b[1].neto - a[1].neto);
 
-  let txt = `\u{1F3E6} *RESUMEN POR BANCO — ${escMD(label)}*\n\n`;
+  let txt = `🏦 *RESUMEN POR BANCO — ${escMD(label)}*\n\n`;
 
   if (!items.length) {
     txt += "_No hay movimientos para este mes._";
@@ -702,7 +788,7 @@ function resumenTopPlataformasTexto(monthKey, list = []) {
     .sort((a, b) => b[1] - a[1])
     .slice(0, 20);
 
-  let txt = `\u{1F3C6} *TOP PLATAFORMAS — ${escMD(label)}*\n\n`;
+  let txt = `🏆 *TOP PLATAFORMAS — ${escMD(label)}*\n\n`;
 
   if (!items.length) {
     txt += "_No hay ingresos para este mes._";
@@ -732,7 +818,7 @@ function cierreCajaTexto(fecha, list = []) {
 
   const saldo = ingresos - egresos;
 
-  let txt = `\u{1F9FE} *CIERRE DE CAJA — ${escMD(fecha)}*\n\n`;
+  let txt = `🧾 *CIERRE DE CAJA — ${escMD(fecha)}*\n\n`;
   txt += `*Ingresos:* ${escMD(moneyLps(ingresos))}\n`;
   txt += `*Egresos:* ${escMD(moneyLps(egresos))}\n`;
   txt += `*Saldo:* ${escMD(moneyLps(saldo))}\n`;
@@ -827,7 +913,7 @@ async function exportarFinanzasRangoExcel(
   await wb.xlsx.writeFile(tempPath);
 
   await bot.sendDocument(chatId, tempPath, {
-    caption: `\u{1F4CA} Finanzas del ${ini} al ${fin}`,
+    caption: `📊 Finanzas del ${ini} al ${fin}`,
   });
 
   try {
@@ -864,10 +950,12 @@ async function pedirFechaEliminarMovimiento(chatId, tipo) {
 
   return upsertPanel(
     chatId,
-    `\u{1F5D1}\uFE0F *ELIMINAR ${titulo} POR FECHA*\n\nEnvíe la fecha exacta en formato *dd/mm/yyyy*.\n\nEjemplo: *22/03/2026*`,
+    `🗑️ *ELIMINAR ${titulo} POR FECHA*\n\nEnvíe la fecha exacta en formato *dd/mm/yyyy*.\n\nEjemplo: *22/03/2026*`,
     [
-      [{ text: "\u2B05\uFE0F Volver eliminar", callback_data: "fin:menu:eliminar" }],
-      [{ text: "\u{1F3E0} Inicio", callback_data: "go:inicio" }],
+      [
+        { text: "⬅️ Volver eliminar", callback_data: "fin:menu:eliminar" },
+        { text: "🏠 Inicio", callback_data: "go:inicio" },
+      ],
     ]
   );
 }
@@ -878,21 +966,21 @@ async function listarMovimientosParaEliminarPorFecha(chatId, tipo, fechaDMY) {
   if (!rows.length) {
     return upsertPanel(
       chatId,
-      `\u26A0\uFE0F No encontré *${
-        tipo === "egreso" ? "egresos" : "ingresos"
-      }* en la fecha *${fechaDMY}*.`,
+      `⚠️ No encontré *${tipo === "egreso" ? "egresos" : "ingresos"}* en la fecha *${fechaDMY}*.`,
       [
         [
           {
-            text: tipo === "egreso" ? "\u2796 Buscar otra fecha" : "\u2795 Buscar otra fecha",
+            text: tipo === "egreso" ? "➖ Buscar otra fecha" : "➕ Buscar otra fecha",
             callback_data:
               tipo === "egreso"
                 ? "fin:menu:eliminar:egreso"
                 : "fin:menu:eliminar:ingreso",
           },
         ],
-        [{ text: "\u2B05\uFE0F Volver eliminar", callback_data: "fin:menu:eliminar" }],
-        [{ text: "\u{1F3E0} Inicio", callback_data: "go:inicio" }],
+        [
+          { text: "⬅️ Volver eliminar", callback_data: "fin:menu:eliminar" },
+          { text: "🏠 Inicio", callback_data: "go:inicio" },
+        ],
       ]
     );
   }
@@ -909,21 +997,21 @@ async function listarMovimientosParaEliminarPorFecha(chatId, tipo, fechaDMY) {
 
   keyboard.push([
     {
-      text: tipo === "egreso" ? "\u2796 Buscar otra fecha" : "\u2795 Buscar otra fecha",
+      text: tipo === "egreso" ? "➖ Buscar otra fecha" : "➕ Buscar otra fecha",
       callback_data:
         tipo === "egreso"
           ? "fin:menu:eliminar:egreso"
           : "fin:menu:eliminar:ingreso",
     },
   ]);
-  keyboard.push([{ text: "\u2B05\uFE0F Volver eliminar", callback_data: "fin:menu:eliminar" }]);
-  keyboard.push([{ text: "\u{1F3E0} Inicio", callback_data: "go:inicio" }]);
+  keyboard.push([
+    { text: "⬅️ Volver eliminar", callback_data: "fin:menu:eliminar" },
+    { text: "🏠 Inicio", callback_data: "go:inicio" },
+  ]);
 
   return upsertPanel(
     chatId,
-    `\u{1F5D1}\uFE0F *${
-      tipo === "egreso" ? "EGRESOS" : "INGRESOS"
-    } DEL ${fechaDMY}*\n\nSeleccione el movimiento exacto que desea borrar:`,
+    `🗑️ *${tipo === "egreso" ? "EGRESOS" : "INGRESOS"} DEL ${fechaDMY}*\n\nSeleccione el movimiento exacto que desea borrar:`,
     keyboard
   );
 }
@@ -934,10 +1022,12 @@ async function confirmarEliminarMovimiento(chatId, movId) {
   if (!mov) {
     return upsertPanel(
       chatId,
-      "\u26A0\uFE0F Ese movimiento ya no existe o fue eliminado.",
+      "⚠️ Ese movimiento ya no existe o fue eliminado.",
       [
-        [{ text: "\u2B05\uFE0F Volver eliminar", callback_data: "fin:menu:eliminar" }],
-        [{ text: "\u{1F3E0} Inicio", callback_data: "go:inicio" }],
+        [
+          { text: "⬅️ Volver eliminar", callback_data: "fin:menu:eliminar" },
+          { text: "🏠 Inicio", callback_data: "go:inicio" },
+        ],
       ]
     );
   }
@@ -946,9 +1036,13 @@ async function confirmarEliminarMovimiento(chatId, movId) {
     chatId,
     textoConfirmarEliminacionMovimiento(mov),
     [
-      [{ text: "\u2705 Sí, eliminar", callback_data: `fin:del:ok:${mov.id}` }],
-      [{ text: "\u274C Cancelar", callback_data: "fin:menu:eliminar" }],
-      [{ text: "\u{1F3E0} Inicio", callback_data: "go:inicio" }],
+      [
+        { text: "✅ Sí, eliminar", callback_data: `fin:del:ok:${mov.id}` },
+        { text: "❌ Cancelar", callback_data: "fin:menu:eliminar" },
+      ],
+      [
+        { text: "🏠 Inicio", callback_data: "go:inicio" },
+      ],
     ]
   );
 }
@@ -956,7 +1050,7 @@ async function confirmarEliminarMovimiento(chatId, movId) {
 async function eliminarMovimientoDefinitivo(chatId, movId, userId = null) {
   const mov = await eliminarMovimientoFinanzas(movId, userId, true);
 
-  let txt = `\u2705 *MOVIMIENTO ELIMINADO*\n\n`;
+  let txt = `✅ *MOVIMIENTO ELIMINADO*\n\n`;
   txt += `*Tipo:* ${escMD(finTipoLabel(mov.tipo))}\n`;
   txt += `*Fecha:* ${escMD(String(mov.fecha || "-"))}\n`;
   txt += `*Monto:* ${escMD(moneyLps(mov.monto || 0))}\n`;
@@ -970,9 +1064,13 @@ async function eliminarMovimientoDefinitivo(chatId, movId, userId = null) {
     chatId,
     txt,
     [
-      [{ text: "\u{1F5D1}\uFE0F Eliminar otro", callback_data: "fin:menu:eliminar" }],
-      [{ text: "\u{1F4D2} Volver Registro", callback_data: "fin:menu:registro" }],
-      [{ text: "\u{1F3E0} Inicio", callback_data: "go:inicio" }],
+      [
+        { text: "🗑️ Eliminar otro", callback_data: "fin:menu:eliminar" },
+        { text: "📒 Volver Registro", callback_data: "fin:menu:registro" },
+      ],
+      [
+        { text: "🏠 Inicio", callback_data: "go:inicio" },
+      ],
     ]
   );
 }
@@ -984,10 +1082,12 @@ async function listarIngresosHoy(chatId) {
   if (!rows.length) {
     return upsertPanel(
       chatId,
-      `\u{1F4D2} *INGRESOS DE HOY (${hoy})*\n\nNo hay ingresos registrados hoy.`,
+      `📒 *INGRESOS DE HOY (${hoy})*\n\nNo hay ingresos registrados hoy.`,
       [
-        [{ text: "\u2B05\uFE0F Volver Registro", callback_data: "fin:menu:registro" }],
-        [{ text: "\u{1F3E0} Inicio", callback_data: "go:inicio" }],
+        [
+          { text: "⬅️ Volver Registro", callback_data: "fin:menu:registro" },
+          { text: "🏠 Inicio", callback_data: "go:inicio" },
+        ],
       ]
     );
   }
@@ -996,10 +1096,12 @@ async function listarIngresosHoy(chatId) {
 
   return upsertPanel(
     chatId,
-    `\u{1F4D2} *INGRESOS DE HOY (${hoy})*\n\n${escMD(lines.join("\n"))}`,
+    `📒 *INGRESOS DE HOY (${hoy})*\n\n${escMD(lines.join("\n"))}`,
     [
-      [{ text: "\u2B05\uFE0F Volver Registro", callback_data: "fin:menu:registro" }],
-      [{ text: "\u{1F3E0} Inicio", callback_data: "go:inicio" }],
+      [
+        { text: "⬅️ Volver Registro", callback_data: "fin:menu:registro" },
+        { text: "🏠 Inicio", callback_data: "go:inicio" },
+      ],
     ]
   );
 }
@@ -1011,10 +1113,12 @@ async function listarEgresosHoy(chatId) {
   if (!rows.length) {
     return upsertPanel(
       chatId,
-      `\u{1F4D2} *EGRESOS DE HOY (${hoy})*\n\nNo hay egresos registrados hoy.`,
+      `📒 *EGRESOS DE HOY (${hoy})*\n\nNo hay egresos registrados hoy.`,
       [
-        [{ text: "\u2B05\uFE0F Volver Registro", callback_data: "fin:menu:registro" }],
-        [{ text: "\u{1F3E0} Inicio", callback_data: "go:inicio" }],
+        [
+          { text: "⬅️ Volver Registro", callback_data: "fin:menu:registro" },
+          { text: "🏠 Inicio", callback_data: "go:inicio" },
+        ],
       ]
     );
   }
@@ -1023,10 +1127,12 @@ async function listarEgresosHoy(chatId) {
 
   return upsertPanel(
     chatId,
-    `\u{1F4D2} *EGRESOS DE HOY (${hoy})*\n\n${escMD(lines.join("\n"))}`,
+    `📒 *EGRESOS DE HOY (${hoy})*\n\n${escMD(lines.join("\n"))}`,
     [
-      [{ text: "\u2B05\uFE0F Volver Registro", callback_data: "fin:menu:registro" }],
-      [{ text: "\u{1F3E0} Inicio", callback_data: "go:inicio" }],
+      [
+        { text: "⬅️ Volver Registro", callback_data: "fin:menu:registro" },
+        { text: "🏠 Inicio", callback_data: "go:inicio" },
+      ],
     ]
   );
 }
@@ -1079,7 +1185,7 @@ async function enviarReporteMesActual(chatId) {
   const label = monthLabelFromKeyLocal(monthKey);
   const res = await resumenFinancieroPorMonthKey(monthKey);
 
-  let txt = `\u{1F4CA} *REPORTE ${escMD(label)}*\n\n`;
+  let txt = `📊 *REPORTE ${escMD(label)}*\n\n`;
   txt += `*Ingresos:* ${escMD(moneyLps(res.ingresos || 0))}\n`;
   txt += `*Egresos:* ${escMD(moneyLps(res.egresos || 0))}\n`;
   txt += `*Utilidad:* ${escMD(moneyLps(res.utilidad || 0))}\n`;
@@ -1101,9 +1207,13 @@ async function enviarReporteMesActual(chatId) {
     chatId,
     txt,
     [
-      [{ text: "\u{1F4E4} Exportar Excel por rango", callback_data: "fin:menu:excel_rango" }],
-      [{ text: "\u2B05\uFE0F Volver Reportes", callback_data: "fin:menu:reportes" }],
-      [{ text: "\u{1F3E0} Inicio", callback_data: "go:inicio" }],
+      [
+        { text: "📤 Exportar Excel por rango", callback_data: "fin:menu:excel_rango" },
+        { text: "⬅️ Volver Reportes", callback_data: "fin:menu:reportes" },
+      ],
+      [
+        { text: "🏠 Inicio", callback_data: "go:inicio" },
+      ],
     ]
   );
 }
@@ -1154,7 +1264,7 @@ async function exportarExcelMesActual(chatId) {
   await wb.xlsx.writeFile(tempPath);
 
   await bot.sendDocument(chatId, tempPath, {
-    caption: `\u{1F4CA} Reporte Excel de ${label}`,
+    caption: `📊 Reporte Excel de ${label}`,
   });
 
   try {
@@ -1163,10 +1273,12 @@ async function exportarExcelMesActual(chatId) {
 
   return upsertPanel(
     chatId,
-    `\u2705 *Excel generado correctamente* para *${escMD(label)}*.`,
+    `✅ *Excel generado correctamente* para *${escMD(label)}*.`,
     [
-      [{ text: "\u2B05\uFE0F Volver Reportes", callback_data: "fin:menu:reportes" }],
-      [{ text: "\u{1F3E0} Inicio", callback_data: "go:inicio" }],
+      [
+        { text: "⬅️ Volver Reportes", callback_data: "fin:menu:reportes" },
+        { text: "🏠 Inicio", callback_data: "go:inicio" },
+      ],
     ]
   );
 }
@@ -1175,22 +1287,15 @@ async function exportarExcelMesActual(chatId) {
 // EXPORTS
 // ===============================
 module.exports = {
-  // menús principales
   menuPrincipal,
   menuVendedor,
-
-  // inventario
   menuInventario,
   menuInventarioVideo,
   menuInventarioMusica,
   menuInventarioIptv,
   menuInventarioDisenoIA,
-
-  // clientes / crm
   menuClientes,
   menuRenovaciones,
-
-  // finanzas
   menuPagos,
   menuFinRegistro,
   menuFinEliminarTipo,
@@ -1209,7 +1314,7 @@ module.exports = {
   exportarFinanzasRangoExcel,
   eliminarMovimientoFinanzas,
 
-  // compatibilidad con versión vieja
+  // compatibilidad
   menuFinanzas,
   menuRegistroFinanzas,
   menuEliminarMovimientoEspecifico,
