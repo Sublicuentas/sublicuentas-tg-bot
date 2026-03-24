@@ -915,6 +915,35 @@ function cierreCajaTexto(fecha, list = []) {
 }
 
 
+function cierreCajaTextoRango(fechaInicio, fechaFin, list = []) {
+  let ingresos = 0;
+  let egresos = 0;
+
+  for (const m of Array.isArray(list) ? list : []) {
+    const monto = Number(m.monto || 0);
+    if (String(m.tipo || "").toLowerCase() === "egreso") egresos += monto;
+    else ingresos += monto;
+  }
+
+  const utilidad = ingresos - egresos;
+
+  let color = "🟢";
+  if (utilidad < 0) color = "🔴";
+  else if (utilidad === 0) color = "🟡";
+
+  let txt = "";
+  txt += `🧾 *CIERRE DE CAJA*\n`;
+  txt += `(${escMD(fechaInicio)} al ${escMD(fechaFin)})\n\n`;
+  txt += `💰 *Entradas:* ${moneyLps(ingresos)}\n`;
+  txt += `💸 *Salidas:* ${moneyLps(egresos)}\n`;
+  txt += `📦 *Caja final:* ${utilidad >= 0 ? "+" : ""}${moneyLps(utilidad)} ${color}\n`;
+  txt += `🧮 *Movimientos:* ${Array.isArray(list) ? list.length : 0}`;
+
+  return txt;
+}
+
+
+
 function applyHeaderStyle(row) {
   row.font = { bold: true, color: { argb: "FFFFFFFF" } };
   row.alignment = { vertical: "middle", horizontal: "center" };
