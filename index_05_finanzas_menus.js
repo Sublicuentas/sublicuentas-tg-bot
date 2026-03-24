@@ -67,6 +67,95 @@ const PLATFORM_KEYS = Array.isArray(PLATAFORMAS)
   ? PLATAFORMAS
   : Object.keys(PLATAFORMAS || {});
 
+const FINANCE_COLLECTIONS_READ = Array.from(
+  new Set(
+    [String(FINANZAS_COLLECTION || "").trim(), "finanzas_movimientos", "finanzas"]
+      .filter(Boolean)
+  )
+);
+
+const FINANCE_COLLECTION_PRIMARY =
+  FINANCE_COLLECTIONS_READ.includes("finanzas_movimientos")
+    ? "finanzas_movimientos"
+    : FINANCE_COLLECTIONS_READ[0];
+
+function normalizeFinanceDocRow(id, data = {}) {
+  return {
+    id: String(id || ""),
+    ...(data || {}),
+  };
+}
+
+async function getAllFinanceDocsMerged() {
+  const map = new Map();
+
+  for (const col of FINANCE_COLLECTIONS_READ) {
+    try {
+      const snap = await db.collection(col).get();
+      snap.forEach((d) => {
+        if (!map.has(d.id)) {
+          map.set(d.id, normalizeFinanceDocRow(d.id, d.data() || {}));
+        }
+      });
+    } catch (e) {
+      logErr(`getAllFinanceDocsMerged:${col}`, e);
+    }
+  }
+
+  return Array.from(map.values());
+}
+
+async function getFinanceDocByIdAny(id) {
+  const docId = String(id || "").trim();
+  if (!docId) return null;
+
+  for (const col of FINANCE_COLLECTIONS_READ) {
+    try {
+      const snap = await db.collection(col).doc(docId).get();
+      if (snap.exists) {
+        return {
+          collection: col,
+          ref: db.collection(col).doc(docId),
+          row: normalizeFinanceDocRow(snap.id, snap.data() || {}),
+        };
+      }
+    } catch (e) {
+      logErr(`getFinanceDocByIdAny:${col}`, e);
+    }
+  }
+
+  return null;
+}
+
+async function saveFinancePayloadMirrored(docId, payload = {}) {
+  const id = String(docId || "").trim();
+  if (!id) throw new Error("ID de finanza inválido.");
+
+  for (const col of FINANCE_COLLECTIONS_READ) {
+    try {
+      await db.collection(col).doc(id).set(payload, { merge: false });
+    } catch (e) {
+      logErr(`saveFinancePayloadMirrored:${col}`, e);
+    }
+  }
+
+  return { id, ...payload };
+}
+
+async function deleteFinanceDocMirrored(docId) {
+  const id = String(docId || "").trim();
+  if (!id) return;
+
+  for (const col of FINANCE_COLLECTIONS_READ) {
+    try {
+      await db.collection(col).doc(id).delete();
+    } catch (e) {
+      logErr(`deleteFinanceDocMirrored:${col}`, e);
+    }
+  }
+}
+
+
 // ===============================
 // HELPERS
 // ===============================
@@ -512,7 +601,10 @@ async function menuFinReportes(chatId) {
         { text: "📤 Excel por rango", callback_data: "fin:menu:excel_rango" },
       ],
       [
+        { text: "🧾 Cierre por rango", callback_data: "fin:menu:cierre:rango" },
         { text: "⬅️ Volver Finanzas", callback_data: "menu:pagos" },
+      ],
+      [
         { text: "🏠 Inicio", callback_data: "go:inicio" },
       ],
     ]
@@ -547,21 +639,14 @@ function kbMotivosFinanzas() {
 // ===============================
 async function registrarIngresoTx({
   monto,
-  banco = "",
-  plataforma = "",
-  detalle = "",
-  fecha = "",
-  userId = "",
-  userName = "",
+  banco,
+  plataforma,
+  detalle,
+  fecha,
+  userId,
+  userName,
 }) {
-  const fechaOk = parseFechaFlexible(fecha || hoyDMY());
-  if (!fechaOk) throw new Error("Fecha inválida");
-
-  const montoOk = Number(monto || 0);
-  if (!Number.isFinite(montoOk) || montoOk <= 0) throw new Error("Monto inválido");
-
-  const mesKey = monthKeyFromDMYLocal(fechaOk);
-  const ref = db.collection(FINANZAS_COLLECTION).doc();
+  const docId = db.collection(FINANCE_COLLECTION_PRIMARY).doc().id;
 
   const payload = {
     tipo: "ingreso",
@@ -579,26 +664,19 @@ async function registrarIngresoTx({
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
   };
 
-  await ref.set(payload);
-  return { id: ref.id, ...payload };
+  await saveFinancePayloadMirrored(docId, payload);
+  return { id: docId, ...payload };
 }
 
 async function registrarEgresoTx({
   monto,
-  motivo = "",
-  detalle = "",
-  fecha = "",
-  userId = "",
-  userName = "",
+  motivo,
+  detalle,
+  fecha,
+  userId,
+  userName,
 }) {
-  const fechaOk = parseFechaFlexible(fecha || hoyDMY());
-  if (!fechaOk) throw new Error("Fecha inválida");
-
-  const montoOk = Number(monto || 0);
-  if (!Number.isFinite(montoOk) || montoOk <= 0) throw new Error("Monto inválido");
-
-  const mesKey = monthKeyFromDMYLocal(fechaOk);
-  const ref = db.collection(FINANZAS_COLLECTION).doc();
+  const docId = db.collection(FINANCE_COLLECTION_PRIMARY).doc().id;
 
   const payload = {
     tipo: "egreso",
@@ -615,15 +693,13 @@ async function registrarEgresoTx({
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
   };
 
-  await ref.set(payload);
-  return { id: ref.id, ...payload };
+  await saveFinancePayloadMirrored(docId, payload);
+  return { id: docId, ...payload };
 }
 
 async function getMovimientoFinanzaById(id) {
-  const ref = db.collection(FINANZAS_COLLECTION).doc(String(id));
-  const snap = await ref.get();
-  if (!snap.exists) return null;
-  return { id: snap.id, ...(snap.data() || {}) };
+  const found = await getFinanceDocByIdAny(id);
+  return found ? found.row : null;
 }
 
 async function getMovimientosPorFecha(fechaDMY, _userId = null, _isSuper = false) {
@@ -631,9 +707,7 @@ async function getMovimientosPorFecha(fechaDMY, _userId = null, _isSuper = false
   if (!fecha) return [];
 
   try {
-    const snap = await db.collection(FINANZAS_COLLECTION).get();
-    const rows = snap.docs
-      .map((d) => ({ id: d.id, ...(d.data() || {}) }))
+    const rows = (await getAllFinanceDocsMerged())
       .filter((r) => extraerFechaMovimiento(r) === fecha)
       .map((r) => ({ ...r, fecha: extraerFechaMovimiento(r) || r.fecha || "" }))
       .sort((a, b) => dmyToMillis(b.fecha || "") - dmyToMillis(a.fecha || ""));
@@ -649,9 +723,7 @@ async function getMovimientosPorMes(monthKey, _userId = null, _isSuper = false) 
   if (!key) return [];
 
   try {
-    const snap = await db.collection(FINANZAS_COLLECTION).get();
-    const rows = snap.docs
-      .map((d) => ({ id: d.id, ...(d.data() || {}) }))
+    const rows = (await getAllFinanceDocsMerged())
       .map((r) => {
         const fechaReal = extraerFechaMovimiento(r);
         const mesReal = fechaReal ? monthKeyFromDMYLocal(fechaReal) : String(r.mesKey || r.monthKey || "");
@@ -670,11 +742,47 @@ async function getMovimientosPorMes(monthKey, _userId = null, _isSuper = false) 
     return [];
   }
 }
+async function getMovimientosPorRango(fechaInicio, fechaFin, _userId = null, _isSuper = false) {
+  const ini = normalizeDMY(fechaInicio);
+  const fin = normalizeDMY(fechaFin);
+  if (!ini || !fin) return [];
+
+  let tsIni = dmyToMillis(ini);
+  let tsFin = dmyToMillis(fin);
+
+  if (tsIni > tsFin) {
+    const temp = tsIni;
+    tsIni = tsFin;
+    tsFin = temp;
+  }
+
+  try {
+    const rows = (await getAllFinanceDocsMerged())
+      .map((r) => {
+        const fechaReal = extraerFechaMovimiento(r) || r.fecha || "";
+        return {
+          ...r,
+          fecha: fechaReal,
+        };
+      })
+      .filter((r) => {
+        const ts = dmyToMillis(String(r.fecha || ""));
+        return ts >= tsIni && ts <= tsFin;
+      })
+      .sort((a, b) => dmyToMillis(a.fecha || "") - dmyToMillis(b.fecha || ""));
+    return rows;
+  } catch (e) {
+    logErr("getMovimientosPorRango", e);
+    return [];
+  }
+}
+
 
 async function eliminarMovimientoFinanzas(id, _userId = null, _isSuper = false) {
   const mov = await getMovimientoFinanzaById(id);
   if (!mov) throw new Error("Movimiento no encontrado.");
-  await db.collection(FINANZAS_COLLECTION).doc(String(id)).delete();
+
+  await deleteFinanceDocMirrored(String(id));
   return mov;
 }
 
@@ -774,22 +882,35 @@ function resumenTopPlataformasTexto(monthKey, list = []) {
 }
 
 function cierreCajaTexto(fecha, list = []) {
-  const rows = Array.isArray(list) ? list : [];
   let ingresos = 0;
   let egresos = 0;
 
-  for (const r of rows) {
-    const monto = Number(r.monto || 0);
-    if (String(r.tipo || "").toLowerCase() === "egreso") egresos += monto;
+  for (const m of Array.isArray(list) ? list : []) {
+    const monto = Number(m.monto || 0);
+    if (String(m.tipo || "").toLowerCase() === "egreso") egresos += monto;
     else ingresos += monto;
   }
 
-  const saldo = ingresos - egresos;
-  let txt = `🧾 *CIERRE DE CAJA — ${escMD(fecha)}*\n\n`;
-  txt += `*Ingresos:* ${escMD(moneyLps(ingresos))}\n`;
-  txt += `*Egresos:* ${escMD(moneyLps(egresos))}\n`;
-  txt += `*Saldo:* ${escMD(moneyLps(saldo))}\n`;
-  txt += `*Movimientos:* ${escMD(String(rows.length))}\n`;
+  const utilidad = ingresos - egresos;
+
+  let color = "🟢";
+  if (utilidad < 0) color = "🔴";
+  else if (utilidad === 0) color = "🟡";
+
+  let txt = "";
+  txt += `🧾 *CIERRE DE CAJA*
+`;
+  txt += `(${escMD(fecha)})
+
+`;
+  txt += `💰 *Entradas:* ${moneyLps(ingresos)}
+`;
+  txt += `💸 *Salidas:* ${moneyLps(egresos)}
+`;
+  txt += `📦 *Caja final:* ${utilidad >= 0 ? "+" : ""}${moneyLps(utilidad)} ${color}
+`;
+  txt += `🧮 *Movimientos:* ${Array.isArray(list) ? list.length : 0}`;
+
   return txt;
 }
 
@@ -1386,10 +1507,12 @@ module.exports = {
   registrarEgresoTx,
   getMovimientosPorFecha,
   getMovimientosPorMes,
+  getMovimientosPorRango,
   resumenFinanzasTextoPorFecha,
   resumenBancosMesTexto,
   resumenTopPlataformasTexto,
   cierreCajaTexto,
+  cierreCajaTextoRango,
   textoConfirmarEliminacionMovimiento,
   exportarFinanzasRangoExcel,
   eliminarMovimientoFinanzas,
