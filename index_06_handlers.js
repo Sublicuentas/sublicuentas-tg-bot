@@ -275,33 +275,90 @@ async function buscarClientesFallbackLocal(query = "") {
   const qRaw = String(query || "").trim();
   const qNorm = normalizeLooseText(qRaw);
   const qDigits = onlyDigits(qRaw);
+
   if (!qNorm && !qDigits) return [];
 
   try {
     const snap = await db.collection("clientes").get();
-    const out = [];
+    const byId = new Map();
+
+    function addRow(score, docId, data) {
+      const prev = byId.get(docId);
+      const row = { id: docId, ...data, _score: score };
+      if (!prev || score > (prev._score || 0)) byId.set(docId, row);
+    }
 
     snap.forEach((doc) => {
       const data = doc.data() || {};
       const nombre = String(data.nombrePerfil || "");
-      const nombreNorm = String(data.nombre_norm || normalizeLooseText(nombre));
+      const nombreNorm = normalizeLooseText(data.nombre_norm || nombre);
       const telefono = String(data.telefono || "");
       const telefonoNorm = String(data.telefono_norm || onlyDigits(telefono));
       const vendedor = String(data.vendedor || "");
-      const vendedorNorm = String(data.vendedor_norm || normalizeLooseText(vendedor));
+      const vendedorNorm = normalizeLooseText(data.vendedor_norm || vendedor);
+
       const servicios = Array.isArray(data.servicios) ? data.servicios : [];
-      const correos = servicios.map((s) => String(s?.correo || "")).join(" ").toLowerCase();
+      const correos = servicios.map((s) => String(s?.correo || "")).join(" ");
+      const pines = servicios.map((s) => String(s?.pin || "")).join(" ");
+      const plataformas = servicios.map((s) => String(s?.plataforma || "")).join(" ");
 
-      let ok = false;
-      if (qDigits && qDigits.length >= 4 && telefonoNorm.includes(qDigits)) ok = true;
-      if (!ok && qNorm && nombreNorm.includes(qNorm)) ok = true;
-      if (!ok && qNorm && vendedorNorm.includes(qNorm)) ok = true;
-      if (!ok && qNorm && normalizeLooseText(correos).includes(qNorm)) ok = true;
+      let score = 0;
 
-      if (ok) out.push({ id: doc.id, ...data });
+      if (qDigits) {
+        if (telefonoNorm === qDigits) score = Math.max(score, 120);
+        else if (telefonoNorm.includes(qDigits)) score = Math.max(score, 95);
+        else if (normalizeLooseText(pines).includes(qDigits)) score = Math.max(score, 70);
+      }
+
+      if (qNorm) {
+        if (nombreNorm === qNorm) score = Math.max(score, 120);
+        else if (nombreNorm.startsWith(qNorm)) score = Math.max(score, 110);
+        else if (nombreNorm.includes(qNorm)) score = Math.max(score, 95);
+
+        if (!score && vendedorNorm.includes(qNorm)) score = Math.max(score, 70);
+        if (!score && normalizeLooseText(correos).includes(qNorm)) score = Math.max(score, 80);
+        if (!score && normalizeLooseText(plataformas).includes(qNorm)) score = Math.max(score, 60);
+
+        const tokens = qNorm.split(" ").filter(Boolean);
+        if (tokens.length > 1) {
+          const tokenMatches = tokens.filter((t) => nombreNorm.includes(t)).length;
+          if (tokenMatches === tokens.length) score = Math.max(score, 100);
+          else if (tokenMatches >= 1) score = Math.max(score, 75);
+        }
+      }
+
+      if (score > 0) addRow(score, doc.id, data);
     });
 
-    return out;
+    // Fallback adicional: buscar nombres dentro de inventario.clientes y mapearlos a clientes
+    if (byId.size === 0 && qNorm) {
+      const inv = await db.collection("inventario").get();
+      const matchedNames = new Set();
+
+      inv.forEach((doc) => {
+        const data = doc.data() || {};
+        const clientes = Array.isArray(data.clientes) ? data.clientes : [];
+        clientes.forEach((c) => {
+          const nombreInv = normalizeLooseText(c?.nombre || "");
+          if (nombreInv && (nombreInv === qNorm || nombreInv.includes(qNorm))) {
+            matchedNames.add(nombreInv);
+          }
+        });
+      });
+
+      if (matchedNames.size) {
+        snap.forEach((doc) => {
+          const data = doc.data() || {};
+          const nombreNorm = normalizeLooseText(data.nombre_norm || data.nombrePerfil || "");
+          if (matchedNames.has(nombreNorm)) addRow(85, doc.id, data);
+        });
+      }
+    }
+
+    return Array.from(byId.values()).sort((a, b) => {
+      if ((b._score || 0) !== (a._score || 0)) return (b._score || 0) - (a._score || 0);
+      return String(a.nombrePerfil || "").localeCompare(String(b.nombrePerfil || ""), "es", { sensitivity: "base" });
+    });
   } catch (e) {
     logErr("buscarClientesFallbackLocal", e);
     return [];
@@ -312,65 +369,82 @@ async function resolverBusquedaAdmin(chatId, query = "") {
   const q = String(query || "").trim().replace(/^\/+/, "").trim();
   if (!q) return bot.sendMessage(chatId, "⚠️ Escriba algo para buscar.");
 
+  // 1) Buscar en inventario por correo/usuario/plataforma
   let hits = [];
   try {
     hits = await buscarInventarioPorCorreo(q);
   } catch (_) {}
 
   if (hits.length === 1) {
+    const accesoUnico = String(hits[0].correo || q);
     pending.set(String(chatId), {
       mode: "invSubmenuCtx",
       plat: normalizarPlataforma(hits[0].plataforma),
-      correo: q,
+      correo: accesoUnico,
     });
-    return enviarSubmenuInventario(chatId, hits[0].plataforma, q);
+    return enviarSubmenuInventario(chatId, hits[0].plataforma, accesoUnico);
   }
 
   if (hits.length > 1) {
-    const kb = hits.map((x) => [
+    const kb = hits.slice(0, 20).map((x) => [
       {
-        text: `📌 ${String(x.plataforma).toUpperCase()}`,
-        callback_data: `inv:open:${normalizarPlataforma(x.plataforma)}:${encodeURIComponent(q)}`,
+        text: `${String(x.plataforma).toUpperCase()} • ${String(x.correo || "")}`,
+        callback_data: `inv:open:${normalizarPlataforma(x.plataforma)}:${encodeURIComponent(String(x.correo || q))}`,
       },
     ]);
     kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
 
-    return bot.sendMessage(
+    return upsertPanel(
       chatId,
-      `🔎 *Coincidencias de inventario*
+      `🔎 *COINCIDENCIAS DE INVENTARIO*
 
-Acceso: ${escMD(q)}
-Seleccione plataforma:`,
-      {
-        parse_mode: "Markdown",
-        reply_markup: { inline_keyboard: kb },
-      }
+Búsqueda: *${escMD(q)}*
+Seleccione la cuenta correcta:`,
+      kb
     );
   }
 
-  if (onlyDigits(q).length >= 7) {
-    const resultados = await buscarPorTelefonoTodos(q);
-    const dedup = dedupeClientes(resultados);
-    if (!dedup.length) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
-    if (dedup.length === 1) return enviarFichaCliente(chatId, dedup[0].id);
-    return enviarListaResultadosClientes(chatId, dedup);
+  // 2) Buscar clientes por teléfono
+  if (onlyDigits(q).length >= 4) {
+    let resultadosTel = [];
+    try {
+      resultadosTel = await buscarPorTelefonoTodos(q);
+    } catch (_) {}
+
+    let dedupTel = dedupeClientes(Array.isArray(resultadosTel) ? resultadosTel : []);
+    if (!dedupTel.length) {
+      const extraTel = await buscarClientesFallbackLocal(q);
+      dedupTel = dedupeClientes(extraTel);
+    }
+
+    if (dedupTel.length === 1) return enviarFichaCliente(chatId, dedupTel[0].id);
+    if (dedupTel.length > 1) return enviarListaResultadosClientes(chatId, dedupTel);
   }
 
+  // 3) Buscar clientes por nombre/correo/plataforma/vendedor
   let resultados = [];
   try {
     resultados = await buscarClienteRobusto(q);
   } catch (_) {}
 
-  if (!Array.isArray(resultados) || !resultados.length) {
-    resultados = await buscarClientesFallbackLocal(q);
-  } else {
-    const extra = await buscarClientesFallbackLocal(q);
-    resultados = [...resultados, ...extra];
-  }
+  const extra = await buscarClientesFallbackLocal(q);
+  resultados = [...(Array.isArray(resultados) ? resultados : []), ...extra];
 
   const dedup = dedupeClientes(resultados);
 
-  if (!dedup.length) return bot.sendMessage(chatId, "⚠️ Sin resultados.");
+  if (!dedup.length) {
+    return bot.sendMessage(
+      chatId,
+      `⚠️ Sin resultados.
+Pruebe con:
+• /buscar nombre completo
+• /buscar teléfono
+• /correo
+• /usuario`,
+      { parse_mode: "Markdown" }
+    );
+  }
+
   if (dedup.length === 1) return enviarFichaCliente(chatId, dedup[0].id);
 
   return enviarListaResultadosClientes(chatId, dedup);
@@ -3546,4 +3620,4 @@ if (!global.__SUBLICUENTAS_HTTP_SERVER__) {
     .listen(PORT, () => {
       console.log("🌐 HTTP KEEPALIVE activo en puerto", PORT);
     });
-      }
+         }
