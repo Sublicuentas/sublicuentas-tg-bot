@@ -1,11 +1,12 @@
-/* ✅ SUBLICUENTAS TG BOT — PARTE 5/6 CORREGIDA Y ORDENADA
+/* ✅ SUBLICUENTAS TG BOT — PARTE 5/6 CORREGIDA
    FINANZAS / REPORTES / EXCEL / MENÚS
    -----------------------------------
    Ajustes:
-   - Menús en filas de 2 donde aplica
+   - Menús en filas de 2
    - Reportes dentro de Finanzas
    - Renovaciones dentro de Clientes
-   - Inventario con iconos y nombres bonitos
+   - Motivos de egreso limitados a los requeridos
+   - Reportes por fecha robustos para registros viejos y nuevos
    - Compatible con index_06_handlers actual
 */
 
@@ -18,16 +19,12 @@ const {
   ExcelJS,
   PLATAFORMAS,
   FINANZAS_COLLECTION,
-  FIN_BANCOS,
-  FIN_MOTIVOS_EGRESO,
 } = require("./index_01_core");
 
 const {
   escMD,
   upsertPanel,
   parseFechaFinanceInput,
-  parseMontoNumber,
-  parseMonthInputToKey,
   getMonthLabelFromKey,
   getMonthKeyFromDMY,
   isFechaDMY,
@@ -39,141 +36,60 @@ const {
 const { humanPlataforma } = require("./index_03_clientes_crm");
 
 // ===============================
-// HELPERS BASE
+// CONFIG
 // ===============================
+const FIN_BANCOS_LOCAL = [
+  "BAC",
+  "Ficohsa",
+  "Atlantida",
+  "Banpais",
+  "Occidente",
+  "Davivienda",
+  "Lafise",
+  "Cash",
+  "Tigo Money",
+  "Tengo",
+  "Paypal",
+  "Binance",
+  "Otro",
+];
+
+const FIN_MOTIVOS_EGRESO_LOCAL = [
+  "Renovaciones",
+  "Cuentas nuevas",
+  "Pago revendedor",
+  "Pago planilla",
+  "Publicidad",
+  "Otros gastos",
+];
+
 const PLATFORM_KEYS = Array.isArray(PLATAFORMAS)
   ? PLATAFORMAS
   : Object.keys(PLATAFORMAS || {});
 
+// ===============================
+// HELPERS
+// ===============================
 function platMeta(key = "") {
   if (Array.isArray(PLATAFORMAS)) return {};
   return PLATAFORMAS[String(key || "").trim()] || {};
 }
 
-function dmyToDate(dmy = "") {
-  const s = String(dmy || "").trim();
-  if (!/^\d{2}\/\d{2}\/\d{4}$/.test(s)) return null;
-  const [dd, mm, yyyy] = s.split("/").map(Number);
-  const dt = new Date(yyyy, mm - 1, dd, 12, 0, 0, 0);
-
-  if (
-    dt.getFullYear() !== yyyy ||
-    dt.getMonth() !== mm - 1 ||
-    dt.getDate() !== dd
-  ) {
-    return null;
+function humanPlatSafe(key = "") {
+  try {
+    return humanPlataforma(key);
+  } catch (_) {
+    const meta = platMeta(key);
+    return meta?.nombre || String(key || "");
   }
-
-  return dt;
 }
 
-function dmyToMillis(dmy = "") {
-  const dt = dmyToDate(dmy);
-  return dt ? dt.getTime() : 0;
-}
-
-function dmyToTimestamp(dmy = "") {
-  const dt = dmyToDate(dmy);
-  return dt ? admin.firestore.Timestamp.fromDate(dt) : null;
-}
-
-function monthKeyFromDMYLocal(dmy = "") {
-  if (typeof getMonthKeyFromDMY === "function") {
-    const v = getMonthKeyFromDMY(dmy);
-    if (v) return v;
+function pairButtons(buttons = []) {
+  const rows = [];
+  for (let i = 0; i < buttons.length; i += 2) {
+    rows.push(buttons.slice(i, i + 2));
   }
-
-  const dt = dmyToDate(dmy);
-  if (!dt) return "";
-
-  const mm = String(dt.getMonth() + 1).padStart(2, "0");
-  const yyyy = String(dt.getFullYear());
-  return `${mm}/${yyyy}`;
-}
-
-function monthLabelFromKeyLocal(key = "") {
-  if (typeof getMonthLabelFromKey === "function") {
-    const v = getMonthLabelFromKey(key);
-    if (v) return v;
-  }
-  return String(key || "");
-}
-
-function parseFechaFlexible(raw = "") {
-  const s = String(raw || "").trim();
-  if (!s) return null;
-  if (s.toLowerCase() === "hoy") return hoyDMY();
-
-  if (typeof parseFechaFinanceInput === "function") {
-    const p = parseFechaFinanceInput(s);
-    if (p) return p;
-  }
-
-  return isFechaDMY(s) ? s : null;
-}
-
-function finTipoLabel(tipo) {
-  return String(tipo || "").toLowerCase() === "egreso" ? "Egreso" : "Ingreso";
-}
-
-function finConceptoLabel(m = {}) {
-  const tipo = String(m.tipo || "").toLowerCase();
-
-  if (tipo === "egreso") {
-    return String(m.motivo || m.detalle || m.descripcion || "Egreso").trim();
-  }
-
-  return String(
-    m.plataforma ||
-      m.detalle ||
-      m.descripcion ||
-      m.cliente ||
-      "Ingreso"
-  ).trim();
-}
-
-function finExtraLabel(m = {}) {
-  return String(
-    m.banco ||
-      m.metodo ||
-      m.vendedor ||
-      m.cliente ||
-      ""
-  ).trim();
-}
-
-function textoMovimientoParaEliminar(m = {}) {
-  const fecha = String(m.fecha || "-").trim();
-  const monto = Number(m.monto || 0).toFixed(2);
-  const concepto = finConceptoLabel(m);
-  const extra = finExtraLabel(m);
-
-  let txt = `${fecha} • ${monto} Lps • ${concepto}`;
-  if (extra) txt += ` • ${extra}`;
-
-  if (txt.length > 60) txt = `${txt.slice(0, 57)}...`;
-  return txt;
-}
-
-function textoConfirmarEliminacionMovimiento(m = {}) {
-  const tipo = finTipoLabel(m.tipo);
-  const fecha = String(m.fecha || "-");
-  const monto =
-    typeof moneyLps === "function"
-      ? moneyLps(m.monto || 0)
-      : `${Number(m.monto || 0).toFixed(2)} Lps`;
-  const concepto = finConceptoLabel(m);
-  const extra = finExtraLabel(m);
-
-  let txt = `🗑️ *CONFIRMAR ELIMINACIÓN*\n\n`;
-  txt += `*Tipo:* ${escMD(tipo)}\n`;
-  txt += `*Fecha:* ${escMD(fecha)}\n`;
-  txt += `*Monto:* ${escMD(monto)}\n`;
-  txt += `*Concepto:* ${escMD(concepto)}\n`;
-  if (extra) txt += `*Extra:* ${escMD(extra)}\n`;
-  txt += `\n¿Desea eliminar este movimiento?`;
-
-  return txt;
+  return rows;
 }
 
 function categoryOfPlat(key = "") {
@@ -186,23 +102,10 @@ function categoryOfPlat(key = "") {
     return c;
   }
 
-  if (
-    [
-      "netflix",
-      "vipnetflix",
-      "disneyp",
-      "disneys",
-      "hbomax",
-      "primevideo",
-      "paramount",
-      "crunchyroll",
-      "vix",
-      "appletv",
-      "universal",
-    ].includes(k)
-  ) {
-    return "video";
-  }
+  if ([
+    "netflix", "vipnetflix", "disneyp", "disneys", "hbomax", "primevideo",
+    "paramount", "crunchyroll", "vix", "appletv", "universal"
+  ].includes(k)) return "video";
 
   if (["spotify", "youtube", "deezer"].includes(k)) return "musica";
   if (["oleadatv1", "oleadatv3", "iptv1", "iptv3", "iptv4"].includes(k)) return "iptv";
@@ -237,25 +140,7 @@ function inventoryLabel(key = "") {
     gemini: "Gemini",
     chatgpt: "ChatGPT",
   };
-
   return labels[k] || humanPlatSafe(k);
-}
-
-function humanPlatSafe(key = "") {
-  try {
-    return humanPlataforma(key);
-  } catch (_) {
-    const meta = platMeta(key);
-    return meta?.nombre || String(key || "");
-  }
-}
-
-function pairButtons(buttons = []) {
-  const rows = [];
-  for (let i = 0; i < buttons.length; i += 2) {
-    rows.push(buttons.slice(i, i + 2));
-  }
-  return rows;
 }
 
 function kbFromItems(items = []) {
@@ -264,6 +149,141 @@ function kbFromItems(items = []) {
     callback_data: `inv:${String(key)}:0`,
   }));
   return pairButtons(buttons);
+}
+
+function dmyToDate(dmy = "") {
+  const s = String(dmy || "").trim();
+  if (!/^\d{2}\/\d{2}\/\d{4}$/.test(s)) return null;
+  const [dd, mm, yyyy] = s.split("/").map(Number);
+  const dt = new Date(yyyy, mm - 1, dd, 12, 0, 0, 0);
+  if (
+    dt.getFullYear() !== yyyy ||
+    dt.getMonth() !== mm - 1 ||
+    dt.getDate() !== dd
+  ) return null;
+  return dt;
+}
+
+function dmyToMillis(dmy = "") {
+  const dt = dmyToDate(dmy);
+  return dt ? dt.getTime() : 0;
+}
+
+function dmyToTimestamp(dmy = "") {
+  const dt = dmyToDate(dmy);
+  return dt ? admin.firestore.Timestamp.fromDate(dt) : null;
+}
+
+function normalizeDMY(s = "") {
+  const v = String(s || "").trim();
+  const m = v.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (!m) return "";
+  const dd = String(Number(m[1])).padStart(2, "0");
+  const mm = String(Number(m[2])).padStart(2, "0");
+  const yyyy = String(m[3]);
+  return `${dd}/${mm}/${yyyy}`;
+}
+
+function tsToDMY(ts) {
+  try {
+    const d = ts?.toDate ? ts.toDate() : new Date(ts);
+    if (!(d instanceof Date) || isNaN(d.getTime())) return "";
+    const dd = String(d.getDate()).padStart(2, "0");
+    const mm = String(d.getMonth() + 1).padStart(2, "0");
+    const yyyy = String(d.getFullYear());
+    return `${dd}/${mm}/${yyyy}`;
+  } catch (_) {
+    return "";
+  }
+}
+
+function monthKeyFromDMYLocal(dmy = "") {
+  if (typeof getMonthKeyFromDMY === "function") {
+    const v = getMonthKeyFromDMY(dmy);
+    if (v) return v;
+  }
+  const dt = dmyToDate(dmy);
+  if (!dt) return "";
+  const mm = String(dt.getMonth() + 1).padStart(2, "0");
+  const yyyy = String(dt.getFullYear());
+  return `${mm}/${yyyy}`;
+}
+
+function monthLabelFromKeyLocal(key = "") {
+  if (typeof getMonthLabelFromKey === "function") {
+    const v = getMonthLabelFromKey(key);
+    if (v) return v;
+  }
+  return String(key || "");
+}
+
+function parseFechaFlexible(raw = "") {
+  const s = String(raw || "").trim();
+  if (!s) return null;
+  if (s.toLowerCase() === "hoy") return hoyDMY();
+  if (typeof parseFechaFinanceInput === "function") {
+    const p = parseFechaFinanceInput(s);
+    if (p) return normalizeDMY(p);
+  }
+  return isFechaDMY(s) ? normalizeDMY(s) : null;
+}
+
+function extraerFechaMovimiento(r = {}) {
+  const f1 = normalizeDMY(r.fecha || "");
+  if (f1) return f1;
+  const f2 = tsToDMY(r.fechaTS);
+  if (f2) return f2;
+  const f3 = tsToDMY(r.createdAt);
+  if (f3) return f3;
+  return "";
+}
+
+function finTipoLabel(tipo) {
+  return String(tipo || "").toLowerCase() === "egreso" ? "Egreso" : "Ingreso";
+}
+
+function finConceptoLabel(m = {}) {
+  const tipo = String(m.tipo || "").toLowerCase();
+  if (tipo === "egreso") {
+    return String(m.motivo || m.detalle || m.descripcion || "Egreso").trim();
+  }
+  return String(m.plataforma || m.detalle || m.descripcion || m.cliente || "Ingreso").trim();
+}
+
+function finExtraLabel(m = {}) {
+  return String(m.banco || m.metodo || m.vendedor || m.cliente || "").trim();
+}
+
+function textoMovimientoParaEliminar(m = {}) {
+  const fecha = String(extraerFechaMovimiento(m) || m.fecha || "-").trim();
+  const monto = Number(m.monto || 0).toFixed(2);
+  const concepto = finConceptoLabel(m);
+  const extra = finExtraLabel(m);
+
+  let txt = `${fecha} • ${monto} Lps • ${concepto}`;
+  if (extra) txt += ` • ${extra}`;
+  if (txt.length > 60) txt = `${txt.slice(0, 57)}...`;
+  return txt;
+}
+
+function textoConfirmarEliminacionMovimiento(m = {}) {
+  const tipo = finTipoLabel(m.tipo);
+  const fecha = String(extraerFechaMovimiento(m) || m.fecha || "-");
+  const monto = typeof moneyLps === "function"
+    ? moneyLps(m.monto || 0)
+    : `${Number(m.monto || 0).toFixed(2)} Lps`;
+  const concepto = finConceptoLabel(m);
+  const extra = finExtraLabel(m);
+
+  let txt = `🗑️ *CONFIRMAR ELIMINACIÓN*\n\n`;
+  txt += `*Tipo:* ${escMD(tipo)}\n`;
+  txt += `*Fecha:* ${escMD(fecha)}\n`;
+  txt += `*Monto:* ${escMD(monto)}\n`;
+  txt += `*Concepto:* ${escMD(concepto)}\n`;
+  if (extra) txt += `*Extra:* ${escMD(extra)}\n`;
+  txt += `\n¿Desea eliminar este movimiento?`;
+
+  return txt;
 }
 
 // ===============================
@@ -333,7 +353,6 @@ async function menuInventarioVideo(chatId) {
     { text: "⬅️ Volver Inventario", callback_data: "menu:inventario" },
     { text: "🏠 Inicio", callback_data: "go:inicio" },
   ]);
-
   return upsertPanel(chatId, "🎬 *INVENTARIO VIDEO*\n\nSeleccione plataforma:", kb);
 }
 
@@ -344,7 +363,6 @@ async function menuInventarioMusica(chatId) {
     { text: "⬅️ Volver Inventario", callback_data: "menu:inventario" },
     { text: "🏠 Inicio", callback_data: "go:inicio" },
   ]);
-
   return upsertPanel(chatId, "🎵 *INVENTARIO MÚSICA*\n\nSeleccione plataforma:", kb);
 }
 
@@ -355,7 +373,6 @@ async function menuInventarioIptv(chatId) {
     { text: "⬅️ Volver Inventario", callback_data: "menu:inventario" },
     { text: "🏠 Inicio", callback_data: "go:inicio" },
   ]);
-
   return upsertPanel(chatId, "📡 *INVENTARIO IPTV*\n\nSeleccione plataforma:", kb);
 }
 
@@ -366,7 +383,6 @@ async function menuInventarioDisenoIA(chatId) {
     { text: "⬅️ Volver Inventario", callback_data: "menu:inventario" },
     { text: "🏠 Inicio", callback_data: "go:inicio" },
   ]);
-
   return upsertPanel(chatId, "🎨 *INVENTARIO DISEÑO E IA*\n\nSeleccione plataforma:", kb);
 }
 
@@ -397,9 +413,6 @@ async function menuClientes(chatId) {
   );
 }
 
-// ===============================
-// MENÚS RENOVACIONES
-// ===============================
 async function menuRenovaciones(chatId) {
   return upsertPanel(
     chatId,
@@ -510,35 +523,22 @@ async function menuFinReportes(chatId) {
 // KEYBOARDS FINANZAS
 // ===============================
 function kbBancosFinanzas() {
-  const buttons = (Array.isArray(FIN_BANCOS) ? FIN_BANCOS : []).map((b) => ({
+  const buttons = FIN_BANCOS_LOCAL.map((b) => ({
     text: String(b),
     callback_data: `fin:ing:banco:${encodeURIComponent(String(b))}`,
   }));
-
   const rows = pairButtons(buttons);
   rows.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
-
   return { inline_keyboard: rows };
 }
 
 function kbMotivosFinanzas() {
-  const MOTIVOS_FIJOS = [
-    "Renovaciones",
-    "Cuentas nuevas",
-    "Pago revendedor",
-    "Pago planilla",
-    "Publicidad",
-    "Otros gastos",
-  ];
-
-  const buttons = MOTIVOS_FIJOS.map((m) => ({
+  const buttons = FIN_MOTIVOS_EGRESO_LOCAL.map((m) => ({
     text: String(m),
     callback_data: `fin:egr:motivo:${encodeURIComponent(String(m))}`,
   }));
-
   const rows = pairButtons(buttons);
   rows.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
-
   return { inline_keyboard: rows };
 }
 
@@ -558,9 +558,7 @@ async function registrarIngresoTx({
   if (!fechaOk) throw new Error("Fecha inválida");
 
   const montoOk = Number(monto || 0);
-  if (!Number.isFinite(montoOk) || montoOk <= 0) {
-    throw new Error("Monto inválido");
-  }
+  if (!Number.isFinite(montoOk) || montoOk <= 0) throw new Error("Monto inválido");
 
   const mesKey = monthKeyFromDMYLocal(fechaOk);
   const ref = db.collection(FINANZAS_COLLECTION).doc();
@@ -582,11 +580,7 @@ async function registrarIngresoTx({
   };
 
   await ref.set(payload);
-
-  return {
-    id: ref.id,
-    ...payload,
-  };
+  return { id: ref.id, ...payload };
 }
 
 async function registrarEgresoTx({
@@ -601,9 +595,7 @@ async function registrarEgresoTx({
   if (!fechaOk) throw new Error("Fecha inválida");
 
   const montoOk = Number(monto || 0);
-  if (!Number.isFinite(montoOk) || montoOk <= 0) {
-    throw new Error("Monto inválido");
-  }
+  if (!Number.isFinite(montoOk) || montoOk <= 0) throw new Error("Monto inválido");
 
   const mesKey = monthKeyFromDMYLocal(fechaOk);
   const ref = db.collection(FINANZAS_COLLECTION).doc();
@@ -624,11 +616,7 @@ async function registrarEgresoTx({
   };
 
   await ref.set(payload);
-
-  return {
-    id: ref.id,
-    ...payload,
-  };
+  return { id: ref.id, ...payload };
 }
 
 async function getMovimientoFinanzaById(id) {
@@ -639,66 +627,53 @@ async function getMovimientoFinanzaById(id) {
 }
 
 async function getMovimientosPorFecha(fechaDMY, _userId = null, _isSuper = false) {
-  const fecha = String(fechaDMY || "").trim();
+  const fecha = normalizeDMY(fechaDMY);
   if (!fecha) return [];
 
-  let rows = [];
-
   try {
-    const snap = await db
-      .collection(FINANZAS_COLLECTION)
-      .where("fecha", "==", fecha)
-      .get();
-
-    rows = snap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
+    const snap = await db.collection(FINANZAS_COLLECTION).get();
+    const rows = snap.docs
+      .map((d) => ({ id: d.id, ...(d.data() || {}) }))
+      .filter((r) => extraerFechaMovimiento(r) === fecha)
+      .map((r) => ({ ...r, fecha: extraerFechaMovimiento(r) || r.fecha || "" }))
+      .sort((a, b) => dmyToMillis(b.fecha || "") - dmyToMillis(a.fecha || ""));
+    return rows;
   } catch (e) {
     logErr("getMovimientosPorFecha", e);
+    return [];
   }
-
-  return rows.sort((a, b) => {
-    const ta = dmyToMillis(a.fecha || "");
-    const tb = dmyToMillis(b.fecha || "");
-    return tb - ta;
-  });
 }
 
 async function getMovimientosPorMes(monthKey, _userId = null, _isSuper = false) {
   const key = String(monthKey || "").trim();
   if (!key) return [];
 
-  let rows = [];
-
   try {
-    let snap = await db
-      .collection(FINANZAS_COLLECTION)
-      .where("mesKey", "==", key)
-      .get();
-
-    rows = snap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
-
-    if (!rows.length) {
-      snap = await db
-        .collection(FINANZAS_COLLECTION)
-        .where("monthKey", "==", key)
-        .get();
-
-      rows = snap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
-    }
+    const snap = await db.collection(FINANZAS_COLLECTION).get();
+    const rows = snap.docs
+      .map((d) => ({ id: d.id, ...(d.data() || {}) }))
+      .map((r) => {
+        const fechaReal = extraerFechaMovimiento(r);
+        const mesReal = fechaReal ? monthKeyFromDMYLocal(fechaReal) : String(r.mesKey || r.monthKey || "");
+        return {
+          ...r,
+          fecha: fechaReal || r.fecha || "",
+          mesKey: mesReal || r.mesKey || r.monthKey || "",
+          monthKey: mesReal || r.monthKey || r.mesKey || "",
+        };
+      })
+      .filter((r) => String(r.mesKey || r.monthKey || "").trim() === key)
+      .sort((a, b) => dmyToMillis(b.fecha || "") - dmyToMillis(a.fecha || ""));
+    return rows;
   } catch (e) {
     logErr("getMovimientosPorMes", e);
+    return [];
   }
-
-  return rows.sort((a, b) => {
-    const ta = dmyToMillis(a.fecha || "");
-    const tb = dmyToMillis(b.fecha || "");
-    return tb - ta;
-  });
 }
 
 async function eliminarMovimientoFinanzas(id, _userId = null, _isSuper = false) {
   const mov = await getMovimientoFinanzaById(id);
   if (!mov) throw new Error("Movimiento no encontrado.");
-
   await db.collection(FINANZAS_COLLECTION).doc(String(id)).delete();
   return mov;
 }
@@ -708,7 +683,6 @@ async function eliminarMovimientoFinanzas(id, _userId = null, _isSuper = false) 
 // ===============================
 function resumenFinanzasTextoPorFecha(fecha, list = []) {
   const rows = Array.isArray(list) ? list : [];
-
   let ingresos = 0;
   let egresos = 0;
 
@@ -728,13 +702,10 @@ function resumenFinanzasTextoPorFecha(fecha, list = []) {
 
   if (rows.length) {
     txt += `\n*Detalle:*\n`;
-    txt += rows
-      .slice(0, 20)
-      .map((r, i) => {
-        const tipo = String(r.tipo || "").toLowerCase() === "egreso" ? "➖" : "➕";
-        return `${i + 1}. ${tipo} ${escMD(textoMovimientoParaEliminar(r))}`;
-      })
-      .join("\n");
+    txt += rows.slice(0, 20).map((r, i) => {
+      const tipo = String(r.tipo || "").toLowerCase() === "egreso" ? "➖" : "➕";
+      return `${i + 1}. ${tipo} ${escMD(textoMovimientoParaEliminar(r))}`;
+    }).join("\n");
   }
 
   return txt;
@@ -760,7 +731,6 @@ function resumenBancosMesTexto(monthKey, list = []) {
   }
 
   const items = Object.entries(map).sort((a, b) => b[1].neto - a[1].neto);
-
   let txt = `🏦 *RESUMEN POR BANCO — ${escMD(label)}*\n\n`;
 
   if (!items.length) {
@@ -768,16 +738,14 @@ function resumenBancosMesTexto(monthKey, list = []) {
     return txt;
   }
 
-  txt += items
-    .map(([bank, v], i) => {
-      return (
-        `${i + 1}. *${escMD(bank)}*\n` +
-        `   Ingresos: ${escMD(moneyLps(v.ingresos))}\n` +
-        `   Egresos: ${escMD(moneyLps(v.egresos))}\n` +
-        `   Neto: ${escMD(moneyLps(v.neto))}`
-      );
-    })
-    .join("\n\n");
+  txt += items.map(([bank, v], i) => {
+    return (
+      `${i + 1}. *${escMD(bank)}*\n` +
+      `   Ingresos: ${escMD(moneyLps(v.ingresos))}\n` +
+      `   Egresos: ${escMD(moneyLps(v.egresos))}\n` +
+      `   Neto: ${escMD(moneyLps(v.neto))}`
+    );
+  }).join("\n\n");
 
   return txt;
 }
@@ -793,10 +761,7 @@ function resumenTopPlataformasTexto(monthKey, list = []) {
     map[key] = (map[key] || 0) + Number(r.monto || 0);
   }
 
-  const items = Object.entries(map)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 20);
-
+  const items = Object.entries(map).sort((a, b) => b[1] - a[1]).slice(0, 20);
   let txt = `🏆 *TOP PLATAFORMAS — ${escMD(label)}*\n\n`;
 
   if (!items.length) {
@@ -804,13 +769,7 @@ function resumenTopPlataformasTexto(monthKey, list = []) {
     return txt;
   }
 
-  txt += items
-    .map(
-      ([plat, total], i) =>
-        `${i + 1}. ${escMD(humanPlatSafe(plat))} — ${escMD(moneyLps(total))}`
-    )
-    .join("\n");
-
+  txt += items.map(([plat, total], i) => `${i + 1}. ${escMD(humanPlatSafe(plat))} — ${escMD(moneyLps(total))}`).join("\n");
   return txt;
 }
 
@@ -826,43 +785,31 @@ function cierreCajaTexto(fecha, list = []) {
   }
 
   const saldo = ingresos - egresos;
-
   let txt = `🧾 *CIERRE DE CAJA — ${escMD(fecha)}*\n\n`;
   txt += `*Ingresos:* ${escMD(moneyLps(ingresos))}\n`;
   txt += `*Egresos:* ${escMD(moneyLps(egresos))}\n`;
   txt += `*Saldo:* ${escMD(moneyLps(saldo))}\n`;
   txt += `*Movimientos:* ${escMD(String(rows.length))}\n`;
-
   return txt;
 }
 
 // ===============================
 // EXCEL
 // ===============================
-async function exportarFinanzasRangoExcel(
-  chatId,
-  fechaInicio,
-  fechaFin,
-  _userId = null,
-  _isSuper = false
-) {
+async function exportarFinanzasRangoExcel(chatId, fechaInicio, fechaFin, _userId = null, _isSuper = false) {
   const ini = parseFechaFlexible(fechaInicio);
   const fin = parseFechaFlexible(fechaFin);
 
-  if (!ini || !fin) {
-    throw new Error("Fechas inválidas.");
-  }
+  if (!ini || !fin) throw new Error("Fechas inválidas.");
 
   const tsIni = dmyToMillis(ini);
   const tsFin = dmyToMillis(fin);
-
-  if (tsIni > tsFin) {
-    throw new Error("La fecha inicial no puede ser mayor a la final.");
-  }
+  if (tsIni > tsFin) throw new Error("La fecha inicial no puede ser mayor a la final.");
 
   const snap = await db.collection(FINANZAS_COLLECTION).get();
   const rows = snap.docs
     .map((d) => ({ id: d.id, ...(d.data() || {}) }))
+    .map((r) => ({ ...r, fecha: extraerFechaMovimiento(r) || r.fecha || "" }))
     .filter((r) => {
       const ts = dmyToMillis(r.fecha || "");
       return ts >= tsIni && ts <= tsFin;
@@ -933,7 +880,7 @@ async function exportarFinanzasRangoExcel(
 }
 
 // ===============================
-// HELPERS VIEJOS / COMPATIBILIDAD
+// COMPATIBILIDAD
 // ===============================
 async function listarMovimientosPorFechaYTipo(fechaDMY, tipo) {
   const rows = await getMovimientosPorFecha(fechaDMY);
@@ -956,16 +903,13 @@ async function menuEliminarMovimientoEspecifico(chatId) {
 
 async function pedirFechaEliminarMovimiento(chatId, tipo) {
   const titulo = String(tipo || "").toLowerCase() === "egreso" ? "EGRESO" : "INGRESO";
-
   return upsertPanel(
     chatId,
     `🗑️ *ELIMINAR ${titulo} POR FECHA*\n\nEnvíe la fecha exacta en formato *dd/mm/yyyy*.\n\nEjemplo: *22/03/2026*`,
-    [
-      [
-        { text: "⬅️ Volver eliminar", callback_data: "fin:menu:eliminar" },
-        { text: "🏠 Inicio", callback_data: "go:inicio" },
-      ],
-    ]
+    [[
+      { text: "⬅️ Volver eliminar", callback_data: "fin:menu:eliminar" },
+      { text: "🏠 Inicio", callback_data: "go:inicio" },
+    ]]
   );
 }
 
@@ -977,15 +921,10 @@ async function listarMovimientosParaEliminarPorFecha(chatId, tipo, fechaDMY) {
       chatId,
       `⚠️ No encontré *${tipo === "egreso" ? "egresos" : "ingresos"}* en la fecha *${fechaDMY}*.`,
       [
-        [
-          {
-            text: tipo === "egreso" ? "➖ Buscar otra fecha" : "➕ Buscar otra fecha",
-            callback_data:
-              tipo === "egreso"
-                ? "fin:menu:eliminar:egreso"
-                : "fin:menu:eliminar:ingreso",
-          },
-        ],
+        [{
+          text: tipo === "egreso" ? "➖ Buscar otra fecha" : "➕ Buscar otra fecha",
+          callback_data: tipo === "egreso" ? "fin:menu:eliminar:egreso" : "fin:menu:eliminar:ingreso",
+        }],
         [
           { text: "⬅️ Volver eliminar", callback_data: "fin:menu:eliminar" },
           { text: "🏠 Inicio", callback_data: "go:inicio" },
@@ -994,25 +933,14 @@ async function listarMovimientosParaEliminarPorFecha(chatId, tipo, fechaDMY) {
     );
   }
 
-  const keyboard = [];
-  for (const r of rows) {
-    keyboard.push([
-      {
-        text: textoMovimientoParaEliminar(r),
-        callback_data: `fin:del:pick:${r.id}`,
-      },
-    ]);
-  }
-
-  keyboard.push([
-    {
-      text: tipo === "egreso" ? "➖ Buscar otra fecha" : "➕ Buscar otra fecha",
-      callback_data:
-        tipo === "egreso"
-          ? "fin:menu:eliminar:egreso"
-          : "fin:menu:eliminar:ingreso",
-    },
+  const keyboard = rows.map((r) => [
+    { text: textoMovimientoParaEliminar(r), callback_data: `fin:del:pick:${r.id}` },
   ]);
+
+  keyboard.push([{
+    text: tipo === "egreso" ? "➖ Buscar otra fecha" : "➕ Buscar otra fecha",
+    callback_data: tipo === "egreso" ? "fin:menu:eliminar:egreso" : "fin:menu:eliminar:ingreso",
+  }]);
   keyboard.push([
     { text: "⬅️ Volver eliminar", callback_data: "fin:menu:eliminar" },
     { text: "🏠 Inicio", callback_data: "go:inicio" },
@@ -1032,12 +960,10 @@ async function confirmarEliminarMovimiento(chatId, movId) {
     return upsertPanel(
       chatId,
       "⚠️ Ese movimiento ya no existe o fue eliminado.",
-      [
-        [
-          { text: "⬅️ Volver eliminar", callback_data: "fin:menu:eliminar" },
-          { text: "🏠 Inicio", callback_data: "go:inicio" },
-        ],
-      ]
+      [[
+        { text: "⬅️ Volver eliminar", callback_data: "fin:menu:eliminar" },
+        { text: "🏠 Inicio", callback_data: "go:inicio" },
+      ]]
     );
   }
 
@@ -1049,9 +975,7 @@ async function confirmarEliminarMovimiento(chatId, movId) {
         { text: "✅ Sí, eliminar", callback_data: `fin:del:ok:${mov.id}` },
         { text: "❌ Cancelar", callback_data: "fin:menu:eliminar" },
       ],
-      [
-        { text: "🏠 Inicio", callback_data: "go:inicio" },
-      ],
+      [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
     ]
   );
 }
@@ -1061,13 +985,10 @@ async function eliminarMovimientoDefinitivo(chatId, movId, userId = null) {
 
   let txt = `✅ *MOVIMIENTO ELIMINADO*\n\n`;
   txt += `*Tipo:* ${escMD(finTipoLabel(mov.tipo))}\n`;
-  txt += `*Fecha:* ${escMD(String(mov.fecha || "-"))}\n`;
+  txt += `*Fecha:* ${escMD(String(extraerFechaMovimiento(mov) || mov.fecha || "-"))}\n`;
   txt += `*Monto:* ${escMD(moneyLps(mov.monto || 0))}\n`;
   txt += `*Concepto:* ${escMD(finConceptoLabel(mov))}\n`;
-
-  if (userId) {
-    txt += `*Eliminado por:* \`${String(userId)}\`\n`;
-  }
+  if (userId) txt += `*Eliminado por:* \`${String(userId)}\`\n`;
 
   return upsertPanel(
     chatId,
@@ -1077,9 +998,7 @@ async function eliminarMovimientoDefinitivo(chatId, movId, userId = null) {
         { text: "🗑️ Eliminar otro", callback_data: "fin:menu:eliminar" },
         { text: "📒 Volver Registro", callback_data: "fin:menu:registro" },
       ],
-      [
-        { text: "🏠 Inicio", callback_data: "go:inicio" },
-      ],
+      [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
     ]
   );
 }
@@ -1092,26 +1011,21 @@ async function listarIngresosHoy(chatId) {
     return upsertPanel(
       chatId,
       `📒 *INGRESOS DE HOY (${hoy})*\n\nNo hay ingresos registrados hoy.`,
-      [
-        [
-          { text: "⬅️ Volver Registro", callback_data: "fin:menu:registro" },
-          { text: "🏠 Inicio", callback_data: "go:inicio" },
-        ],
-      ]
+      [[
+        { text: "⬅️ Volver Registro", callback_data: "fin:menu:registro" },
+        { text: "🏠 Inicio", callback_data: "go:inicio" },
+      ]]
     );
   }
 
   const lines = rows.slice(0, 30).map((r, i) => `${i + 1}. ${textoMovimientoParaEliminar(r)}`);
-
   return upsertPanel(
     chatId,
     `📒 *INGRESOS DE HOY (${hoy})*\n\n${escMD(lines.join("\n"))}`,
-    [
-      [
-        { text: "⬅️ Volver Registro", callback_data: "fin:menu:registro" },
-        { text: "🏠 Inicio", callback_data: "go:inicio" },
-      ],
-    ]
+    [[
+      { text: "⬅️ Volver Registro", callback_data: "fin:menu:registro" },
+      { text: "🏠 Inicio", callback_data: "go:inicio" },
+    ]]
   );
 }
 
@@ -1123,26 +1037,21 @@ async function listarEgresosHoy(chatId) {
     return upsertPanel(
       chatId,
       `📒 *EGRESOS DE HOY (${hoy})*\n\nNo hay egresos registrados hoy.`,
-      [
-        [
-          { text: "⬅️ Volver Registro", callback_data: "fin:menu:registro" },
-          { text: "🏠 Inicio", callback_data: "go:inicio" },
-        ],
-      ]
+      [[
+        { text: "⬅️ Volver Registro", callback_data: "fin:menu:registro" },
+        { text: "🏠 Inicio", callback_data: "go:inicio" },
+      ]]
     );
   }
 
   const lines = rows.slice(0, 30).map((r, i) => `${i + 1}. ${textoMovimientoParaEliminar(r)}`);
-
   return upsertPanel(
     chatId,
     `📒 *EGRESOS DE HOY (${hoy})*\n\n${escMD(lines.join("\n"))}`,
-    [
-      [
-        { text: "⬅️ Volver Registro", callback_data: "fin:menu:registro" },
-        { text: "🏠 Inicio", callback_data: "go:inicio" },
-      ],
-    ]
+    [[
+      { text: "⬅️ Volver Registro", callback_data: "fin:menu:registro" },
+      { text: "🏠 Inicio", callback_data: "go:inicio" },
+    ]]
   );
 }
 
@@ -1159,7 +1068,6 @@ async function resumenFinancieroPorMonthKey(monthKey) {
 
   for (const r of rows) {
     const monto = Number(r.monto || 0);
-
     if (String(r.tipo || "").toLowerCase() === "egreso") {
       egresos += monto;
     } else {
@@ -1170,14 +1078,10 @@ async function resumenFinancieroPorMonthKey(monthKey) {
   }
 
   const utilidad = ingresos - egresos;
-
   const topOrdenado = Object.entries(top)
     .sort((a, b) => b[1] - a[1])
     .slice(0, 10)
-    .map(([plat, total]) => ({
-      plataforma: plat,
-      total,
-    }));
+    .map(([plat, total]) => ({ plataforma: plat, total }));
 
   return {
     ingresos,
@@ -1203,12 +1107,7 @@ async function enviarReporteMesActual(chatId) {
   if (res.topOrdenado.length) {
     txt += `\n*Top plataformas vendidas:*\n`;
     txt += res.topOrdenado
-      .map(
-        (x, i) =>
-          `${i + 1}. ${escMD(humanPlatSafe(x.plataforma))} — ${escMD(
-            moneyLps(x.total || 0)
-          )}`
-      )
+      .map((x, i) => `${i + 1}. ${escMD(humanPlatSafe(x.plataforma))} — ${escMD(moneyLps(x.total || 0))}`)
       .join("\n");
   }
 
@@ -1220,9 +1119,7 @@ async function enviarReporteMesActual(chatId) {
         { text: "📤 Exportar Excel por rango", callback_data: "fin:menu:excel_rango" },
         { text: "⬅️ Volver Reportes", callback_data: "fin:menu:reportes" },
       ],
-      [
-        { text: "🏠 Inicio", callback_data: "go:inicio" },
-      ],
+      [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
     ]
   );
 }
@@ -1283,18 +1180,13 @@ async function exportarExcelMesActual(chatId) {
   return upsertPanel(
     chatId,
     `✅ *Excel generado correctamente* para *${escMD(label)}*.`,
-    [
-      [
-        { text: "⬅️ Volver Reportes", callback_data: "fin:menu:reportes" },
-        { text: "🏠 Inicio", callback_data: "go:inicio" },
-      ],
-    ]
+    [[
+      { text: "⬅️ Volver Reportes", callback_data: "fin:menu:reportes" },
+      { text: "🏠 Inicio", callback_data: "go:inicio" },
+    ]]
   );
 }
 
-// ===============================
-// EXPORTS
-// ===============================
 module.exports = {
   menuPrincipal,
   menuVendedor,
