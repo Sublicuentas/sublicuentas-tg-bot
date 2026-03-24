@@ -293,16 +293,28 @@ async function enviarInventarioPlataforma(chatId, plataforma = "", page = 0) {
     const rows = snap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
 
     rows.sort((a, b) => {
-      const da = getDisponibles(a, plat);
-      const dbb = getDisponibles(b, plat);
-      if (dbb !== da) return dbb - da;
+      const aDisp = getDisponibles(a, plat);
+      const bDisp = getDisponibles(b, plat);
+
+      const aConEspacio = aDisp > 0 ? 1 : 0;
+      const bConEspacio = bDisp > 0 ? 1 : 0;
+      if (bConEspacio !== aConEspacio) return bConEspacio - aConEspacio;
+
+      if (bDisp !== aDisp) return bDisp - aDisp;
+
+      const aOcc = getOcupados(a);
+      const bOcc = getOcupados(b);
+      if (aOcc !== bOcc) return aOcc - bOcc;
+
       return String(a.correo || "").localeCompare(String(b.correo || ""), "es", { sensitivity: "base" });
     });
 
     if (!rows.length) {
       return upsertPanel(
         chatId,
-        `📦 *${escMD(humanPlatSafe(plat).toUpperCase())}*\n\n_No hay cuentas en inventario para esta plataforma._`,
+        `📦 *${escMD(humanPlatSafe(plat).toUpperCase())}*
+
+_No hay cuentas en inventario para esta plataforma._`,
         [
           [{ text: "⬅️ Volver Inventario", callback_data: "menu:inventario" }],
           [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
@@ -315,20 +327,46 @@ async function enviarInventarioPlataforma(chatId, plataforma = "", page = 0) {
     const start = safePage * pageSize;
     const slice = rows.slice(start, start + pageSize);
 
-    let txt = `📦 *${escMD(humanPlatSafe(plat).toUpperCase())}*\n`;
-    txt += `Página *${safePage + 1}/${totalPages}*\n\n`;
+    const conEspacioTotal = rows.filter((r) => getDisponibles(r, plat) > 0).length;
+    const llenasTotal = rows.length - conEspacioTotal;
 
+    let txt = `📦 *${escMD(humanPlatSafe(plat).toUpperCase())}*
+`;
+    txt += `Página *${safePage + 1}/${totalPages}*
+`;
+    txt += `🟢 Con espacio: *${conEspacioTotal}*
+`;
+    txt += `🔴 Llenas: *${llenasTotal}*
+
+`;
+
+    let seccionActual = "";
     slice.forEach((r, idx) => {
       const ident = String(r.correo || "");
       const { capacidad, ocupados, disponibles, estado } = formatCuentaResumen(r, plat);
-      txt += `*${start + idx + 1}.* ${getIdentIcon(plat)} ${escMD(ident)}\n`;
-      txt += `   👥 ${ocupados}/${capacidad} • ✅ ${disponibles} • ${estado}\n`;
-      if (r.clave) txt += `   🔑 ${escMD(String(r.clave))}\n`;
+      const nuevaSeccion = disponibles > 0 ? "con_espacio" : "llenas";
+
+      if (nuevaSeccion !== seccionActual) {
+        seccionActual = nuevaSeccion;
+        txt += nuevaSeccion === "con_espacio"
+          ? `🟢 *CUENTAS CON ESPACIO*
+`
+          : `
+🔴 *CUENTAS LLENAS*
+`;
+      }
+
+      txt += `*${start + idx + 1}.* ${getIdentIcon(plat)} ${escMD(ident)}
+`;
+      txt += `   👥 ${ocupados}/${capacidad} • ✅ ${disponibles} • ${estado}
+`;
+      if (r.clave) txt += `   🔑 ${escMD(String(r.clave))}
+`;
     });
 
     const kb = slice.map((r) => [
       {
-        text: `${getIdentIcon(plat)} ${String(r.correo || "")} • ${getDisponibles(r, plat)}/${getCapacidadCorreo(r, plat)}`,
+        text: `${getDisponibles(r, plat) > 0 ? "🟢" : "🔴"} ${String(r.correo || "")} • ${getDisponibles(r, plat)}/${getCapacidadCorreo(r, plat)}`,
         callback_data: `inv:open:${plat}:${encodeURIComponent(String(r.correo || ""))}`,
       },
     ]);
