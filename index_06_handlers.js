@@ -262,6 +262,120 @@ function resetChatState(chatId) {
   } catch (_) {}
 }
 
+function normalizeLooseText(txt = "") {
+  return String(txt || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+async function buscarClientesFallbackLocal(query = "") {
+  const qRaw = String(query || "").trim();
+  const qNorm = normalizeLooseText(qRaw);
+  const qDigits = onlyDigits(qRaw);
+  if (!qNorm && !qDigits) return [];
+
+  try {
+    const snap = await db.collection("clientes").get();
+    const out = [];
+
+    snap.forEach((doc) => {
+      const data = doc.data() || {};
+      const nombre = String(data.nombrePerfil || "");
+      const nombreNorm = String(data.nombre_norm || normalizeLooseText(nombre));
+      const telefono = String(data.telefono || "");
+      const telefonoNorm = String(data.telefono_norm || onlyDigits(telefono));
+      const vendedor = String(data.vendedor || "");
+      const vendedorNorm = String(data.vendedor_norm || normalizeLooseText(vendedor));
+      const servicios = Array.isArray(data.servicios) ? data.servicios : [];
+      const correos = servicios.map((s) => String(s?.correo || "")).join(" ").toLowerCase();
+
+      let ok = false;
+      if (qDigits && qDigits.length >= 4 && telefonoNorm.includes(qDigits)) ok = true;
+      if (!ok && qNorm && nombreNorm.includes(qNorm)) ok = true;
+      if (!ok && qNorm && vendedorNorm.includes(qNorm)) ok = true;
+      if (!ok && qNorm && normalizeLooseText(correos).includes(qNorm)) ok = true;
+
+      if (ok) out.push({ id: doc.id, ...data });
+    });
+
+    return out;
+  } catch (e) {
+    logErr("buscarClientesFallbackLocal", e);
+    return [];
+  }
+}
+
+async function resolverBusquedaAdmin(chatId, query = "") {
+  const q = String(query || "").trim().replace(/^\/+/, "").trim();
+  if (!q) return bot.sendMessage(chatId, "⚠️ Escriba algo para buscar.");
+
+  let hits = [];
+  try {
+    hits = await buscarInventarioPorCorreo(q);
+  } catch (_) {}
+
+  if (hits.length === 1) {
+    pending.set(String(chatId), {
+      mode: "invSubmenuCtx",
+      plat: normalizarPlataforma(hits[0].plataforma),
+      correo: q,
+    });
+    return enviarSubmenuInventario(chatId, hits[0].plataforma, q);
+  }
+
+  if (hits.length > 1) {
+    const kb = hits.map((x) => [
+      {
+        text: `📌 ${String(x.plataforma).toUpperCase()}`,
+        callback_data: `inv:open:${normalizarPlataforma(x.plataforma)}:${encodeURIComponent(q)}`,
+      },
+    ]);
+    kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
+
+    return bot.sendMessage(
+      chatId,
+      `🔎 *Coincidencias de inventario*
+
+Acceso: ${escMD(q)}
+Seleccione plataforma:`,
+      {
+        parse_mode: "Markdown",
+        reply_markup: { inline_keyboard: kb },
+      }
+    );
+  }
+
+  if (onlyDigits(q).length >= 7) {
+    const resultados = await buscarPorTelefonoTodos(q);
+    const dedup = dedupeClientes(resultados);
+    if (!dedup.length) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
+    if (dedup.length === 1) return enviarFichaCliente(chatId, dedup[0].id);
+    return enviarListaResultadosClientes(chatId, dedup);
+  }
+
+  let resultados = [];
+  try {
+    resultados = await buscarClienteRobusto(q);
+  } catch (_) {}
+
+  if (!Array.isArray(resultados) || !resultados.length) {
+    resultados = await buscarClientesFallbackLocal(q);
+  } else {
+    const extra = await buscarClientesFallbackLocal(q);
+    resultados = [...resultados, ...extra];
+  }
+
+  const dedup = dedupeClientes(resultados);
+
+  if (!dedup.length) return bot.sendMessage(chatId, "⚠️ Sin resultados.");
+  if (dedup.length === 1) return enviarFichaCliente(chatId, dedup[0].id);
+
+  return enviarListaResultadosClientes(chatId, dedup);
+}
+
 async function upsertPanel(chatId, text, keyboardArg = [], parseMode = "Markdown") {
   try {
     let keyboard = [];
@@ -397,21 +511,7 @@ bot.onText(/\/buscar\s+(.+)/i, async (msg, match) => {
   const q = String(match[1] || "").trim();
   if (!q) return bot.sendMessage(chatId, "⚠️ Uso: /buscar texto");
 
-  if (onlyDigits(q).length >= 7) {
-    const resultados = await buscarPorTelefonoTodos(q);
-    const dedup = dedupeClientes(resultados);
-    if (!dedup.length) return bot.sendMessage(chatId, "⚠️ Sin resultados.");
-    if (dedup.length === 1) return enviarFichaCliente(chatId, dedup[0].id);
-    return enviarListaResultadosClientes(chatId, dedup);
-  }
-
-  const resultados = await buscarClienteRobusto(q);
-  const dedup = dedupeClientes(resultados);
-
-  if (!dedup.length) return bot.sendMessage(chatId, "⚠️ Sin resultados.");
-  if (dedup.length === 1) return enviarFichaCliente(chatId, dedup[0].id);
-
-  return enviarListaResultadosClientes(chatId, dedup);
+  return resolverBusquedaAdmin(chatId, q);
 });
 
 bot.onText(/\/cliente\s+(\S+)/i, async (msg, match) => {
@@ -2453,8 +2553,10 @@ bot.on("message", async (msg) => {
     if (text.startsWith("/")) {
       if (!adminOk && !vendOk) return bot.sendMessage(chatId, "⛔ Acceso denegado");
 
-      const cmd = limpiarComandoTexto(text);
-      const first = String(cmd || "").split(" ")[0];
+      const rawCmd = String(text || "").trim().replace(/^\/+/, "");
+      const partsCmd = rawCmd.split(/\s+/).filter(Boolean);
+      const first = String(partsCmd[0] || "").toLowerCase();
+      const rest = String(rawCmd.slice((partsCmd[0] || "").length) || "").trim();
 
       const vendedorCmd = new Set([
         "menu",
@@ -2467,6 +2569,14 @@ bot.on("message", async (msg) => {
       ]);
 
       if (!adminOk && vendOk && !vendedorCmd.has(first)) return;
+
+      if (adminOk && PLATFORM_KEYS.includes(first)) {
+        return enviarInventarioPlataforma(chatId, first, 0);
+      }
+
+      if (adminOk && first === "buscar" && rest) {
+        return resolverBusquedaAdmin(chatId, rest);
+      }
 
       const comandosReservados = new Set([
         "start",
@@ -2504,52 +2614,7 @@ bot.on("message", async (msg) => {
       ]);
 
       if (adminOk && !comandosReservados.has(first)) {
-        const query = String(text || "").trim().replace(/^\/+/, "");
-        const hits = await buscarInventarioPorCorreo(query);
-
-        if (hits.length === 1) {
-          pending.set(String(chatId), {
-            mode: "invSubmenuCtx",
-            plat: normalizarPlataforma(hits[0].plataforma),
-            correo: query,
-          });
-          return enviarSubmenuInventario(chatId, hits[0].plataforma, query);
-        }
-
-        if (hits.length > 1) {
-          const kb = hits.map((x) => [
-            {
-              text: `📌 ${String(x.plataforma).toUpperCase()}`,
-              callback_data: `inv:open:${normalizarPlataforma(x.plataforma)}:${encodeURIComponent(query)}`,
-            },
-          ]);
-          kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
-
-          return bot.sendMessage(
-            chatId,
-            `🔎 *Coincidencias de inventario*\n\nAcceso: ${escMD(query)}\nSeleccione plataforma:`,
-            {
-              parse_mode: "Markdown",
-              reply_markup: { inline_keyboard: kb },
-            }
-          );
-        }
-
-        if (onlyDigits(query).length >= 7) {
-          const resultados = await buscarPorTelefonoTodos(query);
-          const dedup = dedupeClientes(resultados);
-          if (!dedup.length) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
-          if (dedup.length === 1) return enviarFichaCliente(chatId, dedup[0].id);
-          return enviarListaResultadosClientes(chatId, dedup);
-        }
-
-        const resultados = await buscarClienteRobusto(query);
-        const dedup = dedupeClientes(resultados);
-
-        if (!dedup.length) return bot.sendMessage(chatId, "⚠️ Sin resultados.");
-        if (dedup.length === 1) return enviarFichaCliente(chatId, dedup[0].id);
-
-        return enviarListaResultadosClientes(chatId, dedup);
+        return resolverBusquedaAdmin(chatId, rawCmd);
       }
 
       return;
@@ -3460,6 +3525,8 @@ process.on("SIGTERM", async () => {
   process.exit(0);
 });
 
+console.log("✅ index_06_handlers actualizado");
+
 // ===============================
 // HTTP KEEPALIVE FINAL
 // ===============================
@@ -3479,4 +3546,4 @@ if (!global.__SUBLICUENTAS_HTTP_SERVER__) {
     .listen(PORT, () => {
       console.log("🌐 HTTP KEEPALIVE activo en puerto", PORT);
     });
-}
+      }
