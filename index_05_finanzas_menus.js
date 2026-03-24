@@ -793,6 +793,186 @@ function cierreCajaTexto(fecha, list = []) {
   return txt;
 }
 
+
+function applyHeaderStyle(row) {
+  row.font = { bold: true, color: { argb: "FFFFFFFF" } };
+  row.alignment = { vertical: "middle", horizontal: "center" };
+  row.fill = {
+    type: "pattern",
+    pattern: "solid",
+    fgColor: { argb: "1F4E78" },
+  };
+}
+
+function applyMoneyFormat(cell) {
+  cell.numFmt = '#,##0.00';
+}
+
+function applyIngresoRowStyle(row) {
+  row.eachCell((cell) => {
+    cell.fill = {
+      type: "pattern",
+      pattern: "solid",
+      fgColor: { argb: "E2F0D9" },
+    };
+  });
+  row.getCell("B").font = { bold: true, color: { argb: "008000" } };
+}
+
+function applyEgresoRowStyle(row) {
+  row.eachCell((cell) => {
+    cell.fill = {
+      type: "pattern",
+      pattern: "solid",
+      fgColor: { argb: "FCE4D6" },
+    };
+  });
+  row.getCell("B").font = { bold: true, color: { argb: "C00000" } };
+}
+
+function autoBorderSheet(ws) {
+  ws.eachRow((row) => {
+    row.eachCell((cell) => {
+      cell.border = {
+        top: { style: "thin", color: { argb: "D9D9D9" } },
+        left: { style: "thin", color: { argb: "D9D9D9" } },
+        bottom: { style: "thin", color: { argb: "D9D9D9" } },
+        right: { style: "thin", color: { argb: "D9D9D9" } },
+      };
+      if (!cell.alignment) {
+        cell.alignment = { vertical: "middle" };
+      }
+    });
+  });
+}
+
+function visualBar(value, maxValue) {
+  const v = Math.max(0, Number(value || 0));
+  const max = Math.max(1, Number(maxValue || 1));
+  const blocks = Math.max(1, Math.round((v / max) * 12));
+  return "█".repeat(blocks);
+}
+
+function decorateFinanzasSheet(ws, rows = []) {
+  applyHeaderStyle(ws.getRow(1));
+
+  for (let i = 0; i < rows.length; i++) {
+    const excelRow = ws.getRow(i + 2);
+    const tipo = String(rows[i]?.tipo || "").toLowerCase();
+
+    applyMoneyFormat(excelRow.getCell("C"));
+
+    if (tipo === "ingreso") applyIngresoRowStyle(excelRow);
+    else if (tipo === "egreso") applyEgresoRowStyle(excelRow);
+  }
+
+  ws.views = [{ state: "frozen", ySplit: 1 }];
+  ws.autoFilter = {
+    from: "A1",
+    to: `G${Math.max(1, ws.rowCount)}`,
+  };
+
+  autoBorderSheet(ws);
+}
+
+function decorateResumenSheet(resumen, meta = {}) {
+  const {
+    fechaInicio = "",
+    fechaFin = "",
+    label = "",
+    ingresos = 0,
+    egresos = 0,
+    utilidad = 0,
+    movimientos = 0,
+  } = meta;
+
+  resumen.columns = [
+    { header: "Concepto", key: "concepto", width: 24 },
+    { header: "Valor", key: "valor", width: 18 },
+    { header: "Visual", key: "visual", width: 18 },
+  ];
+
+  applyHeaderStyle(resumen.getRow(1));
+
+  if (label) resumen.addRow({ concepto: "Periodo", valor: label, visual: "" });
+  if (fechaInicio) resumen.addRow({ concepto: "Fecha inicio", valor: fechaInicio, visual: "" });
+  if (fechaFin) resumen.addRow({ concepto: "Fecha fin", valor: fechaFin, visual: "" });
+
+  const maxBase = Math.max(Number(ingresos || 0), Number(egresos || 0), Math.abs(Number(utilidad || 0)), 1);
+
+  resumen.addRow({
+    concepto: "Ingresos",
+    valor: Number(ingresos || 0),
+    visual: visualBar(ingresos, maxBase),
+  });
+  resumen.addRow({
+    concepto: "Egresos",
+    valor: Number(egresos || 0),
+    visual: visualBar(egresos, maxBase),
+  });
+  resumen.addRow({
+    concepto: "Utilidad",
+    valor: Number(utilidad || 0),
+    visual: visualBar(Math.abs(utilidad || 0), maxBase),
+  });
+  resumen.addRow({
+    concepto: "Movimientos",
+    valor: Number(movimientos || 0),
+    visual: "",
+  });
+
+  for (let i = 2; i <= resumen.rowCount; i++) {
+    const row = resumen.getRow(i);
+    const concepto = String(row.getCell("A").value || "");
+
+    if (["Ingresos", "Egresos", "Utilidad", "Movimientos"].includes(concepto)) {
+      row.font = { bold: true };
+    }
+
+    if (concepto === "Ingresos") {
+      row.getCell("A").font = { bold: true, color: { argb: "008000" } };
+      row.getCell("B").fill = {
+        type: "pattern",
+        pattern: "solid",
+        fgColor: { argb: "E2F0D9" },
+      };
+      applyMoneyFormat(row.getCell("B"));
+      row.getCell("C").font = { color: { argb: "008000" } };
+    }
+
+    if (concepto === "Egresos") {
+      row.getCell("A").font = { bold: true, color: { argb: "C00000" } };
+      row.getCell("B").fill = {
+        type: "pattern",
+        pattern: "solid",
+        fgColor: { argb: "FCE4D6" },
+      };
+      applyMoneyFormat(row.getCell("B"));
+      row.getCell("C").font = { color: { argb: "C00000" } };
+    }
+
+    if (concepto === "Utilidad") {
+      const positive = Number(utilidad || 0) >= 0;
+      row.getCell("A").font = {
+        bold: true,
+        color: { argb: positive ? "008000" : "C00000" },
+      };
+      row.getCell("B").fill = {
+        type: "pattern",
+        pattern: "solid",
+        fgColor: { argb: positive ? "E2F0D9" : "FCE4D6" },
+      };
+      applyMoneyFormat(row.getCell("B"));
+      row.getCell("C").font = {
+        color: { argb: positive ? "008000" : "C00000" },
+      };
+    }
+  }
+
+  resumen.views = [{ state: "frozen", ySplit: 1 }];
+  autoBorderSheet(resumen);
+}
+
 // ===============================
 // EXCEL
 // ===============================
@@ -817,6 +997,9 @@ async function exportarFinanzasRangoExcel(chatId, fechaInicio, fechaFin, _userId
     .sort((a, b) => dmyToMillis(a.fecha || "") - dmyToMillis(b.fecha || ""));
 
   const wb = new ExcelJS.Workbook();
+  wb.creator = "Sublicuentas Bot";
+  wb.created = new Date();
+
   const ws = wb.addWorksheet("Finanzas");
 
   ws.columns = [
@@ -841,13 +1024,7 @@ async function exportarFinanzasRangoExcel(chatId, fechaInicio, fechaFin, _userId
     });
   }
 
-  ws.getRow(1).font = { bold: true };
-
-  const resumen = wb.addWorksheet("Resumen");
-  resumen.columns = [
-    { header: "Concepto", key: "concepto", width: 25 },
-    { header: "Valor", key: "valor", width: 25 },
-  ];
+  decorateFinanzasSheet(ws, rows);
 
   let ingresos = 0;
   let egresos = 0;
@@ -857,13 +1034,15 @@ async function exportarFinanzasRangoExcel(chatId, fechaInicio, fechaFin, _userId
     else ingresos += monto;
   }
 
-  resumen.addRow({ concepto: "Fecha inicio", valor: ini });
-  resumen.addRow({ concepto: "Fecha fin", valor: fin });
-  resumen.addRow({ concepto: "Ingresos", valor: Number(ingresos || 0) });
-  resumen.addRow({ concepto: "Egresos", valor: Number(egresos || 0) });
-  resumen.addRow({ concepto: "Utilidad", valor: Number(ingresos - egresos) });
-  resumen.addRow({ concepto: "Movimientos", valor: Number(rows.length || 0) });
-  resumen.getRow(1).font = { bold: true };
+  const resumen = wb.addWorksheet("Resumen");
+  decorateResumenSheet(resumen, {
+    fechaInicio: ini,
+    fechaFin: fin,
+    ingresos,
+    egresos,
+    utilidad: ingresos - egresos,
+    movimientos: rows.length,
+  });
 
   const tempPath = `/tmp/finanzas_${Date.now()}.xlsx`;
   await wb.xlsx.writeFile(tempPath);
@@ -1130,6 +1309,9 @@ async function exportarExcelMesActual(chatId) {
   const res = await resumenFinancieroPorMonthKey(monthKey);
 
   const wb = new ExcelJS.Workbook();
+  wb.creator = "Sublicuentas Bot";
+  wb.created = new Date();
+
   const ws = wb.addWorksheet("Finanzas");
 
   ws.columns = [
@@ -1152,19 +1334,16 @@ async function exportarExcelMesActual(chatId) {
     });
   }
 
-  ws.getRow(1).font = { bold: true };
+  decorateFinanzasSheet(ws, res.rows);
 
   const resumen = wb.addWorksheet("Resumen");
-  resumen.columns = [
-    { header: "Concepto", key: "concepto", width: 25 },
-    { header: "Valor", key: "valor", width: 25 },
-  ];
-
-  resumen.addRow({ concepto: "Mes", valor: label });
-  resumen.addRow({ concepto: "Ingresos", valor: Number(res.ingresos || 0) });
-  resumen.addRow({ concepto: "Egresos", valor: Number(res.egresos || 0) });
-  resumen.addRow({ concepto: "Utilidad", valor: Number(res.utilidad || 0) });
-  resumen.addRow({ concepto: "Movimientos", valor: Number(res.totalMovimientos || 0) });
+  decorateResumenSheet(resumen, {
+    label,
+    ingresos: res.ingresos || 0,
+    egresos: res.egresos || 0,
+    utilidad: res.utilidad || 0,
+    movimientos: res.totalMovimientos || 0,
+  });
 
   const tempPath = `/tmp/finanzas_${monthKey.replace(/[^\w]/g, "_")}.xlsx`;
   await wb.xlsx.writeFile(tempPath);
@@ -1179,7 +1358,7 @@ async function exportarExcelMesActual(chatId) {
 
   return upsertPanel(
     chatId,
-    `✅ *Excel generado correctamente* para *${escMD(label)}*.`,
+    `✅ *Excel generado correctamente* para *${escMD(label)}*.\n\n🟢 Ingresos en verde\n🔴 Egresos en rojo`,
     [[
       { text: "⬅️ Volver Reportes", callback_data: "fin:menu:reportes" },
       { text: "🏠 Inicio", callback_data: "go:inicio" },
