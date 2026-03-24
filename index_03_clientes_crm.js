@@ -297,43 +297,77 @@ async function enviarHistorialClienteTXT(chatId, clientId) {
 async function enviarFichaCliente(chatId, clientId) {
   const c = await getCliente(clientId);
   if (!c) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
+
   const servicios = serviciosOrdenados(Array.isArray(c.servicios) ? c.servicios : []);
   const estadoGeneral = getEstadoGeneralCliente(c);
   const totalMensual = getTotalMensualCliente(c);
   const proxFecha = getProximaRenovacionCliente(c);
 
-  let txt = "👤 *CRM CLIENTE*\n\n";
-  txt += `🧑 *Nombre:* ${escMD(c.nombrePerfil || "-")}\n`;
-  txt += `📱 *Teléfono:* ${escMD(c.telefono || "-")}\n`;
-  txt += `🧾 *Vendedor:* ${escMD(c.vendedor || "-")}\n`;
-  txt += `📊 *Estado general:* ${escMD(estadoGeneral)}\n`;
-  txt += `💰 *Total mensual:* ${totalMensual} Lps\n`;
-  txt += `📅 *Próxima renovación:* ${escMD(proxFecha)}\n`;
-  txt += `🧩 *Servicios activos:* ${servicios.length}\n\n*SERVICIOS*\n`;
+  let txt = "👤 *CRM CLIENTE*
+
+";
+  txt += `🧑 *${escMD(c.nombrePerfil || "-")}*
+`;
+  txt += `📱 ${escMD(c.telefono || "-")}
+`;
+  txt += `🧾 ${escMD(c.vendedor || "-")}
+
+`;
+
+  txt += `📊 *Estado:* ${escMD(estadoGeneral)}
+`;
+  txt += `💰 *Mensual:* ${Number(totalMensual || 0)} Lps
+`;
+  txt += `📅 *Próxima:* ${escMD(proxFecha)}
+`;
+  txt += `🧩 *Servicios:* ${servicios.length}
+
+`;
+
+  txt += "*SERVICIOS*
+";
 
   if (!servicios.length) {
-    txt += "— Sin servicios —\n";
+    txt += "
+— Sin servicios —
+";
   } else {
     servicios.forEach((s, i) => {
-      txt += `\n*${i + 1})* ${escMD(labelPlataforma(s.plataforma || "-"))}\n`;
-      txt += `🔐 ${escMD(s.correo || "-")}\n`;
-      txt += `🔑 ${escMD(s.pin || "-")}\n`;
-      txt += `💵 ${Number(s.precio || 0)} Lps\n`;
-      txt += `📆 ${escMD(s.fechaRenovacion || "-")} — ${escMD(estadoServicioLabel(s.fechaRenovacion))}\n`;
+      txt += `
+*${i + 1})* ${escMD(labelPlataforma(s.plataforma || "-"))}
+`;
+      txt += `🔐 ${escMD(s.correo || "-")}
+`;
+      txt += `🔑 PIN: ${escMD(s.pin || "-")}
+`;
+      txt += `📅 ${escMD(s.fechaRenovacion || "-")} • 💰 ${Number(s.precio || 0)} Lps • ${escMD(estadoServicioLabel(s.fechaRenovacion))}
+`;
     });
   }
 
   const kb = [];
-  kb.push([{ text: "✏️ Editar cliente", callback_data: `cli:edit:menu:${clientId}` }]);
+
+  kb.push([
+    { text: "✏️ Editar cliente", callback_data: `cli:edit:menu:${clientId}` },
+    { text: "🧩 Editar servicios", callback_data: `cli:serv:list:${clientId}` },
+  ]);
+
   if (servicios.length > 0) {
-    kb.push([{ text: "🧩 Editar servicios", callback_data: `cli:serv:list:${clientId}` }]);
-    kb.push([{ text: "🔄 Renovar servicio", callback_data: `cli:ren:list:${clientId}` }]);
-    kb.push([{ text: "⏫ Renovar TODOS +30 días", callback_data: `cli:ren:all:ask:${clientId}` }]);
+    kb.push([
+      { text: "🔄 Renovar servicio", callback_data: `cli:ren:list:${clientId}` },
+      { text: "⏫ Renovar TODOS", callback_data: `cli:ren:all:ask:${clientId}` },
+    ]);
   }
-  kb.push([{ text: "➕ Agregar servicio", callback_data: `cli:serv:add:${clientId}` }]);
-  kb.push([{ text: "📄 TXT de este cliente", callback_data: `cli:txt:one:${clientId}` }]);
-  kb.push([{ text: "📜 Historial TXT", callback_data: `cli:txt:hist:${clientId}` }]);
-  kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
+
+  kb.push([
+    { text: "➕ Agregar servicio", callback_data: `cli:serv:add:${clientId}` },
+    { text: "📜 Historial TXT", callback_data: `cli:txt:hist:${clientId}` },
+  ]);
+
+  kb.push([
+    { text: "📄 TXT cliente", callback_data: `cli:txt:one:${clientId}` },
+    { text: "🏠 Inicio", callback_data: "go:inicio" },
+  ]);
 
   return upsertPanel(chatId, txt, { inline_keyboard: kb }, "Markdown");
 }
