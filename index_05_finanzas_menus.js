@@ -522,7 +522,16 @@ function kbBancosFinanzas() {
 }
 
 function kbMotivosFinanzas() {
-  const buttons = (Array.isArray(FIN_MOTIVOS_EGRESO) ? FIN_MOTIVOS_EGRESO : []).map((m) => ({
+  const MOTIVOS_FIJOS = [
+    "Renovaciones",
+    "Cuentas nuevas",
+    "Pago revendedor",
+    "Pago planilla",
+    "Publicidad",
+    "Otros gastos",
+  ];
+
+  const buttons = MOTIVOS_FIJOS.map((m) => ({
     text: String(m),
     callback_data: `fin:egr:motivo:${encodeURIComponent(String(m))}`,
   }));
