@@ -313,7 +313,6 @@ async function enviarFichaCliente(chatId, clientId) {
   txt += `🧾 ${escMD(c.vendedor || "-")}
 
 `;
-
   txt += `📊 *Estado:* ${escMD(estadoGeneral)}
 `;
   txt += `💰 *Mensual:* ${Number(totalMensual || 0)} Lps
@@ -323,9 +322,8 @@ async function enviarFichaCliente(chatId, clientId) {
   txt += `🧩 *Servicios:* ${servicios.length}
 
 `;
-
-  txt += "*SERVICIOS*
-";
+  txt += `*SERVICIOS*
+`;
 
   if (!servicios.length) {
     txt += "
