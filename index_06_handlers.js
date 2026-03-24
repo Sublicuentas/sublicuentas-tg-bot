@@ -87,7 +87,6 @@ const {
 const {
   buscarInventarioPorCorreo,
   enviarInventarioPlataforma,
-  enviarInventarioPlataformaEstado,
   mostrarStockGeneral,
   enviarSubmenuInventario,
   buscarCorreoInventarioPorPlatCorreo,
@@ -120,10 +119,12 @@ const {
   registrarEgresoTx,
   getMovimientosPorFecha,
   getMovimientosPorMes,
+  getMovimientosPorRango,
   resumenFinanzasTextoPorFecha,
   resumenBancosMesTexto,
   resumenTopPlataformasTexto,
   cierreCajaTexto,
+  cierreCajaTextoRango,
   textoConfirmarEliminacionMovimiento,
   exportarFinanzasRangoExcel,
   eliminarMovimientoFinanzas,
@@ -508,18 +509,22 @@ function textoBtnEliminarMovimiento(m = {}) {
 
   const concepto =
     tipo === "egreso"
-      ? String(m.motivo || m.detalle || m.descripcion || "Egreso")
-      : String(m.plataforma || m.detalle || m.descripcion || "Ingreso");
+      ? String(m.motivo || m.descripcion || "Egreso").trim()
+      : String(m.plataforma || m.descripcion || "Ingreso").trim();
 
-  const extra =
-    tipo === "egreso"
-      ? String(m.detalle || "")
-      : String(m.banco || "");
+  const banco = String(m.banco || "").trim();
+  const detalle = String(m.detalle || "").trim();
 
-  let txt = `${fecha} • ${monto} • ${concepto}`;
-  if (extra) txt += ` • ${extra}`;
+  const partes = [`${fecha}`, `${monto}`, concepto];
 
-  return safeBtnLabelLocal(txt, 60);
+  if (tipo === "ingreso") {
+    if (detalle) partes.push(detalle);
+    if (banco) partes.push(banco);
+  } else {
+    if (detalle) partes.push(detalle);
+  }
+
+  return safeBtnLabelLocal(partes.join(" • "), 60);
 }
 
 async function listarRevendedores(chatId) {
@@ -858,6 +863,32 @@ bot.onText(/\/cierre_caja\s+(.+)/i, async (msg, match) => {
     parse_mode: "Markdown",
   });
 });
+
+bot.onText(
+  /\/cierre_caja_rango\s+(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})/i,
+  async (msg, match) => {
+    if (!hasRuntimeLock()) return;
+
+    const chatId = msg.chat.id;
+    const userId = msg.from.id;
+    if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+
+    const fechaInicio = String(match[1] || "").trim();
+    const fechaFin = String(match[2] || "").trim();
+
+    const list = await getMovimientosPorRango(
+      fechaInicio,
+      fechaFin,
+      userId,
+      await isSuperAdmin(userId)
+    );
+
+    return bot.sendMessage(chatId, cierreCajaTextoRango(fechaInicio, fechaFin, list), {
+      parse_mode: "Markdown",
+    });
+  }
+);
+
 
 bot.onText(
   /\/excel_finanzas\s+(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})/i,
@@ -1400,6 +1431,18 @@ bot.on("callback_query", async (q) => {
         );
       }
 
+      if (data === "fin:menu:cierre:rango") {
+        pending.set(String(chatId), { mode: "finCierreCajaRangoInicio" });
+        return upsertPanel(
+          chatId,
+          "🧾 *CIERRE DE CAJA POR RANGO*\n\nEscriba la *fecha inicial* en formato *dd/mm/yyyy*.",
+          [
+            [{ text: "⬅️ Volver Reportes", callback_data: "fin:menu:reportes" }],
+            [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
+          ]
+        );
+      }
+
       if (data === "fin:menu:excel_rango") {
         pending.set(String(chatId), { mode: "finExcelRangoInicio" });
         return upsertPanel(
@@ -1591,18 +1634,13 @@ bot.on("callback_query", async (q) => {
 
       if (data === "inv:general") return mostrarStockGeneral(chatId);
 
-      if (data.startsWith("invf:")) {
-        const [, plat, filtro, pageStr] = data.split(":");
-        return enviarInventarioPlataformaEstado(chatId, plat, filtro, Number(pageStr || 0));
-      }
-
       if (
         data.startsWith("inv:") &&
         !data.startsWith("inv:open:") &&
         !data.startsWith("inv:menu:")
       ) {
-        const [, plat] = data.split(":");
-        return enviarInventarioPlataforma(chatId, plat, 0);
+        const [, plat, pageStr] = data.split(":");
+        return enviarInventarioPlataforma(chatId, plat, Number(pageStr || 0));
       }
 
       if (data.startsWith("inv:open:")) {
@@ -2643,6 +2681,7 @@ bot.on("message", async (msg) => {
         "bancos_mes",
         "top_plataformas_mes",
         "cierre_caja",
+        "cierre_caja_rango",
         "excel_finanzas",
         "editar_movimiento",
         ...PLATFORM_KEYS,
@@ -2882,6 +2921,39 @@ bot.on("message", async (msg) => {
         pending.delete(String(chatId));
         const list = await getMovimientosPorFecha(fecha, userId, await isSuperAdmin(userId));
         return bot.sendMessage(chatId, cierreCajaTexto(fecha, list), {
+          parse_mode: "Markdown",
+        });
+      }
+
+      if (p.mode === "finCierreCajaRangoInicio") {
+        const fecha = parseFechaFlexible(t);
+        if (!fecha) return bot.sendMessage(chatId, "⚠️ Fecha inválida. Use dd/mm/yyyy");
+
+        pending.set(String(chatId), {
+          mode: "finCierreCajaRangoFin",
+          fechaInicio: fecha,
+        });
+
+        return bot.sendMessage(
+          chatId,
+          "📅 Escriba la *fecha final* en formato dd/mm/yyyy:",
+          { parse_mode: "Markdown" }
+        );
+      }
+
+      if (p.mode === "finCierreCajaRangoFin") {
+        const fechaFin = parseFechaFlexible(t);
+        if (!fechaFin) return bot.sendMessage(chatId, "⚠️ Fecha inválida. Use dd/mm/yyyy");
+
+        pending.delete(String(chatId));
+        const list = await getMovimientosPorRango(
+          p.fechaInicio,
+          fechaFin,
+          userId,
+          await isSuperAdmin(userId)
+        );
+
+        return bot.sendMessage(chatId, cierreCajaTextoRango(p.fechaInicio, fechaFin, list), {
           parse_mode: "Markdown",
         });
       }
@@ -3581,4 +3653,4 @@ if (!global.__SUBLICUENTAS_HTTP_SERVER__) {
     .listen(PORT, () => {
       console.log("🌐 HTTP KEEPALIVE activo en puerto", PORT);
     });
-}
+           }
