@@ -87,6 +87,7 @@ const {
 const {
   buscarInventarioPorCorreo,
   enviarInventarioPlataforma,
+  enviarInventarioPlataformaEstado,
   mostrarStockGeneral,
   enviarSubmenuInventario,
   buscarCorreoInventarioPorPlatCorreo,
@@ -1633,6 +1634,11 @@ bot.on("callback_query", async (q) => {
       }
 
       if (data === "inv:general") return mostrarStockGeneral(chatId);
+
+      if (data.startsWith("invf:")) {
+        const [, plat, filtro, pageStr] = data.split(":");
+        return enviarInventarioPlataformaEstado(chatId, plat, filtro, Number(pageStr || 0));
+      }
 
       if (
         data.startsWith("inv:") &&
@@ -3653,4 +3659,4 @@ if (!global.__SUBLICUENTAS_HTTP_SERVER__) {
     .listen(PORT, () => {
       console.log("🌐 HTTP KEEPALIVE activo en puerto", PORT);
     });
-           }
+                   }
