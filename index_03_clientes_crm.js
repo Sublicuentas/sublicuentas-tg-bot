@@ -404,41 +404,87 @@ async function menuServicio(chatId, clientId, idx) {
 
 async function addServicioTx(clientId, servicio) {
   const refCliente = db.collection("clientes").doc(String(clientId));
-  const plat = normalizarPlataforma(servicio.plataforma);
-  const ident = String(servicio.correo || "").trim().toLowerCase();
-  const refInv = db.collection("inventario").doc(docIdInventario(ident, plat));
+  const plat = normalizarPlataforma(servicio.plataforma || "");
+  const ident = normalizeIdentByPlatform(plat, String(servicio.correo || "").trim());
 
   return db.runTransaction(async (tx) => {
     const docCli = await tx.get(refCliente);
     if (!docCli.exists) throw new Error("Cliente no existe en TX");
+
     const curCli = docCli.data() || {};
-    const docInv = await tx.get(refInv);
-
     const arrServ = Array.isArray(curCli.servicios) ? curCli.servicios.slice() : [];
-    arrServ.push(servicio);
 
-    tx.set(refCliente, {
-      servicios: arrServ,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    }, { merge: true });
+    const servicioNormalizado = {
+      plataforma: plat,
+      correo: ident,
+      pin: String(servicio.pin || "").trim(),
+      precio: Number(servicio.precio || 0),
+      fechaRenovacion: String(servicio.fechaRenovacion || "").trim(),
+    };
+
+    arrServ.push(servicioNormalizado);
+
+    tx.set(
+      refCliente,
+      {
+        servicios: arrServ,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+
+    let refInv = db.collection("inventario").doc(docIdInventario(ident, plat));
+    let docInv = await tx.get(refInv);
+
+    if (!docInv.exists) {
+      const qs = await tx.get(
+        db.collection("inventario").where("plataforma", "==", plat)
+      );
+
+      const found = qs.docs.find((d) => {
+        const data = d.data() || {};
+        const accesoGuardado = normalizeIdentByPlatform(
+          plat,
+          String(data.correo || data.usuario || "").trim()
+        );
+        return accesoGuardado === ident;
+      });
+
+      if (found) {
+        refInv = found.ref;
+        docInv = found;
+      }
+    }
 
     if (docInv.exists) {
       const invData = docInv.data() || {};
       let clientesInv = Array.isArray(invData.clientes) ? invData.clientes.slice() : [];
-      const capacidad = Number(invData.capacidad || invData.total || getCapacidadBasePorPlataformaLocal(plat) || 0);
-      const yaExiste = clientesInv.some((c) => c.nombre === curCli.nombrePerfil && c.pin === servicio.pin);
+
+      const yaExiste = clientesInv.some(
+        (c) =>
+          String(c.nombre || "").trim().toLowerCase() ===
+            String(curCli.nombrePerfil || "").trim().toLowerCase() &&
+          String(c.pin || "").trim() === String(servicioNormalizado.pin || "").trim()
+      );
 
       if (!yaExiste) {
         clientesInv.push({
           nombre: curCli.nombrePerfil || "Sin Nombre",
-          pin: servicio.pin || "0000",
+          pin: String(servicioNormalizado.pin || "").trim() || "0000",
           slot: clientesInv.length + 1,
         });
-        const ocupados = clientesInv.length;
-        const disponibles = Math.max(0, capacidad - ocupados);
-        const estado = disponibles === 0 ? "llena" : "activa";
+      }
 
-        tx.set(refInv, {
+      const capacidad = Number(
+        invData.capacidad || invData.total || getCapacidadBasePorPlataformaLocal(plat) || 1
+      );
+      const ocupados = clientesInv.length;
+      const disponibles = Math.max(0, capacidad - ocupados);
+      const estado = disponibles === 0 ? "llena" : "activa";
+
+      tx.set(
+        refInv,
+        {
           clientes: clientesInv,
           capacidad,
           ocupados,
@@ -446,11 +492,15 @@ async function addServicioTx(clientId, servicio) {
           disp: disponibles,
           estado,
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        }, { merge: true });
-      }
+        },
+        { merge: true }
+      );
     }
 
-    return { cliente: { id: docCli.id, ...curCli }, servicios: arrServ };
+    return {
+      cliente: { id: docCli.id, ...curCli },
+      servicios: arrServ,
+    };
   });
 }
 
