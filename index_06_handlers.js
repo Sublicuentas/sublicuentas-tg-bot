@@ -621,6 +621,7 @@ bot.onText(/\/sincronizar_todo/i, async (msg) => {
 
   let perfilesEmparejados = 0;
   const cuentasAfectadas = new Set();
+  let serviciosSinInventario = 0;
 
   try {
     const snapClientes = await db.collection("clientes").get();
@@ -628,27 +629,51 @@ bot.onText(/\/sincronizar_todo/i, async (msg) => {
     for (const docCli of snapClientes.docs) {
       const c = docCli.data() || {};
       const servicios = Array.isArray(c.servicios) ? c.servicios : [];
-      const nombreCliente = c.nombrePerfil || "Sin Nombre";
+      const nombreCliente = String(c.nombrePerfil || "Sin Nombre").trim();
 
       for (const s of servicios) {
-        if (!s.correo || !s.plataforma) continue;
+        const plat = normalizarPlataforma(s.plataforma || "");
+        const accesoRaw = String(s.correo || "").trim();
+        const pinCliente = String(s.pin || "0000").trim();
 
-        const plat = normalizarPlataforma(s.plataforma);
-        const acceso = normalizeIdentByPlatformLocal(plat, s.correo);
-        const idInv = docIdInventarioLocal(acceso, plat);
+        if (!plat || !accesoRaw) continue;
 
-        const refInv = db.collection("inventario").doc(idInv);
-        const docInv = await refInv.get();
+        const acceso = normalizeIdentByPlatformLocal(plat, accesoRaw);
 
-        if (!docInv.exists) continue;
+        let found = null;
 
-        const invData = docInv.data() || {};
+        try {
+          found = await buscarCorreoInventarioPorPlatCorreo(plat, acceso);
+        } catch (_) {
+          found = null;
+        }
+
+        if (!found || !found.ref) {
+          try {
+            const idInv = docIdInventarioLocal(acceso, plat);
+            const refInvDirect = db.collection("inventario").doc(idInv);
+            const docInvDirect = await refInvDirect.get();
+            if (docInvDirect.exists) {
+              found = { ref: refInvDirect, data: docInvDirect.data() || {} };
+            }
+          } catch (_) {}
+        }
+
+        if (!found || !found.ref) {
+          serviciosSinInventario++;
+          continue;
+        }
+
+        const refInv = found.ref;
+        const invData = found.data || {};
         let clientesInv = Array.isArray(invData.clientes) ? invData.clientes.slice() : [];
-        const pinCliente = s.pin || "0000";
 
-        const yaExiste = clientesInv.some(
-          (x) => x.nombre === nombreCliente && x.pin === pinCliente
-        );
+        const yaExiste = clientesInv.some((x) => {
+          const nom = String(x?.nombre || "").trim().toLowerCase();
+          const pin = String(x?.pin || "").trim();
+          return nom === nombreCliente.toLowerCase() && pin === pinCliente;
+        });
+
         if (yaExiste) continue;
 
         clientesInv.push({
@@ -657,12 +682,17 @@ bot.onText(/\/sincronizar_todo/i, async (msg) => {
           slot: clientesInv.length + 1,
         });
 
-        const capacidad = Number(invData.capacidad || invData.total || 0);
+        clientesInv = clientesInv.map((x, i) => ({
+          ...x,
+          slot: i + 1,
+        }));
+
+        const capacidadBase =
+          Number(invData.capacidad || invData.total || 0) ||
+          getTotalPorPlataformaLocal(plat);
+
         const ocupados = clientesInv.length;
-        const disponibles =
-          capacidad > 0
-            ? Math.max(0, capacidad - ocupados)
-            : Math.max(0, Number(invData.disp || 0) - 1);
+        const disponibles = Math.max(0, capacidadBase - ocupados);
         const estado = disponibles === 0 ? "llena" : "activa";
 
         await refInv.set(
@@ -672,20 +702,21 @@ bot.onText(/\/sincronizar_todo/i, async (msg) => {
             disponibles,
             disp: disponibles,
             estado,
-            capacidad,
+            capacidad: capacidadBase,
             updatedAt: admin.firestore.FieldValue.serverTimestamp(),
           },
           { merge: true }
         );
 
         perfilesEmparejados++;
-        cuentasAfectadas.add(idInv);
+        cuentasAfectadas.add(refInv.id);
       }
     }
 
     let reporte = "✅ *Sincronización completada con éxito*\n\n";
     reporte += `👤 Perfiles emparejados: *${perfilesEmparejados}*\n`;
-    reporte += `📦 Cuentas actualizadas: *${cuentasAfectadas.size}*\n\n`;
+    reporte += `📦 Cuentas actualizadas: *${cuentasAfectadas.size}*\n`;
+    reporte += `🧩 Servicios sin cuenta en inventario: *${serviciosSinInventario}*\n\n`;
     reporte += "💡 _La base quedó sincronizada._";
 
     return bot.sendMessage(chatId, reporte, { parse_mode: "Markdown" });
@@ -697,7 +728,6 @@ bot.onText(/\/sincronizar_todo/i, async (msg) => {
     );
   }
 });
-
 // ===============================
 // COMANDOS RENOVACIONES
 // ===============================
@@ -3659,4 +3689,4 @@ if (!global.__SUBLICUENTAS_HTTP_SERVER__) {
     .listen(PORT, () => {
       console.log("🌐 HTTP KEEPALIVE activo en puerto", PORT);
     });
-}
+     }
