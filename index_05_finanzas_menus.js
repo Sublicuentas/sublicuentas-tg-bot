@@ -639,13 +639,20 @@ function kbMotivosFinanzas() {
 // ===============================
 async function registrarIngresoTx({
   monto,
-  banco,
-  plataforma,
-  detalle,
-  fecha,
-  userId,
-  userName,
+  banco = "",
+  plataforma = "",
+  detalle = "",
+  fecha = "",
+  userId = "",
+  userName = "",
 }) {
+  const fechaOk = parseFechaFlexible(fecha || hoyDMY());
+  if (!fechaOk) throw new Error("Fecha inválida");
+
+  const montoOk = Number(monto || 0);
+  if (!Number.isFinite(montoOk) || montoOk <= 0) throw new Error("Monto inválido");
+
+  const mesKey = monthKeyFromDMYLocal(fechaOk);
   const docId = db.collection(FINANCE_COLLECTION_PRIMARY).doc().id;
 
   const payload = {
@@ -670,12 +677,19 @@ async function registrarIngresoTx({
 
 async function registrarEgresoTx({
   monto,
-  motivo,
-  detalle,
-  fecha,
-  userId,
-  userName,
+  motivo = "",
+  detalle = "",
+  fecha = "",
+  userId = "",
+  userName = "",
 }) {
+  const fechaOk = parseFechaFlexible(fecha || hoyDMY());
+  if (!fechaOk) throw new Error("Fecha inválida");
+
+  const montoOk = Number(monto || 0);
+  if (!Number.isFinite(montoOk) || montoOk <= 0) throw new Error("Monto inválido");
+
+  const mesKey = monthKeyFromDMYLocal(fechaOk);
   const docId = db.collection(FINANCE_COLLECTION_PRIMARY).doc().id;
 
   const payload = {
