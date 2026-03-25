@@ -349,7 +349,26 @@ function normalizeRevendedorDoc(docOrData = {}) {
 }
 
 async function isSuperAdmin(userId) {
-  return String(userId || "").trim() === String(SUPER_ADMIN || "").trim();
+  const uid = String(userId || "").trim();
+  if (!uid) return false;
+
+  if (uid === String(SUPER_ADMIN || "").trim()) return true;
+
+  try {
+    const doc = await db.collection(ADMINS_COLLECTION || "admins").doc(uid).get();
+    if (!doc.exists) return false;
+
+    const data = doc.data() || {};
+    return (
+      data.superAdmin === true ||
+      data.superadmin === true ||
+      String(data.rol || "").toLowerCase() === "superadmin" ||
+      String(data.role || "").toLowerCase() === "superadmin"
+    );
+  } catch (e) {
+    logErr("isSuperAdmin", e);
+    return false;
+  }
 }
 
 async function isAdmin(userId) {
