@@ -611,8 +611,8 @@ bot.onText(/\/sincronizar_todo/i, async (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
 
-  if (!(await isSuperAdmin(userId))) {
-    return bot.sendMessage(chatId, "⛔ Solo el SUPER ADMIN puede sincronizar la base de datos.");
+  if (!(await isAdmin(userId))) {
+    return bot.sendMessage(chatId, "⛔ Solo ADMIN puede sincronizar la base de datos.");
   }
 
   await bot.sendMessage(chatId, "🔄 *Iniciando sincronización masiva...*", {
@@ -3659,4 +3659,4 @@ if (!global.__SUBLICUENTAS_HTTP_SERVER__) {
     .listen(PORT, () => {
       console.log("🌐 HTTP KEEPALIVE activo en puerto", PORT);
     });
-    }
+}
