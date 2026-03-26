@@ -437,14 +437,23 @@ async function buscarInventarioParaServicio(plataforma = "", ident = "") {
 
 async function addServicioTx(clientId, servicio) {
   const refCliente = db.collection("clientes").doc(String(clientId));
-  const plat = normalizarPlataforma(servicio.plataforma);
+  const plat = normalizarPlataforma(servicio.plataforma || "");
   const ident = String(servicio.correo || "").trim();
+
+  if (!plat) throw new Error("Plataforma inválida");
+  if (!ident) throw new Error("Correo/usuario vacío");
+
+  const fechaRenovacion = String(servicio.fechaRenovacion || "").trim();
+  if (!isFechaDMY(fechaRenovacion)) {
+    throw new Error("Fecha de renovación inválida");
+  }
+
   const servicioFinal = {
     plataforma: plat,
     correo: normalizeIdentByPlatform(plat, ident),
     pin: String(servicio.pin || "").trim(),
     precio: Number(servicio.precio || 0),
-    fechaRenovacion: String(servicio.fechaRenovacion || "").trim(),
+    fechaRenovacion,
   };
 
   const docCli = await refCliente.get();
@@ -461,6 +470,8 @@ async function addServicioTx(clientId, servicio) {
     },
     { merge: true }
   );
+
+  let syncInventario = false;
 
   try {
     const found = await buscarInventarioParaServicio(plat, servicioFinal.correo);
@@ -481,35 +492,37 @@ async function addServicioTx(clientId, servicio) {
           pin: servicioFinal.pin || "0000",
           slot: clientesInv.length + 1,
         });
-
-        clientesInv = clientesInv.map((c, i) => ({
-          ...c,
-          slot: i + 1,
-        }));
-
-        const capacidad = Number(
-          invData.capacidad ||
-          invData.total ||
-          getCapacidadBasePorPlataformaLocal(plat)
-        ) || getCapacidadBasePorPlataformaLocal(plat);
-
-        const ocupados = clientesInv.length;
-        const disponibles = Math.max(0, capacidad - ocupados);
-        const estado = disponibles === 0 ? "llena" : "activa";
-
-        await found.ref.set(
-          {
-            clientes: clientesInv,
-            capacidad,
-            ocupados,
-            disponibles,
-            disp: disponibles,
-            estado,
-            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-          },
-          { merge: true }
-        );
       }
+
+      clientesInv = clientesInv.map((c, i) => ({
+        ...c,
+        slot: i + 1,
+      }));
+
+      const capacidad = Number(
+        invData.capacidad ||
+        invData.total ||
+        getCapacidadBasePorPlataformaLocal(plat)
+      ) || getCapacidadBasePorPlataformaLocal(plat);
+
+      const ocupados = clientesInv.length;
+      const disponibles = Math.max(0, capacidad - ocupados);
+      const estado = disponibles === 0 ? "llena" : "activa";
+
+      await found.ref.set(
+        {
+          clientes: clientesInv,
+          capacidad,
+          ocupados,
+          disponibles,
+          disp: disponibles,
+          estado,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+
+      syncInventario = true;
     }
   } catch (e) {
     logErr("addServicioTx.syncInventario", e?.stack || e?.message || e);
@@ -518,6 +531,7 @@ async function addServicioTx(clientId, servicio) {
   return {
     cliente: { id: docCli.id, ...curCli },
     servicios: arrServ,
+    syncInventario,
   };
 }
 
@@ -653,50 +667,60 @@ async function wizardNext(chatId, text) {
       if (!isFechaDMY(t)) return bot.sendMessage(chatId, "⚠️ Formato inválido. Use dd/mm/yyyy:");
       s.fechaRenovacion = String(t).trim();
 
-      const { cliente, servicios } = await addServicioTx(String(st.clientId), {
-        plataforma: String(s.plataforma || "").trim(),
-        correo: String(s.correo || "").trim().toLowerCase(),
-        pin: String(s.pin || "").trim(),
-        precio: Number(s.precio || 0),
-        fechaRenovacion: s.fechaRenovacion,
-      });
+      try {
+        const { cliente, servicios, syncInventario } = await addServicioTx(String(st.clientId), {
+          plataforma: String(s.plataforma || "").trim(),
+          correo: String(s.correo || "").trim().toLowerCase(),
+          pin: String(s.pin || "").trim(),
+          precio: Number(s.precio || 0),
+          fechaRenovacion: s.fechaRenovacion,
+        });
 
-      await registrarHistorialCliente(st.clientId, {
-        tipo: "servicio_agregado",
-        plataforma: String(s.plataforma || "").trim(),
-        correo: String(s.correo || "").trim().toLowerCase(),
-        pin: String(s.pin || "").trim(),
-        precio: Number(s.precio || 0),
-        fechaRenovacion: s.fechaRenovacion,
-        vendedor: cliente?.vendedor || st.data?.vendedor || "",
-        fecha: hoyDMY(),
-      });
+        try {
+          await registrarHistorialCliente(st.clientId, {
+            tipo: "servicio_agregado",
+            plataforma: String(s.plataforma || "").trim(),
+            correo: String(s.correo || "").trim().toLowerCase(),
+            pin: String(s.pin || "").trim(),
+            precio: Number(s.precio || 0),
+            fechaRenovacion: s.fechaRenovacion,
+            vendedor: cliente?.vendedor || st.data?.vendedor || "",
+            fecha: hoyDMY(),
+          });
+        } catch (eHist) {
+          logErr("wizardNext.registrarHistorialCliente", eHist?.stack || eHist?.message || eHist);
+        }
 
-      st.servicio = {};
-      st.servStep = 1;
-      st.step = 4;
-      wset(chatId, st);
+        st.servicio = {};
+        st.servStep = 1;
+        st.step = 4;
+        wset(chatId, st);
 
-      const ordenados = serviciosOrdenados(servicios);
-      const resumen =
-        "✅ Servicio agregado.\n¿Desea agregar otra plataforma a este cliente?\n\n" +
-        `Cliente:\n${cliente?.nombrePerfil || st.data?.nombrePerfil || "-"}\n${cliente?.telefono || st.data?.telefono || "-"}\n${cliente?.vendedor || st.data?.vendedor || "-"}\n\n` +
-        "SERVICIOS (ordenados por fecha):\n" +
-        ordenados.map((x, i) => `${i + 1}) ${x.plataforma} — ${x.correo} — ${x.precio} Lps — Renueva: ${x.fechaRenovacion}`).join("\n");
+        const totalServ = Array.isArray(servicios) ? servicios.length : 0;
+        const resumen =
+          "✅ Servicio guardado correctamente.\n\n" +
+          `👤 Cliente: ${cliente?.nombrePerfil || st.data?.nombrePerfil || "-"}\n` +
+          `📱 Tel: ${cliente?.telefono || st.data?.telefono || "-"}\n` +
+          `📦 Plataforma: ${humanPlataforma(s.plataforma || "-")}\n` +
+          `🔐 Acceso: ${String(s.correo || "").trim().toLowerCase()}\n` +
+          `🔑 PIN/Clave: ${String(s.pin || "").trim()}\n` +
+          `💰 Precio: ${Number(s.precio || 0)} Lps\n` +
+          `📅 Renovación: ${s.fechaRenovacion}\n` +
+          `🧩 Servicios activos: ${totalServ}\n` +
+          `🔄 Inventario: ${syncInventario ? "Sincronizado" : "Guardado en CRM (sin vínculo automático)"}`;
 
-      const kb = {
-        inline_keyboard: [
-          [{ text: "➕ Agregar otra", callback_data: `wiz:addmore:${st.clientId}` }],
-          [{ text: "✅ Finalizar", callback_data: `wiz:finish:${st.clientId}` }],
-        ],
-      };
+        const kb = {
+          inline_keyboard: [
+            [{ text: "➕ Agregar otra", callback_data: `wiz:addmore:${st.clientId}` }],
+            [{ text: "✅ Finalizar", callback_data: `wiz:finish:${st.clientId}` }],
+          ],
+        };
 
-      if (resumen.length > 3800) {
-        await enviarTxtComoArchivo(chatId, resumen, `resumen_servicios_${Date.now()}.txt`);
-        return bot.sendMessage(chatId, "📄 Te mandé el resumen en TXT.\n¿Deseas agregar otra plataforma?", { reply_markup: kb });
+        return bot.sendMessage(chatId, resumen, { reply_markup: kb });
+      } catch (e) {
+        logErr("wizardNext.servStep5", e?.stack || e?.message || e);
+        return bot.sendMessage(chatId, `⚠️ No se pudo guardar el servicio.\n\nDetalle: ${e?.message || "Error interno"}`);
       }
-
-      return bot.sendMessage(chatId, resumen, { reply_markup: kb });
     }
   }
 }
