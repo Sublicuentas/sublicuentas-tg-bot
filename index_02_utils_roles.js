@@ -20,6 +20,7 @@ const {
   admin,
   db,
   SUPER_ADMIN,
+  TZ,
   PLATAFORMAS,
   ADMINS_COLLECTION,
   REVENDEDORES_COLLECTION,
@@ -121,11 +122,26 @@ function normalizeDMY(text = "") {
 }
 
 function hoyDMY() {
-  const now = new Date();
-  const dd = String(now.getDate()).padStart(2, "0");
-  const mm = String(now.getMonth() + 1).padStart(2, "0");
-  const yyyy = String(now.getFullYear());
-  return `${dd}/${mm}/${yyyy}`;
+  try {
+    const tz = String(TZ || "America/Tegucigalpa").trim() || "America/Tegucigalpa";
+    const parts = new Intl.DateTimeFormat("en-GB", {
+      timeZone: tz,
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+    }).formatToParts(new Date());
+
+    const dd = parts.find((p) => p.type === "day")?.value || "01";
+    const mm = parts.find((p) => p.type === "month")?.value || "01";
+    const yyyy = parts.find((p) => p.type === "year")?.value || "2000";
+    return `${dd}/${mm}/${yyyy}`;
+  } catch (_) {
+    const now = new Date();
+    const dd = String(now.getDate()).padStart(2, "0");
+    const mm = String(now.getMonth() + 1).padStart(2, "0");
+    const yyyy = String(now.getFullYear());
+    return `${dd}/${mm}/${yyyy}`;
+  }
 }
 
 function parseFechaFinanceInput(raw = "") {
