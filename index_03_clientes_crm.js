@@ -402,106 +402,123 @@ async function menuServicio(chatId, clientId, idx) {
   }, "Markdown");
 }
 
-async function addServicioTx(clientId, servicio) {
-  const refCliente = db.collection("clientes").doc(String(clientId));
-  const plat = normalizarPlataforma(servicio.plataforma || "");
-  const ident = normalizeIdentByPlatform(plat, String(servicio.correo || "").trim());
 
-  return db.runTransaction(async (tx) => {
-    const docCli = await tx.get(refCliente);
-    if (!docCli.exists) throw new Error("Cliente no existe en TX");
+async function buscarInventarioParaServicio(plataforma = "", ident = "") {
+  const plat = normalizarPlataforma(plataforma);
+  const acceso = normalizeIdentByPlatform(plat, ident);
 
-    const curCli = docCli.data() || {};
-    const arrServ = Array.isArray(curCli.servicios) ? curCli.servicios.slice() : [];
+  try {
+    const refDirect = db.collection("inventario").doc(docIdInventario(acceso, plat));
+    const docDirect = await refDirect.get();
+    if (docDirect.exists) {
+      return { ref: refDirect, data: docDirect.data() || {}, acceso };
+    }
+  } catch (_) {}
 
-    const servicioNormalizado = {
-      plataforma: plat,
-      correo: ident,
-      pin: String(servicio.pin || "").trim(),
-      precio: Number(servicio.precio || 0),
-      fechaRenovacion: String(servicio.fechaRenovacion || "").trim(),
-    };
-
-    arrServ.push(servicioNormalizado);
-
-    tx.set(
-      refCliente,
-      {
-        servicios: arrServ,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      },
-      { merge: true }
-    );
-
-    let refInv = db.collection("inventario").doc(docIdInventario(ident, plat));
-    let docInv = await tx.get(refInv);
-
-    if (!docInv.exists) {
-      const qs = await tx.get(
-        db.collection("inventario").where("plataforma", "==", plat)
-      );
-
-      const found = qs.docs.find((d) => {
-        const data = d.data() || {};
-        const accesoGuardado = normalizeIdentByPlatform(
-          plat,
-          String(data.correo || data.usuario || "").trim()
-        );
-        return accesoGuardado === ident;
-      });
-
-      if (found) {
-        refInv = found.ref;
-        docInv = found;
+  try {
+    const snap = await db.collection("inventario").where("plataforma", "==", plat).get();
+    for (const doc of snap.docs) {
+      const data = doc.data() || {};
+      const rawIdent =
+        data.correo ||
+        data.usuario ||
+        data.email ||
+        data.acceso ||
+        "";
+      const normInv = normalizeIdentByPlatform(plat, rawIdent);
+      if (String(normInv || "").trim().toLowerCase() === String(acceso || "").trim().toLowerCase()) {
+        return { ref: doc.ref, data, acceso };
       }
     }
+  } catch (_) {}
 
-    if (docInv.exists) {
-      const invData = docInv.data() || {};
+  return null;
+}
+
+async function addServicioTx(clientId, servicio) {
+  const refCliente = db.collection("clientes").doc(String(clientId));
+  const plat = normalizarPlataforma(servicio.plataforma);
+  const ident = String(servicio.correo || "").trim();
+  const servicioFinal = {
+    plataforma: plat,
+    correo: normalizeIdentByPlatform(plat, ident),
+    pin: String(servicio.pin || "").trim(),
+    precio: Number(servicio.precio || 0),
+    fechaRenovacion: String(servicio.fechaRenovacion || "").trim(),
+  };
+
+  const docCli = await refCliente.get();
+  if (!docCli.exists) throw new Error("Cliente no existe");
+
+  const curCli = docCli.data() || {};
+  const arrServ = Array.isArray(curCli.servicios) ? curCli.servicios.slice() : [];
+  arrServ.push(servicioFinal);
+
+  await refCliente.set(
+    {
+      servicios: arrServ,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    },
+    { merge: true }
+  );
+
+  try {
+    const found = await buscarInventarioParaServicio(plat, servicioFinal.correo);
+
+    if (found && found.ref) {
+      const invData = found.data || {};
       let clientesInv = Array.isArray(invData.clientes) ? invData.clientes.slice() : [];
 
-      const yaExiste = clientesInv.some(
-        (c) =>
-          String(c.nombre || "").trim().toLowerCase() ===
-            String(curCli.nombrePerfil || "").trim().toLowerCase() &&
-          String(c.pin || "").trim() === String(servicioNormalizado.pin || "").trim()
-      );
+      const yaExiste = clientesInv.some((c) => {
+        const nom = String(c?.nombre || "").trim().toLowerCase();
+        const pin = String(c?.pin || "").trim();
+        return nom === String(curCli.nombrePerfil || "").trim().toLowerCase() && pin === servicioFinal.pin;
+      });
 
       if (!yaExiste) {
         clientesInv.push({
           nombre: curCli.nombrePerfil || "Sin Nombre",
-          pin: String(servicioNormalizado.pin || "").trim() || "0000",
+          pin: servicioFinal.pin || "0000",
           slot: clientesInv.length + 1,
         });
+
+        clientesInv = clientesInv.map((c, i) => ({
+          ...c,
+          slot: i + 1,
+        }));
+
+        const capacidad = Number(
+          invData.capacidad ||
+          invData.total ||
+          getCapacidadBasePorPlataformaLocal(plat)
+        ) || getCapacidadBasePorPlataformaLocal(plat);
+
+        const ocupados = clientesInv.length;
+        const disponibles = Math.max(0, capacidad - ocupados);
+        const estado = disponibles === 0 ? "llena" : "activa";
+
+        await found.ref.set(
+          {
+            clientes: clientesInv,
+            capacidad,
+            ocupados,
+            disponibles,
+            disp: disponibles,
+            estado,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        );
       }
-
-      const capacidad = Number(
-        invData.capacidad || invData.total || getCapacidadBasePorPlataformaLocal(plat) || 1
-      );
-      const ocupados = clientesInv.length;
-      const disponibles = Math.max(0, capacidad - ocupados);
-      const estado = disponibles === 0 ? "llena" : "activa";
-
-      tx.set(
-        refInv,
-        {
-          clientes: clientesInv,
-          capacidad,
-          ocupados,
-          disponibles,
-          disp: disponibles,
-          estado,
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        },
-        { merge: true }
-      );
     }
+  } catch (e) {
+    logErr("addServicioTx.syncInventario", e?.stack || e?.message || e);
+  }
 
-    return {
-      cliente: { id: docCli.id, ...curCli },
-      servicios: arrServ,
-    };
-  });
+  return {
+    cliente: { id: docCli.id, ...curCli },
+    servicios: arrServ,
+  };
 }
 
 function kbPlataformasWiz(prefix, clientId, idxOpt) {
