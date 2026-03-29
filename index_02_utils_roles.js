@@ -381,13 +381,81 @@ function getSuperAdminIdSet() {
   return out;
 }
 
+async function findDocByUidInCollection(collectionName = "", uid = "", fieldNames = []) {
+  try {
+    const col = String(collectionName || "").trim();
+    const id = String(uid || "").trim();
+    if (!col || !id) return null;
+
+    try {
+      const byId = await db.collection(col).doc(id).get();
+      if (byId.exists) return { id: byId.id, ...(byId.data() || {}) };
+    } catch (eById) {
+      logErr(`findDocByUidInCollection.doc.${col}`, eById);
+    }
+
+    for (const field of fieldNames) {
+      try {
+        const snap = await db.collection(col).where(field, "==", id).limit(1).get();
+        if (!snap.empty) {
+          const d = snap.docs[0];
+          return { id: d.id, ...(d.data() || {}) };
+        }
+      } catch (eQuery) {
+        logErr(`findDocByUidInCollection.query.${col}.${field}`, eQuery);
+      }
+    }
+
+    try {
+      const snapAll = await db.collection(col).get();
+      let found = null;
+      snapAll.forEach((d) => {
+        if (found) return;
+        const data = d.data() || {};
+        const candidates = [
+          d.id,
+          data.telegramId,
+          data.userId,
+          data.uid,
+          data.idTelegram,
+          data.telegram_id,
+          data.chatId,
+          data.ownerId,
+          data.adminId,
+        ]
+          .map((x) => String(x || "").trim())
+          .filter(Boolean);
+
+        if (candidates.includes(id)) {
+          found = { id: d.id, ...data };
+        }
+      });
+      if (found) return found;
+    } catch (eScan) {
+      logErr(`findDocByUidInCollection.scan.${col}`, eScan);
+    }
+
+    return null;
+  } catch (e) {
+    logErr("findDocByUidInCollection", e);
+    return null;
+  }
+}
+
 async function getAdminDocById(uid = "") {
   try {
     const id = String(uid || "").trim();
     if (!id) return null;
-    const doc = await db.collection("admins").doc(id).get();
-    if (!doc.exists) return null;
-    return { id: doc.id, ...(doc.data() || {}) };
+
+    const collections = ["admins", "admin", "backoffice", "usuarios_admin"];
+    const fields = ["telegramId", "userId", "uid", "idTelegram", "telegram_id", "chatId", "ownerId", "adminId"];
+
+    for (const col of collections) {
+      const found = await findDocByUidInCollection(col, id, fields);
+      if (found) return found;
+    }
+
+    return null;
   } catch (e) {
     logErr("getAdminDocById", e);
     return null;
@@ -438,43 +506,17 @@ async function getRevendedorPorTelegramId(userId) {
     const uid = String(userId || "").trim();
     if (!uid) return null;
 
+    if (await isAdmin(uid)) return null;
+
     const collections = ["revendedores", "vendedores"];
+    const fields = ["telegramId", "userId", "uid", "idTelegram", "telegram_id", "chatId"];
 
     for (const colName of collections) {
-      try {
-        const snap = await db
-          .collection(colName)
-          .where("telegramId", "==", uid)
-          .limit(1)
-          .get();
+      const found = await findDocByUidInCollection(colName, uid, fields);
+      if (!found) continue;
 
-        if (!snap.empty) {
-          const d = snap.docs[0];
-          const rev = normalizeRevendedorDoc({ id: d.id, ...(d.data() || {}) });
-          if (rev.activo !== false) return { id: d.id, ...rev };
-        }
-      } catch (eQuery) {
-        logErr(`getRevendedorPorTelegramId.query.${colName}`, eQuery);
-      }
-
-      try {
-        const snapAll = await db.collection(colName).get();
-        if (snapAll.empty) continue;
-
-        let found = null;
-        snapAll.forEach((d) => {
-          if (found) return;
-          const rev = normalizeRevendedorDoc({ id: d.id, ...(d.data() || {}) });
-          const tg = String(rev.telegramId || "").trim();
-          if (tg && tg === uid && rev.activo !== false) {
-            found = { id: d.id, ...rev };
-          }
-        });
-
-        if (found) return found;
-      } catch (eScan) {
-        logErr(`getRevendedorPorTelegramId.scan.${colName}`, eScan);
-      }
+      const rev = normalizeRevendedorDoc(found);
+      if (rev.activo !== false) return { id: found.id, ...rev };
     }
 
     return null;
@@ -501,13 +543,37 @@ async function setTelegramIdToRevendedor(revDocId, telegramId) {
     const tg = String(telegramId || "").trim();
     if (!docId || !tg) throw new Error("Falta revDocId o telegramId");
 
-    await db.collection("revendedores").doc(docId).set(
-      {
-        telegramId: tg,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      },
-      { merge: true }
-    );
+    const collections = ["revendedores", "vendedores"];
+    let updated = false;
+
+    for (const col of collections) {
+      try {
+        const ref = db.collection(col).doc(docId);
+        const doc = await ref.get();
+        if (!doc.exists) continue;
+
+        await ref.set(
+          {
+            telegramId: tg,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        );
+        updated = true;
+      } catch (eCol) {
+        logErr(`setTelegramIdToRevendedor.${col}`, eCol);
+      }
+    }
+
+    if (!updated) {
+      await db.collection("revendedores").doc(docId).set(
+        {
+          telegramId: tg,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+    }
 
     return true;
   } catch (e) {
