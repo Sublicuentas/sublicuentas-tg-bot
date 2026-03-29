@@ -1,4 +1,3 @@
-
 /* ✅ SUBLICUENTAS TG BOT — PARTE 6/6 CORREGIDA
    HANDLERS / COMANDOS / CALLBACKS / MESSAGE / AUTOTXT / HARDEN / HTTP
    -------------------------------------------------------------------
@@ -24,6 +23,7 @@ const {
   PLATAFORMAS,
   FINANZAS_COLLECTION,
   CORE_STATE,
+  SUPER_ADMIN,
   hardStopBot,
   releaseRuntimeLock,
   getCoreHealth,
@@ -248,6 +248,164 @@ const PLATFORM_KEYS = Array.isArray(PLATAFORMAS)
   ? PLATAFORMAS
   : Object.keys(PLATAFORMAS || {});
 
+
+function normalizeTelegramIdLocal(value = "") {
+  return String(value == null ? "" : value).trim();
+}
+
+function getSuperAdminIdsLocal() {
+  const raw = String(SUPER_ADMIN || "").trim();
+  if (!raw) return [];
+  return Array.from(
+    new Set(
+      raw
+        .split(/[,\s]+/)
+        .map((x) => normalizeTelegramIdLocal(x))
+        .filter(Boolean)
+    )
+  );
+}
+
+async function safeIsSuperAdminLocal(userId) {
+  const uid = normalizeTelegramIdLocal(userId);
+  if (!uid) return false;
+
+  try {
+    if (await isSuperAdmin(userId)) return true;
+  } catch (e) {
+    logErr("safeIsSuperAdminLocal:isSuperAdmin", e?.stack || e?.message || e);
+  }
+
+  if (getSuperAdminIdsLocal().includes(uid)) return true;
+
+  try {
+    const doc = await db.collection("admins").doc(uid).get();
+    if (doc.exists) {
+      const data = doc.data() || {};
+      if (data.activo !== false && (data.superAdmin === true || data.superadmin === true || data.rol === "superadmin")) {
+        return true;
+      }
+    }
+  } catch (e) {
+    logErr("safeIsSuperAdminLocal:doc", e?.stack || e?.message || e);
+  }
+
+  return false;
+}
+
+async function safeIsAdminLocal(userId) {
+  const uid = normalizeTelegramIdLocal(userId);
+  if (!uid) return false;
+
+  if (await safeIsSuperAdminLocal(uid)) return true;
+
+  try {
+    if (await isAdmin(userId)) return true;
+  } catch (e) {
+    logErr("safeIsAdminLocal:isAdmin", e?.stack || e?.message || e);
+  }
+
+  try {
+    const doc = await db.collection("admins").doc(uid).get();
+    if (doc.exists) {
+      const data = doc.data() || {};
+      if (data.activo !== false) return true;
+    }
+  } catch (e) {
+    logErr("safeIsAdminLocal:doc", e?.stack || e?.message || e);
+  }
+
+  return false;
+}
+
+async function safeGetRevendedorLocal(userId) {
+  const uid = normalizeTelegramIdLocal(userId);
+  if (!uid) return null;
+
+  try {
+    const rev = await getRevendedorPorTelegramId(userId);
+    if (rev && typeof rev === "object") {
+      return typeof normalizeRevendedorDoc === "function" ? normalizeRevendedorDoc(rev) : rev;
+    }
+  } catch (e) {
+    logErr("safeGetRevendedorLocal:getRevendedorPorTelegramId", e?.stack || e?.message || e);
+  }
+
+  try {
+    const snap = await db.collection("revendedores").get();
+    let found = null;
+
+    snap.forEach((d) => {
+      if (found) return;
+      const data = d.data() || {};
+      const tg = normalizeTelegramIdLocal(data.telegramId || data.telegramID || data.userId || "");
+      if (tg === uid) {
+        found = { id: d.id, ...data };
+      }
+    });
+
+    if (found) {
+      return typeof normalizeRevendedorDoc === "function" ? normalizeRevendedorDoc(found) : found;
+    }
+  } catch (e) {
+    logErr("safeGetRevendedorLocal:fallback", e?.stack || e?.message || e);
+  }
+
+  return null;
+}
+
+async function safeIsVendedorLocal(userId) {
+  const uid = normalizeTelegramIdLocal(userId);
+  if (!uid) return false;
+
+  try {
+    if (await isVendedor(userId)) return true;
+  } catch (e) {
+    logErr("safeIsVendedorLocal:isVendedor", e?.stack || e?.message || e);
+  }
+
+  const rev = await safeGetRevendedorLocal(uid);
+  return !!(rev && rev.nombre);
+}
+
+async function getActiveAdminIdsLocal() {
+  const ids = new Set(getSuperAdminIdsLocal());
+
+  try {
+    const snap = await db.collection("admins").get();
+    snap.forEach((d) => {
+      const data = d.data() || {};
+      if (data.activo === false) return;
+
+      ids.add(normalizeTelegramIdLocal(d.id));
+
+      const tg = normalizeTelegramIdLocal(data.telegramId || data.telegramID || data.userId || "");
+      if (tg) ids.add(tg);
+    });
+  } catch (e) {
+    logErr("getActiveAdminIdsLocal", e?.stack || e?.message || e);
+  }
+
+  return Array.from(ids).filter(Boolean);
+}
+
+async function getActiveRevendedoresLocal() {
+  const out = [];
+  try {
+    const snap = await db.collection("revendedores").get();
+    snap.forEach((d) => {
+      const data = d.data() || {};
+      const telegramId = normalizeTelegramIdLocal(data.telegramId || data.telegramID || data.userId || "");
+      if (!data.activo || !data.nombre || !telegramId) return;
+      out.push({ id: d.id, ...data, telegramId });
+    });
+  } catch (e) {
+    logErr("getActiveRevendedoresLocal", e?.stack || e?.message || e);
+  }
+  return out;
+}
+
+
 async function answerCallbackSilentlySafe(q) {
   try {
     if (q?.id) await bot.answerCallbackQuery(q.id);
@@ -266,17 +424,6 @@ function resetChatState(chatId) {
   } catch (_) {}
 }
 
-async function isBackoffice(userId) {
-  try {
-    if (await isSuperAdmin(userId)) return true;
-    if (await isAdmin(userId)) return true;
-    return false;
-  } catch (e) {
-    logErr("isBackoffice", e);
-    return false;
-  }
-}
-
 async function sendBottomMainMenu(chatId, userId) {
   try {
     resetChatState(chatId);
@@ -284,7 +431,7 @@ async function sendBottomMainMenu(chatId, userId) {
     let text = "";
     let keyboard = [];
 
-    if (await isBackoffice(userId)) {
+    if (await safeIsAdminLocal(userId)) {
       text = "📌 *MENÚ PRINCIPAL*\n\nSeleccione una opción:";
       keyboard = [
         [
@@ -295,7 +442,7 @@ async function sendBottomMainMenu(chatId, userId) {
           { text: "💰 Finanzas", callback_data: "menu:pagos" },
         ],
       ];
-    } else if (await isVendedor(userId)) {
+    } else if (await safeIsVendedorLocal(userId)) {
       text = "👤 *MENÚ VENDEDOR*\n\nSeleccione una opción:";
       keyboard = [
         [
@@ -466,8 +613,8 @@ async function userHasAccessFromMessage(msg) {
   const chatId = msg?.chat?.id;
   if (!chatId || !userId) return false;
 
-  if (await isBackoffice(userId)) return true;
-  if (await isVendedor(userId)) return true;
+  if (await safeIsAdminLocal(userId)) return true;
+  if (await safeIsVendedorLocal(userId)) return true;
 
   try {
     await bot.sendMessage(chatId, "⛔ Acceso denegado");
@@ -477,8 +624,8 @@ async function userHasAccessFromMessage(msg) {
 
 async function userHasAccessById(chatId, userId) {
   if (!chatId || !userId) return false;
-  if (await isBackoffice(userId)) return true;
-  if (await isVendedor(userId)) return true;
+  if (await safeIsAdminLocal(userId)) return true;
+  if (await safeIsVendedorLocal(userId)) return true;
   try {
     await bot.sendMessage(chatId, "⛔ Acceso denegado");
   } catch (_) {}
@@ -576,7 +723,7 @@ bot.onText(/\/buscar\s+(.+)/i, async (msg, match) => {
 
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-  if (!(await isBackoffice(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+  if (!(await safeIsAdminLocal(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
 
   const q = String(match[1] || "").trim();
   if (!q) return bot.sendMessage(chatId, "⚠️ Uso: /buscar texto");
@@ -589,7 +736,7 @@ bot.onText(/\/cliente\s+(\S+)/i, async (msg, match) => {
 
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-  if (!(await isBackoffice(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+  if (!(await safeIsAdminLocal(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
 
   const tel = String(match[1] || "").trim();
   const resultados = await buscarPorTelefonoTodos(tel);
@@ -605,7 +752,7 @@ bot.onText(/\/clientes_txt/i, async (msg) => {
   if (!hasRuntimeLock()) return;
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-  if (!(await isBackoffice(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+  if (!(await safeIsAdminLocal(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
   return reporteClientesTXTGeneral(chatId);
 });
 
@@ -613,7 +760,7 @@ bot.onText(/\/vendedores_txt_split/i, async (msg) => {
   if (!hasRuntimeLock()) return;
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-  if (!(await isBackoffice(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+  if (!(await safeIsAdminLocal(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
   return reporteClientesSplitPorVendedorTXT(chatId);
 });
 
@@ -623,8 +770,8 @@ bot.onText(/\/sincronizar_todo/i, async (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
 
-  if (!(await isSuperAdmin(userId))) {
-    return bot.sendMessage(chatId, "⛔ Solo el SUPER ADMIN puede sincronizar la base de datos.");
+  if (!(await safeIsAdminLocal(userId))) {
+    return bot.sendMessage(chatId, "⛔ Solo ADMIN puede sincronizar la base de datos.");
   }
 
   await bot.sendMessage(chatId, "🔄 *Iniciando sincronización masiva...*", {
@@ -719,8 +866,8 @@ bot.onText(/\/renovaciones(?:\s+(.+))?/i, async (msg, match) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
 
-  const adminOk = await isBackoffice(userId);
-  const vend = await getRevendedorPorTelegramId(userId);
+  const adminOk = await safeIsAdminLocal(userId);
+  const vend = await safeGetRevendedorLocal(userId);
 
   if (!adminOk && !(vend && vend.nombre)) {
     return bot.sendMessage(chatId, "⛔ Acceso denegado");
@@ -760,8 +907,8 @@ bot.onText(/\/txt(?:\s+(.+))?/i, async (msg, match) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
 
-  const adminOk = await isBackoffice(userId);
-  const vend = await getRevendedorPorTelegramId(userId);
+  const adminOk = await safeIsAdminLocal(userId);
+  const vend = await safeGetRevendedorLocal(userId);
 
   if (!adminOk && !(vend && vend.nombre)) {
     return bot.sendMessage(chatId, "⛔ Acceso denegado");
@@ -801,7 +948,7 @@ bot.onText(/\/finanzas/i, async (msg) => {
   if (!hasRuntimeLock()) return;
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-  if (!(await isBackoffice(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+  if (!(await safeIsAdminLocal(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
   return menuPagos(chatId);
 });
 
@@ -810,7 +957,7 @@ bot.onText(/\/resumen_fecha\s+(.+)/i, async (msg, match) => {
 
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-  if (!(await isBackoffice(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+  if (!(await safeIsAdminLocal(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
 
   const fecha =
     String(match[1] || "").trim().toLowerCase() === "hoy"
@@ -819,7 +966,7 @@ bot.onText(/\/resumen_fecha\s+(.+)/i, async (msg, match) => {
 
   if (!isFechaDMY(fecha)) return bot.sendMessage(chatId, "⚠️ Uso: /resumen_fecha dd/mm/yyyy");
 
-  const list = await getMovimientosPorFecha(fecha, userId, await isSuperAdmin(userId));
+  const list = await getMovimientosPorFecha(fecha, userId, await safeIsSuperAdminLocal(userId));
   return bot.sendMessage(chatId, resumenFinanzasTextoPorFecha(fecha, list), {
     parse_mode: "Markdown",
   });
@@ -830,12 +977,12 @@ bot.onText(/\/bancos_mes\s+(.+)/i, async (msg, match) => {
 
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-  if (!(await isBackoffice(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+  if (!(await safeIsAdminLocal(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
 
   const key = parseMonthInputToKey(String(match[1] || "").trim());
   if (!key) return bot.sendMessage(chatId, "⚠️ Uso: /bancos_mes mm/yyyy");
 
-  const list = await getMovimientosPorMes(key, userId, await isSuperAdmin(userId));
+  const list = await getMovimientosPorMes(key, userId, await safeIsSuperAdminLocal(userId));
   return bot.sendMessage(chatId, resumenBancosMesTexto(key, list), {
     parse_mode: "Markdown",
   });
@@ -846,12 +993,12 @@ bot.onText(/\/top_plataformas_mes\s+(.+)/i, async (msg, match) => {
 
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-  if (!(await isBackoffice(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+  if (!(await safeIsAdminLocal(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
 
   const key = parseMonthInputToKey(String(match[1] || "").trim());
   if (!key) return bot.sendMessage(chatId, "⚠️ Uso: /top_plataformas_mes mm/yyyy");
 
-  const list = await getMovimientosPorMes(key, userId, await isSuperAdmin(userId));
+  const list = await getMovimientosPorMes(key, userId, await safeIsSuperAdminLocal(userId));
   return bot.sendMessage(chatId, resumenTopPlataformasTexto(key, list), {
     parse_mode: "Markdown",
   });
@@ -862,7 +1009,7 @@ bot.onText(/\/cierre_caja\s+(.+)/i, async (msg, match) => {
 
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-  if (!(await isBackoffice(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+  if (!(await safeIsAdminLocal(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
 
   const fecha =
     String(match[1] || "").trim().toLowerCase() === "hoy"
@@ -871,7 +1018,7 @@ bot.onText(/\/cierre_caja\s+(.+)/i, async (msg, match) => {
 
   if (!isFechaDMY(fecha)) return bot.sendMessage(chatId, "⚠️ Uso: /cierre_caja dd/mm/yyyy");
 
-  const list = await getMovimientosPorFecha(fecha, userId, await isSuperAdmin(userId));
+  const list = await getMovimientosPorFecha(fecha, userId, await safeIsSuperAdminLocal(userId));
   return bot.sendMessage(chatId, cierreCajaTexto(fecha, list), {
     parse_mode: "Markdown",
   });
@@ -884,7 +1031,7 @@ bot.onText(
 
     const chatId = msg.chat.id;
     const userId = msg.from.id;
-    if (!(await isBackoffice(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+    if (!(await safeIsAdminLocal(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
 
     const fechaInicio = String(match[1] || "").trim();
     const fechaFin = String(match[2] || "").trim();
@@ -893,7 +1040,7 @@ bot.onText(
       fechaInicio,
       fechaFin,
       userId,
-      await isSuperAdmin(userId)
+      await safeIsSuperAdminLocal(userId)
     );
 
     return bot.sendMessage(chatId, cierreCajaTextoRango(fechaInicio, fechaFin, list), {
@@ -910,7 +1057,7 @@ bot.onText(
 
     const chatId = msg.chat.id;
     const userId = msg.from.id;
-    if (!(await isBackoffice(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+    if (!(await safeIsAdminLocal(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
 
     const fechaInicio = String(match[1] || "").trim();
     const fechaFin = String(match[2] || "").trim();
@@ -920,7 +1067,7 @@ bot.onText(
       fechaInicio,
       fechaFin,
       userId,
-      await isSuperAdmin(userId)
+      await safeIsSuperAdminLocal(userId)
     );
   }
 );
@@ -930,7 +1077,7 @@ bot.onText(/\/editar_movimiento\s+([A-Za-z0-9_-]+)/i, async (msg, match) => {
 
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-  if (!(await isBackoffice(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+  if (!(await safeIsAdminLocal(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
 
   const id = String(match[1] || "").trim();
   const ref = db.collection(FINANZAS_COLLECTION).doc(id);
@@ -1013,7 +1160,7 @@ bot.onText(/\/addvendedor\s+(\d+)\s+(.+)/i, async (msg, match) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
 
-  if (!(await isBackoffice(userId))) return bot.sendMessage(chatId, "⛔ Solo admin puede usar este comando");
+  if (!(await safeIsAdminLocal(userId))) return bot.sendMessage(chatId, "⛔ Solo admin puede usar este comando");
 
   const telegramId = String(match[1] || "").trim();
   const nombre = String(match[2] || "").trim();
@@ -1053,7 +1200,7 @@ bot.onText(/\/delvendedor\s+(.+)/i, async (msg, match) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
 
-  if (!(await isBackoffice(userId))) return bot.sendMessage(chatId, "⛔ Solo admin puede usar este comando");
+  if (!(await safeIsAdminLocal(userId))) return bot.sendMessage(chatId, "⛔ Solo admin puede usar este comando");
 
   const nombre = String(match[1] || "").trim();
   if (!nombre) return bot.sendMessage(chatId, "⚠️ Uso:\n/delvendedor Nombre");
@@ -1094,7 +1241,7 @@ bot.onText(/\/adminadd\s+(\d+)/i, async (msg, match) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
 
-  if (!(await isSuperAdmin(userId))) {
+  if (!(await safeIsSuperAdminLocal(userId))) {
     return bot.sendMessage(chatId, "⛔ Solo SUPER ADMIN puede agregar admins.");
   }
 
@@ -1118,7 +1265,7 @@ bot.onText(/\/admindel\s+(\d+)/i, async (msg, match) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
 
-  if (!(await isSuperAdmin(userId))) {
+  if (!(await safeIsSuperAdminLocal(userId))) {
     return bot.sendMessage(chatId, "⛔ Solo SUPER ADMIN puede eliminar admins.");
   }
 
@@ -1142,12 +1289,11 @@ bot.onText(/\/adminlist/i, async (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
 
-  if (!(await isSuperAdmin(userId))) return bot.sendMessage(chatId, "⛔ Solo SUPER ADMIN.");
+  if (!(await safeIsSuperAdminLocal(userId))) return bot.sendMessage(chatId, "⛔ Solo SUPER ADMIN.");
 
   const snap = await db.collection("admins").get();
   if (snap.empty) return bot.sendMessage(chatId, "⚠️ No hay admins en colección.");
 
-  const { SUPER_ADMIN } = require("./index_01_core");
   let t = `👑 *ADMINS*\nSUPER_ADMIN: ${SUPER_ADMIN || "(no seteado)"}\n\n`;
 
   snap.forEach((d) => {
@@ -1190,7 +1336,7 @@ PLATFORM_KEYS.forEach((p) => {
 
     const chatId = msg.chat.id;
     const userId = msg.from.id;
-    if (!(await isBackoffice(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+    if (!(await safeIsAdminLocal(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
 
     return enviarInventarioPlataforma(chatId, p, 0);
   });
@@ -1201,7 +1347,7 @@ bot.onText(/\/stock/i, async (msg) => {
 
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-  if (!(await isBackoffice(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+  if (!(await safeIsAdminLocal(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
 
   return mostrarStockGeneral(chatId);
 });
@@ -1216,7 +1362,7 @@ bot.onText(/\/addcorreo\s+(\S+)\s+(\S+)(?:\s+(\d+))?/i, async (msg, match) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
 
-  if (!(await isBackoffice(userId))) {
+  if (!(await safeIsAdminLocal(userId))) {
     return bot.sendMessage(chatId, "⛔ Acceso denegado. Solo admins pueden agregar inventario.");
   }
 
@@ -1304,8 +1450,8 @@ bot.on("callback_query", async (q) => {
 
     bindPanelFromCallback(q);
 
-    const adminOk = await isBackoffice(userId);
-    const vend = await getRevendedorPorTelegramId(userId);
+    const adminOk = await safeIsAdminLocal(userId);
+    const vend = await safeGetRevendedorLocal(userId);
     const vendOk = !!(vend && vend.nombre);
 
     if (!adminOk && !vendOk) return bot.sendMessage(chatId, "⛔ Acceso denegado");
@@ -1553,7 +1699,7 @@ bot.on("callback_query", async (q) => {
           const eliminado = await eliminarMovimientoFinanzas(
             id,
             userId,
-            await isSuperAdmin(userId)
+            await safeIsSuperAdminLocal(userId)
           );
 
           const tipoEliminado =
@@ -2555,7 +2701,7 @@ bot.on("callback_query", async (q) => {
       }
 
       if (data === "txt:todos:hoy") {
-        if (!(await isSuperAdmin(userId))) return bot.sendMessage(chatId, "⛔ Solo SUPERADMIN.");
+        if (!(await safeIsSuperAdminLocal(userId))) return bot.sendMessage(chatId, "⛔ Solo SUPERADMIN.");
         return enviarTXTATodosHoy(chatId);
       }
     }
@@ -2627,8 +2773,8 @@ bot.on("message", async (msg) => {
   try {
     if (!(await userHasAccessFromMessage(msg))) return;
 
-    const adminOk = await isBackoffice(userId);
-    const vendOk = await isVendedor(userId);
+    const adminOk = await safeIsAdminLocal(userId);
+    const vendOk = await safeIsVendedorLocal(userId);
 
     if (wizard.has(String(chatId)) && text.startsWith("/")) {
       const cmdWizard = limpiarComandoTexto(text).split(" ")[0];
@@ -2713,12 +2859,12 @@ bot.on("message", async (msg) => {
     }
 
     if (wizard.has(String(chatId))) {
-      if (!(await isBackoffice(userId))) return;
+      if (!(await safeIsAdminLocal(userId))) return;
       return wizardNext(chatId, text);
     }
 
     if (pending.has(String(chatId))) {
-      if (!(await isBackoffice(userId))) return;
+      if (!(await safeIsAdminLocal(userId))) return;
 
       const p = pending.get(String(chatId));
       const t = String(text || "").trim();
@@ -2734,7 +2880,7 @@ bot.on("message", async (msg) => {
           );
         }
 
-        const isSuper = await isSuperAdmin(userId);
+        const isSuper = await safeIsSuperAdminLocal(userId);
         const listFecha = await getMovimientosPorFecha(fecha, userId, isSuper);
         const list = (Array.isArray(listFecha) ? listFecha : []).filter(
           (x) => String(x.tipo || "").toLowerCase() === String(p.tipo || "").toLowerCase()
@@ -2904,7 +3050,7 @@ bot.on("message", async (msg) => {
         if (!fecha) return bot.sendMessage(chatId, "⚠️ Fecha inválida. Use dd/mm/yyyy o escriba hoy.");
 
         pending.delete(String(chatId));
-        const list = await getMovimientosPorFecha(fecha, userId, await isSuperAdmin(userId));
+        const list = await getMovimientosPorFecha(fecha, userId, await safeIsSuperAdminLocal(userId));
         return bot.sendMessage(chatId, resumenFinanzasTextoPorFecha(fecha, list), {
           parse_mode: "Markdown",
         });
@@ -2915,7 +3061,7 @@ bot.on("message", async (msg) => {
         if (!key) return bot.sendMessage(chatId, "⚠️ Mes inválido. Use mm/yyyy");
 
         pending.delete(String(chatId));
-        const list = await getMovimientosPorMes(key, userId, await isSuperAdmin(userId));
+        const list = await getMovimientosPorMes(key, userId, await safeIsSuperAdminLocal(userId));
         return bot.sendMessage(chatId, resumenBancosMesTexto(key, list), {
           parse_mode: "Markdown",
         });
@@ -2926,7 +3072,7 @@ bot.on("message", async (msg) => {
         if (!key) return bot.sendMessage(chatId, "⚠️ Mes inválido. Use mm/yyyy");
 
         pending.delete(String(chatId));
-        const list = await getMovimientosPorMes(key, userId, await isSuperAdmin(userId));
+        const list = await getMovimientosPorMes(key, userId, await safeIsSuperAdminLocal(userId));
         return bot.sendMessage(chatId, resumenTopPlataformasTexto(key, list), {
           parse_mode: "Markdown",
         });
@@ -2937,7 +3083,7 @@ bot.on("message", async (msg) => {
         if (!fecha) return bot.sendMessage(chatId, "⚠️ Fecha inválida. Use dd/mm/yyyy o escriba hoy.");
 
         pending.delete(String(chatId));
-        const list = await getMovimientosPorFecha(fecha, userId, await isSuperAdmin(userId));
+        const list = await getMovimientosPorFecha(fecha, userId, await safeIsSuperAdminLocal(userId));
         return bot.sendMessage(chatId, cierreCajaTexto(fecha, list), {
           parse_mode: "Markdown",
         });
@@ -2968,7 +3114,7 @@ bot.on("message", async (msg) => {
           p.fechaInicio,
           fechaFin,
           userId,
-          await isSuperAdmin(userId)
+          await safeIsSuperAdminLocal(userId)
         );
 
         return bot.sendMessage(chatId, cierreCajaTextoRango(p.fechaInicio, fechaFin, list), {
@@ -2996,7 +3142,7 @@ bot.on("message", async (msg) => {
           p.fechaInicio,
           t,
           userId,
-          await isSuperAdmin(userId)
+          await safeIsSuperAdminLocal(userId)
         );
       }
 
@@ -3576,27 +3722,43 @@ function getTimePartsNow() {
   };
 }
 
-async function enviarTxtRenovacionesDiariasPorVendedor() {
+async function enviarTxtRenovacionesDiarias7AM() {
   if (!hasRuntimeLock()) return;
 
   const { dmy } = getTimePartsNow();
-  const snap = await db.collection("revendedores").get();
-  if (snap.empty) return;
+  const adminIds = new Set(await getActiveAdminIdsLocal());
 
-  for (const doc of snap.docs) {
-    const rev = { id: doc.id, ...(doc.data() || {}) };
-    if (!rev.activo || !rev.nombre || !rev.telegramId) continue;
+  try {
+    const listaGeneral = await obtenerRenovacionesPorFecha(dmy, null);
+    for (const adminId of adminIds) {
+      try {
+        await enviarTXT(adminId, listaGeneral, dmy, null);
+      } catch (e) {
+        logErr(`AutoTXT:admin:${adminId}`, e?.stack || e?.message || e);
+      }
+    }
+  } catch (e) {
+    logErr("AutoTXT:listaGeneral", e?.stack || e?.message || e);
+  }
 
-    const list = await obtenerRenovacionesPorFecha(dmy, rev.nombre);
-    await enviarTXT(rev.telegramId, list, dmy, rev.nombre);
+  const revendedores = await getActiveRevendedoresLocal();
+  for (const rev of revendedores) {
+    try {
+      if (adminIds.has(normalizeTelegramIdLocal(rev.telegramId))) continue;
 
-    await doc.ref.set(
-      {
-        autoLastSent: dmy,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      },
-      { merge: true }
-    );
+      const list = await obtenerRenovacionesPorFecha(dmy, rev.nombre);
+      await enviarTXT(rev.telegramId, list, dmy, rev.nombre);
+
+      await db.collection("revendedores").doc(rev.id).set(
+        {
+          autoLastSent: dmy,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+    } catch (e) {
+      logErr(`AutoTXT:revendedor:${rev.id}`, e?.stack || e?.message || e);
+    }
   }
 }
 
@@ -3612,7 +3774,7 @@ setInterval(async () => {
 
       _lastDailyRun = dmy;
       await setLastRunDB(dmy);
-      await enviarTxtRenovacionesDiariasPorVendedor();
+      await enviarTxtRenovacionesDiarias7AM();
 
       console.log(`ℹ️ ✅ AutoTXT 7AM enviado (${dmy}) TZ=${TZ}`);
     }
@@ -3671,4 +3833,4 @@ if (!global.__SUBLICUENTAS_HTTP_SERVER__) {
     .listen(PORT, () => {
       console.log("🌐 HTTP KEEPALIVE activo en puerto", PORT);
     });
-       }
+           }
