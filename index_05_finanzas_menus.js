@@ -833,26 +833,91 @@ function resumenFinanzasTextoPorFecha(fecha, list = []) {
   return txt;
 }
 
+
+function normalizarBancoKey(raw = "") {
+  const s = String(raw || "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+
+  if (!s) return "sin_banco";
+
+  if (["bac"].includes(s)) return "bac";
+  if (["atlantida", "banco atlantida"].includes(s)) return "atlantida";
+  if (["ficohsa", "banco ficohsa"].includes(s)) return "ficohsa";
+  if (["banpais", "banco banpais"].includes(s)) return "banpais";
+  if (["occidente", "banco occidente"].includes(s)) return "occidente";
+  if (["davivienda", "banco davivienda"].includes(s)) return "davivienda";
+  if (["lafise", "banco lafise"].includes(s)) return "lafise";
+  if (["tigo money", "tigomoney", "tigo"].includes(s)) return "tigo_money";
+  if (["paypal", "pay pal"].includes(s)) return "paypal";
+  if (["binance"].includes(s)) return "binance";
+  if (["efectivo", "cash"].includes(s)) return "efectivo";
+  if (["transferencia", "transferencia bancaria"].includes(s)) return "transferencia";
+  if (["otro", "otros"].includes(s)) return "otro";
+
+  return s.replace(/\s+/g, "_");
+}
+
+function humanBanco(raw = "") {
+  const key = normalizarBancoKey(raw);
+
+  const map = {
+    bac: "BAC",
+    atlantida: "Atlántida",
+    ficohsa: "Ficohsa",
+    banpais: "Banpaís",
+    occidente: "Occidente",
+    davivienda: "Davivienda",
+    lafise: "Lafise",
+    tigo_money: "Tigo Money",
+    paypal: "PayPal",
+    binance: "Binance",
+    efectivo: "Efectivo",
+    transferencia: "Transferencia",
+    otro: "Otro",
+    sin_banco: "Sin banco",
+  };
+
+  return map[key] || String(raw || "Sin banco").trim() || "Sin banco";
+}
+
 function resumenBancosMesTexto(monthKey, list = []) {
   const rows = Array.isArray(list) ? list : [];
   const label = monthLabelFromKeyLocal(monthKey);
   const map = {};
 
   for (const r of rows) {
-    const banco = String(r.banco || "Sin banco").trim();
+    const bancoRaw = String(r.banco || r.metodo || "").trim();
+    const bancoKey = normalizarBancoKey(bancoRaw);
+    const bancoLabel = humanBanco(bancoRaw);
     const monto = Number(r.monto || 0);
-    if (!map[banco]) map[banco] = { ingresos: 0, egresos: 0, neto: 0 };
 
-    if (String(r.tipo || "").toLowerCase() === "egreso") {
-      map[banco].egresos += monto;
-      map[banco].neto -= monto;
+    if (!map[bancoKey]) {
+      map[bancoKey] = {
+        banco: bancoLabel,
+        ingresos: 0,
+        egresos: 0,
+        neto: 0,
+      };
+    }
+
+    if (String(r.tipo || "").trim().toLowerCase() === "egreso") {
+      map[bancoKey].egresos += monto;
+      map[bancoKey].neto -= monto;
     } else {
-      map[banco].ingresos += monto;
-      map[banco].neto += monto;
+      map[bancoKey].ingresos += monto;
+      map[bancoKey].neto += monto;
     }
   }
 
-  const items = Object.entries(map).sort((a, b) => b[1].neto - a[1].neto);
+  const items = Object.values(map).sort((a, b) => {
+    const totalA = Number(a.ingresos || 0) + Number(a.egresos || 0);
+    const totalB = Number(b.ingresos || 0) + Number(b.egresos || 0);
+    return totalB - totalA;
+  });
+
   let txt = `🏦 *RESUMEN POR BANCO — ${escMD(label)}*\n\n`;
 
   if (!items.length) {
@@ -860,9 +925,9 @@ function resumenBancosMesTexto(monthKey, list = []) {
     return txt;
   }
 
-  txt += items.map(([bank, v], i) => {
+  txt += items.map((v, i) => {
     return (
-      `${i + 1}. *${escMD(bank)}*\n` +
+      `${i + 1}. *${escMD(v.banco)}*\n` +
       `   Ingresos: ${escMD(moneyLps(v.ingresos))}\n` +
       `   Egresos: ${escMD(moneyLps(v.egresos))}\n` +
       `   Neto: ${escMD(moneyLps(v.neto))}`
@@ -871,6 +936,7 @@ function resumenBancosMesTexto(monthKey, list = []) {
 
   return txt;
 }
+
 
 function resumenTopPlataformasTexto(monthKey, list = []) {
   const rows = Array.isArray(list) ? list : [];
