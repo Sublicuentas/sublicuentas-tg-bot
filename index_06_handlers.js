@@ -1,3 +1,4 @@
+
 /* ✅ SUBLICUENTAS TG BOT — PARTE 6/6 CORREGIDA
    HANDLERS / COMANDOS / CALLBACKS / MESSAGE / AUTOTXT / HARDEN / HTTP
    -------------------------------------------------------------------
@@ -268,7 +269,7 @@ function resetChatState(chatId) {
 async function isBackoffice(userId) {
   try {
     if (await isSuperAdmin(userId)) return true;
-    if (await isBackoffice(userId)) return true;
+    if (await isAdmin(userId)) return true;
     return false;
   } catch (e) {
     logErr("isBackoffice", e);
@@ -3670,4 +3671,4 @@ if (!global.__SUBLICUENTAS_HTTP_SERVER__) {
     .listen(PORT, () => {
       console.log("🌐 HTTP KEEPALIVE activo en puerto", PORT);
     });
-}
+       }
