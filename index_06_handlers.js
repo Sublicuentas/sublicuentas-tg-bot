@@ -265,6 +265,17 @@ function resetChatState(chatId) {
   } catch (_) {}
 }
 
+async function isBackoffice(userId) {
+  try {
+    if (await isSuperAdmin(userId)) return true;
+    if (await isBackoffice(userId)) return true;
+    return false;
+  } catch (e) {
+    logErr("isBackoffice", e);
+    return false;
+  }
+}
+
 async function sendBottomMainMenu(chatId, userId) {
   try {
     resetChatState(chatId);
@@ -272,7 +283,7 @@ async function sendBottomMainMenu(chatId, userId) {
     let text = "";
     let keyboard = [];
 
-    if (await isAdmin(userId)) {
+    if (await isBackoffice(userId)) {
       text = "📌 *MENÚ PRINCIPAL*\n\nSeleccione una opción:";
       keyboard = [
         [
@@ -454,7 +465,7 @@ async function userHasAccessFromMessage(msg) {
   const chatId = msg?.chat?.id;
   if (!chatId || !userId) return false;
 
-  if (await isAdmin(userId)) return true;
+  if (await isBackoffice(userId)) return true;
   if (await isVendedor(userId)) return true;
 
   try {
@@ -465,7 +476,7 @@ async function userHasAccessFromMessage(msg) {
 
 async function userHasAccessById(chatId, userId) {
   if (!chatId || !userId) return false;
-  if (await isAdmin(userId)) return true;
+  if (await isBackoffice(userId)) return true;
   if (await isVendedor(userId)) return true;
   try {
     await bot.sendMessage(chatId, "⛔ Acceso denegado");
@@ -564,7 +575,7 @@ bot.onText(/\/buscar\s+(.+)/i, async (msg, match) => {
 
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-  if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+  if (!(await isBackoffice(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
 
   const q = String(match[1] || "").trim();
   if (!q) return bot.sendMessage(chatId, "⚠️ Uso: /buscar texto");
@@ -577,7 +588,7 @@ bot.onText(/\/cliente\s+(\S+)/i, async (msg, match) => {
 
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-  if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+  if (!(await isBackoffice(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
 
   const tel = String(match[1] || "").trim();
   const resultados = await buscarPorTelefonoTodos(tel);
@@ -593,7 +604,7 @@ bot.onText(/\/clientes_txt/i, async (msg) => {
   if (!hasRuntimeLock()) return;
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-  if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+  if (!(await isBackoffice(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
   return reporteClientesTXTGeneral(chatId);
 });
 
@@ -601,7 +612,7 @@ bot.onText(/\/vendedores_txt_split/i, async (msg) => {
   if (!hasRuntimeLock()) return;
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-  if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+  if (!(await isBackoffice(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
   return reporteClientesSplitPorVendedorTXT(chatId);
 });
 
@@ -611,8 +622,8 @@ bot.onText(/\/sincronizar_todo/i, async (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
 
-  if (!(await isAdmin(userId))) {
-    return bot.sendMessage(chatId, "⛔ Solo ADMIN puede sincronizar la base de datos.");
+  if (!(await isSuperAdmin(userId))) {
+    return bot.sendMessage(chatId, "⛔ Solo el SUPER ADMIN puede sincronizar la base de datos.");
   }
 
   await bot.sendMessage(chatId, "🔄 *Iniciando sincronización masiva...*", {
@@ -621,7 +632,6 @@ bot.onText(/\/sincronizar_todo/i, async (msg) => {
 
   let perfilesEmparejados = 0;
   const cuentasAfectadas = new Set();
-  let serviciosSinInventario = 0;
 
   try {
     const snapClientes = await db.collection("clientes").get();
@@ -629,51 +639,27 @@ bot.onText(/\/sincronizar_todo/i, async (msg) => {
     for (const docCli of snapClientes.docs) {
       const c = docCli.data() || {};
       const servicios = Array.isArray(c.servicios) ? c.servicios : [];
-      const nombreCliente = String(c.nombrePerfil || "Sin Nombre").trim();
+      const nombreCliente = c.nombrePerfil || "Sin Nombre";
 
       for (const s of servicios) {
-        const plat = normalizarPlataforma(s.plataforma || "");
-        const accesoRaw = String(s.correo || "").trim();
-        const pinCliente = String(s.pin || "0000").trim();
+        if (!s.correo || !s.plataforma) continue;
 
-        if (!plat || !accesoRaw) continue;
+        const plat = normalizarPlataforma(s.plataforma);
+        const acceso = normalizeIdentByPlatformLocal(plat, s.correo);
+        const idInv = docIdInventarioLocal(acceso, plat);
 
-        const acceso = normalizeIdentByPlatformLocal(plat, accesoRaw);
+        const refInv = db.collection("inventario").doc(idInv);
+        const docInv = await refInv.get();
 
-        let found = null;
+        if (!docInv.exists) continue;
 
-        try {
-          found = await buscarCorreoInventarioPorPlatCorreo(plat, acceso);
-        } catch (_) {
-          found = null;
-        }
-
-        if (!found || !found.ref) {
-          try {
-            const idInv = docIdInventarioLocal(acceso, plat);
-            const refInvDirect = db.collection("inventario").doc(idInv);
-            const docInvDirect = await refInvDirect.get();
-            if (docInvDirect.exists) {
-              found = { ref: refInvDirect, data: docInvDirect.data() || {} };
-            }
-          } catch (_) {}
-        }
-
-        if (!found || !found.ref) {
-          serviciosSinInventario++;
-          continue;
-        }
-
-        const refInv = found.ref;
-        const invData = found.data || {};
+        const invData = docInv.data() || {};
         let clientesInv = Array.isArray(invData.clientes) ? invData.clientes.slice() : [];
+        const pinCliente = s.pin || "0000";
 
-        const yaExiste = clientesInv.some((x) => {
-          const nom = String(x?.nombre || "").trim().toLowerCase();
-          const pin = String(x?.pin || "").trim();
-          return nom === nombreCliente.toLowerCase() && pin === pinCliente;
-        });
-
+        const yaExiste = clientesInv.some(
+          (x) => x.nombre === nombreCliente && x.pin === pinCliente
+        );
         if (yaExiste) continue;
 
         clientesInv.push({
@@ -682,17 +668,12 @@ bot.onText(/\/sincronizar_todo/i, async (msg) => {
           slot: clientesInv.length + 1,
         });
 
-        clientesInv = clientesInv.map((x, i) => ({
-          ...x,
-          slot: i + 1,
-        }));
-
-        const capacidadBase =
-          Number(invData.capacidad || invData.total || 0) ||
-          getTotalPorPlataformaLocal(plat);
-
+        const capacidad = Number(invData.capacidad || invData.total || 0);
         const ocupados = clientesInv.length;
-        const disponibles = Math.max(0, capacidadBase - ocupados);
+        const disponibles =
+          capacidad > 0
+            ? Math.max(0, capacidad - ocupados)
+            : Math.max(0, Number(invData.disp || 0) - 1);
         const estado = disponibles === 0 ? "llena" : "activa";
 
         await refInv.set(
@@ -702,21 +683,20 @@ bot.onText(/\/sincronizar_todo/i, async (msg) => {
             disponibles,
             disp: disponibles,
             estado,
-            capacidad: capacidadBase,
+            capacidad,
             updatedAt: admin.firestore.FieldValue.serverTimestamp(),
           },
           { merge: true }
         );
 
         perfilesEmparejados++;
-        cuentasAfectadas.add(refInv.id);
+        cuentasAfectadas.add(idInv);
       }
     }
 
     let reporte = "✅ *Sincronización completada con éxito*\n\n";
     reporte += `👤 Perfiles emparejados: *${perfilesEmparejados}*\n`;
-    reporte += `📦 Cuentas actualizadas: *${cuentasAfectadas.size}*\n`;
-    reporte += `🧩 Servicios sin cuenta en inventario: *${serviciosSinInventario}*\n\n`;
+    reporte += `📦 Cuentas actualizadas: *${cuentasAfectadas.size}*\n\n`;
     reporte += "💡 _La base quedó sincronizada._";
 
     return bot.sendMessage(chatId, reporte, { parse_mode: "Markdown" });
@@ -728,6 +708,7 @@ bot.onText(/\/sincronizar_todo/i, async (msg) => {
     );
   }
 });
+
 // ===============================
 // COMANDOS RENOVACIONES
 // ===============================
@@ -737,7 +718,7 @@ bot.onText(/\/renovaciones(?:\s+(.+))?/i, async (msg, match) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
 
-  const adminOk = await isAdmin(userId);
+  const adminOk = await isBackoffice(userId);
   const vend = await getRevendedorPorTelegramId(userId);
 
   if (!adminOk && !(vend && vend.nombre)) {
@@ -778,7 +759,7 @@ bot.onText(/\/txt(?:\s+(.+))?/i, async (msg, match) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
 
-  const adminOk = await isAdmin(userId);
+  const adminOk = await isBackoffice(userId);
   const vend = await getRevendedorPorTelegramId(userId);
 
   if (!adminOk && !(vend && vend.nombre)) {
@@ -819,7 +800,7 @@ bot.onText(/\/finanzas/i, async (msg) => {
   if (!hasRuntimeLock()) return;
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-  if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+  if (!(await isBackoffice(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
   return menuPagos(chatId);
 });
 
@@ -828,7 +809,7 @@ bot.onText(/\/resumen_fecha\s+(.+)/i, async (msg, match) => {
 
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-  if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+  if (!(await isBackoffice(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
 
   const fecha =
     String(match[1] || "").trim().toLowerCase() === "hoy"
@@ -848,7 +829,7 @@ bot.onText(/\/bancos_mes\s+(.+)/i, async (msg, match) => {
 
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-  if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+  if (!(await isBackoffice(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
 
   const key = parseMonthInputToKey(String(match[1] || "").trim());
   if (!key) return bot.sendMessage(chatId, "⚠️ Uso: /bancos_mes mm/yyyy");
@@ -864,7 +845,7 @@ bot.onText(/\/top_plataformas_mes\s+(.+)/i, async (msg, match) => {
 
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-  if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+  if (!(await isBackoffice(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
 
   const key = parseMonthInputToKey(String(match[1] || "").trim());
   if (!key) return bot.sendMessage(chatId, "⚠️ Uso: /top_plataformas_mes mm/yyyy");
@@ -880,7 +861,7 @@ bot.onText(/\/cierre_caja\s+(.+)/i, async (msg, match) => {
 
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-  if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+  if (!(await isBackoffice(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
 
   const fecha =
     String(match[1] || "").trim().toLowerCase() === "hoy"
@@ -902,7 +883,7 @@ bot.onText(
 
     const chatId = msg.chat.id;
     const userId = msg.from.id;
-    if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+    if (!(await isBackoffice(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
 
     const fechaInicio = String(match[1] || "").trim();
     const fechaFin = String(match[2] || "").trim();
@@ -928,7 +909,7 @@ bot.onText(
 
     const chatId = msg.chat.id;
     const userId = msg.from.id;
-    if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+    if (!(await isBackoffice(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
 
     const fechaInicio = String(match[1] || "").trim();
     const fechaFin = String(match[2] || "").trim();
@@ -948,7 +929,7 @@ bot.onText(/\/editar_movimiento\s+([A-Za-z0-9_-]+)/i, async (msg, match) => {
 
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-  if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+  if (!(await isBackoffice(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
 
   const id = String(match[1] || "").trim();
   const ref = db.collection(FINANZAS_COLLECTION).doc(id);
@@ -1031,7 +1012,7 @@ bot.onText(/\/addvendedor\s+(\d+)\s+(.+)/i, async (msg, match) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
 
-  if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Solo admin puede usar este comando");
+  if (!(await isBackoffice(userId))) return bot.sendMessage(chatId, "⛔ Solo admin puede usar este comando");
 
   const telegramId = String(match[1] || "").trim();
   const nombre = String(match[2] || "").trim();
@@ -1071,7 +1052,7 @@ bot.onText(/\/delvendedor\s+(.+)/i, async (msg, match) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
 
-  if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Solo admin puede usar este comando");
+  if (!(await isBackoffice(userId))) return bot.sendMessage(chatId, "⛔ Solo admin puede usar este comando");
 
   const nombre = String(match[1] || "").trim();
   if (!nombre) return bot.sendMessage(chatId, "⚠️ Uso:\n/delvendedor Nombre");
@@ -1208,7 +1189,7 @@ PLATFORM_KEYS.forEach((p) => {
 
     const chatId = msg.chat.id;
     const userId = msg.from.id;
-    if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+    if (!(await isBackoffice(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
 
     return enviarInventarioPlataforma(chatId, p, 0);
   });
@@ -1219,7 +1200,7 @@ bot.onText(/\/stock/i, async (msg) => {
 
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-  if (!(await isAdmin(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+  if (!(await isBackoffice(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
 
   return mostrarStockGeneral(chatId);
 });
@@ -1234,7 +1215,7 @@ bot.onText(/\/addcorreo\s+(\S+)\s+(\S+)(?:\s+(\d+))?/i, async (msg, match) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
 
-  if (!(await isAdmin(userId))) {
+  if (!(await isBackoffice(userId))) {
     return bot.sendMessage(chatId, "⛔ Acceso denegado. Solo admins pueden agregar inventario.");
   }
 
@@ -1322,7 +1303,7 @@ bot.on("callback_query", async (q) => {
 
     bindPanelFromCallback(q);
 
-    const adminOk = await isAdmin(userId);
+    const adminOk = await isBackoffice(userId);
     const vend = await getRevendedorPorTelegramId(userId);
     const vendOk = !!(vend && vend.nombre);
 
@@ -2645,7 +2626,7 @@ bot.on("message", async (msg) => {
   try {
     if (!(await userHasAccessFromMessage(msg))) return;
 
-    const adminOk = await isAdmin(userId);
+    const adminOk = await isBackoffice(userId);
     const vendOk = await isVendedor(userId);
 
     if (wizard.has(String(chatId)) && text.startsWith("/")) {
@@ -2731,12 +2712,12 @@ bot.on("message", async (msg) => {
     }
 
     if (wizard.has(String(chatId))) {
-      if (!(await isAdmin(userId))) return;
+      if (!(await isBackoffice(userId))) return;
       return wizardNext(chatId, text);
     }
 
     if (pending.has(String(chatId))) {
-      if (!(await isAdmin(userId))) return;
+      if (!(await isBackoffice(userId))) return;
 
       const p = pending.get(String(chatId));
       const t = String(text || "").trim();
@@ -3689,4 +3670,4 @@ if (!global.__SUBLICUENTAS_HTTP_SERVER__) {
     .listen(PORT, () => {
       console.log("🌐 HTTP KEEPALIVE activo en puerto", PORT);
     });
-     }
+}
