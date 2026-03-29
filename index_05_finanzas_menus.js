@@ -1,4 +1,4 @@
-/* ✅ SUBLICUENTAS TG BOT — PARTE 5/6 CORREGIDA
+/* ✅ SUBLICUENTAS TG BOT — PARTE 5/6 CORREGIDA FINAL
    FINANZAS / REPORTES / EXCEL / MENÚS
    -----------------------------------
    Ajustes:
@@ -8,6 +8,9 @@
    - Motivos de egreso limitados a los requeridos
    - Reportes por fecha robustos para registros viejos y nuevos
    - Compatible con index_06_handlers actual
+   - Resúmenes sin barras invertidas \ en Telegram
+   - Bancos unificados (BAC, Atlántida, etc.)
+   - Excel por rango leyendo colecciones espejo también
 */
 
 const fs = require("fs");
@@ -41,15 +44,15 @@ const { humanPlataforma } = require("./index_03_clientes_crm");
 const FIN_BANCOS_LOCAL = [
   "BAC",
   "Ficohsa",
-  "Atlantida",
-  "Banpais",
+  "Atlántida",
+  "Banpaís",
   "Occidente",
   "Davivienda",
   "Lafise",
-  "Cash",
+  "Efectivo",
   "Tigo Money",
   "Tengo",
-  "Paypal",
+  "PayPal",
   "Binance",
   "Otro",
 ];
@@ -154,7 +157,6 @@ async function deleteFinanceDocMirrored(docId) {
     }
   }
 }
-
 
 // ===============================
 // HELPERS
@@ -339,8 +341,63 @@ function finConceptoLabel(m = {}) {
   return String(m.plataforma || m.detalle || m.descripcion || m.cliente || "Ingreso").trim();
 }
 
+function normalizarBancoKey(raw = "") {
+  const s = String(raw || "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+
+  if (!s) return "sin_banco";
+
+  if (["bac", "b.a.c", "b a c"].includes(s)) return "bac";
+  if (["atlantida", "banco atlantida", "atlantida banco"].includes(s)) return "atlantida";
+  if (["ficohsa", "banco ficohsa"].includes(s)) return "ficohsa";
+  if (["banpais", "banco banpais"].includes(s)) return "banpais";
+  if (["occidente", "banco occidente"].includes(s)) return "occidente";
+  if (["davivienda", "banco davivienda"].includes(s)) return "davivienda";
+  if (["lafise", "banco lafise"].includes(s)) return "lafise";
+  if (["tigo money", "tigomoney", "tigo"].includes(s)) return "tigo_money";
+  if (["paypal", "pay pal"].includes(s)) return "paypal";
+  if (["binance"].includes(s)) return "binance";
+  if (["efectivo", "cash"].includes(s)) return "efectivo";
+  if (["transferencia", "transferencia bancaria"].includes(s)) return "transferencia";
+  if (["tengo"].includes(s)) return "tengo";
+  if (["otro", "otros"].includes(s)) return "otro";
+
+  return s.replace(/\s+/g, "_");
+}
+
+function humanBanco(raw = "") {
+  const key = normalizarBancoKey(raw);
+
+  const map = {
+    bac: "BAC",
+    atlantida: "Atlántida",
+    ficohsa: "Ficohsa",
+    banpais: "Banpaís",
+    occidente: "Occidente",
+    davivienda: "Davivienda",
+    lafise: "Lafise",
+    tigo_money: "Tigo Money",
+    paypal: "PayPal",
+    binance: "Binance",
+    efectivo: "Efectivo",
+    transferencia: "Transferencia",
+    tengo: "Tengo",
+    otro: "Otro",
+    sin_banco: "Sin banco",
+  };
+
+  return map[key] || String(raw || "Sin banco").trim() || "Sin banco";
+}
+
 function finExtraLabel(m = {}) {
-  return String(m.banco || m.metodo || m.vendedor || m.cliente || "").trim();
+  const tipo = String(m.tipo || "").toLowerCase();
+  if (tipo === "egreso") {
+    return String(m.detalle || m.descripcion || "").trim();
+  }
+  return humanBanco(m.banco || m.metodo || "");
 }
 
 function textoMovimientoParaEliminar(m = {}) {
@@ -364,13 +421,13 @@ function textoConfirmarEliminacionMovimiento(m = {}) {
   const concepto = finConceptoLabel(m);
   const extra = finExtraLabel(m);
 
-  let txt = `🗑️ *CONFIRMAR ELIMINACIÓN*\n\n`;
-  txt += `*Tipo:* ${escMD(tipo)}\n`;
-  txt += `*Fecha:* ${escMD(fecha)}\n`;
-  txt += `*Monto:* ${escMD(monto)}\n`;
-  txt += `*Concepto:* ${escMD(concepto)}\n`;
-  if (extra) txt += `*Extra:* ${escMD(extra)}\n`;
-  txt += `\n¿Desea eliminar este movimiento?`;
+  let txt = "🗑️ CONFIRMAR ELIMINACIÓN\n\n";
+  txt += `Tipo: ${tipo}\n`;
+  txt += `Fecha: ${fecha}\n`;
+  txt += `Monto: ${monto}\n`;
+  txt += `Concepto: ${concepto}\n`;
+  if (extra) txt += `Extra: ${extra}\n`;
+  txt += "\n¿Desea eliminar este movimiento?";
 
   return txt;
 }
@@ -658,7 +715,7 @@ async function registrarIngresoTx({
   const payload = {
     tipo: "ingreso",
     monto: montoOk,
-    banco: String(banco || "").trim(),
+    banco: humanBanco(String(banco || "").trim()),
     plataforma: String(plataforma || "").trim(),
     detalle: String(detalle || "").trim(),
     fecha: fechaOk,
@@ -756,6 +813,7 @@ async function getMovimientosPorMes(monthKey, _userId = null, _isSuper = false) 
     return [];
   }
 }
+
 async function getMovimientosPorRango(fechaInicio, fechaFin, _userId = null, _isSuper = false) {
   const ini = normalizeDMY(fechaInicio);
   const fin = normalizeDMY(fechaFin);
@@ -791,7 +849,6 @@ async function getMovimientosPorRango(fechaInicio, fechaFin, _userId = null, _is
   }
 }
 
-
 async function eliminarMovimientoFinanzas(id, _userId = null, _isSuper = false) {
   const mov = await getMovimientoFinanzaById(id);
   if (!mov) throw new Error("Movimiento no encontrado.");
@@ -816,71 +873,21 @@ function resumenFinanzasTextoPorFecha(fecha, list = []) {
 
   const utilidad = ingresos - egresos;
 
-  let txt = `📅 *RESUMEN DEL ${escMD(fecha)}*\n\n`;
-  txt += `*Ingresos:* ${escMD(moneyLps(ingresos))}\n`;
-  txt += `*Egresos:* ${escMD(moneyLps(egresos))}\n`;
-  txt += `*Utilidad:* ${escMD(moneyLps(utilidad))}\n`;
-  txt += `*Movimientos:* ${escMD(String(rows.length))}\n`;
+  let txt = `📅 RESUMEN DEL ${String(fecha || "")}\n\n`;
+  txt += `Ingresos: ${moneyLps(ingresos)}\n`;
+  txt += `Egresos: ${moneyLps(egresos)}\n`;
+  txt += `Utilidad: ${moneyLps(utilidad)}\n`;
+  txt += `Movimientos: ${String(rows.length)}\n`;
 
   if (rows.length) {
-    txt += `\n*Detalle:*\n`;
+    txt += `\nDetalle:\n`;
     txt += rows.slice(0, 20).map((r, i) => {
       const tipo = String(r.tipo || "").toLowerCase() === "egreso" ? "➖" : "➕";
-      return `${i + 1}. ${tipo} ${escMD(textoMovimientoParaEliminar(r))}`;
+      return `${i + 1}. ${tipo} ${textoMovimientoParaEliminar(r)}`;
     }).join("\n");
   }
 
   return txt;
-}
-
-
-function normalizarBancoKey(raw = "") {
-  const s = String(raw || "")
-    .trim()
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "");
-
-  if (!s) return "sin_banco";
-
-  if (["bac"].includes(s)) return "bac";
-  if (["atlantida", "banco atlantida"].includes(s)) return "atlantida";
-  if (["ficohsa", "banco ficohsa"].includes(s)) return "ficohsa";
-  if (["banpais", "banco banpais"].includes(s)) return "banpais";
-  if (["occidente", "banco occidente"].includes(s)) return "occidente";
-  if (["davivienda", "banco davivienda"].includes(s)) return "davivienda";
-  if (["lafise", "banco lafise"].includes(s)) return "lafise";
-  if (["tigo money", "tigomoney", "tigo"].includes(s)) return "tigo_money";
-  if (["paypal", "pay pal"].includes(s)) return "paypal";
-  if (["binance"].includes(s)) return "binance";
-  if (["efectivo", "cash"].includes(s)) return "efectivo";
-  if (["transferencia", "transferencia bancaria"].includes(s)) return "transferencia";
-  if (["otro", "otros"].includes(s)) return "otro";
-
-  return s.replace(/\s+/g, "_");
-}
-
-function humanBanco(raw = "") {
-  const key = normalizarBancoKey(raw);
-
-  const map = {
-    bac: "BAC",
-    atlantida: "Atlántida",
-    ficohsa: "Ficohsa",
-    banpais: "Banpaís",
-    occidente: "Occidente",
-    davivienda: "Davivienda",
-    lafise: "Lafise",
-    tigo_money: "Tigo Money",
-    paypal: "PayPal",
-    binance: "Binance",
-    efectivo: "Efectivo",
-    transferencia: "Transferencia",
-    otro: "Otro",
-    sin_banco: "Sin banco",
-  };
-
-  return map[key] || String(raw || "Sin banco").trim() || "Sin banco";
 }
 
 function resumenBancosMesTexto(monthKey, list = []) {
@@ -918,25 +925,24 @@ function resumenBancosMesTexto(monthKey, list = []) {
     return totalB - totalA;
   });
 
-  let txt = `🏦 *RESUMEN POR BANCO — ${escMD(label)}*\n\n`;
+  let txt = `🏦 RESUMEN POR BANCO — ${label}\n\n`;
 
   if (!items.length) {
-    txt += "_No hay movimientos para este mes._";
+    txt += "No hay movimientos para este mes.";
     return txt;
   }
 
   txt += items.map((v, i) => {
     return (
-      `${i + 1}. *${escMD(v.banco)}*\n` +
-      `   Ingresos: ${escMD(moneyLps(v.ingresos))}\n` +
-      `   Egresos: ${escMD(moneyLps(v.egresos))}\n` +
-      `   Neto: ${escMD(moneyLps(v.neto))}`
+      `${i + 1}. ${v.banco}\n` +
+      `   Ingresos: ${moneyLps(v.ingresos)}\n` +
+      `   Egresos: ${moneyLps(v.egresos)}\n` +
+      `   Neto: ${moneyLps(v.neto)}`
     );
   }).join("\n\n");
 
   return txt;
 }
-
 
 function resumenTopPlataformasTexto(monthKey, list = []) {
   const rows = Array.isArray(list) ? list : [];
@@ -950,14 +956,16 @@ function resumenTopPlataformasTexto(monthKey, list = []) {
   }
 
   const items = Object.entries(map).sort((a, b) => b[1] - a[1]).slice(0, 20);
-  let txt = `🏆 *TOP PLATAFORMAS — ${escMD(label)}*\n\n`;
+  let txt = `🏆 TOP PLATAFORMAS — ${label}\n\n`;
 
   if (!items.length) {
-    txt += "_No hay ingresos para este mes._";
+    txt += "No hay ingresos para este mes.";
     return txt;
   }
 
-  txt += items.map(([plat, total], i) => `${i + 1}. ${escMD(humanPlatSafe(plat))} — ${escMD(moneyLps(total))}`).join("\n");
+  txt += items
+    .map(([plat, total], i) => `${i + 1}. ${humanPlatSafe(plat)} — ${moneyLps(total)}`)
+    .join("\n");
   return txt;
 }
 
@@ -978,22 +986,15 @@ function cierreCajaTexto(fecha, list = []) {
   else if (utilidad === 0) color = "🟡";
 
   let txt = "";
-  txt += `🧾 *CIERRE DE CAJA*
-`;
-  txt += `(${escMD(fecha)})
-
-`;
-  txt += `💰 *Entradas:* ${moneyLps(ingresos)}
-`;
-  txt += `💸 *Salidas:* ${moneyLps(egresos)}
-`;
-  txt += `📦 *Caja final:* ${utilidad >= 0 ? "+" : ""}${moneyLps(utilidad)} ${color}
-`;
-  txt += `🧮 *Movimientos:* ${Array.isArray(list) ? list.length : 0}`;
+  txt += "🧾 CIERRE DE CAJA\n";
+  txt += `(${String(fecha || "")})\n\n`;
+  txt += `💰 Entradas: ${moneyLps(ingresos)}\n`;
+  txt += `💸 Salidas: ${moneyLps(egresos)}\n`;
+  txt += `📦 Caja final: ${utilidad >= 0 ? "+" : ""}${moneyLps(utilidad)} ${color}\n`;
+  txt += `🧮 Movimientos: ${Array.isArray(list) ? list.length : 0}`;
 
   return txt;
 }
-
 
 function cierreCajaTextoRango(fechaInicio, fechaFin, list = []) {
   let ingresos = 0;
@@ -1012,17 +1013,15 @@ function cierreCajaTextoRango(fechaInicio, fechaFin, list = []) {
   else if (utilidad === 0) color = "🟡";
 
   let txt = "";
-  txt += `🧾 *CIERRE DE CAJA*\n`;
-  txt += `(${escMD(fechaInicio)} al ${escMD(fechaFin)})\n\n`;
-  txt += `💰 *Entradas:* ${moneyLps(ingresos)}\n`;
-  txt += `💸 *Salidas:* ${moneyLps(egresos)}\n`;
-  txt += `📦 *Caja final:* ${utilidad >= 0 ? "+" : ""}${moneyLps(utilidad)} ${color}\n`;
-  txt += `🧮 *Movimientos:* ${Array.isArray(list) ? list.length : 0}`;
+  txt += "🧾 CIERRE DE CAJA\n";
+  txt += `(${String(fechaInicio || "")} al ${String(fechaFin || "")})\n\n`;
+  txt += `💰 Entradas: ${moneyLps(ingresos)}\n`;
+  txt += `💸 Salidas: ${moneyLps(egresos)}\n`;
+  txt += `📦 Caja final: ${utilidad >= 0 ? "+" : ""}${moneyLps(utilidad)} ${color}\n`;
+  txt += `🧮 Movimientos: ${Array.isArray(list) ? list.length : 0}`;
 
   return txt;
 }
-
-
 
 function applyHeaderStyle(row) {
   row.font = { bold: true, color: { argb: "FFFFFFFF" } };
@@ -1216,15 +1215,10 @@ async function exportarFinanzasRangoExcel(chatId, fechaInicio, fechaFin, _userId
   const tsFin = dmyToMillis(fin);
   if (tsIni > tsFin) throw new Error("La fecha inicial no puede ser mayor a la final.");
 
-  const snap = await db.collection(FINANZAS_COLLECTION).get();
-  const rows = snap.docs
-    .map((d) => ({ id: d.id, ...(d.data() || {}) }))
-    .map((r) => ({ ...r, fecha: extraerFechaMovimiento(r) || r.fecha || "" }))
-    .filter((r) => {
-      const ts = dmyToMillis(r.fecha || "");
-      return ts >= tsIni && ts <= tsFin;
-    })
-    .sort((a, b) => dmyToMillis(a.fecha || "") - dmyToMillis(b.fecha || ""));
+  const rows = (await getMovimientosPorRango(ini, fin)).map((r) => ({
+    ...r,
+    fecha: extraerFechaMovimiento(r) || r.fecha || "",
+  }));
 
   const wb = new ExcelJS.Workbook();
   wb.creator = "Sublicuentas Bot";
@@ -1392,12 +1386,12 @@ async function confirmarEliminarMovimiento(chatId, movId) {
 async function eliminarMovimientoDefinitivo(chatId, movId, userId = null) {
   const mov = await eliminarMovimientoFinanzas(movId, userId, true);
 
-  let txt = `✅ *MOVIMIENTO ELIMINADO*\n\n`;
-  txt += `*Tipo:* ${escMD(finTipoLabel(mov.tipo))}\n`;
-  txt += `*Fecha:* ${escMD(String(extraerFechaMovimiento(mov) || mov.fecha || "-"))}\n`;
-  txt += `*Monto:* ${escMD(moneyLps(mov.monto || 0))}\n`;
-  txt += `*Concepto:* ${escMD(finConceptoLabel(mov))}\n`;
-  if (userId) txt += `*Eliminado por:* \`${String(userId)}\`\n`;
+  let txt = "✅ MOVIMIENTO ELIMINADO\n\n";
+  txt += `Tipo: ${finTipoLabel(mov.tipo)}\n`;
+  txt += `Fecha: ${String(extraerFechaMovimiento(mov) || mov.fecha || "-")}\n`;
+  txt += `Monto: ${moneyLps(mov.monto || 0)}\n`;
+  txt += `Concepto: ${finConceptoLabel(mov)}\n`;
+  if (userId) txt += `Eliminado por: ${String(userId)}\n`;
 
   return upsertPanel(
     chatId,
@@ -1490,7 +1484,7 @@ async function resumenFinancieroPorMonthKey(monthKey) {
   const topOrdenado = Object.entries(top)
     .sort((a, b) => b[1] - a[1])
     .slice(0, 10)
-    .map(([plat, total]) => ({ plataforma: plat, total }));
+    .map(([plataforma, total]) => ({ plataforma, total }));
 
   return {
     ingresos,
