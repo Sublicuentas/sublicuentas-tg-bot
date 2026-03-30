@@ -2020,8 +2020,10 @@ bot.on("callback_query", async (q) => {
       if (data.startsWith("mail_del_cliente|")) {
         const [, plataforma, accesoEnc] = data.split("|");
         const acceso = decodeURIComponent(accesoEnc || "");
+        const platNorm = normalizarPlataforma(plataforma);
+        const accesoNorm = normalizeIdentByPlatformLocal(platNorm, acceso);
 
-        const found = await buscarCorreoInventarioPorPlatCorreo(plataforma, acceso);
+        const found = await buscarCorreoInventarioPorPlatCorreo(platNorm, accesoNorm);
         if (!found) return bot.sendMessage(chatId, "❌ La cuenta no existe.");
 
         const correoData = found.data || {};
@@ -2031,31 +2033,56 @@ bot.on("callback_query", async (q) => {
           return bot.sendMessage(chatId, "⚠️ Esta cuenta no tiene clientes.");
         }
 
+        pending.set(String(chatId), {
+          mode: "mailDelClientePickCtx",
+          plataforma: platNorm,
+          correo: accesoNorm,
+        });
+
         const kb = clientes.map((c, i) => [
           {
             text: `${i + 1}. ${c.nombre || "Sin nombre"} — PIN ${c.pin || "----"}`,
-            callback_data: `mail_del_cliente_ok|${normalizarPlataforma(plataforma)}|${encodeURIComponent(acceso)}|${i}`,
+            callback_data: `mail_del_cliente_ok|${i}`,
           },
         ]);
 
         kb.push([{
           text: "⬅️ Volver",
-          callback_data: `mail_panel|${normalizarPlataforma(plataforma)}|${encodeURIComponent(acceso)}`,
+          callback_data: `mail_panel|${platNorm}|${encodeURIComponent(accesoNorm)}`,
         }]);
 
         return upsertPanel(
           chatId,
-          `➖ *Quitar cliente*\n\n${identIcon(plataforma)} *${escMD(
-            getIdentLabelLocal(plataforma)
-          )}:* ${escMD(acceso)}\n\nSeleccione el cliente que desea quitar:`,
+          `➖ *Quitar cliente*
+
+${identIcon(platNorm)} *${escMD(
+            getIdentLabelLocal(platNorm)
+          )}:* ${escMD(accesoNorm)}
+
+Seleccione el cliente que desea quitar:`,
           kb
         );
       }
 
       if (data.startsWith("mail_del_cliente_ok|")) {
-        const [, plataforma, accesoEnc, indexStr] = data.split("|");
-        const acceso = decodeURIComponent(accesoEnc || "");
-        const index = Number(indexStr);
+        const parts = data.split("|");
+        let plataforma = "";
+        let acceso = "";
+        let index = -1;
+
+        if (parts.length >= 4) {
+          plataforma = normalizarPlataforma(parts[1] || "");
+          acceso = normalizeIdentByPlatformLocal(plataforma, decodeURIComponent(parts[2] || ""));
+          index = Number(parts[3]);
+        } else {
+          const ctx = pending.get(String(chatId));
+          if (!ctx || ctx.mode !== "mailDelClientePickCtx") {
+            return bot.sendMessage(chatId, "⚠️ El selector expiró. Abra otra vez el menú de quitar cliente.");
+          }
+          plataforma = normalizarPlataforma(ctx.plataforma || "");
+          acceso = normalizeIdentByPlatformLocal(plataforma, ctx.correo || "");
+          index = Number(parts[1]);
+        }
 
         const found = await buscarCorreoInventarioPorPlatCorreo(plataforma, acceso);
         if (!found) return bot.sendMessage(chatId, "❌ La cuenta no existe.");
@@ -2112,8 +2139,10 @@ bot.on("callback_query", async (q) => {
       if (data.startsWith("mail_edit_pin|")) {
         const [, plataforma, accesoEnc] = data.split("|");
         const acceso = decodeURIComponent(accesoEnc || "");
+        const platNorm = normalizarPlataforma(plataforma);
+        const accesoNorm = normalizeIdentByPlatformLocal(platNorm, acceso);
 
-        const found = await buscarCorreoInventarioPorPlatCorreo(plataforma, acceso);
+        const found = await buscarCorreoInventarioPorPlatCorreo(platNorm, accesoNorm);
         if (!found) return bot.sendMessage(chatId, "❌ La cuenta no existe.");
 
         const correoData = found.data || {};
@@ -2121,31 +2150,56 @@ bot.on("callback_query", async (q) => {
 
         if (!clientes.length) return bot.sendMessage(chatId, "⚠️ Esta cuenta no tiene clientes.");
 
+        pending.set(String(chatId), {
+          mode: "mailEditPinPickCtx",
+          plataforma: platNorm,
+          correo: accesoNorm,
+        });
+
         const kb = clientes.map((c, i) => [
           {
             text: `${i + 1}. ${c.nombre || "Sin nombre"} — PIN ${c.pin || "----"}`,
-            callback_data: `mail_edit_pin_sel|${normalizarPlataforma(plataforma)}|${encodeURIComponent(acceso)}|${i}`,
+            callback_data: `mail_edit_pin_sel|${i}`,
           },
         ]);
 
         kb.push([{
           text: "⬅️ Volver",
-          callback_data: `mail_panel|${normalizarPlataforma(plataforma)}|${encodeURIComponent(acceso)}`,
+          callback_data: `mail_panel|${platNorm}|${encodeURIComponent(accesoNorm)}`,
         }]);
 
         return upsertPanel(
           chatId,
-          `🔐 *Editar PIN*\n\n${identIcon(plataforma)} *${escMD(
-            getIdentLabelLocal(plataforma)
-          )}:* ${escMD(acceso)}\n\nSeleccione el cliente:`,
+          `🔐 *Editar PIN*
+
+${identIcon(platNorm)} *${escMD(
+            getIdentLabelLocal(platNorm)
+          )}:* ${escMD(accesoNorm)}
+
+Seleccione el cliente:`,
           kb
         );
       }
 
       if (data.startsWith("mail_edit_pin_sel|")) {
-        const [, plataforma, accesoEnc, indexStr] = data.split("|");
-        const acceso = decodeURIComponent(accesoEnc || "");
-        const clienteIndex = Number(indexStr);
+        const parts = data.split("|");
+        let plataforma = "";
+        let acceso = "";
+        let clienteIndex = -1;
+
+        if (parts.length >= 4) {
+          plataforma = normalizarPlataforma(parts[1] || "");
+          acceso = normalizeIdentByPlatformLocal(plataforma, decodeURIComponent(parts[2] || ""));
+          clienteIndex = Number(parts[3]);
+        } else {
+          const ctx = pending.get(String(chatId));
+          if (!ctx || ctx.mode !== "mailEditPinPickCtx") {
+            return bot.sendMessage(chatId, "⚠️ El selector expiró. Abra otra vez el menú de editar PIN.");
+          }
+          plataforma = normalizarPlataforma(ctx.plataforma || "");
+          acceso = normalizeIdentByPlatformLocal(plataforma, ctx.correo || "");
+          clienteIndex = Number(parts[1]);
+        }
 
         const found = await buscarCorreoInventarioPorPlatCorreo(plataforma, acceso);
         if (!found) return bot.sendMessage(chatId, "❌ La cuenta no existe.");
