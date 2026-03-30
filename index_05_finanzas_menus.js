@@ -8,7 +8,7 @@
    - Motivos de egreso limitados a los requeridos
    - Reportes por fecha robustos para registros viejos y nuevos
    - Compatible con index_06_handlers actual
-   - Resúmenes sin barras invertidas \ en Telegram
+   - Resúmenes sin barras invertidas \ en Telegram (depende del escMD corregido en index_02)
    - Bancos unificados (BAC, Atlántida, etc.)
    - Excel por rango leyendo colecciones espejo también
 */
