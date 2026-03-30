@@ -13,6 +13,7 @@
 
    ✅ AJUSTE CLAVE:
    - FINANZAS_COLLECTION = "finanzas_movimientos"
+   - disneys ajustado a capacidad 3
 */
 
 const TelegramBot = require("node-telegram-bot-api");
@@ -181,7 +182,7 @@ const PLATAFORMAS = {
     nombre: "Disneys",
     categoria: "video",
     acceso: "correo_clave_pin",
-    capacidadDefault: 5,
+    capacidadDefault: 3,
     requiereCorreo: true,
     requiereClave: true,
     requierePin: true,
