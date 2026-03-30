@@ -11,6 +11,9 @@
    - callback_query blindado
    - PLATAFORMAS objeto/array corregido
    - runtimeLock compatible con core viejo y nuevo
+   - cliAddServ respeta plataformas solo_correo
+   - patchServicio / addServicioTx devuelven errores reales
+   - disneys ajustado a 3
 */
 
 const http = require("http");
@@ -171,15 +174,26 @@ function safeBtnLabelLocal(txt = "", max = 60) {
   return `${s.slice(0, Math.max(0, max - 1)).trim()}…`;
 }
 
+function platMetaLocal(plataforma = "") {
+  const p = normalizarPlataforma(plataforma);
+  if (Array.isArray(PLATAFORMAS)) return {};
+  return PLATAFORMAS[p] || {};
+}
+
 function getIdentLabelLocal(plataforma = "") {
   const p = normalizarPlataforma(plataforma);
   if (["oleadatv1", "oleadatv3", "iptv1", "iptv3", "iptv4"].includes(p)) return "Usuario";
   return "Correo";
 }
 
+function esSoloCorreoLocal(plataforma = "") {
+  const cfg = platMetaLocal(plataforma);
+  return cfg.requiereCorreo === true && cfg.requiereClave !== true && cfg.requierePin !== true;
+}
+
 function getAccessTypeLabelLocal(plataforma = "") {
   const p = normalizarPlataforma(plataforma);
-  if (p === "canva") return "Solo correo";
+  if (esSoloCorreoLocal(p)) return "Solo correo";
   if (["oleadatv1", "oleadatv3", "iptv1", "iptv3", "iptv4"].includes(p)) return "Usuario + clave";
   return "Correo + clave";
 }
@@ -217,7 +231,7 @@ function getTotalPorPlataformaLocal(plat = "") {
     netflix: 5,
     vipnetflix: 1,
     disneyp: 6,
-    disneys: 5,
+    disneys: 3,
     hbomax: 5,
     primevideo: 5,
     paramount: 5,
@@ -247,7 +261,6 @@ function identIcon(plataforma = "") {
 const PLATFORM_KEYS = Array.isArray(PLATAFORMAS)
   ? PLATAFORMAS
   : Object.keys(PLATAFORMAS || {});
-
 
 function normalizeTelegramIdLocal(value = "") {
   return String(value == null ? "" : value).trim();
@@ -405,7 +418,6 @@ async function getActiveRevendedoresLocal() {
   return out;
 }
 
-
 async function answerCallbackSilentlySafe(q) {
   try {
     if (q?.id) await bot.answerCallbackQuery(q.id);
@@ -474,12 +486,11 @@ async function sendBottomMainMenu(chatId, userId) {
   }
 }
 
-
 function normalizeLooseText(txt = "") {
   return String(txt || "")
     .toLowerCase()
     .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
+    .replace(/[\u0300-\u036f]/g, "")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -550,10 +561,7 @@ async function resolverBusquedaAdmin(chatId, query = "") {
 
     return bot.sendMessage(
       chatId,
-      `🔎 *Coincidencias de inventario*
-
-Acceso: ${escMD(q)}
-Seleccione plataforma:`,
+      `🔎 *Coincidencias de inventario*\n\nAcceso: ${escMD(q)}\nSeleccione plataforma:`,
       {
         parse_mode: "Markdown",
         reply_markup: { inline_keyboard: kb },
@@ -1048,7 +1056,6 @@ bot.onText(
     });
   }
 );
-
 
 bot.onText(
   /\/excel_finanzas\s+(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})/i,
@@ -2303,12 +2310,13 @@ bot.on("callback_query", async (q) => {
 
       if (data.startsWith("wiz:addmore:")) {
         const clientId = data.split(":")[2];
+        const current = wizard.get(String(chatId)) || {};
         const nuevoState = {
           step: 4,
           clientId,
-          nombre: "",
-          telefono: "",
-          vendedor: "",
+          nombre: current.nombre || "",
+          telefono: current.telefono || "",
+          vendedor: current.vendedor || "",
           servicio: {},
           servStep: 1,
         };
@@ -2453,22 +2461,11 @@ bot.on("callback_query", async (q) => {
 
         if (!esPlataformaValida(plat)) return bot.sendMessage(chatId, "⚠️ Plataforma inválida.");
 
-        const ref = db.collection("clientes").doc(String(clientId));
-        const doc = await ref.get();
-        if (!doc.exists) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
-
-        const c = doc.data() || {};
-        const servicios = Array.isArray(c.servicios) ? c.servicios : [];
-        if (idx < 0 || idx >= servicios.length) return bot.sendMessage(chatId, "⚠️ Servicio inválido.");
-
-        servicios[idx] = { ...(servicios[idx] || {}), plataforma: plat };
-        await ref.set(
-          {
-            servicios,
-            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-          },
-          { merge: true }
-        );
+        try {
+          await patchServicio(clientId, idx, { plataforma: plat });
+        } catch (e) {
+          return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo cambiar la plataforma."}`);
+        }
 
         return menuServicio(chatId, clientId, idx);
       }
@@ -3571,11 +3568,24 @@ bot.on("message", async (msg) => {
           return bot.sendMessage(chatId, `⚠️ ${label} inválido. Escriba el ${label.toLowerCase()}:`);
         }
 
+        const normalizedMail = normalizeIdentByPlatformLocal(p.plat, t);
+
+        if (esSoloCorreoLocal(p.plat)) {
+          pending.set(String(chatId), {
+            mode: "cliAddServPrecio",
+            clientId: p.clientId,
+            plat: p.plat,
+            mail: normalizedMail,
+            pin: "",
+          });
+          return bot.sendMessage(chatId, "💰 Precio (solo número, Lps):");
+        }
+
         pending.set(String(chatId), {
           mode: "cliAddServPin",
           clientId: p.clientId,
           plat: p.plat,
-          mail: normalizeIdentByPlatformLocal(p.plat, t),
+          mail: normalizedMail,
         });
 
         return bot.sendMessage(chatId, "🔐 Escriba la clave/pin:");
@@ -3616,13 +3626,17 @@ bot.on("message", async (msg) => {
 
         pending.delete(String(chatId));
 
-        await addServicioTx(String(p.clientId), {
-          plataforma: p.plat,
-          correo: p.mail,
-          pin: p.pin,
-          precio: p.precio,
-          fechaRenovacion: t,
-        });
+        try {
+          await addServicioTx(String(p.clientId), {
+            plataforma: p.plat,
+            correo: p.mail,
+            pin: p.pin,
+            precio: p.precio,
+            fechaRenovacion: t,
+          });
+        } catch (e) {
+          return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo agregar el servicio."}`);
+        }
 
         return enviarFichaCliente(chatId, p.clientId);
       }
@@ -3634,15 +3648,23 @@ bot.on("message", async (msg) => {
         }
 
         pending.delete(String(chatId));
-        await patchServicio(p.clientId, p.idx, {
-          correo: normalizeIdentByPlatformLocal(p.plat || "", t),
-        });
+        try {
+          await patchServicio(p.clientId, p.idx, {
+            correo: normalizeIdentByPlatformLocal(p.plat || "", t),
+          });
+        } catch (e) {
+          return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo actualizar el servicio."}`);
+        }
         return menuServicio(chatId, p.clientId, p.idx);
       }
 
       if (p.mode === "cliServEditPin") {
         pending.delete(String(chatId));
-        await patchServicio(p.clientId, p.idx, { pin: t });
+        try {
+          await patchServicio(p.clientId, p.idx, { pin: t });
+        } catch (e) {
+          return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo actualizar el servicio."}`);
+        }
         return menuServicio(chatId, p.clientId, p.idx);
       }
 
@@ -3651,7 +3673,11 @@ bot.on("message", async (msg) => {
         if (!Number.isFinite(n) || n <= 0) return bot.sendMessage(chatId, "⚠️ Precio inválido.");
 
         pending.delete(String(chatId));
-        await patchServicio(p.clientId, p.idx, { precio: n });
+        try {
+          await patchServicio(p.clientId, p.idx, { precio: n });
+        } catch (e) {
+          return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo actualizar el servicio."}`);
+        }
         return menuServicio(chatId, p.clientId, p.idx);
       }
 
@@ -3659,7 +3685,11 @@ bot.on("message", async (msg) => {
         if (!isFechaDMY(t)) return bot.sendMessage(chatId, "⚠️ Formato inválido. Use dd/mm/yyyy");
 
         pending.delete(String(chatId));
-        await patchServicio(p.clientId, p.idx, { fechaRenovacion: t });
+        try {
+          await patchServicio(p.clientId, p.idx, { fechaRenovacion: t });
+        } catch (e) {
+          return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo actualizar el servicio."}`);
+        }
         return menuServicio(chatId, p.clientId, p.idx);
       }
 
@@ -3833,4 +3863,4 @@ if (!global.__SUBLICUENTAS_HTTP_SERVER__) {
     .listen(PORT, () => {
       console.log("🌐 HTTP KEEPALIVE activo en puerto", PORT);
     });
-           }
+}
