@@ -8,6 +8,9 @@
    - Helpers de fechas, dinero y normalización
    - upsertPanel robusto
    - Sin lanzar errores fatales al bot
+
+   ✅ AJUSTE CLAVE:
+   - escMD corregido para Markdown normal (sin barras invertidas en correos)
 */
 
 const fs = require("fs");
@@ -200,7 +203,7 @@ function esPlataformaValida(v = "") {
 // MARKDOWN / TEXTO
 // ===============================
 function escMD(v = "") {
-  return String(v ?? "").replace(/([_\-*\[\]()~`>#+=|{}.!\\])/g, "\\$1");
+  return String(v ?? "").replace(/([_*`\[])/g, "\\$1");
 }
 
 function moneyNumber(v = 0) {
@@ -461,6 +464,7 @@ async function getAdminDocById(uid = "") {
     return null;
   }
 }
+
 async function isSuperAdmin(userId) {
   try {
     const uid = String(userId || "").trim();
