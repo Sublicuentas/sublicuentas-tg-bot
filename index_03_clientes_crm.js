@@ -9,6 +9,8 @@
    - TXT general, por vendedor, historial y renovaciones
    - Renovaciones por fecha con filtro opcional por vendedor
    - Compatible con plataformas de correo o usuario
+   - Canva ya no obliga clave/pin
+   - Si addServicioTx falla, el wizard devuelve el error real
 */
 
 const fs = require("fs");
@@ -21,7 +23,7 @@ const { bot, admin, db, PLATAFORMAS } = core;
 
 const escMD = typeof utils.escMD === "function"
   ? utils.escMD
-  : (v = "") => String(v || "").replace(/([_*\[\]()~`>#+\-=|{}.!\\])/g, "\\$1");
+  : (v = "") => String(v || "").replace(/([_*`\[])/g, "\\$1");
 
 const upsertPanel = typeof utils.upsertPanel === "function"
   ? utils.upsertPanel
@@ -103,6 +105,22 @@ function normTxt(v = "") {
     .trim();
 }
 
+function platCfgLocal(plataforma = "") {
+  const p = normalizarPlataforma(plataforma);
+  if (Array.isArray(PLATAFORMAS)) return {};
+  return PLATAFORMAS[p] || {};
+}
+
+function requiereClaveOPinLocal(plataforma = "") {
+  const cfg = platCfgLocal(plataforma);
+  return cfg.requiereClave === true || cfg.requierePin === true;
+}
+
+function esSoloCorreoLocal(plataforma = "") {
+  const cfg = platCfgLocal(plataforma);
+  return cfg.requiereCorreo === true && cfg.requiereClave !== true && cfg.requierePin !== true;
+}
+
 function humanPlataforma(key = "") {
   const k = normalizarPlataforma(key);
   const map = {
@@ -169,7 +187,7 @@ function getIdentLabelLocal(plataforma = "") {
 
 function getAccessTypeLabelLocal(plataforma = "") {
   const p = normalizarPlataforma(plataforma);
-  if (p === "canva") return "Solo correo";
+  if (esSoloCorreoLocal(p)) return "Solo correo";
   if (["oleadatv1", "oleadatv3", "iptv1", "iptv3", "iptv4"].includes(p)) return "Usuario + clave";
   return "Correo + clave";
 }
@@ -205,7 +223,7 @@ function getTotalPorPlataformaLocal(plat = "") {
     netflix: 5,
     vipnetflix: 1,
     disneyp: 6,
-    disneys: 5,
+    disneys: 3,
     hbomax: 5,
     primevideo: 5,
     paramount: 5,
@@ -754,7 +772,7 @@ async function addServicioTx(clientId, servicio = {}) {
   const precio = Number(servicio.precio || 0);
   const fechaRenovacion = String(servicio.fechaRenovacion || "").trim();
 
-  if (!pin) throw new Error("Clave/PIN inválido.");
+  if (requiereClaveOPinLocal(plat) && !pin) throw new Error("Clave/PIN inválido.");
   if (!Number.isFinite(precio) || precio <= 0) throw new Error("Precio inválido.");
   if (!isFechaDMY(fechaRenovacion)) throw new Error("Fecha de renovación inválida.");
 
@@ -940,6 +958,14 @@ async function wizardNext(chatId, rawText = "") {
         return bot.sendMessage(chatId, `⚠️ ${getIdentLabelLocal(plat)} inválido.`);
       }
       st.servicio.correo = normalizeIdentByPlatformLocal(plat, t);
+
+      if (esSoloCorreoLocal(plat)) {
+        st.servicio.pin = "";
+        st.servStep = 4;
+        wizard.set(String(chatId), st);
+        return bot.sendMessage(chatId, "(Servicio 4/5) Precio (solo número, Lps):");
+      }
+
       st.servStep = 3;
       wizard.set(String(chatId), st);
       return bot.sendMessage(chatId, "(Servicio 3/5) Clave/PIN:");
@@ -968,15 +994,20 @@ async function wizardNext(chatId, rawText = "") {
       st.servicio.fechaRenovacion = t;
 
       let clientId = st.clientId;
+      let createdNow = false;
+      let refNew = null;
+
       if (!clientId) {
         const dup = await clienteDuplicado(st.nombre, st.telefono);
         if (dup) {
           return bot.sendMessage(chatId, "⚠️ Ya existe un cliente con ese nombre y teléfono.");
         }
 
-        const ref = db.collection(CLIENTES_COLLECTION).doc();
-        clientId = ref.id;
-        await ref.set({
+        refNew = db.collection(CLIENTES_COLLECTION).doc();
+        clientId = refNew.id;
+        createdNow = true;
+
+        await refNew.set({
           nombrePerfil: st.nombre,
           nombre_norm: normTxt(st.nombre),
           telefono: st.telefono,
@@ -989,13 +1020,22 @@ async function wizardNext(chatId, rawText = "") {
         });
       }
 
-      await addServicioTx(clientId, {
-        plataforma: plat,
-        correo: st.servicio.correo,
-        pin: st.servicio.pin,
-        precio: st.servicio.precio,
-        fechaRenovacion: st.servicio.fechaRenovacion,
-      });
+      try {
+        await addServicioTx(clientId, {
+          plataforma: plat,
+          correo: st.servicio.correo,
+          pin: st.servicio.pin,
+          precio: st.servicio.precio,
+          fechaRenovacion: st.servicio.fechaRenovacion,
+        });
+      } catch (e) {
+        if (createdNow && refNew) {
+          try {
+            await refNew.delete();
+          } catch (_) {}
+        }
+        return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo guardar el servicio."}`);
+      }
 
       wizard.set(String(chatId), {
         step: 4,
