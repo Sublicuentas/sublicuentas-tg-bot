@@ -793,7 +793,7 @@ async function addServicioTx(clientId, servicio = {}) {
     pin,
     precio,
     fechaRenovacion,
-    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    createdAt: admin.firestore.Timestamp.now(),
   };
 
   servicios.push(nuevoServicio);
