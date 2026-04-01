@@ -438,7 +438,8 @@ function resetChatState(chatId) {
 
 async function sendBottomMainMenu(chatId, userId) {
   try {
-    resetChatState(chatId);
+    try { pending?.delete?.(String(chatId)); } catch (_) {}
+    try { wizard?.delete?.(String(chatId)); } catch (_) {}
 
     let text = "";
     let keyboard = [];
@@ -470,16 +471,7 @@ async function sendBottomMainMenu(chatId, userId) {
       return bot.sendMessage(chatId, "⛔ Acceso denegado");
     }
 
-    const sent = await bot.sendMessage(chatId, text, {
-      parse_mode: "Markdown",
-      reply_markup: { inline_keyboard: keyboard },
-    });
-
-    try {
-      panelMsgId?.set?.(String(chatId), sent.message_id);
-    } catch (_) {}
-
-    return sent;
+    return upsertPanel(chatId, text, keyboard, "Markdown");
   } catch (err) {
     logErr("sendBottomMainMenu", err?.stack || err?.message || err);
     return bot.sendMessage(chatId, "⚠️ Error interno al abrir el menú.");
@@ -722,6 +714,11 @@ async function listarRevendedores(chatId) {
 
   return bot.sendMessage(chatId, t, { parse_mode: "Markdown" });
 }
+
+if (global.__SUBLICUENTAS_HANDLERS_READY__) {
+  console.log("ℹ️ Handlers ya estaban registrados. Se omite registro duplicado.");
+} else {
+  global.__SUBLICUENTAS_HANDLERS_READY__ = true;
 
 // ===============================
 // COMANDOS CLIENTES
@@ -3758,6 +3755,8 @@ bot.on("message", async (msg) => {
     }
   }
 });
+
+}
 
 // ===============================
 // AUTO TXT 7AM
