@@ -386,6 +386,40 @@ function monthLabelFromKeyLocal(key = "") {
   return String(key || "");
 }
 
+function canonicalMonthKeyLocal(value = "") {
+  const s = String(value || "").trim();
+  if (!s) return "";
+
+  let m = s.match(/^(\d{4})-(\d{2})$/);
+  if (m) return `${m[1]}-${m[2]}`;
+
+  m = s.match(/^(\d{2})\/(\d{4})$/);
+  if (m) return `${m[2]}-${m[1]}`;
+
+  m = s.match(/^(\d{4})\/(\d{2})$/);
+  if (m) return `${m[1]}-${m[2]}`;
+
+  m = s.match(/^(\d{2})-(\d{4})$/);
+  if (m) return `${m[2]}-${m[1]}`;
+
+  if (isFechaDMY(s)) return monthKeyFromDMYLocal(s);
+  return "";
+}
+
+function alternateMonthKeyLocal(value = "") {
+  const c = canonicalMonthKeyLocal(value);
+  if (!c) return "";
+  const m = c.match(/^(\d{4})-(\d{2})$/);
+  if (!m) return "";
+  return `${m[2]}/${m[1]}`;
+}
+
+function sameMonthKeyLocal(a = "", b = "") {
+  const ca = canonicalMonthKeyLocal(a);
+  const cb = canonicalMonthKeyLocal(b);
+  return !!ca && !!cb && ca === cb;
+}
+
 function parseFechaFlexible(raw = "") {
   const s = String(raw || "").trim();
   if (!s) return null;
@@ -910,25 +944,24 @@ async function getMovimientosPorFecha(fechaDMY, _userId = null, _isSuper = false
 }
 
 async function getMovimientosPorMes(monthKey, _userId = null, _isSuper = false) {
-  const key = String(monthKey || "").trim();
+  const keyRaw = String(monthKey || "").trim();
+  const key = canonicalMonthKeyLocal(keyRaw);
   if (!key) return [];
 
+  const altKey = alternateMonthKeyLocal(key);
   const rowsMap = new Map();
   const monthRange = getMonthRangeFromKey(key);
 
   for (const col of FINANCE_COLLECTIONS_READ) {
-    try {
-      const snapMesKey = await db.collection(col).where("mesKey", "==", key).get();
-      pushUniqueFinanceRows(rowsMap, snapMesKey);
-    } catch (e) {
-      logErr(`getMovimientosPorMes.mesKey:${col}`, e);
-    }
-
-    try {
-      const snapMonthKey = await db.collection(col).where("monthKey", "==", key).get();
-      pushUniqueFinanceRows(rowsMap, snapMonthKey);
-    } catch (e) {
-      logErr(`getMovimientosPorMes.monthKey:${col}`, e);
+    for (const field of ["mesKey", "monthKey"]) {
+      for (const wanted of [key, altKey].filter(Boolean)) {
+        try {
+          const snap = await db.collection(col).where(field, "==", wanted).get();
+          pushUniqueFinanceRows(rowsMap, snap);
+        } catch (e) {
+          logErr(`getMovimientosPorMes.${field}:${col}:${wanted}`, e);
+        }
+      }
     }
 
     if (monthRange) {
@@ -949,15 +982,17 @@ async function getMovimientosPorMes(monthKey, _userId = null, _isSuper = false) 
   let rows = Array.from(rowsMap.values())
     .map((r) => {
       const fechaReal = extraerFechaMovimiento(r) || r.fecha || "";
-      const mesReal = fechaReal ? monthKeyFromDMYLocal(fechaReal) : String(r.mesKey || r.monthKey || "");
+      const mesReal = canonicalMonthKeyLocal(
+        fechaReal || r.mesKey || r.monthKey || ""
+      );
       return {
         ...r,
         fecha: fechaReal,
-        mesKey: mesReal || r.mesKey || "",
-        monthKey: mesReal || r.monthKey || "",
+        mesKey: mesReal || canonicalMonthKeyLocal(r.mesKey || "") || "",
+        monthKey: mesReal || canonicalMonthKeyLocal(r.monthKey || "") || "",
       };
     })
-    .filter((r) => String(r.mesKey || r.monthKey || "").trim() === key)
+    .filter((r) => sameMonthKeyLocal(r.mesKey || r.monthKey || r.fecha || "", key))
     .sort((a, b) => dmyToMillis(b.fecha || "") - dmyToMillis(a.fecha || ""));
 
   if (rows.length) return rows;
@@ -966,15 +1001,17 @@ async function getMovimientosPorMes(monthKey, _userId = null, _isSuper = false) 
   rows = legacyRows
     .map((r) => {
       const fechaReal = extraerFechaMovimiento(r) || r.fecha || "";
-      const mesReal = fechaReal ? monthKeyFromDMYLocal(fechaReal) : String(r.mesKey || r.monthKey || "");
+      const mesReal = canonicalMonthKeyLocal(
+        fechaReal || r.mesKey || r.monthKey || ""
+      );
       return {
         ...r,
         fecha: fechaReal,
-        mesKey: mesReal || r.mesKey || "",
-        monthKey: mesReal || r.monthKey || "",
+        mesKey: mesReal || canonicalMonthKeyLocal(r.mesKey || "") || "",
+        monthKey: mesReal || canonicalMonthKeyLocal(r.monthKey || "") || "",
       };
     })
-    .filter((r) => String(r.mesKey || r.monthKey || "").trim() === key)
+    .filter((r) => sameMonthKeyLocal(r.mesKey || r.monthKey || r.fecha || "", key))
     .sort((a, b) => dmyToMillis(b.fecha || "") - dmyToMillis(a.fecha || ""));
 
   return rows;
