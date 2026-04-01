@@ -1,4 +1,4 @@
-/* ✅ SUBLICUENTAS TG BOT — PARTE 5/6 CORREGIDA FINAL v3
+/* ✅ SUBLICUENTAS TG BOT — PARTE 5/6 CORREGIDA FINAL v4
    FINANZAS / REPORTES / EXCEL / MENÚS
    -----------------------------------
    Ajustes:
@@ -12,7 +12,7 @@
    - Bancos unificados (BAC, Atlántida, etc.)
    - Excel por rango leyendo colecciones espejo también
    - Lecturas por query directa para evitar lentitud
-   - Fallback legacy para registros viejos sin fechaTS
+   - Cache legacy para registros viejos sin fechaTS
 */
 
 const fs = require("fs");
@@ -94,10 +94,47 @@ function normalizeFinanceDocRow(id, data = {}) {
 function pushUniqueFinanceRows(map, snap) {
   if (!snap || snap.empty) return;
   snap.forEach((d) => {
+    const next = normalizeFinanceDocRow(d.id, d.data() || {});
     if (!map.has(d.id)) {
-      map.set(d.id, normalizeFinanceDocRow(d.id, d.data() || {}));
+      map.set(d.id, next);
+      return;
     }
+
+    const prev = map.get(d.id) || {};
+    const merged = { ...prev, ...next };
+    map.set(d.id, merged);
   });
+}
+
+if (!global.__SUBLICUENTAS_FINANZAS_CACHE__) {
+  global.__SUBLICUENTAS_FINANZAS_CACHE__ = {
+    loadedAt: 0,
+    rows: [],
+  };
+}
+
+const FINANZAS_CACHE = global.__SUBLICUENTAS_FINANZAS_CACHE__;
+const FINANZAS_CACHE_TTL_MS = 30000;
+
+async function getLegacyFinanceRowsCached(force = false) {
+  const now = Date.now();
+  if (!force && FINANZAS_CACHE.loadedAt && now - FINANZAS_CACHE.loadedAt < FINANZAS_CACHE_TTL_MS) {
+    return Array.isArray(FINANZAS_CACHE.rows) ? FINANZAS_CACHE.rows.slice() : [];
+  }
+
+  const map = new Map();
+  for (const col of FINANCE_COLLECTIONS_READ) {
+    try {
+      const snapAll = await db.collection(col).get();
+      pushUniqueFinanceRows(map, snapAll);
+    } catch (e) {
+      logErr(`getLegacyFinanceRowsCached:${col}`, e);
+    }
+  }
+
+  FINANZAS_CACHE.loadedAt = now;
+  FINANZAS_CACHE.rows = Array.from(map.values());
+  return FINANZAS_CACHE.rows.slice();
 }
 
 function getDayRangeFromDMY(dmy = "") {
@@ -361,12 +398,18 @@ function parseFechaFlexible(raw = "") {
 }
 
 function extraerFechaMovimiento(r = {}) {
-  const f1 = normalizeDMY(r.fecha || "");
+  const f1 = normalizeDMY(r.fecha || r.fecha_txt || "");
   if (f1) return f1;
-  const f2 = tsToDMY(r.fechaTS);
+
+  const f2 = tsToDMY(r.fechaTS || r.fecha_ts || r.timestamp || null);
   if (f2) return f2;
-  const f3 = tsToDMY(r.createdAt);
+
+  const f3 = tsToDMY(r.createdAt || r.created_at || null);
   if (f3) return f3;
+
+  const f4 = tsToDMY(r.updatedAt || r.updated_at || null);
+  if (f4) return f4;
+
   return "";
 }
 
@@ -854,18 +897,8 @@ async function getMovimientosPorFecha(fechaDMY, _userId = null, _isSuper = false
 
   if (rows.length) return rows;
 
-  // Fallback legacy
-  const legacyMap = new Map();
-  for (const col of FINANCE_COLLECTIONS_READ) {
-    try {
-      const snapAll = await db.collection(col).get();
-      pushUniqueFinanceRows(legacyMap, snapAll);
-    } catch (e) {
-      logErr(`getMovimientosPorFecha.legacy:${col}`, e);
-    }
-  }
-
-  rows = Array.from(legacyMap.values())
+  const legacyRows = await getLegacyFinanceRowsCached();
+  rows = legacyRows
     .map((r) => ({
       ...r,
       fecha: extraerFechaMovimiento(r) || r.fecha || "",
@@ -929,18 +962,8 @@ async function getMovimientosPorMes(monthKey, _userId = null, _isSuper = false) 
 
   if (rows.length) return rows;
 
-  // Fallback legacy
-  const legacyMap = new Map();
-  for (const col of FINANCE_COLLECTIONS_READ) {
-    try {
-      const snapAll = await db.collection(col).get();
-      pushUniqueFinanceRows(legacyMap, snapAll);
-    } catch (e) {
-      logErr(`getMovimientosPorMes.legacy:${col}`, e);
-    }
-  }
-
-  rows = Array.from(legacyMap.values())
+  const legacyRows = await getLegacyFinanceRowsCached();
+  rows = legacyRows
     .map((r) => {
       const fechaReal = extraerFechaMovimiento(r) || r.fecha || "";
       const mesReal = fechaReal ? monthKeyFromDMYLocal(fechaReal) : String(r.mesKey || r.monthKey || "");
@@ -1009,18 +1032,8 @@ async function getMovimientosPorRango(fechaInicio, fechaFin, _userId = null, _is
 
   if (rows.length) return rows;
 
-  // Fallback legacy
-  const legacyMap = new Map();
-  for (const col of FINANCE_COLLECTIONS_READ) {
-    try {
-      const snapAll = await db.collection(col).get();
-      pushUniqueFinanceRows(legacyMap, snapAll);
-    } catch (e) {
-      logErr(`getMovimientosPorRango.legacy:${col}`, e);
-    }
-  }
-
-  rows = Array.from(legacyMap.values())
+  const legacyRows = await getLegacyFinanceRowsCached();
+  rows = legacyRows
     .map((r) => ({
       ...r,
       fecha: extraerFechaMovimiento(r) || r.fecha || "",
