@@ -438,8 +438,7 @@ function resetChatState(chatId) {
 
 async function sendBottomMainMenu(chatId, userId) {
   try {
-    try { pending?.delete?.(String(chatId)); } catch (_) {}
-    try { wizard?.delete?.(String(chatId)); } catch (_) {}
+    resetChatState(chatId);
 
     let text = "";
     let keyboard = [];
@@ -1119,6 +1118,111 @@ bot.onText(/\/editar_movimiento\s+([A-Za-z0-9_-]+)/i, async (msg, match) => {
   });
 });
 
+bot.onText(/\/debug_finanzas_mes\s+(.+)/i, async (msg, match) => {
+  if (!hasRuntimeLock()) return;
+
+  const chatId = msg.chat.id;
+  const userId = msg.from.id;
+  if (!(await safeIsAdminLocal(userId))) {
+    return bot.sendMessage(chatId, "⛔ Solo admin.");
+  }
+
+  const raw = String(match[1] || "").trim();
+  const key = parseMonthInputToKey(raw);
+  if (!key) {
+    return bot.sendMessage(chatId, "⚠️ Uso: /debug_finanzas_mes mm/yyyy");
+  }
+
+  function tsToDMYLocal(ts) {
+    try {
+      const d = ts?.toDate ? ts.toDate() : new Date(ts);
+      if (!(d instanceof Date) || isNaN(d.getTime())) return "";
+      const dd = String(d.getDate()).padStart(2, "0");
+      const mm = String(d.getMonth() + 1).padStart(2, "0");
+      const yyyy = String(d.getFullYear());
+      return `${dd}/${mm}/${yyyy}`;
+    } catch (_) {
+      return "";
+    }
+  }
+
+  function monthFromFecha(fecha = "") {
+    const m = String(fecha || "").match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if (!m) return "";
+    return `${m[3]}-${m[2]}`;
+  }
+
+  const cols = ["finanzas_movimientos", "finanzas"];
+  let out = `🧪 DEBUG FINANZAS MES: ${raw}
+Key buscada: ${key}
+
+`;
+
+  for (const col of cols) {
+    try {
+      const snap = await db.collection(col).limit(300).get();
+      const docs = snap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
+
+      const hits = docs.filter((x) => {
+        const fecha =
+          String(x.fecha || "").trim() ||
+          tsToDMYLocal(x.fechaTS) ||
+          tsToDMYLocal(x.createdAt) ||
+          tsToDMYLocal(x.updatedAt);
+
+        const m1 = String(x.mesKey || "").trim();
+        const m2 = String(x.monthKey || "").trim();
+        const mf = monthFromFecha(fecha);
+
+        return m1 === key || m2 === key || mf === key;
+      });
+
+      out += `📦 ${col}: ${hits.length} coincidencias
+`;
+
+      hits.slice(0, 5).forEach((x, i) => {
+        const fecha =
+          String(x.fecha || "").trim() ||
+          tsToDMYLocal(x.fechaTS) ||
+          tsToDMYLocal(x.createdAt) ||
+          tsToDMYLocal(x.updatedAt) ||
+          "-";
+
+        out += `
+${i + 1}) ${x.id}
+`;
+        out += `tipo: ${x.tipo || "-"}
+`;
+        out += `monto: ${x.monto ?? "-"}
+`;
+        out += `fecha: ${fecha}
+`;
+        out += `mesKey: ${x.mesKey || "-"}
+`;
+        out += `monthKey: ${x.monthKey || "-"}
+`;
+        out += `banco: ${x.banco || "-"}
+`;
+        out += `plataforma: ${x.plataforma || "-"}
+`;
+        out += `detalle: ${x.detalle || x.descripcion || "-"}
+`;
+      });
+
+      out += `
+-------------------------
+`;
+    } catch (e) {
+      out += `❌ ${col}: ${e.message || e}
+
+`;
+    }
+  }
+
+  if (out.length > 3900) out = out.slice(0, 3900);
+  return bot.sendMessage(chatId, out);
+});
+
 // ===============================
 // IDS / VINCULACIÓN
 // ===============================
@@ -1317,6 +1421,7 @@ bot.onText(/^\/start(?:@\w+)?$/i, async (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
 
+  resetChatState(chatId);
   return sendBottomMainMenu(chatId, userId);
 });
 
@@ -1326,6 +1431,7 @@ bot.onText(/^\/menu(?:@\w+)?$/i, async (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
 
+  resetChatState(chatId);
   return sendBottomMainMenu(chatId, userId);
 });
 
