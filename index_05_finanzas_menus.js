@@ -1,4 +1,4 @@
-/* ✅ SUBLICUENTAS TG BOT — PARTE 5/6 CORREGIDA FINAL v5
+/* ✅ SUBLICUENTAS TG BOT — PARTE 5/6 CORREGIDA FINAL
    FINANZAS / REPORTES / EXCEL / MENÚS
    -----------------------------------
    Ajustes:
@@ -11,8 +11,6 @@
    - Resúmenes sin barras invertidas \ en Telegram
    - Bancos unificados (BAC, Atlántida, etc.)
    - Excel por rango leyendo colecciones espejo también
-   - Lecturas por query directa para evitar lentitud
-   - Cache legacy para registros viejos sin fechaTS
 */
 
 const fs = require("fs");
@@ -91,92 +89,23 @@ function normalizeFinanceDocRow(id, data = {}) {
   };
 }
 
-function pushUniqueFinanceRows(map, snap) {
-  if (!snap || snap.empty) return;
-  snap.forEach((d) => {
-    const next = normalizeFinanceDocRow(d.id, d.data() || {});
-    if (!map.has(d.id)) {
-      map.set(d.id, next);
-      return;
-    }
-
-    const prev = map.get(d.id) || {};
-    const merged = { ...prev, ...next };
-    map.set(d.id, merged);
-  });
-}
-
-if (!global.__SUBLICUENTAS_FINANZAS_CACHE__) {
-  global.__SUBLICUENTAS_FINANZAS_CACHE__ = {
-    loadedAt: 0,
-    rows: [],
-  };
-}
-
-const FINANZAS_CACHE = global.__SUBLICUENTAS_FINANZAS_CACHE__;
-const FINANZAS_CACHE_TTL_MS = 30000;
-
-async function getLegacyFinanceRowsCached(force = false) {
-  const now = Date.now();
-  if (!force && FINANZAS_CACHE.loadedAt && now - FINANZAS_CACHE.loadedAt < FINANZAS_CACHE_TTL_MS) {
-    return Array.isArray(FINANZAS_CACHE.rows) ? FINANZAS_CACHE.rows.slice() : [];
-  }
-
+async function getAllFinanceDocsMerged() {
   const map = new Map();
+
   for (const col of FINANCE_COLLECTIONS_READ) {
     try {
-      const snapAll = await db.collection(col).get();
-      pushUniqueFinanceRows(map, snapAll);
+      const snap = await db.collection(col).get();
+      snap.forEach((d) => {
+        if (!map.has(d.id)) {
+          map.set(d.id, normalizeFinanceDocRow(d.id, d.data() || {}));
+        }
+      });
     } catch (e) {
-      logErr(`getLegacyFinanceRowsCached:${col}`, e);
+      logErr(`getAllFinanceDocsMerged:${col}`, e);
     }
   }
 
-  FINANZAS_CACHE.loadedAt = now;
-  FINANZAS_CACHE.rows = Array.from(map.values());
-  return FINANZAS_CACHE.rows.slice();
-}
-
-function getDayRangeFromDMY(dmy = "") {
-  const dt = dmyToDate(dmy);
-  if (!dt) return null;
-
-  const ini = new Date(dt.getFullYear(), dt.getMonth(), dt.getDate(), 0, 0, 0, 0);
-  const fin = new Date(dt.getFullYear(), dt.getMonth(), dt.getDate(), 23, 59, 59, 999);
-
-  return {
-    iniTs: admin.firestore.Timestamp.fromDate(ini),
-    finTs: admin.firestore.Timestamp.fromDate(fin),
-  };
-}
-
-function getMonthRangeFromKey(key = "") {
-  const s = String(key || "").trim();
-
-  let yyyy = "";
-  let mm = "";
-
-  let m = s.match(/^(\d{4})-(\d{2})$/);
-  if (m) {
-    yyyy = m[1];
-    mm = m[2];
-  } else {
-    m = s.match(/^(\d{2})\/(\d{4})$/);
-    if (m) {
-      mm = m[1];
-      yyyy = m[2];
-    }
-  }
-
-  if (!yyyy || !mm) return null;
-
-  const ini = new Date(Number(yyyy), Number(mm) - 1, 1, 0, 0, 0, 0);
-  const fin = new Date(Number(yyyy), Number(mm), 0, 23, 59, 59, 999);
-
-  return {
-    iniTs: admin.firestore.Timestamp.fromDate(ini),
-    finTs: admin.firestore.Timestamp.fromDate(fin),
-  };
+  return Array.from(map.values());
 }
 
 async function getFinanceDocByIdAny(id) {
@@ -205,19 +134,12 @@ async function saveFinancePayloadMirrored(docId, payload = {}) {
   const id = String(docId || "").trim();
   if (!id) throw new Error("ID de finanza inválido.");
 
-  const errors = [];
-
   for (const col of FINANCE_COLLECTIONS_READ) {
     try {
       await db.collection(col).doc(id).set(payload, { merge: false });
     } catch (e) {
-      errors.push(`${col}: ${e?.message || e}`);
       logErr(`saveFinancePayloadMirrored:${col}`, e);
     }
-  }
-
-  if (errors.length === FINANCE_COLLECTIONS_READ.length) {
-    throw new Error(`No se pudo guardar en finanzas. ${errors.join(" | ")}`);
   }
 
   return { id, ...payload };
@@ -375,7 +297,7 @@ function monthKeyFromDMYLocal(dmy = "") {
   if (!dt) return "";
   const mm = String(dt.getMonth() + 1).padStart(2, "0");
   const yyyy = String(dt.getFullYear());
-  return `${yyyy}-${mm}`;
+  return `${mm}/${yyyy}`;
 }
 
 function monthLabelFromKeyLocal(key = "") {
@@ -384,40 +306,6 @@ function monthLabelFromKeyLocal(key = "") {
     if (v) return v;
   }
   return String(key || "");
-}
-
-function canonicalMonthKeyLocal(value = "") {
-  const s = String(value || "").trim();
-  if (!s) return "";
-
-  let m = s.match(/^(\d{4})-(\d{2})$/);
-  if (m) return `${m[1]}-${m[2]}`;
-
-  m = s.match(/^(\d{2})\/(\d{4})$/);
-  if (m) return `${m[2]}-${m[1]}`;
-
-  m = s.match(/^(\d{4})\/(\d{2})$/);
-  if (m) return `${m[1]}-${m[2]}`;
-
-  m = s.match(/^(\d{2})-(\d{4})$/);
-  if (m) return `${m[2]}-${m[1]}`;
-
-  if (isFechaDMY(s)) return monthKeyFromDMYLocal(s);
-  return "";
-}
-
-function alternateMonthKeyLocal(value = "") {
-  const c = canonicalMonthKeyLocal(value);
-  if (!c) return "";
-  const m = c.match(/^(\d{4})-(\d{2})$/);
-  if (!m) return "";
-  return `${m[2]}/${m[1]}`;
-}
-
-function sameMonthKeyLocal(a = "", b = "") {
-  const ca = canonicalMonthKeyLocal(a);
-  const cb = canonicalMonthKeyLocal(b);
-  return !!ca && !!cb && ca === cb;
 }
 
 function parseFechaFlexible(raw = "") {
@@ -432,18 +320,12 @@ function parseFechaFlexible(raw = "") {
 }
 
 function extraerFechaMovimiento(r = {}) {
-  const f1 = normalizeDMY(r.fecha || r.fecha_txt || "");
+  const f1 = normalizeDMY(r.fecha || "");
   if (f1) return f1;
-
-  const f2 = tsToDMY(r.fechaTS || r.fecha_ts || r.timestamp || null);
+  const f2 = tsToDMY(r.fechaTS);
   if (f2) return f2;
-
-  const f3 = tsToDMY(r.createdAt || r.created_at || null);
+  const f3 = tsToDMY(r.createdAt);
   if (f3) return f3;
-
-  const f4 = tsToDMY(r.updatedAt || r.updated_at || null);
-  if (f4) return f4;
-
   return "";
 }
 
@@ -895,126 +777,41 @@ async function getMovimientosPorFecha(fechaDMY, _userId = null, _isSuper = false
   const fecha = normalizeDMY(fechaDMY);
   if (!fecha) return [];
 
-  const rowsMap = new Map();
-  const dayRange = getDayRangeFromDMY(fecha);
-
-  for (const col of FINANCE_COLLECTIONS_READ) {
-    try {
-      const snapFecha = await db.collection(col).where("fecha", "==", fecha).get();
-      pushUniqueFinanceRows(rowsMap, snapFecha);
-    } catch (e) {
-      logErr(`getMovimientosPorFecha.fecha:${col}`, e);
-    }
-
-    if (dayRange) {
-      try {
-        const snapFechaTS = await db
-          .collection(col)
-          .where("fechaTS", ">=", dayRange.iniTs)
-          .where("fechaTS", "<=", dayRange.finTs)
-          .get();
-
-        pushUniqueFinanceRows(rowsMap, snapFechaTS);
-      } catch (e) {
-        logErr(`getMovimientosPorFecha.fechaTS:${col}`, e);
-      }
-    }
+  try {
+    const rows = (await getAllFinanceDocsMerged())
+      .filter((r) => extraerFechaMovimiento(r) === fecha)
+      .map((r) => ({ ...r, fecha: extraerFechaMovimiento(r) || r.fecha || "" }))
+      .sort((a, b) => dmyToMillis(b.fecha || "") - dmyToMillis(a.fecha || ""));
+    return rows;
+  } catch (e) {
+    logErr("getMovimientosPorFecha", e);
+    return [];
   }
-
-  let rows = Array.from(rowsMap.values())
-    .map((r) => ({
-      ...r,
-      fecha: extraerFechaMovimiento(r) || r.fecha || "",
-    }))
-    .filter((r) => String(r.fecha || "").trim() === fecha)
-    .sort((a, b) => dmyToMillis(b.fecha || "") - dmyToMillis(a.fecha || ""));
-
-  if (rows.length) return rows;
-
-  const legacyRows = await getLegacyFinanceRowsCached();
-  rows = legacyRows
-    .map((r) => ({
-      ...r,
-      fecha: extraerFechaMovimiento(r) || r.fecha || "",
-    }))
-    .filter((r) => String(r.fecha || "").trim() === fecha)
-    .sort((a, b) => dmyToMillis(b.fecha || "") - dmyToMillis(a.fecha || ""));
-
-  return rows;
 }
 
 async function getMovimientosPorMes(monthKey, _userId = null, _isSuper = false) {
-  const keyRaw = String(monthKey || "").trim();
-  const key = canonicalMonthKeyLocal(keyRaw);
+  const key = String(monthKey || "").trim();
   if (!key) return [];
 
-  const altKey = alternateMonthKeyLocal(key);
-  const rowsMap = new Map();
-  const monthRange = getMonthRangeFromKey(key);
-
-  for (const col of FINANCE_COLLECTIONS_READ) {
-    for (const field of ["mesKey", "monthKey"]) {
-      for (const wanted of [key, altKey].filter(Boolean)) {
-        try {
-          const snap = await db.collection(col).where(field, "==", wanted).get();
-          pushUniqueFinanceRows(rowsMap, snap);
-        } catch (e) {
-          logErr(`getMovimientosPorMes.${field}:${col}:${wanted}`, e);
-        }
-      }
-    }
-
-    if (monthRange) {
-      try {
-        const snapFechaTS = await db
-          .collection(col)
-          .where("fechaTS", ">=", monthRange.iniTs)
-          .where("fechaTS", "<=", monthRange.finTs)
-          .get();
-
-        pushUniqueFinanceRows(rowsMap, snapFechaTS);
-      } catch (e) {
-        logErr(`getMovimientosPorMes.fechaTS:${col}`, e);
-      }
-    }
+  try {
+    const rows = (await getAllFinanceDocsMerged())
+      .map((r) => {
+        const fechaReal = extraerFechaMovimiento(r);
+        const mesReal = fechaReal ? monthKeyFromDMYLocal(fechaReal) : String(r.mesKey || r.monthKey || "");
+        return {
+          ...r,
+          fecha: fechaReal || r.fecha || "",
+          mesKey: mesReal || r.mesKey || r.monthKey || "",
+          monthKey: mesReal || r.monthKey || r.mesKey || "",
+        };
+      })
+      .filter((r) => String(r.mesKey || r.monthKey || "").trim() === key)
+      .sort((a, b) => dmyToMillis(b.fecha || "") - dmyToMillis(a.fecha || ""));
+    return rows;
+  } catch (e) {
+    logErr("getMovimientosPorMes", e);
+    return [];
   }
-
-  let rows = Array.from(rowsMap.values())
-    .map((r) => {
-      const fechaReal = extraerFechaMovimiento(r) || r.fecha || "";
-      const mesReal = canonicalMonthKeyLocal(
-        fechaReal || r.mesKey || r.monthKey || ""
-      );
-      return {
-        ...r,
-        fecha: fechaReal,
-        mesKey: mesReal || canonicalMonthKeyLocal(r.mesKey || "") || "",
-        monthKey: mesReal || canonicalMonthKeyLocal(r.monthKey || "") || "",
-      };
-    })
-    .filter((r) => sameMonthKeyLocal(r.mesKey || r.monthKey || r.fecha || "", key))
-    .sort((a, b) => dmyToMillis(b.fecha || "") - dmyToMillis(a.fecha || ""));
-
-  if (rows.length) return rows;
-
-  const legacyRows = await getLegacyFinanceRowsCached();
-  rows = legacyRows
-    .map((r) => {
-      const fechaReal = extraerFechaMovimiento(r) || r.fecha || "";
-      const mesReal = canonicalMonthKeyLocal(
-        fechaReal || r.mesKey || r.monthKey || ""
-      );
-      return {
-        ...r,
-        fecha: fechaReal,
-        mesKey: mesReal || canonicalMonthKeyLocal(r.mesKey || "") || "",
-        monthKey: mesReal || canonicalMonthKeyLocal(r.monthKey || "") || "",
-      };
-    })
-    .filter((r) => sameMonthKeyLocal(r.mesKey || r.monthKey || r.fecha || "", key))
-    .sort((a, b) => dmyToMillis(b.fecha || "") - dmyToMillis(a.fecha || ""));
-
-  return rows;
 }
 
 async function getMovimientosPorRango(fechaInicio, fechaFin, _userId = null, _isSuper = false) {
@@ -1022,66 +819,34 @@ async function getMovimientosPorRango(fechaInicio, fechaFin, _userId = null, _is
   const fin = normalizeDMY(fechaFin);
   if (!ini || !fin) return [];
 
-  let iniMs = dmyToMillis(ini);
-  let finMs = dmyToMillis(fin);
+  let tsIni = dmyToMillis(ini);
+  let tsFin = dmyToMillis(fin);
 
-  if (iniMs > finMs) {
-    const temp = iniMs;
-    iniMs = finMs;
-    finMs = temp;
+  if (tsIni > tsFin) {
+    const temp = tsIni;
+    tsIni = tsFin;
+    tsFin = temp;
   }
 
-  const iniDate = new Date(iniMs);
-  iniDate.setHours(0, 0, 0, 0);
-
-  const finDate = new Date(finMs);
-  finDate.setHours(23, 59, 59, 999);
-
-  const iniTs = admin.firestore.Timestamp.fromDate(iniDate);
-  const finTs = admin.firestore.Timestamp.fromDate(finDate);
-
-  const rowsMap = new Map();
-
-  for (const col of FINANCE_COLLECTIONS_READ) {
-    try {
-      const snapFechaTS = await db
-        .collection(col)
-        .where("fechaTS", ">=", iniTs)
-        .where("fechaTS", "<=", finTs)
-        .get();
-
-      pushUniqueFinanceRows(rowsMap, snapFechaTS);
-    } catch (e) {
-      logErr(`getMovimientosPorRango.fechaTS:${col}`, e);
-    }
+  try {
+    const rows = (await getAllFinanceDocsMerged())
+      .map((r) => {
+        const fechaReal = extraerFechaMovimiento(r) || r.fecha || "";
+        return {
+          ...r,
+          fecha: fechaReal,
+        };
+      })
+      .filter((r) => {
+        const ts = dmyToMillis(String(r.fecha || ""));
+        return ts >= tsIni && ts <= tsFin;
+      })
+      .sort((a, b) => dmyToMillis(a.fecha || "") - dmyToMillis(b.fecha || ""));
+    return rows;
+  } catch (e) {
+    logErr("getMovimientosPorRango", e);
+    return [];
   }
-
-  let rows = Array.from(rowsMap.values())
-    .map((r) => ({
-      ...r,
-      fecha: extraerFechaMovimiento(r) || r.fecha || "",
-    }))
-    .filter((r) => {
-      const ts = dmyToMillis(String(r.fecha || ""));
-      return ts >= iniMs && ts <= finMs;
-    })
-    .sort((a, b) => dmyToMillis(a.fecha || "") - dmyToMillis(b.fecha || ""));
-
-  if (rows.length) return rows;
-
-  const legacyRows = await getLegacyFinanceRowsCached();
-  rows = legacyRows
-    .map((r) => ({
-      ...r,
-      fecha: extraerFechaMovimiento(r) || r.fecha || "",
-    }))
-    .filter((r) => {
-      const ts = dmyToMillis(String(r.fecha || ""));
-      return ts >= iniMs && ts <= finMs;
-    })
-    .sort((a, b) => dmyToMillis(a.fecha || "") - dmyToMillis(b.fecha || ""));
-
-  return rows;
 }
 
 async function eliminarMovimientoFinanzas(id, _userId = null, _isSuper = false) {
