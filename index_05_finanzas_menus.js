@@ -1,4 +1,4 @@
-/* ✅ SUBLICUENTAS TG BOT — PARTE 5/6 CORREGIDA FINAL v4
+/* ✅ SUBLICUENTAS TG BOT — PARTE 5/6 CORREGIDA FINAL v5
    FINANZAS / REPORTES / EXCEL / MENÚS
    -----------------------------------
    Ajustes:
