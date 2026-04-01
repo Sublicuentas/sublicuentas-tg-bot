@@ -1,4 +1,4 @@
-/* ✅ SUBLICUENTAS TG BOT — PARTE 5/6 CORREGIDA FINAL
+/* ✅ SUBLICUENTAS TG BOT — PARTE 5/6 CORREGIDA FINAL v3
    FINANZAS / REPORTES / EXCEL / MENÚS
    -----------------------------------
    Ajustes:
@@ -8,9 +8,11 @@
    - Motivos de egreso limitados a los requeridos
    - Reportes por fecha robustos para registros viejos y nuevos
    - Compatible con index_06_handlers actual
-   - Resúmenes sin barras invertidas \ en Telegram (depende del escMD corregido en index_02)
+   - Resúmenes sin barras invertidas \ en Telegram
    - Bancos unificados (BAC, Atlántida, etc.)
    - Excel por rango leyendo colecciones espejo también
+   - Lecturas por query directa para evitar lentitud
+   - Fallback legacy para registros viejos sin fechaTS
 */
 
 const fs = require("fs");
@@ -89,23 +91,55 @@ function normalizeFinanceDocRow(id, data = {}) {
   };
 }
 
-async function getAllFinanceDocsMerged() {
-  const map = new Map();
+function pushUniqueFinanceRows(map, snap) {
+  if (!snap || snap.empty) return;
+  snap.forEach((d) => {
+    if (!map.has(d.id)) {
+      map.set(d.id, normalizeFinanceDocRow(d.id, d.data() || {}));
+    }
+  });
+}
 
-  for (const col of FINANCE_COLLECTIONS_READ) {
-    try {
-      const snap = await db.collection(col).get();
-      snap.forEach((d) => {
-        if (!map.has(d.id)) {
-          map.set(d.id, normalizeFinanceDocRow(d.id, d.data() || {}));
-        }
-      });
-    } catch (e) {
-      logErr(`getAllFinanceDocsMerged:${col}`, e);
+function getDayRangeFromDMY(dmy = "") {
+  const dt = dmyToDate(dmy);
+  if (!dt) return null;
+
+  const ini = new Date(dt.getFullYear(), dt.getMonth(), dt.getDate(), 0, 0, 0, 0);
+  const fin = new Date(dt.getFullYear(), dt.getMonth(), dt.getDate(), 23, 59, 59, 999);
+
+  return {
+    iniTs: admin.firestore.Timestamp.fromDate(ini),
+    finTs: admin.firestore.Timestamp.fromDate(fin),
+  };
+}
+
+function getMonthRangeFromKey(key = "") {
+  const s = String(key || "").trim();
+
+  let yyyy = "";
+  let mm = "";
+
+  let m = s.match(/^(\d{4})-(\d{2})$/);
+  if (m) {
+    yyyy = m[1];
+    mm = m[2];
+  } else {
+    m = s.match(/^(\d{2})\/(\d{4})$/);
+    if (m) {
+      mm = m[1];
+      yyyy = m[2];
     }
   }
 
-  return Array.from(map.values());
+  if (!yyyy || !mm) return null;
+
+  const ini = new Date(Number(yyyy), Number(mm) - 1, 1, 0, 0, 0, 0);
+  const fin = new Date(Number(yyyy), Number(mm), 0, 23, 59, 59, 999);
+
+  return {
+    iniTs: admin.firestore.Timestamp.fromDate(ini),
+    finTs: admin.firestore.Timestamp.fromDate(fin),
+  };
 }
 
 async function getFinanceDocByIdAny(id) {
@@ -134,12 +168,19 @@ async function saveFinancePayloadMirrored(docId, payload = {}) {
   const id = String(docId || "").trim();
   if (!id) throw new Error("ID de finanza inválido.");
 
+  const errors = [];
+
   for (const col of FINANCE_COLLECTIONS_READ) {
     try {
       await db.collection(col).doc(id).set(payload, { merge: false });
     } catch (e) {
+      errors.push(`${col}: ${e?.message || e}`);
       logErr(`saveFinancePayloadMirrored:${col}`, e);
     }
+  }
+
+  if (errors.length === FINANCE_COLLECTIONS_READ.length) {
+    throw new Error(`No se pudo guardar en finanzas. ${errors.join(" | ")}`);
   }
 
   return { id, ...payload };
@@ -297,7 +338,7 @@ function monthKeyFromDMYLocal(dmy = "") {
   if (!dt) return "";
   const mm = String(dt.getMonth() + 1).padStart(2, "0");
   const yyyy = String(dt.getFullYear());
-  return `${mm}/${yyyy}`;
+  return `${yyyy}-${mm}`;
 }
 
 function monthLabelFromKeyLocal(key = "") {
@@ -777,41 +818,143 @@ async function getMovimientosPorFecha(fechaDMY, _userId = null, _isSuper = false
   const fecha = normalizeDMY(fechaDMY);
   if (!fecha) return [];
 
-  try {
-    const rows = (await getAllFinanceDocsMerged())
-      .filter((r) => extraerFechaMovimiento(r) === fecha)
-      .map((r) => ({ ...r, fecha: extraerFechaMovimiento(r) || r.fecha || "" }))
-      .sort((a, b) => dmyToMillis(b.fecha || "") - dmyToMillis(a.fecha || ""));
-    return rows;
-  } catch (e) {
-    logErr("getMovimientosPorFecha", e);
-    return [];
+  const rowsMap = new Map();
+  const dayRange = getDayRangeFromDMY(fecha);
+
+  for (const col of FINANCE_COLLECTIONS_READ) {
+    try {
+      const snapFecha = await db.collection(col).where("fecha", "==", fecha).get();
+      pushUniqueFinanceRows(rowsMap, snapFecha);
+    } catch (e) {
+      logErr(`getMovimientosPorFecha.fecha:${col}`, e);
+    }
+
+    if (dayRange) {
+      try {
+        const snapFechaTS = await db
+          .collection(col)
+          .where("fechaTS", ">=", dayRange.iniTs)
+          .where("fechaTS", "<=", dayRange.finTs)
+          .get();
+
+        pushUniqueFinanceRows(rowsMap, snapFechaTS);
+      } catch (e) {
+        logErr(`getMovimientosPorFecha.fechaTS:${col}`, e);
+      }
+    }
   }
+
+  let rows = Array.from(rowsMap.values())
+    .map((r) => ({
+      ...r,
+      fecha: extraerFechaMovimiento(r) || r.fecha || "",
+    }))
+    .filter((r) => String(r.fecha || "").trim() === fecha)
+    .sort((a, b) => dmyToMillis(b.fecha || "") - dmyToMillis(a.fecha || ""));
+
+  if (rows.length) return rows;
+
+  // Fallback legacy
+  const legacyMap = new Map();
+  for (const col of FINANCE_COLLECTIONS_READ) {
+    try {
+      const snapAll = await db.collection(col).get();
+      pushUniqueFinanceRows(legacyMap, snapAll);
+    } catch (e) {
+      logErr(`getMovimientosPorFecha.legacy:${col}`, e);
+    }
+  }
+
+  rows = Array.from(legacyMap.values())
+    .map((r) => ({
+      ...r,
+      fecha: extraerFechaMovimiento(r) || r.fecha || "",
+    }))
+    .filter((r) => String(r.fecha || "").trim() === fecha)
+    .sort((a, b) => dmyToMillis(b.fecha || "") - dmyToMillis(a.fecha || ""));
+
+  return rows;
 }
 
 async function getMovimientosPorMes(monthKey, _userId = null, _isSuper = false) {
   const key = String(monthKey || "").trim();
   if (!key) return [];
 
-  try {
-    const rows = (await getAllFinanceDocsMerged())
-      .map((r) => {
-        const fechaReal = extraerFechaMovimiento(r);
-        const mesReal = fechaReal ? monthKeyFromDMYLocal(fechaReal) : String(r.mesKey || r.monthKey || "");
-        return {
-          ...r,
-          fecha: fechaReal || r.fecha || "",
-          mesKey: mesReal || r.mesKey || r.monthKey || "",
-          monthKey: mesReal || r.monthKey || r.mesKey || "",
-        };
-      })
-      .filter((r) => String(r.mesKey || r.monthKey || "").trim() === key)
-      .sort((a, b) => dmyToMillis(b.fecha || "") - dmyToMillis(a.fecha || ""));
-    return rows;
-  } catch (e) {
-    logErr("getMovimientosPorMes", e);
-    return [];
+  const rowsMap = new Map();
+  const monthRange = getMonthRangeFromKey(key);
+
+  for (const col of FINANCE_COLLECTIONS_READ) {
+    try {
+      const snapMesKey = await db.collection(col).where("mesKey", "==", key).get();
+      pushUniqueFinanceRows(rowsMap, snapMesKey);
+    } catch (e) {
+      logErr(`getMovimientosPorMes.mesKey:${col}`, e);
+    }
+
+    try {
+      const snapMonthKey = await db.collection(col).where("monthKey", "==", key).get();
+      pushUniqueFinanceRows(rowsMap, snapMonthKey);
+    } catch (e) {
+      logErr(`getMovimientosPorMes.monthKey:${col}`, e);
+    }
+
+    if (monthRange) {
+      try {
+        const snapFechaTS = await db
+          .collection(col)
+          .where("fechaTS", ">=", monthRange.iniTs)
+          .where("fechaTS", "<=", monthRange.finTs)
+          .get();
+
+        pushUniqueFinanceRows(rowsMap, snapFechaTS);
+      } catch (e) {
+        logErr(`getMovimientosPorMes.fechaTS:${col}`, e);
+      }
+    }
   }
+
+  let rows = Array.from(rowsMap.values())
+    .map((r) => {
+      const fechaReal = extraerFechaMovimiento(r) || r.fecha || "";
+      const mesReal = fechaReal ? monthKeyFromDMYLocal(fechaReal) : String(r.mesKey || r.monthKey || "");
+      return {
+        ...r,
+        fecha: fechaReal,
+        mesKey: mesReal || r.mesKey || "",
+        monthKey: mesReal || r.monthKey || "",
+      };
+    })
+    .filter((r) => String(r.mesKey || r.monthKey || "").trim() === key)
+    .sort((a, b) => dmyToMillis(b.fecha || "") - dmyToMillis(a.fecha || ""));
+
+  if (rows.length) return rows;
+
+  // Fallback legacy
+  const legacyMap = new Map();
+  for (const col of FINANCE_COLLECTIONS_READ) {
+    try {
+      const snapAll = await db.collection(col).get();
+      pushUniqueFinanceRows(legacyMap, snapAll);
+    } catch (e) {
+      logErr(`getMovimientosPorMes.legacy:${col}`, e);
+    }
+  }
+
+  rows = Array.from(legacyMap.values())
+    .map((r) => {
+      const fechaReal = extraerFechaMovimiento(r) || r.fecha || "";
+      const mesReal = fechaReal ? monthKeyFromDMYLocal(fechaReal) : String(r.mesKey || r.monthKey || "");
+      return {
+        ...r,
+        fecha: fechaReal,
+        mesKey: mesReal || r.mesKey || "",
+        monthKey: mesReal || r.monthKey || "",
+      };
+    })
+    .filter((r) => String(r.mesKey || r.monthKey || "").trim() === key)
+    .sort((a, b) => dmyToMillis(b.fecha || "") - dmyToMillis(a.fecha || ""));
+
+  return rows;
 }
 
 async function getMovimientosPorRango(fechaInicio, fechaFin, _userId = null, _isSuper = false) {
@@ -819,34 +962,76 @@ async function getMovimientosPorRango(fechaInicio, fechaFin, _userId = null, _is
   const fin = normalizeDMY(fechaFin);
   if (!ini || !fin) return [];
 
-  let tsIni = dmyToMillis(ini);
-  let tsFin = dmyToMillis(fin);
+  let iniMs = dmyToMillis(ini);
+  let finMs = dmyToMillis(fin);
 
-  if (tsIni > tsFin) {
-    const temp = tsIni;
-    tsIni = tsFin;
-    tsFin = temp;
+  if (iniMs > finMs) {
+    const temp = iniMs;
+    iniMs = finMs;
+    finMs = temp;
   }
 
-  try {
-    const rows = (await getAllFinanceDocsMerged())
-      .map((r) => {
-        const fechaReal = extraerFechaMovimiento(r) || r.fecha || "";
-        return {
-          ...r,
-          fecha: fechaReal,
-        };
-      })
-      .filter((r) => {
-        const ts = dmyToMillis(String(r.fecha || ""));
-        return ts >= tsIni && ts <= tsFin;
-      })
-      .sort((a, b) => dmyToMillis(a.fecha || "") - dmyToMillis(b.fecha || ""));
-    return rows;
-  } catch (e) {
-    logErr("getMovimientosPorRango", e);
-    return [];
+  const iniDate = new Date(iniMs);
+  iniDate.setHours(0, 0, 0, 0);
+
+  const finDate = new Date(finMs);
+  finDate.setHours(23, 59, 59, 999);
+
+  const iniTs = admin.firestore.Timestamp.fromDate(iniDate);
+  const finTs = admin.firestore.Timestamp.fromDate(finDate);
+
+  const rowsMap = new Map();
+
+  for (const col of FINANCE_COLLECTIONS_READ) {
+    try {
+      const snapFechaTS = await db
+        .collection(col)
+        .where("fechaTS", ">=", iniTs)
+        .where("fechaTS", "<=", finTs)
+        .get();
+
+      pushUniqueFinanceRows(rowsMap, snapFechaTS);
+    } catch (e) {
+      logErr(`getMovimientosPorRango.fechaTS:${col}`, e);
+    }
   }
+
+  let rows = Array.from(rowsMap.values())
+    .map((r) => ({
+      ...r,
+      fecha: extraerFechaMovimiento(r) || r.fecha || "",
+    }))
+    .filter((r) => {
+      const ts = dmyToMillis(String(r.fecha || ""));
+      return ts >= iniMs && ts <= finMs;
+    })
+    .sort((a, b) => dmyToMillis(a.fecha || "") - dmyToMillis(b.fecha || ""));
+
+  if (rows.length) return rows;
+
+  // Fallback legacy
+  const legacyMap = new Map();
+  for (const col of FINANCE_COLLECTIONS_READ) {
+    try {
+      const snapAll = await db.collection(col).get();
+      pushUniqueFinanceRows(legacyMap, snapAll);
+    } catch (e) {
+      logErr(`getMovimientosPorRango.legacy:${col}`, e);
+    }
+  }
+
+  rows = Array.from(legacyMap.values())
+    .map((r) => ({
+      ...r,
+      fecha: extraerFechaMovimiento(r) || r.fecha || "",
+    }))
+    .filter((r) => {
+      const ts = dmyToMillis(String(r.fecha || ""));
+      return ts >= iniMs && ts <= finMs;
+    })
+    .sort((a, b) => dmyToMillis(a.fecha || "") - dmyToMillis(b.fecha || ""));
+
+  return rows;
 }
 
 async function eliminarMovimientoFinanzas(id, _userId = null, _isSuper = false) {
