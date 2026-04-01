@@ -1,12 +1,12 @@
-
-/* ✅ SUBLICUENTAS TG BOT — PARTE 5/6 LIVIANA Y ESTABLE
+/* ✅ SUBLICUENTAS TG BOT — PARTE 5/6 SIN DUPLICADOS
    FINANZAS / REPORTES / EXCEL / MENÚS
    -----------------------------------
    Objetivo:
    - Evitar lecturas masivas que queman cuota
-   - Mantener compatibilidad con registros nuevos
-   - Leer por queries directas (fecha, mes, rango con fechaTS)
-   - Mantener menús y exports compatibles con la parte 6
+   - Leer movimientos viejos por fecha string
+   - Leer movimientos nuevos por fechaTS
+   - Usar UNA sola colección oficial
+   - Evitar duplicados por colección espejo
 */
 
 const fs = require("fs");
@@ -17,7 +17,6 @@ const {
   db,
   ExcelJS,
   PLATAFORMAS,
-  FINANZAS_COLLECTION,
 } = require("./index_01_core");
 
 const {
@@ -66,14 +65,8 @@ const PLATFORM_KEYS = Array.isArray(PLATAFORMAS)
   ? PLATAFORMAS
   : Object.keys(PLATAFORMAS || {});
 
-const FINANCE_COLLECTIONS_READ = Array.from(
-  new Set([String(FINANZAS_COLLECTION || "").trim(), "finanzas_movimientos", "finanzas"].filter(Boolean))
-);
-
-const FINANCE_COLLECTION_PRIMARY =
-  FINANCE_COLLECTIONS_READ.includes("finanzas_movimientos")
-    ? "finanzas_movimientos"
-    : FINANCE_COLLECTIONS_READ[0];
+const FINANCE_COLLECTION_PRIMARY = "finanzas_movimientos";
+const FINANCE_COLLECTIONS_READ = [FINANCE_COLLECTION_PRIMARY];
 
 // ===============================
 // HELPERS BASE
@@ -383,11 +376,48 @@ function startEndMonthTimestamps(monthKey = "") {
   };
 }
 
-function addRowsDedup(map, rows = [], source = "") {
+function getMonthBoundsDMY(monthKey = "") {
+  const key = normalizeMonthKey(monthKey);
+  const m = key.match(/^(\d{4})-(\d{2})$/);
+  if (!m) return null;
+
+  const yyyy = Number(m[1]);
+  const mm = Number(m[2]);
+  const lastDay = new Date(yyyy, mm, 0).getDate();
+
+  return {
+    ini: `01/${String(mm).padStart(2, "0")}/${yyyy}`,
+    fin: `${String(lastDay).padStart(2, "0")}/${String(mm).padStart(2, "0")}/${yyyy}`,
+  };
+}
+
+function monthsBetweenDMY(fechaInicio = "", fechaFin = "") {
+  const ini = dmyToDate(fechaInicio);
+  const fin = dmyToDate(fechaFin);
+  if (!ini || !fin) return [];
+
+  let a = new Date(ini.getFullYear(), ini.getMonth(), 1);
+  let b = new Date(fin.getFullYear(), fin.getMonth(), 1);
+
+  if (a.getTime() > b.getTime()) {
+    const temp = a;
+    a = b;
+    b = temp;
+  }
+
+  const out = [];
+  while (a.getTime() <= b.getTime()) {
+    out.push(`${a.getFullYear()}-${String(a.getMonth() + 1).padStart(2, "0")}`);
+    a = new Date(a.getFullYear(), a.getMonth() + 1, 1);
+  }
+
+  return out;
+}
+
+function addRowsDedup(map, rows = []) {
   for (const row of rows) {
     if (!row?.id) continue;
-    const key = `${source}:${row.id}`;
-    if (!map.has(key)) map.set(key, row);
+    if (!map.has(row.id)) map.set(row.id, row);
   }
 }
 
@@ -415,20 +445,19 @@ async function getFinanceDocByIdAny(id) {
   const docId = String(id || "").trim();
   if (!docId) return null;
 
-  for (const col of FINANCE_COLLECTIONS_READ) {
-    try {
-      const snap = await db.collection(col).doc(docId).get();
-      if (snap.exists) {
-        return {
-          collection: col,
-          ref: db.collection(col).doc(docId),
-          row: normalizeFinanceDocRow(snap.id, snap.data() || {}),
-        };
-      }
-    } catch (e) {
-      logErr(`getFinanceDocByIdAny:${col}`, e);
+  try {
+    const snap = await db.collection(FINANCE_COLLECTION_PRIMARY).doc(docId).get();
+    if (snap.exists) {
+      return {
+        collection: FINANCE_COLLECTION_PRIMARY,
+        ref: db.collection(FINANCE_COLLECTION_PRIMARY).doc(docId),
+        row: normalizeFinanceDocRow(snap.id, snap.data() || {}),
+      };
     }
+  } catch (e) {
+    logErr(`getFinanceDocByIdAny:${FINANCE_COLLECTION_PRIMARY}`, e);
   }
+
   return null;
 }
 
@@ -436,36 +465,14 @@ async function saveFinancePayloadMirrored(docId, payload = {}) {
   const id = String(docId || "").trim();
   if (!id) throw new Error("ID de finanza inválido.");
 
-  let ok = 0;
-  const errors = [];
-  for (const col of FINANCE_COLLECTIONS_READ) {
-    try {
-      await db.collection(col).doc(id).set(payload, { merge: false });
-      ok++;
-    } catch (e) {
-      errors.push(`${col}: ${e.message || e}`);
-      logErr(`saveFinancePayloadMirrored:${col}`, e);
-    }
-  }
-
-  if (!ok) {
-    throw new Error(`No se pudo guardar en finanzas. ${errors.join(" | ")}`);
-  }
-
+  await db.collection(FINANCE_COLLECTION_PRIMARY).doc(id).set(payload, { merge: false });
   return { id, ...payload };
 }
 
 async function deleteFinanceDocMirrored(docId) {
   const id = String(docId || "").trim();
   if (!id) return;
-
-  for (const col of FINANCE_COLLECTIONS_READ) {
-    try {
-      await db.collection(col).doc(id).delete();
-    } catch (e) {
-      logErr(`deleteFinanceDocMirrored:${col}`, e);
-    }
-  }
+  await db.collection(FINANCE_COLLECTION_PRIMARY).doc(id).delete();
 }
 
 // ===============================
@@ -742,17 +749,24 @@ async function getMovimientosPorFecha(fechaDMY, _userId = null, _isSuper = false
   const map = new Map();
   const range = startEndDayTimestamps(fecha);
 
+  const [dd, mm, yyyy] = fecha.split("/");
+  const fechaAlt = `${Number(dd)}/${Number(mm)}/${yyyy}`;
+
   for (const col of FINANCE_COLLECTIONS_READ) {
-    addRowsDedup(map, await queryDocsByFieldEq(col, "fecha", fecha), col);
+    addRowsDedup(map, await queryDocsByFieldEq(col, "fecha", fecha));
+
+    if (fechaAlt !== fecha) {
+      addRowsDedup(map, await queryDocsByFieldEq(col, "fecha", fechaAlt));
+    }
 
     if (range) {
-      addRowsDedup(map, await queryDocsByFieldRange(col, "fechaTS", range.iniTs, range.finTs), `${col}:ts`);
+      addRowsDedup(map, await queryDocsByFieldRange(col, "fechaTS", range.iniTs, range.finTs));
     }
   }
 
   return Array.from(map.values())
     .map((r) => ({ ...r, fecha: extraerFechaMovimiento(r) || r.fecha || "" }))
-    .filter((r) => String(r.fecha || "").trim() === fecha)
+    .filter((r) => normalizeDMY(String(r.fecha || "")) === fecha)
     .sort((a, b) => dmyToMillis(b.fecha || "") - dmyToMillis(a.fecha || ""));
 }
 
@@ -763,18 +777,23 @@ async function getMovimientosPorMes(monthKey, _userId = null, _isSuper = false) 
   const map = new Map();
   const range = startEndMonthTimestamps(key);
   const alt = altMonthKey(key);
+  const bounds = getMonthBoundsDMY(key);
 
   for (const col of FINANCE_COLLECTIONS_READ) {
-    addRowsDedup(map, await queryDocsByFieldEq(col, "mesKey", key), `${col}:mesKey1`);
-    addRowsDedup(map, await queryDocsByFieldEq(col, "monthKey", key), `${col}:monthKey1`);
+    addRowsDedup(map, await queryDocsByFieldEq(col, "mesKey", key));
+    addRowsDedup(map, await queryDocsByFieldEq(col, "monthKey", key));
 
     if (alt) {
-      addRowsDedup(map, await queryDocsByFieldEq(col, "mesKey", alt), `${col}:mesKey2`);
-      addRowsDedup(map, await queryDocsByFieldEq(col, "monthKey", alt), `${col}:monthKey2`);
+      addRowsDedup(map, await queryDocsByFieldEq(col, "mesKey", alt));
+      addRowsDedup(map, await queryDocsByFieldEq(col, "monthKey", alt));
     }
 
     if (range) {
-      addRowsDedup(map, await queryDocsByFieldRange(col, "fechaTS", range.iniTs, range.finTs), `${col}:range`);
+      addRowsDedup(map, await queryDocsByFieldRange(col, "fechaTS", range.iniTs, range.finTs));
+    }
+
+    if (bounds) {
+      addRowsDedup(map, await queryDocsByFieldRange(col, "fecha", bounds.ini, bounds.fin));
     }
   }
 
@@ -803,18 +822,34 @@ async function getMovimientosPorRango(fechaInicio, fechaFin, _userId = null, _is
 
   let iniMs = dmyToMillis(ini);
   let finMs = dmyToMillis(fin);
+
   if (iniMs > finMs) {
     const temp = iniMs;
     iniMs = finMs;
     finMs = temp;
   }
 
-  const iniTs = admin.firestore.Timestamp.fromDate(new Date(new Date(iniMs).setHours(0, 0, 0, 0)));
-  const finTs = admin.firestore.Timestamp.fromDate(new Date(new Date(finMs).setHours(23, 59, 59, 999)));
+  const iniDate = new Date(iniMs);
+  const finDate = new Date(finMs);
 
+  const iniTs = admin.firestore.Timestamp.fromDate(
+    new Date(iniDate.getFullYear(), iniDate.getMonth(), iniDate.getDate(), 0, 0, 0, 0)
+  );
+  const finTs = admin.firestore.Timestamp.fromDate(
+    new Date(finDate.getFullYear(), finDate.getMonth(), finDate.getDate(), 23, 59, 59, 999)
+  );
+
+  const monthKeys = monthsBetweenDMY(ini, fin);
   const map = new Map();
+
   for (const col of FINANCE_COLLECTIONS_READ) {
-    addRowsDedup(map, await queryDocsByFieldRange(col, "fechaTS", iniTs, finTs), `${col}:range`);
+    addRowsDedup(map, await queryDocsByFieldRange(col, "fechaTS", iniTs, finTs));
+
+    for (const mk of monthKeys) {
+      const bounds = getMonthBoundsDMY(mk);
+      if (!bounds) continue;
+      addRowsDedup(map, await queryDocsByFieldRange(col, "fecha", bounds.ini, bounds.fin));
+    }
   }
 
   return Array.from(map.values())
