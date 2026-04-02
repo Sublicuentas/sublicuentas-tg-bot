@@ -1,12 +1,12 @@
-/* ✅ SUBLICUENTAS TG BOT — PARTE 5/6 SIN DUPLICADOS
+/* ✅ SUBLICUENTAS TG BOT — PARTE 5/6 SIN DUPLICADOS + BANCOS EN EGRESOS
    FINANZAS / REPORTES / EXCEL / MENÚS
    -----------------------------------
    Objetivo:
    - Evitar lecturas masivas que queman cuota
-   - Leer movimientos viejos por fecha string
-   - Leer movimientos nuevos por fechaTS
-   - Usar UNA sola colección oficial
-   - Evitar duplicados por colección espejo
+   - Usar SOLO finanzas_movimientos como colección oficial
+   - Leer por queries directas (fecha, mes, rango con fechaTS y fecha string)
+   - Soportar movimientos viejos y nuevos
+   - Usar los mismos bancos en ingresos y egresos
 */
 
 const fs = require("fs");
@@ -316,7 +316,13 @@ function humanBanco(raw = "") {
 
 function finExtraLabel(m = {}) {
   const tipo = String(m.tipo || "").toLowerCase();
-  if (tipo === "egreso") return String(m.detalle || m.descripcion || "").trim();
+
+  if (tipo === "egreso") {
+    const banco = humanBanco(m.banco || m.metodo || "");
+    const detalle = String(m.detalle || m.descripcion || "").trim();
+    return detalle ? `${banco} • ${detalle}` : banco;
+  }
+
   return humanBanco(m.banco || m.metodo || "");
 }
 
@@ -656,11 +662,23 @@ async function menuFinReportes(chatId) {
   ]);
 }
 
-// keyboards
+// ===============================
+// KEYBOARDS FINANZAS
+// ===============================
 function kbBancosFinanzas() {
   const buttons = FIN_BANCOS_LOCAL.map((b) => ({
     text: String(b),
     callback_data: `fin:ing:banco:${encodeURIComponent(String(b))}`,
+  }));
+  const rows = pairButtons(buttons);
+  rows.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
+  return { inline_keyboard: rows };
+}
+
+function kbBancosFinanzasEgreso() {
+  const buttons = FIN_BANCOS_LOCAL.map((b) => ({
+    text: String(b),
+    callback_data: `fin:egr:banco:${encodeURIComponent(String(b))}`,
   }));
   const rows = pairButtons(buttons);
   rows.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
@@ -677,7 +695,9 @@ function kbMotivosFinanzas() {
   return { inline_keyboard: rows };
 }
 
+// ===============================
 // CRUD
+// ===============================
 async function registrarIngresoTx({ monto, banco = "", plataforma = "", detalle = "", fecha = "", userId = "", userName = "" }) {
   const fechaOk = parseFechaFlexible(fecha || hoyDMY());
   if (!fechaOk) throw new Error("Fecha inválida");
@@ -708,7 +728,7 @@ async function registrarIngresoTx({ monto, banco = "", plataforma = "", detalle 
   return { id: docId, ...payload };
 }
 
-async function registrarEgresoTx({ monto, motivo = "", detalle = "", fecha = "", userId = "", userName = "" }) {
+async function registrarEgresoTx({ monto, banco = "", motivo = "", detalle = "", fecha = "", userId = "", userName = "" }) {
   const fechaOk = parseFechaFlexible(fecha || hoyDMY());
   if (!fechaOk) throw new Error("Fecha inválida");
 
@@ -721,6 +741,7 @@ async function registrarEgresoTx({ monto, motivo = "", detalle = "", fecha = "",
   const payload = {
     tipo: "egreso",
     monto: montoOk,
+    banco: humanBanco(String(banco || "").trim()),
     motivo: String(motivo || "").trim(),
     detalle: String(detalle || "").trim(),
     fecha: fechaOk,
@@ -748,20 +769,13 @@ async function getMovimientosPorFecha(fechaDMY, _userId = null, _isSuper = false
 
   const map = new Map();
   const range = startEndDayTimestamps(fecha);
-
   const [dd, mm, yyyy] = fecha.split("/");
   const fechaAlt = `${Number(dd)}/${Number(mm)}/${yyyy}`;
 
   for (const col of FINANCE_COLLECTIONS_READ) {
     addRowsDedup(map, await queryDocsByFieldEq(col, "fecha", fecha));
-
-    if (fechaAlt !== fecha) {
-      addRowsDedup(map, await queryDocsByFieldEq(col, "fecha", fechaAlt));
-    }
-
-    if (range) {
-      addRowsDedup(map, await queryDocsByFieldRange(col, "fechaTS", range.iniTs, range.finTs));
-    }
+    if (fechaAlt !== fecha) addRowsDedup(map, await queryDocsByFieldEq(col, "fecha", fechaAlt));
+    if (range) addRowsDedup(map, await queryDocsByFieldRange(col, "fechaTS", range.iniTs, range.finTs));
   }
 
   return Array.from(map.values())
@@ -788,13 +802,8 @@ async function getMovimientosPorMes(monthKey, _userId = null, _isSuper = false) 
       addRowsDedup(map, await queryDocsByFieldEq(col, "monthKey", alt));
     }
 
-    if (range) {
-      addRowsDedup(map, await queryDocsByFieldRange(col, "fechaTS", range.iniTs, range.finTs));
-    }
-
-    if (bounds) {
-      addRowsDedup(map, await queryDocsByFieldRange(col, "fecha", bounds.ini, bounds.fin));
-    }
+    if (range) addRowsDedup(map, await queryDocsByFieldRange(col, "fechaTS", range.iniTs, range.finTs));
+    if (bounds) addRowsDedup(map, await queryDocsByFieldRange(col, "fecha", bounds.ini, bounds.fin));
   }
 
   return Array.from(map.values())
@@ -1162,7 +1171,7 @@ async function exportarFinanzasRangoExcel(chatId, fechaInicio, fechaFin, _userId
     { header: "Tipo", key: "tipo", width: 12 },
     { header: "Monto", key: "monto", width: 15 },
     { header: "Plataforma/Motivo", key: "concepto", width: 30 },
-    { header: "Banco/Método", key: "extra", width: 22 },
+    { header: "Banco/Método", key: "extra", width: 28 },
     { header: "Detalle", key: "detalle", width: 35 },
     { header: "ID", key: "id", width: 28 },
   ];
@@ -1173,7 +1182,7 @@ async function exportarFinanzasRangoExcel(chatId, fechaInicio, fechaFin, _userId
       tipo: finTipoLabel(r.tipo),
       monto: Number(r.monto || 0),
       concepto: finConceptoLabel(r),
-      extra: finExtraLabel(r),
+      extra: humanBanco(r.banco || r.metodo || ""),
       detalle: r.detalle || r.descripcion || "",
       id: r.id,
     });
@@ -1208,7 +1217,9 @@ async function exportarFinanzasRangoExcel(chatId, fechaInicio, fechaFin, _userId
   return true;
 }
 
-// compatibility
+// ===============================
+// COMPATIBILITY
+// ===============================
 async function listarMovimientosPorFechaYTipo(fechaDMY, tipo) {
   const rows = await getMovimientosPorFecha(fechaDMY);
   return rows
@@ -1295,6 +1306,7 @@ async function eliminarMovimientoDefinitivo(chatId, movId, userId = null) {
   txt += `Fecha: ${String(extraerFechaMovimiento(mov) || mov.fecha || "-")}\n`;
   txt += `Monto: ${moneyLps(mov.monto || 0)}\n`;
   txt += `Concepto: ${finConceptoLabel(mov)}\n`;
+  if (mov.banco) txt += `Banco: ${humanBanco(mov.banco)}\n`;
   if (userId) txt += `Eliminado por: ${String(userId)}\n`;
 
   return upsertPanel(chatId, txt, [
@@ -1429,7 +1441,7 @@ async function exportarExcelMesActual(chatId) {
       tipo: finTipoLabel(r.tipo),
       monto: Number(r.monto || 0),
       concepto: finConceptoLabel(r),
-      extra: finExtraLabel(r),
+      extra: humanBanco(r.banco || r.metodo || ""),
       detalle: r.detalle || r.descripcion || "",
     });
   }
@@ -1472,6 +1484,7 @@ module.exports = {
   menuFinEliminarTipo,
   menuFinReportes,
   kbBancosFinanzas,
+  kbBancosFinanzasEgreso,
   kbMotivosFinanzas,
   registrarIngresoTx,
   registrarEgresoTx,
