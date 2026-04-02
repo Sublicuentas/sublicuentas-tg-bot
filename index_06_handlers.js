@@ -119,6 +119,7 @@ const {
   menuFinEliminarTipo,
   menuFinReportes,
   kbBancosFinanzas,
+  kbBancosFinanzasEgreso,
   kbMotivosFinanzas,
   registrarIngresoTx,
   registrarEgresoTx,
@@ -1652,14 +1653,38 @@ bot.on("callback_query", async (q) => {
         }
 
         pending.set(String(chatId), {
-          mode: "finEgresoDetalle",
+          mode: "finEgresoBancoPick",
           monto: p.monto,
           motivo,
         });
 
+        return bot.sendMessage(
+          chatId,
+          `➖ *REGISTRAR EGRESO*\n\n🧾 Motivo: *${escMD(motivo)}*\n\n🏦 Seleccione el banco desde donde salió el dinero:`,
+          {
+            parse_mode: "Markdown",
+            reply_markup: kbBancosFinanzasEgreso(),
+          }
+        );
+      }
+
+      if (data.startsWith("fin:egr:banco:")) {
+        const banco = decodeURIComponent(data.split(":").slice(3).join(":") || "");
+        const p = pending.get(String(chatId));
+        if (!p || p.mode !== "finEgresoBancoPick") {
+          return bot.sendMessage(chatId, "⚠️ Flujo de egreso no activo.");
+        }
+
+        pending.set(String(chatId), {
+          mode: "finEgresoDetalle",
+          monto: p.monto,
+          motivo: p.motivo,
+          banco,
+        });
+
         return upsertPanel(
           chatId,
-          `➖ *REGISTRAR EGRESO*\n\n🧾 Motivo: *${escMD(motivo)}*\n\n📝 Escriba el detalle del egreso:`,
+          `➖ *REGISTRAR EGRESO*\n\n🧾 Motivo: *${escMD(p.motivo)}*\n🏦 Banco: *${escMD(banco)}*\n\n📝 Escriba el detalle del egreso:`,
           [
             [{ text: "⬅️ Volver Finanzas", callback_data: "fin:menu:registro" }],
             [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
@@ -3058,6 +3083,7 @@ bot.on("message", async (msg) => {
           mode: "finEgresoFecha",
           monto: p.monto,
           motivo: p.motivo,
+          banco: p.banco,
           detalle: t,
         });
 
@@ -3071,6 +3097,7 @@ bot.on("message", async (msg) => {
         pending.delete(String(chatId));
         const ok = await registrarEgresoTx({
           monto: p.monto,
+          banco: p.banco,
           motivo: p.motivo,
           detalle: p.detalle || "",
           fecha,
@@ -3080,7 +3107,7 @@ bot.on("message", async (msg) => {
 
         return bot.sendMessage(
           chatId,
-          `✅ *Egreso registrado*\n\n💸 Monto: ${moneyLps(ok.monto)}\n🧾 Motivo: ${escMD(ok.motivo)}\n📝 Detalle: ${escMD(ok.detalle || "-")}\n📅 Fecha: ${escMD(ok.fecha)}\n🆔 ID: \`${ok.id}\``,
+          `✅ *Egreso registrado*\n\n💸 Monto: ${moneyLps(ok.monto)}\n🏦 Banco: ${escMD(ok.banco || "-")}\n🧾 Motivo: ${escMD(ok.motivo)}\n📝 Detalle: ${escMD(ok.detalle || "-")}\n📅 Fecha: ${escMD(ok.fecha)}\n🆔 ID: \`${ok.id}\``,
           {
             parse_mode: "Markdown",
             reply_markup: {
