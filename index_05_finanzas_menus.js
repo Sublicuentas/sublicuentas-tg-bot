@@ -29,6 +29,7 @@ const {
   hoyDMY,
   moneyLps,
   logErr,
+  normalizarPlataforma,
 } = require("./index_02_utils_roles");
 
 const { humanPlataforma } = require("./index_03_clientes_crm");
@@ -356,6 +357,235 @@ function textoConfirmarEliminacionMovimiento(m = {}) {
   txt += "\n¿Desea eliminar este movimiento?";
   return txt;
 }
+function resumenFinanzasTextoPorRango(fechaInicio, fechaFin, list = []) {
+  const rows = Array.isArray(list) ? list : [];
+  let ingresos = 0;
+  let egresos = 0;
+
+  for (const r of rows) {
+    const monto = Number(r.monto || 0);
+    if (String(r.tipo || "").toLowerCase() === "egreso") egresos += monto;
+    else ingresos += monto;
+  }
+
+  const utilidad = ingresos - egresos;
+
+  let txt = `🗓️ RESUMEN DEL ${fechaInicio} AL ${fechaFin}\n\n`;
+  txt += `Ingresos: ${moneyLps(ingresos)}\n`;
+  txt += `Egresos: ${moneyLps(egresos)}\n`;
+  txt += `Utilidad: ${moneyLps(utilidad)}\n`;
+  txt += `Movimientos: ${String(rows.length)}\n`;
+
+  if (rows.length) {
+    txt += `\nDetalle:\n`;
+    txt += rows.slice(0, 30).map((r, i) => {
+      const tipo = String(r.tipo || "").toLowerCase() === "egreso" ? "➖" : "➕";
+      return `${i + 1}. ${tipo} ${textoMovimientoParaEliminar(r)}`;
+    }).join("\n");
+  }
+
+  return txt;
+}
+
+function agruparBancosDesdeLista(list = []) {
+  const map = {};
+  for (const r of Array.isArray(list) ? list : []) {
+    const bancoRaw = String(r.banco || r.metodo || "").trim();
+    const bancoKey = normalizarBancoKey(bancoRaw);
+    const bancoLabel = humanBanco(bancoRaw);
+    const monto = Number(r.monto || 0);
+
+    if (!map[bancoKey]) {
+      map[bancoKey] = { banco: bancoLabel, ingresos: 0, egresos: 0, neto: 0 };
+    }
+
+    if (String(r.tipo || "").trim().toLowerCase() === "egreso") {
+      map[bancoKey].egresos += monto;
+      map[bancoKey].neto -= monto;
+    } else {
+      map[bancoKey].ingresos += monto;
+      map[bancoKey].neto += monto;
+    }
+  }
+
+  return Object.values(map).sort((a, b) => {
+    const totalA = Number(a.ingresos || 0) + Number(a.egresos || 0);
+    const totalB = Number(b.ingresos || 0) + Number(b.egresos || 0);
+    return totalB - totalA;
+  });
+}
+
+function resumenBancosFechaTexto(fecha, list = []) {
+  const items = agruparBancosDesdeLista(list);
+  let txt = `🏦 RESUMEN POR BANCO — ${fecha}\n\n`;
+
+  if (!items.length) {
+    txt += "No hay movimientos para esa fecha.";
+    return txt;
+  }
+
+  txt += items.map((v, i) => (
+    `${i + 1}. ${v.banco}\n` +
+    `   Ingresos: ${moneyLps(v.ingresos)}\n` +
+    `   Egresos: ${moneyLps(v.egresos)}\n` +
+    `   Neto: ${moneyLps(v.neto)}`
+  )).join("\n\n");
+
+  return txt;
+}
+
+function resumenBancosRangoTexto(fechaInicio, fechaFin, list = []) {
+  const items = agruparBancosDesdeLista(list);
+  let txt = `🏦 RESUMEN POR BANCO — ${fechaInicio} al ${fechaFin}\n\n`;
+
+  if (!items.length) {
+    txt += "No hay movimientos para ese rango.";
+    return txt;
+  }
+
+  txt += items.map((v, i) => (
+    `${i + 1}. ${v.banco}\n` +
+    `   Ingresos: ${moneyLps(v.ingresos)}\n` +
+    `   Egresos: ${moneyLps(v.egresos)}\n` +
+    `   Neto: ${moneyLps(v.neto)}`
+  )).join("\n\n");
+
+  return txt;
+}
+
+function splitPlataformasNormalizadas(raw = "") {
+  const source = String(raw || "").trim();
+  if (!source) return [];
+
+  const normalized = source
+    .replace(/\s+y\s+/gi, ",")
+    .replace(/[+|&;]/g, ",")
+    .split(",")
+    .map((x) => String(x || "").trim())
+    .filter(Boolean);
+
+  const out = [];
+  for (const part of normalized.length ? normalized : [source]) {
+    const plat = normalizarPlataforma(part);
+    if (plat && PLATFORM_KEYS.includes(plat) && !out.includes(plat)) out.push(plat);
+  }
+
+  if (!out.length) {
+    const single = normalizarPlataforma(source);
+    if (single && PLATFORM_KEYS.includes(single)) out.push(single);
+  }
+
+  return out;
+}
+
+function resumenTopPlataformasGenerico(label = "", list = []) {
+  const map = {};
+
+  for (const r of Array.isArray(list) ? list : []) {
+    if (String(r.tipo || "").toLowerCase() === "egreso") continue;
+    const monto = Number(r.monto || 0);
+    if (!Number.isFinite(monto) || monto <= 0) continue;
+
+    const plats = splitPlataformasNormalizadas(r.plataforma || r.plataformas || "");
+    if (!plats.length) continue;
+
+    const porcion = monto / plats.length;
+    for (const plat of plats) {
+      map[plat] = (map[plat] || 0) + porcion;
+    }
+  }
+
+  const items = Object.entries(map).sort((a, b) => b[1] - a[1]).slice(0, 20);
+  let txt = `🏆 TOP PLATAFORMAS — ${label}\n\n`;
+
+  if (!items.length) {
+    txt += "No hay ingresos para ese período.";
+    return txt;
+  }
+
+  txt += items
+    .map(([plat, total], i) => `${i + 1}. ${humanPlatSafe(plat)} — ${moneyLps(total)}`)
+    .join("\n");
+
+  return txt;
+}
+
+function resumenTopPlataformasRangoTexto(fechaInicio, fechaFin, list = []) {
+  return resumenTopPlataformasGenerico(`${fechaInicio} al ${fechaFin}`, list);
+}
+
+function resumenTopCombosRangoTexto(fechaInicio, fechaFin, list = []) {
+  const map = {};
+
+  for (const r of Array.isArray(list) ? list : []) {
+    if (String(r.tipo || "").toLowerCase() === "egreso") continue;
+    const monto = Number(r.monto || 0);
+    if (!Number.isFinite(monto) || monto <= 0) continue;
+
+    const plats = splitPlataformasNormalizadas(r.plataforma || r.plataformas || "");
+    if (plats.length < 2) continue;
+
+    const combo = plats
+      .map((x) => humanPlatSafe(x))
+      .sort((a, b) => a.localeCompare(b, "es"))
+      .join(" + ");
+
+    map[combo] = (map[combo] || 0) + monto;
+  }
+
+  const items = Object.entries(map).sort((a, b) => b[1] - a[1]).slice(0, 20);
+  let txt = `🎯 TOP COMBOS — ${fechaInicio} al ${fechaFin}\n\n`;
+
+  if (!items.length) {
+    txt += "No hay combos para ese período.";
+    return txt;
+  }
+
+  txt += items.map(([combo, total], i) => `${i + 1}. ${combo} — ${moneyLps(total)}`).join("\n");
+  return txt;
+}
+
+function detalleBancoRangoTexto(banco = "", fechaInicio = "", fechaFin = "", list = []) {
+  const objetivo = normalizarBancoKey(banco);
+  const rows = (Array.isArray(list) ? list : []).filter(
+    (r) => normalizarBancoKey(r.banco || r.metodo || "") === objetivo
+  );
+
+  let ingresos = 0;
+  let egresos = 0;
+  const ing = [];
+  const egr = [];
+
+  for (const r of rows) {
+    const monto = Number(r.monto || 0);
+    const linea = `${r.fecha || extraerFechaMovimiento(r) || "-"} — ${moneyLps(monto)} — ${finConceptoLabel(r)}${finExtraLabel(r) ? ` — ${finExtraLabel(r)}` : ""}`;
+    if (String(r.tipo || "").toLowerCase() === "egreso") {
+      egresos += monto;
+      egr.push(linea);
+    } else {
+      ingresos += monto;
+      ing.push(linea);
+    }
+  }
+
+  let txt = `🏦 DETALLE BANCO: ${humanBanco(banco)}\n`;
+  txt += `📅 Del ${fechaInicio} al ${fechaFin}\n\n`;
+
+  if (!rows.length) {
+    txt += "No hay movimientos para ese banco en ese rango.";
+    return txt;
+  }
+
+  txt += "Ingresos:\n";
+  txt += ing.length ? ing.map((x, i) => `${i + 1}. ${x}`).join("\n") : "Sin ingresos";
+  txt += "\n\nEgresos:\n";
+  txt += egr.length ? egr.map((x, i) => `${i + 1}. ${x}`).join("\n") : "Sin egresos";
+  txt += `\n\nTotal ingresos: ${moneyLps(ingresos)}\n`;
+  txt += `Total egresos: ${moneyLps(egresos)}\n`;
+  txt += `Neto: ${moneyLps(ingresos - egresos)}`;
+
+  return txt;
+}
 
 function startEndDayTimestamps(dmy = "") {
   const dt = dmyToDate(dmy);
@@ -583,7 +813,15 @@ async function menuClientes(chatId) {
       { text: "👤 Revendedores", callback_data: "rev:lista" },
     ],
     [
-      { text: "📄 TXT clientes", callback_data: "cli:txt:general" },
+      { text: "📄 TXT general", callback_data: "cli:txt:general" },
+      { text: "📒 Agenda simple", callback_data: "cli:txt:agenda" },
+    ],
+    [
+      { text: "🟢 TXT vigentes", callback_data: "cli:txt:vigentes" },
+      { text: "🔴 TXT no vigentes", callback_data: "cli:txt:no_vigentes" },
+    ],
+    [
+      { text: "📊 Resumen CRM", callback_data: "cli:crm:resumen" },
       { text: "🗂️ TXT vendedores", callback_data: "cli:txt:vendedores_split" },
     ],
     [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
@@ -656,10 +894,18 @@ async function menuFinReportes(chatId) {
   return upsertPanel(chatId, "📊 *REPORTES DE FINANZAS*\n\nSeleccione una opción:", [
     [
       { text: "📅 Resumen por fecha", callback_data: "fin:menu:resumen_fecha" },
-      { text: "🏦 Bancos del mes", callback_data: "fin:menu:bancos_mes" },
+      { text: "🗓️ Resumen por rango", callback_data: "fin:menu:resumen_rango" },
     ],
     [
+      { text: "🏦 Bancos por fecha", callback_data: "fin:menu:bancos_fecha" },
+      { text: "🏦 Bancos por rango", callback_data: "fin:menu:bancos_rango" },
+    ],
+    [
+      { text: "🏦 Detalle banco", callback_data: "fin:menu:detalle_banco" },
       { text: "🏆 Top plataformas", callback_data: "fin:menu:top_plataformas" },
+    ],
+    [
+      { text: "🎯 Top combos", callback_data: "fin:menu:top_combos" },
       { text: "📤 Excel por rango", callback_data: "fin:menu:excel_rango" },
     ],
     [
@@ -919,73 +1165,13 @@ function resumenFinanzasTextoPorFecha(fecha, list = []) {
 }
 
 function resumenBancosMesTexto(monthKey, list = []) {
-  const rows = Array.isArray(list) ? list : [];
   const label = monthLabelFromKeyLocal(monthKey);
-  const map = {};
-
-  for (const r of rows) {
-    const bancoRaw = String(r.banco || r.metodo || "").trim();
-    const bancoKey = normalizarBancoKey(bancoRaw);
-    const bancoLabel = humanBanco(bancoRaw);
-    const monto = Number(r.monto || 0);
-
-    if (!map[bancoKey]) {
-      map[bancoKey] = { banco: bancoLabel, ingresos: 0, egresos: 0, neto: 0 };
-    }
-
-    if (String(r.tipo || "").trim().toLowerCase() === "egreso") {
-      map[bancoKey].egresos += monto;
-      map[bancoKey].neto -= monto;
-    } else {
-      map[bancoKey].ingresos += monto;
-      map[bancoKey].neto += monto;
-    }
-  }
-
-  const items = Object.values(map).sort((a, b) => {
-    const totalA = Number(a.ingresos || 0) + Number(a.egresos || 0);
-    const totalB = Number(b.ingresos || 0) + Number(b.egresos || 0);
-    return totalB - totalA;
-  });
-
-  let txt = `🏦 RESUMEN POR BANCO — ${label}\n\n`;
-  if (!items.length) {
-    txt += "No hay movimientos para este mes.";
-    return txt;
-  }
-
-  txt += items.map((v, i) => (
-    `${i + 1}. ${v.banco}\n` +
-    `   Ingresos: ${moneyLps(v.ingresos)}\n` +
-    `   Egresos: ${moneyLps(v.egresos)}\n` +
-    `   Neto: ${moneyLps(v.neto)}`
-  )).join("\n\n");
-
-  return txt;
+  return resumenBancosRangoTexto(label, label, list).replace(`— ${label} al ${label}`, `— ${label}`);
 }
 
 function resumenTopPlataformasTexto(monthKey, list = []) {
-  const rows = Array.isArray(list) ? list : [];
   const label = monthLabelFromKeyLocal(monthKey);
-  const map = {};
-
-  for (const r of rows) {
-    if (String(r.tipo || "").toLowerCase() === "egreso") continue;
-    const key = String(r.plataforma || "").trim().toLowerCase();
-    if (!key) continue;
-    map[key] = (map[key] || 0) + Number(r.monto || 0);
-  }
-
-  const items = Object.entries(map).sort((a, b) => b[1] - a[1]).slice(0, 20);
-  let txt = `🏆 TOP PLATAFORMAS — ${label}\n\n`;
-
-  if (!items.length) {
-    txt += "No hay ingresos para este mes.";
-    return txt;
-  }
-
-  txt += items.map(([plat, total], i) => `${i + 1}. ${humanPlatSafe(plat)} — ${moneyLps(total)}`).join("\n");
-  return txt;
+  return resumenTopPlataformasGenerico(label, list);
 }
 
 function cierreCajaTexto(fecha, list = []) {
@@ -1500,8 +1686,14 @@ module.exports = {
   getMovimientosPorMes,
   getMovimientosPorRango,
   resumenFinanzasTextoPorFecha,
+  resumenFinanzasTextoPorRango,
   resumenBancosMesTexto,
+  resumenBancosFechaTexto,
+  resumenBancosRangoTexto,
+  detalleBancoRangoTexto,
   resumenTopPlataformasTexto,
+  resumenTopPlataformasRangoTexto,
+  resumenTopCombosRangoTexto,
   cierreCajaTexto,
   cierreCajaTextoRango,
   textoConfirmarEliminacionMovimiento,
