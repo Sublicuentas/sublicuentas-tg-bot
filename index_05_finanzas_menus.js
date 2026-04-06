@@ -495,16 +495,24 @@ async function menuPrincipal(chatId) {
 }
 
 async function menuVendedor(chatId) {
-  return upsertPanel(chatId, "👤 *MENÚ VENDEDOR*\n\nSeleccione una opción:", [
+  return upsertPanel(
+    chatId,
+    "👤 *MENÚ VENDEDOR PRO*\n\nSeleccione una opción:",
     [
-      { text: "📅 Mis renovaciones", callback_data: "ren:mis" },
-      { text: "📄 TXT renovaciones", callback_data: "txt:mis" },
-    ],
-    [
-      { text: "👥 Mis clientes", callback_data: "vend:clientes" },
-      { text: "📝 TXT mis clientes", callback_data: "vend:clientes:txt" },
-    ],
-  ]);
+      [
+        { text: "📅 Mis renovaciones hoy", callback_data: "ren:mis:hoy" },
+        { text: "⏳ Renovaciones en 3 días", callback_data: "ren:mis:prox3" },
+      ],
+      [
+        { text: "📄 TXT renovaciones", callback_data: "txt:mis" },
+        { text: "👥 Mis clientes", callback_data: "vend:clientes" },
+      ],
+      [
+        { text: "🧾 TXT mis clientes", callback_data: "vend:clientes:txt" },
+        { text: "💰 Mi resumen", callback_data: "vend:resumen" },
+      ],
+    ]
+  );
 }
 
 async function menuInventario(chatId) {
