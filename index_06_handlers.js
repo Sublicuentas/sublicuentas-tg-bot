@@ -1831,11 +1831,47 @@ bot.on("callback_query", async (q) => {
         );
       }
 
-      if (data === "fin:menu:bancos_mes") {
-        pending.set(String(chatId), { mode: "finResumenBancoMesAsk" });
+      if (data === "fin:menu:resumen_rango") {
+        pending.set(String(chatId), { mode: "finResumenRangoInicio" });
         return upsertPanel(
           chatId,
-          "🏦 *RESUMEN POR BANCO DEL MES*\n\nEscriba el mes en formato *mm/yyyy*.\nEjemplo: *01/2026*",
+          "🗓️ *RESUMEN POR RANGO*\n\nEscriba la fecha inicial en formato *dd/mm/yyyy*.",
+          [
+            [{ text: "⬅️ Volver Reportes", callback_data: "fin:menu:reportes" }],
+            [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
+          ]
+        );
+      }
+
+      if (data === "fin:menu:bancos_fecha") {
+        pending.set(String(chatId), { mode: "finBancosFechaAsk" });
+        return upsertPanel(
+          chatId,
+          "🏦 *BANCOS POR FECHA*\n\nEscriba la fecha en formato *dd/mm/yyyy* o escriba *hoy*.",
+          [
+            [{ text: "⬅️ Volver Reportes", callback_data: "fin:menu:reportes" }],
+            [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
+          ]
+        );
+      }
+
+      if (data === "fin:menu:bancos_rango") {
+        pending.set(String(chatId), { mode: "finBancosRangoInicio" });
+        return upsertPanel(
+          chatId,
+          "🏦 *BANCOS POR RANGO*\n\nEscriba la fecha inicial en formato *dd/mm/yyyy*.",
+          [
+            [{ text: "⬅️ Volver Reportes", callback_data: "fin:menu:reportes" }],
+            [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
+          ]
+        );
+      }
+
+      if (data === "fin:menu:detalle_banco") {
+        pending.set(String(chatId), { mode: "finDetalleBancoNombreAsk" });
+        return upsertPanel(
+          chatId,
+          "🏦 *DETALLE DE BANCO*\n\nEscriba el nombre del banco.\nEjemplo: *BAC*",
           [
             [{ text: "⬅️ Volver Reportes", callback_data: "fin:menu:reportes" }],
             [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
@@ -1844,10 +1880,22 @@ bot.on("callback_query", async (q) => {
       }
 
       if (data === "fin:menu:top_plataformas") {
-        pending.set(String(chatId), { mode: "finTopPlataformasMesAsk" });
+        pending.set(String(chatId), { mode: "finTopPlataformasRangoInicio" });
         return upsertPanel(
           chatId,
-          "🏆 *TOP PLATAFORMAS DEL MES*\n\nEscriba el mes en formato *mm/yyyy*.\nEjemplo: *01/2026*",
+          "🏆 *TOP PLATAFORMAS*\n\nEscriba la fecha inicial en formato *dd/mm/yyyy*.",
+          [
+            [{ text: "⬅️ Volver Reportes", callback_data: "fin:menu:reportes" }],
+            [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
+          ]
+        );
+      }
+
+      if (data === "fin:menu:top_combos") {
+        pending.set(String(chatId), { mode: "finTopCombosRangoInicio" });
+        return upsertPanel(
+          chatId,
+          "🎯 *TOP COMBOS*\n\nEscriba la fecha inicial en formato *dd/mm/yyyy*.",
           [
             [{ text: "⬅️ Volver Reportes", callback_data: "fin:menu:reportes" }],
             [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
