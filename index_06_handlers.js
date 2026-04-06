@@ -59,6 +59,7 @@ const {
   parseDMYtoTS,
   moneyLps,
   hoyDMY,
+  enviarTxtComoArchivo,
 } = require("./index_02_utils_roles");
 
 const {
@@ -456,15 +457,19 @@ async function sendBottomMainMenu(chatId, userId) {
         ],
       ];
     } else if (await safeIsVendedorLocal(userId)) {
-      text = "👤 *MENÚ VENDEDOR*\n\nSeleccione una opción:";
+      text = "👤 *MENÚ VENDEDOR PRO*\n\nSeleccione una opción:";
       keyboard = [
         [
-          { text: "📅 Mis renovaciones", callback_data: "ren:mis" },
-          { text: "📄 TXT renovaciones", callback_data: "txt:mis" },
+          { text: "📅 Mis renovaciones hoy", callback_data: "ren:mis:hoy" },
+          { text: "⏳ Renovaciones en 3 días", callback_data: "ren:mis:prox3" },
         ],
         [
+          { text: "📄 TXT renovaciones", callback_data: "txt:mis" },
           { text: "👥 Mis clientes", callback_data: "vend:clientes" },
-          { text: "📝 TXT mis clientes", callback_data: "vend:clientes:txt" },
+        ],
+        [
+          { text: "🧾 TXT mis clientes", callback_data: "vend:clientes:txt" },
+          { text: "💰 Mi resumen", callback_data: "vend:resumen" },
         ],
       ];
     } else {
@@ -486,6 +491,169 @@ function normalizeLooseText(txt = "") {
     .replace(/\s+/g, " ")
     .trim();
 }
+
+function normVendorText(v = "") {
+  return String(v || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function safeFileNameLocal(v = "", fallback = "archivo") {
+  const s = String(v || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-zA-Z0-9_-]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 60);
+  return s || fallback;
+}
+
+function formatearBloqueRenovaciones(rows = [], titulo = "") {
+  const items = Array.isArray(rows) ? rows : [];
+  let txt = "";
+  txt += "==============================\n";
+  txt += `${titulo}\n`;
+  txt += "==============================\n";
+
+  if (!items.length) {
+    txt += "Sin registros.\n\n";
+    return txt;
+  }
+
+  items.forEach((x, i) => {
+    txt += `${i + 1}) ${x.nombrePerfil || "Sin nombre"}\n`;
+    txt += `Telefono: ${x.telefono || "-"}\n`;
+    txt += `Plataforma: ${x.plataforma || "-"}\n`;
+    txt += `${getIdentLabelLocal(x.plataforma || "")}: ${x.correo || "-"}\n`;
+    txt += `PIN: ${x.pin || "-"}\n`;
+    txt += `Precio: ${Number(x.precio || 0).toFixed(2)} Lps\n`;
+    txt += `Fecha: ${x.fechaRenovacion || "-"}\n`;
+    txt += `\n`;
+  });
+
+  return txt;
+}
+
+function generarTxtRenovacionesPro(vendedorNombre = "", fechaHoy = "", fechaMas3 = "", rowsHoy = [], rowsMas3 = []) {
+  let txt = "";
+  txt += `RENOVACIONES - ${vendedorNombre}\n`;
+  txt += `FECHA DE ENVIO: ${fechaHoy}\n\n`;
+
+  if (rowsMas3.length) {
+    txt += formatearBloqueRenovaciones(
+      rowsMas3,
+      `⏳ VENCEN EN 3 DIAS (${fechaMas3})`
+    );
+  }
+
+  if (rowsHoy.length) {
+    txt += formatearBloqueRenovaciones(
+      rowsHoy,
+      `📅 VENCEN HOY (${fechaHoy})`
+    );
+  }
+
+  return txt.trim() + "\n";
+}
+
+async function enviarTxtRenovacionesVendedorPro(chatId, vendedorNombre = "") {
+  const fechaHoy = hoyDMY();
+  const fechaMas3 = addDaysDMY(fechaHoy, 3);
+
+  const rowsHoy = await obtenerRenovacionesPorFecha(fechaHoy, vendedorNombre);
+  const rowsMas3 = await obtenerRenovacionesPorFecha(fechaMas3, vendedorNombre);
+
+  if (!rowsHoy.length && !rowsMas3.length) {
+    return false;
+  }
+
+  const contenido = generarTxtRenovacionesPro(
+    vendedorNombre,
+    fechaHoy,
+    fechaMas3,
+    rowsHoy,
+    rowsMas3
+  );
+
+  const nombre = `renovaciones_${safeFileNameLocal(vendedorNombre, "vendedor")}_${fechaHoy.replace(/\//g, "-")}.txt`;
+  await enviarTxtComoArchivo(chatId, contenido, nombre);
+  return true;
+}
+
+async function enviarTxtRenovacionesAdminPro(chatId) {
+  const fechaHoy = hoyDMY();
+  const fechaMas3 = addDaysDMY(fechaHoy, 3);
+
+  const rowsHoy = await obtenerRenovacionesPorFecha(fechaHoy, null);
+  const rowsMas3 = await obtenerRenovacionesPorFecha(fechaMas3, null);
+
+  if (!rowsHoy.length && !rowsMas3.length) {
+    return false;
+  }
+
+  const contenido = generarTxtRenovacionesPro(
+    "GENERAL",
+    fechaHoy,
+    fechaMas3,
+    rowsHoy,
+    rowsMas3
+  );
+
+  const nombre = `renovaciones_general_${fechaHoy.replace(/\//g, "-")}.txt`;
+  await enviarTxtComoArchivo(chatId, contenido, nombre);
+  return true;
+}
+
+async function enviarResumenVendedorPro(chatId, vendedorNombre = "") {
+  const fechaHoy = hoyDMY();
+  const fechaMas3 = addDaysDMY(fechaHoy, 3);
+  const hoyTs = parseDMYtoTS(fechaHoy);
+
+  const snap = await db.collection("clientes").get();
+
+  let clientesActivos = 0;
+  let renovacionesHoy = 0;
+  let renovacionesMas3 = 0;
+  let vencidas = 0;
+  let totalMensual = 0;
+
+  snap.forEach((d) => {
+    const c = d.data() || {};
+    if (normVendorText(c.vendedor || "") !== normVendorText(vendedorNombre || "")) return;
+
+    const servicios = Array.isArray(c.servicios) ? c.servicios : [];
+    if (servicios.length) clientesActivos++;
+
+    servicios.forEach((s) => {
+      const fecha = String(s.fechaRenovacion || "").trim();
+      const ts = parseDMYtoTS(fecha);
+
+      totalMensual += Number(s.precio || 0);
+
+      if (fecha === fechaHoy) renovacionesHoy++;
+      if (fecha === fechaMas3) renovacionesMas3++;
+      if (ts && ts < hoyTs) vencidas++;
+    });
+  });
+
+  let txt = "💰 *MI RESUMEN*\n\n";
+  txt += `👤 *Vendedor:* ${escMD(vendedorNombre || "-")}\n`;
+  txt += `👥 *Clientes activos:* ${clientesActivos}\n`;
+  txt += `📅 *Renovaciones hoy:* ${renovacionesHoy}\n`;
+  txt += `⏳ *Renovaciones en 3 días:* ${renovacionesMas3}\n`;
+  txt += `🔴 *Vencidas:* ${vencidas}\n`;
+  txt += `💵 *Total mensual estimado:* ${escMD(Number(totalMensual || 0).toFixed(2))} Lps`;
+
+  return upsertPanel(
+    chatId,
+    txt,
+    [[{ text: "🏠 Inicio", callback_data: "go:inicio" }]]
+  );
+}
+
 
 async function buscarClientesFallbackLocal(query = "") {
   const qRaw = String(query || "").trim();
@@ -1470,17 +1638,19 @@ bot.on("callback_query", async (q) => {
     }
 
     const vendedorOnlyAllowed = new Set([
-      "ren:mis",
+      "ren:mis:hoy",
+      "ren:mis:prox3",
       "txt:mis",
       "vend:clientes",
       "vend:clientes:txt",
+      "vend:resumen",
       "go:inicio",
     ]);
 
     if (!adminOk && !vendedorOnlyAllowed.has(data)) {
       return upsertPanel(
         chatId,
-        "⛔ Modo vendedor.\n\nUsa:\n• Mis renovaciones\n• TXT Mis renovaciones\n• Mis clientes\n• TXT Mis clientes\n",
+        "⛔ Modo vendedor.\n\nUsa:\n• Mis renovaciones hoy\n• Renovaciones en 3 días\n• TXT renovaciones\n• Mis clientes\n• TXT Mis clientes\n• Mi resumen\n",
         [[{ text: "🏠 Inicio", callback_data: "go:inicio" }]]
       );
     }
@@ -2793,19 +2963,34 @@ Seleccione el cliente:`,
       return enviarTXT(chatId, list, fecha, adminOk ? null : vend?.nombre);
     }
 
-    if (data === "ren:mis") {
+    if (data === "ren:mis:hoy") {
       if (!vendOk) return bot.sendMessage(chatId, "⚠️ No está vinculado a un vendedor.");
+
       const fecha = hoyDMY();
       const list = await obtenerRenovacionesPorFecha(fecha, vend.nombre);
       const texto = renovacionesTexto(list, fecha, vend.nombre);
+
+      return bot.sendMessage(chatId, texto, { parse_mode: "Markdown" });
+    }
+
+    if (data === "ren:mis:prox3") {
+      if (!vendOk) return bot.sendMessage(chatId, "⚠️ No está vinculado a un vendedor.");
+
+      const fecha = addDaysDMY(hoyDMY(), 3);
+      const list = await obtenerRenovacionesPorFecha(fecha, vend.nombre);
+      const texto = renovacionesTexto(list, fecha, vend.nombre);
+
       return bot.sendMessage(chatId, texto, { parse_mode: "Markdown" });
     }
 
     if (data === "txt:mis") {
       if (!vendOk) return bot.sendMessage(chatId, "⚠️ No está vinculado a un vendedor.");
-      const fecha = hoyDMY();
-      const list = await obtenerRenovacionesPorFecha(fecha, vend.nombre);
-      return enviarTXT(chatId, list, fecha, vend.nombre);
+
+      const sent = await enviarTxtRenovacionesVendedorPro(chatId, vend.nombre);
+      if (!sent) {
+        return bot.sendMessage(chatId, "ℹ️ No tiene renovaciones para hoy ni para dentro de 3 días.");
+      }
+      return;
     }
 
     if (data === "vend:clientes") {
@@ -2818,6 +3003,11 @@ Seleccione el cliente:`,
       if (!vendOk) return bot.sendMessage(chatId, "⚠️ No está vinculado a un vendedor.");
       const { enviarMisClientesTXT } = require("./index_03_clientes_crm");
       return enviarMisClientesTXT(chatId, vend.nombre);
+    }
+
+    if (data === "vend:resumen") {
+      if (!vendOk) return bot.sendMessage(chatId, "⚠️ No está vinculado a un vendedor.");
+      return enviarResumenVendedorPro(chatId, vend.nombre);
     }
 
     if (data === "rev:lista") return listarRevendedores(chatId);
@@ -3840,16 +4030,15 @@ async function enviarTxtRenovacionesDiarias7AM() {
   const adminIds = new Set(await getActiveAdminIdsLocal());
 
   try {
-    const listaGeneral = await obtenerRenovacionesPorFecha(dmy, null);
     for (const adminId of adminIds) {
       try {
-        await enviarTXT(adminId, listaGeneral, dmy, null);
+        await enviarTxtRenovacionesAdminPro(adminId);
       } catch (e) {
         logErr(`AutoTXT:admin:${adminId}`, e?.stack || e?.message || e);
       }
     }
   } catch (e) {
-    logErr("AutoTXT:listaGeneral", e?.stack || e?.message || e);
+    logErr("AutoTXT:admins", e?.stack || e?.message || e);
   }
 
   const revendedores = await getActiveRevendedoresLocal();
@@ -3857,8 +4046,9 @@ async function enviarTxtRenovacionesDiarias7AM() {
     try {
       if (adminIds.has(normalizeTelegramIdLocal(rev.telegramId))) continue;
 
-      const list = await obtenerRenovacionesPorFecha(dmy, rev.nombre);
-      await enviarTXT(rev.telegramId, list, dmy, rev.nombre);
+      const sent = await enviarTxtRenovacionesVendedorPro(rev.telegramId, rev.nombre);
+
+      if (!sent) continue;
 
       await db.collection("revendedores").doc(rev.id).set(
         {
