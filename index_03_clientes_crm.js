@@ -9,8 +9,8 @@
    - TXT general, por vendedor, historial y renovaciones
    - Renovaciones por fecha con filtro opcional por vendedor
    - Compatible con plataformas de correo o usuario
-   - Canva ya no obliga clave/pin
-   - Si addServicioTx falla, el wizard devuelve el error real
+   - ✅ CORREGIDO: TXT salen con extensión .txt real para abrir en Android/Excel
+   - ✅ CORREGIDO: no usar serverTimestamp dentro del array servicios
 */
 
 const fs = require("fs");
@@ -23,7 +23,7 @@ const { bot, admin, db, PLATAFORMAS } = core;
 
 const escMD = typeof utils.escMD === "function"
   ? utils.escMD
-  : (v = "") => String(v || "").replace(/([_*`\[])/g, "\\$1");
+  : (v = "") => String(v || "").replace(/([_*\[\]()~`>#+\-=|{}.!\\])/g, "\\$1");
 
 const upsertPanel = typeof utils.upsertPanel === "function"
   ? utils.upsertPanel
@@ -105,22 +105,6 @@ function normTxt(v = "") {
     .trim();
 }
 
-function platCfgLocal(plataforma = "") {
-  const p = normalizarPlataforma(plataforma);
-  if (Array.isArray(PLATAFORMAS)) return {};
-  return PLATAFORMAS[p] || {};
-}
-
-function requiereClaveOPinLocal(plataforma = "") {
-  const cfg = platCfgLocal(plataforma);
-  return cfg.requiereClave === true || cfg.requierePin === true;
-}
-
-function esSoloCorreoLocal(plataforma = "") {
-  const cfg = platCfgLocal(plataforma);
-  return cfg.requiereCorreo === true && cfg.requiereClave !== true && cfg.requierePin !== true;
-}
-
 function humanPlataforma(key = "") {
   const k = normalizarPlataforma(key);
   const map = {
@@ -187,7 +171,7 @@ function getIdentLabelLocal(plataforma = "") {
 
 function getAccessTypeLabelLocal(plataforma = "") {
   const p = normalizarPlataforma(plataforma);
-  if (esSoloCorreoLocal(p)) return "Solo correo";
+  if (p === "canva") return "Solo correo";
   if (["oleadatv1", "oleadatv3", "iptv1", "iptv3", "iptv4"].includes(p)) return "Usuario + clave";
   return "Correo + clave";
 }
@@ -223,7 +207,7 @@ function getTotalPorPlataformaLocal(plat = "") {
     netflix: 5,
     vipnetflix: 1,
     disneyp: 6,
-    disneys: 3,
+    disneys: 5,
     hbomax: 5,
     primevideo: 5,
     paramount: 5,
@@ -314,26 +298,41 @@ function resumenGeneralCliente(servicios = []) {
 }
 
 function fileSafeName(v = "", fallback = "archivo") {
-  const s = String(v || "")
+  let s = String(v || "")
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-zA-Z0-9_-]+/g, "_")
+    .replace(/[^a-zA-Z0-9._-]+/g, "_")
     .replace(/^_+|_+$/g, "")
-    .slice(0, 60);
-  return s || fallback;
+    .slice(0, 80);
+
+  if (!s) s = fallback;
+  if (!/\.txt$/i.test(s)) s += ".txt";
+
+  return s;
 }
 
-async function enviarTxtComoArchivo(chatId, contenido = "", fileName = "reporte.txt") {
-  const tempPath = path.join("/tmp", `${Date.now()}_${fileSafeName(fileName, "reporte")}`);
-  fs.writeFileSync(tempPath, String(contenido || ""), "utf8");
-  try {
-    await bot.sendDocument(chatId, tempPath, {
-      caption: fileName,
-    });
-  } finally {
-    try { fs.unlinkSync(tempPath); } catch (_) {}
-  }
-}
+const enviarTxtComoArchivo =
+  typeof utils.enviarTxtComoArchivo === "function"
+    ? utils.enviarTxtComoArchivo
+    : async (chatId, contenido = "", fileName = "reporte.txt") => {
+        const safeName = fileSafeName(fileName, "reporte.txt");
+        const tempPath = path.join("/tmp", safeName);
+        fs.writeFileSync(tempPath, String(contenido || ""), "utf8");
+
+        try {
+          return await bot.sendDocument(
+            chatId,
+            tempPath,
+            {},
+            {
+              filename: safeName,
+              contentType: "text/plain",
+            }
+          );
+        } finally {
+          try { fs.unlinkSync(tempPath); } catch (_) {}
+        }
+      };
 
 function serviciosConIndiceOriginal(servicios = []) {
   return (Array.isArray(servicios) ? servicios : []).map((s, idxOriginal) => ({
@@ -772,7 +771,7 @@ async function addServicioTx(clientId, servicio = {}) {
   const precio = Number(servicio.precio || 0);
   const fechaRenovacion = String(servicio.fechaRenovacion || "").trim();
 
-  if (requiereClaveOPinLocal(plat) && !pin) throw new Error("Clave/PIN inválido.");
+  if (!pin) throw new Error("Clave/PIN inválido.");
   if (!Number.isFinite(precio) || precio <= 0) throw new Error("Precio inválido.");
   if (!isFechaDMY(fechaRenovacion)) throw new Error("Fecha de renovación inválida.");
 
@@ -793,7 +792,6 @@ async function addServicioTx(clientId, servicio = {}) {
     pin,
     precio,
     fechaRenovacion,
-    createdAt: admin.firestore.Timestamp.now(),
   };
 
   servicios.push(nuevoServicio);
@@ -958,14 +956,6 @@ async function wizardNext(chatId, rawText = "") {
         return bot.sendMessage(chatId, `⚠️ ${getIdentLabelLocal(plat)} inválido.`);
       }
       st.servicio.correo = normalizeIdentByPlatformLocal(plat, t);
-
-      if (esSoloCorreoLocal(plat)) {
-        st.servicio.pin = "";
-        st.servStep = 4;
-        wizard.set(String(chatId), st);
-        return bot.sendMessage(chatId, "(Servicio 4/5) Precio (solo número, Lps):");
-      }
-
       st.servStep = 3;
       wizard.set(String(chatId), st);
       return bot.sendMessage(chatId, "(Servicio 3/5) Clave/PIN:");
@@ -994,20 +984,15 @@ async function wizardNext(chatId, rawText = "") {
       st.servicio.fechaRenovacion = t;
 
       let clientId = st.clientId;
-      let createdNow = false;
-      let refNew = null;
-
       if (!clientId) {
         const dup = await clienteDuplicado(st.nombre, st.telefono);
         if (dup) {
           return bot.sendMessage(chatId, "⚠️ Ya existe un cliente con ese nombre y teléfono.");
         }
 
-        refNew = db.collection(CLIENTES_COLLECTION).doc();
-        clientId = refNew.id;
-        createdNow = true;
-
-        await refNew.set({
+        const ref = db.collection(CLIENTES_COLLECTION).doc();
+        clientId = ref.id;
+        await ref.set({
           nombrePerfil: st.nombre,
           nombre_norm: normTxt(st.nombre),
           telefono: st.telefono,
@@ -1020,22 +1005,13 @@ async function wizardNext(chatId, rawText = "") {
         });
       }
 
-      try {
-        await addServicioTx(clientId, {
-          plataforma: plat,
-          correo: st.servicio.correo,
-          pin: st.servicio.pin,
-          precio: st.servicio.precio,
-          fechaRenovacion: st.servicio.fechaRenovacion,
-        });
-      } catch (e) {
-        if (createdNow && refNew) {
-          try {
-            await refNew.delete();
-          } catch (_) {}
-        }
-        return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo guardar el servicio."}`);
-      }
+      await addServicioTx(clientId, {
+        plataforma: plat,
+        correo: st.servicio.correo,
+        pin: st.servicio.pin,
+        precio: st.servicio.precio,
+        fechaRenovacion: st.servicio.fechaRenovacion,
+      });
 
       wizard.set(String(chatId), {
         step: 4,
@@ -1164,7 +1140,7 @@ function renovacionesTextoPlano(rows = [], fecha = "", vendedor = null) {
 async function enviarTXT(chatId, rows = [], fecha = "", vendedor = null) {
   const contenido = renovacionesTextoPlano(rows, fecha, vendedor);
   const nombre = vendedor
-    ? `renovaciones_${fileSafeName(vendedor, "vendedor")}_${String(fecha || "").replace(/\//g, "-")}.txt`
+    ? `renovaciones_${fileSafeName(vendedor, "vendedor").replace(/\.txt$/i, "")}_${String(fecha || "").replace(/\//g, "-")}.txt`
     : `renovaciones_${String(fecha || "").replace(/\//g, "-")}.txt`;
   return enviarTxtComoArchivo(chatId, contenido, nombre);
 }
@@ -1223,7 +1199,7 @@ async function reporteClientesSplitPorVendedorTXT(chatId) {
       txt += `========================================\n`;
       txt += `${i + 1}) ${clienteResumenTXT(c)}\n`;
     });
-    await enviarTxtComoArchivo(chatId, txt, `${fileSafeName(vend, "vendedor")}_${Date.now()}.txt`);
+    await enviarTxtComoArchivo(chatId, txt, `${fileSafeName(vend, "vendedor").replace(/\.txt$/i, "")}_${Date.now()}.txt`);
     enviados++;
   }
 
@@ -1234,7 +1210,7 @@ async function enviarHistorialClienteTXT(chatId, clientId) {
   const c = await getCliente(clientId);
   if (!c) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
   const contenido = clienteResumenTXT(c);
-  const nombre = `historial_${fileSafeName(c.nombrePerfil || clientId, "cliente")}.txt`;
+  const nombre = `historial_${fileSafeName(c.nombrePerfil || clientId, "cliente").replace(/\.txt$/i, "")}.txt`;
   return enviarTxtComoArchivo(chatId, contenido, nombre);
 }
 
@@ -1261,7 +1237,7 @@ async function enviarMisClientesTXT(chatId, vendedorNombre = "") {
     txt += `${i + 1}) ${clienteResumenTXT(c)}\n`;
   });
 
-  return enviarTxtComoArchivo(chatId, txt, `mis_clientes_${fileSafeName(vendedorNombre, "vendedor")}.txt`);
+  return enviarTxtComoArchivo(chatId, txt, `mis_clientes_${fileSafeName(vendedorNombre, "vendedor").replace(/\.txt$/i, "")}.txt`);
 }
 
 module.exports = {
