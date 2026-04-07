@@ -986,6 +986,280 @@ async function listarRevendedores(chatId) {
   return bot.sendMessage(chatId, t, { parse_mode: "Markdown" });
 }
 
+
+function humanPlatAlertLocal(key = "") {
+  const k = normalizarPlataforma(key);
+  const map = {
+    netflix: "Netflix",
+    vipnetflix: "VIP Netflix",
+    disneyp: "Disney Premium",
+    disneys: "Disney Standard",
+    hbomax: "HBO Max",
+    primevideo: "Prime Video",
+    paramount: "Paramount+",
+    crunchyroll: "Crunchyroll",
+    vix: "Vix",
+    appletv: "Apple TV",
+    universal: "Universal",
+    spotify: "Spotify",
+    youtube: "YouTube",
+    deezer: "Deezer",
+    oleadatv1: "Oleada 1",
+    oleadatv3: "Oleada 3",
+    iptv1: "IPTV 1",
+    iptv3: "IPTV 3",
+    iptv4: "IPTV 4",
+    canva: "Canva",
+    gemini: "Gemini",
+    chatgpt: "ChatGPT",
+  };
+  return map[k] || String(key || "");
+}
+
+function diffDaysFromTodayLocal(fechaDMY = "") {
+  const hoyTs = Number(parseDMYtoTS(hoyDMY()) || 0);
+  const fechaTs = Number(parseDMYtoTS(fechaDMY) || 0);
+  if (!hoyTs || !fechaTs) return 0;
+  return Math.floor((hoyTs - fechaTs) / 86400000);
+}
+
+async function getAlertaClientesLocal(tipo = "hoy") {
+  const snap = await db.collection("clientes").get();
+  const hoy = hoyDMY();
+  const fecha3 = addDaysDMY(hoy, 3);
+  const rows = [];
+
+  snap.forEach((doc) => {
+    const c = doc.data() || {};
+    const servicios = Array.isArray(c.servicios) ? c.servicios : [];
+
+    servicios.forEach((s) => {
+      const fecha = String(s?.fechaRenovacion || "").trim();
+      if (!isFechaDMY(fecha)) return;
+
+      let ok = false;
+      if (tipo === "vencidos") ok = Number(parseDMYtoTS(fecha) || 0) < Number(parseDMYtoTS(hoy) || 0);
+      else if (tipo === "hoy") ok = fecha === hoy;
+      else if (tipo === "3dias") ok = fecha === fecha3;
+
+      if (!ok) return;
+
+      rows.push({
+        clientId: doc.id,
+        nombrePerfil: String(c.nombrePerfil || "Sin nombre").trim(),
+        telefono: String(c.telefono || "-").trim(),
+        vendedor: String(c.vendedor || "-").trim(),
+        plataforma: normalizarPlataforma(s?.plataforma || ""),
+        correo: String(s?.correo || "-").trim(),
+        pin: String(s?.pin || "-").trim(),
+        precio: Number(s?.precio || 0),
+        fechaRenovacion: fecha,
+        atrasoDias: tipo === "vencidos" ? Math.max(1, diffDaysFromTodayLocal(fecha)) : 0,
+      });
+    });
+  });
+
+  rows.sort((a, b) => {
+    const fa = String(a.fechaRenovacion || "");
+    const fb = String(b.fechaRenovacion || "");
+    if (fa !== fb) return fa.localeCompare(fb, "es");
+    const va = String(a.vendedor || "");
+    const vb = String(b.vendedor || "");
+    if (va !== vb) return va.localeCompare(vb, "es", { sensitivity: "base" });
+    return String(a.nombrePerfil || "").localeCompare(String(b.nombrePerfil || ""), "es", { sensitivity: "base" });
+  });
+
+  return rows;
+}
+
+function renderAlertaClientesMarkdown(rows = [], titulo = "", emptyText = "Sin resultados.") {
+  const items = Array.isArray(rows) ? rows : [];
+  let txt = `${titulo}\n\n`;
+
+  if (!items.length) {
+    txt += `_${emptyText}_`;
+    return txt;
+  }
+
+  items.slice(0, 120).forEach((x, i) => {
+    txt += `*${i + 1})* ${escMD(x.nombrePerfil || "Sin nombre")}\n`;
+    txt += `📱 ${escMD(x.telefono || "-")}\n`;
+    txt += `🧾 ${escMD(x.vendedor || "-")}\n`;
+    txt += `📦 ${escMD(humanPlatAlertLocal(x.plataforma || ""))}\n`;
+    txt += `${getIdentLabelLocal(x.plataforma || "") === "Usuario" ? "👤" : "📧"} ${escMD(x.correo || "-")}\n`;
+    txt += `💰 ${escMD(moneyLps(x.precio || 0))}\n`;
+    txt += `📅 ${escMD(x.fechaRenovacion || "-")}`;
+    if (Number(x.atrasoDias || 0) > 0) {
+      txt += ` • ⏰ ${escMD(String(x.atrasoDias))} día(s)`;
+    }
+    txt += `\n\n`;
+  });
+
+  if (items.length > 120) {
+    txt += `_Mostrando 120 de ${items.length} resultados._`;
+  } else {
+    txt += `*Total:* ${escMD(String(items.length))}`;
+  }
+
+  return txt.trim();
+}
+
+async function getInventarioCriticoLocal() {
+  const snap = await db.collection("inventario").get();
+  const rows = [];
+
+  snap.forEach((doc) => {
+    const d = doc.data() || {};
+    const plataforma = normalizarPlataforma(d.plataforma || "");
+    const capacidad = Number(d.capacidad || d.total || getCapacidadCorreo(d, plataforma) || 1);
+    const clientes = Array.isArray(d.clientes) ? d.clientes : [];
+    const ocupados = Number.isFinite(Number(d.ocupados)) ? Number(d.ocupados) : clientes.length;
+    const disponiblesRaw = d.disponibles ?? d.disp;
+    const disponibles = Number.isFinite(Number(disponiblesRaw))
+      ? Number(disponiblesRaw)
+      : Math.max(0, capacidad - ocupados);
+    const acceso = String(d.correo || d.usuario || "").trim();
+
+    if (ocupados > capacidad || disponibles <= 0) {
+      rows.push({
+        id: doc.id,
+        plataforma,
+        acceso,
+        ocupados,
+        capacidad,
+        disponibles,
+        estado: ocupados > capacidad ? "SOBREOCUPADA" : "LLENA",
+      });
+    }
+  });
+
+  rows.sort((a, b) => {
+    if ((b.ocupados - b.capacidad) !== (a.ocupados - a.capacidad)) {
+      return (b.ocupados - b.capacidad) - (a.ocupados - a.capacidad);
+    }
+    return String(a.plataforma || "").localeCompare(String(b.plataforma || ""), "es", { sensitivity: "base" });
+  });
+
+  return rows;
+}
+
+function renderInventarioCriticoMarkdown(rows = []) {
+  const items = Array.isArray(rows) ? rows : [];
+  let txt = `📦 *INVENTARIO CRÍTICO*\n\n`;
+
+  if (!items.length) {
+    txt += `_Sin cuentas críticas._`;
+    return txt;
+  }
+
+  items.slice(0, 120).forEach((x, i) => {
+    txt += `*${i + 1})* ${escMD(humanPlatAlertLocal(x.plataforma || ""))}\n`;
+    txt += `${getIdentLabelLocal(x.plataforma || "") === "Usuario" ? "👤" : "📧"} ${escMD(x.acceso || "-")}\n`;
+    txt += `👥 ${escMD(String(x.ocupados))}/${escMD(String(x.capacidad))}\n`;
+    txt += `✅ ${escMD(String(x.disponibles))}\n`;
+    txt += `📊 ${escMD(x.estado || "-")}\n\n`;
+  });
+
+  if (items.length > 120) {
+    txt += `_Mostrando 120 de ${items.length} resultados._`;
+  } else {
+    txt += `*Total:* ${escMD(String(items.length))}`;
+  }
+
+  return txt.trim();
+}
+
+async function enviarTxtAlertasDiaLocal(chatId) {
+  const hoy = hoyDMY();
+  const fecha3 = addDaysDMY(hoy, 3);
+
+  const [vencidos, hoyRows, dias3, inventario] = await Promise.all([
+    getAlertaClientesLocal("vencidos"),
+    getAlertaClientesLocal("hoy"),
+    getAlertaClientesLocal("3dias"),
+    getInventarioCriticoLocal(),
+  ]);
+
+  let txt = "";
+  txt += `ALERTAS DEL DÍA\n`;
+  txt += `Fecha: ${hoy}\n\n`;
+
+  txt += "==============================\n";
+  txt += "🔴 CLIENTES VENCIDOS\n";
+  txt += "==============================\n";
+  if (!vencidos.length) {
+    txt += "Sin clientes vencidos.\n\n";
+  } else {
+    vencidos.forEach((x, i) => {
+      txt += `${i + 1}) ${x.nombrePerfil}\n`;
+      txt += `Teléfono: ${x.telefono}\n`;
+      txt += `Vendedor: ${x.vendedor}\n`;
+      txt += `Plataforma: ${humanPlatAlertLocal(x.plataforma)}\n`;
+      txt += `${getIdentLabelLocal(x.plataforma) === "Usuario" ? "Usuario" : "Correo"}: ${x.correo}\n`;
+      txt += `Fecha: ${x.fechaRenovacion}\n`;
+      txt += `Atraso: ${x.atrasoDias} día(s)\n`;
+      txt += `Monto: ${Number(x.precio || 0).toFixed(2)} Lps\n\n`;
+    });
+  }
+
+  txt += "==============================\n";
+  txt += "🟠 VENCEN HOY\n";
+  txt += "==============================\n";
+  if (!hoyRows.length) {
+    txt += "Sin renovaciones para hoy.\n\n";
+  } else {
+    hoyRows.forEach((x, i) => {
+      txt += `${i + 1}) ${x.nombrePerfil}\n`;
+      txt += `Teléfono: ${x.telefono}\n`;
+      txt += `Vendedor: ${x.vendedor}\n`;
+      txt += `Plataforma: ${humanPlatAlertLocal(x.plataforma)}\n`;
+      txt += `${getIdentLabelLocal(x.plataforma) === "Usuario" ? "Usuario" : "Correo"}: ${x.correo}\n`;
+      txt += `Fecha: ${x.fechaRenovacion}\n`;
+      txt += `Monto: ${Number(x.precio || 0).toFixed(2)} Lps\n\n`;
+    });
+  }
+
+  txt += "==============================\n";
+  txt += `⏳ VENCEN EN 3 DÍAS (${fecha3})\n`;
+  txt += "==============================\n";
+  if (!dias3.length) {
+    txt += "Sin renovaciones en 3 días.\n\n";
+  } else {
+    dias3.forEach((x, i) => {
+      txt += `${i + 1}) ${x.nombrePerfil}\n`;
+      txt += `Teléfono: ${x.telefono}\n`;
+      txt += `Vendedor: ${x.vendedor}\n`;
+      txt += `Plataforma: ${humanPlatAlertLocal(x.plataforma)}\n`;
+      txt += `${getIdentLabelLocal(x.plataforma) === "Usuario" ? "Usuario" : "Correo"}: ${x.correo}\n`;
+      txt += `Fecha: ${x.fechaRenovacion}\n`;
+      txt += `Monto: ${Number(x.precio || 0).toFixed(2)} Lps\n\n`;
+    });
+  }
+
+  txt += "==============================\n";
+  txt += "📦 INVENTARIO CRÍTICO\n";
+  txt += "==============================\n";
+  if (!inventario.length) {
+    txt += "Sin cuentas críticas.\n";
+  } else {
+    inventario.forEach((x, i) => {
+      txt += `${i + 1}) ${humanPlatAlertLocal(x.plataforma)}\n`;
+      txt += `${getIdentLabelLocal(x.plataforma) === "Usuario" ? "Usuario" : "Correo"}: ${x.acceso}\n`;
+      txt += `Ocupados: ${x.ocupados}/${x.capacidad}\n`;
+      txt += `Disponibles: ${x.disponibles}\n`;
+      txt += `Estado: ${x.estado}\n\n`;
+    });
+  }
+
+  try {
+    const { enviarTxtComoArchivo } = require("./index_02_utils_roles");
+    return await enviarTxtComoArchivo(chatId, txt, `alertas_${hoy.replace(/\//g, "-")}.txt`);
+  } catch (e) {
+    logErr("enviarTxtAlertasDiaLocal", e);
+    return bot.sendMessage(chatId, txt);
+  }
+}
+
 if (global.__SUBLICUENTAS_HANDLERS_READY__) {
   console.log("ℹ️ Handlers ya estaban registrados. Se omite registro duplicado.");
 } else {
