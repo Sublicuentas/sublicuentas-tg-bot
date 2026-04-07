@@ -115,6 +115,7 @@ const {
   menuInventarioDisenoIA,
   menuClientes,
   menuPagos,
+  menuAlertas,
   menuRenovaciones,
   menuFinRegistro,
   menuFinEliminarTipo,
@@ -460,6 +461,7 @@ async function sendBottomMainMenu(chatId, userId) {
         ],
         [
           { text: "💰 Finanzas", callback_data: "menu:pagos" },
+          { text: "🚨 Alertas", callback_data: "menu:alertas" },
         ],
       ];
     } else if (await safeIsVendedorLocal(userId)) {
@@ -1765,7 +1767,60 @@ bot.on("callback_query", async (q) => {
 
       if (data === "menu:clientes") return menuClientes(chatId);
       if (data === "menu:pagos") return menuPagos(chatId);
+      if (data === "menu:alertas") return menuAlertas(chatId);
       if (data === "menu:renovaciones") return menuRenovaciones(chatId, userId);
+
+      if (data === "alert:vencidos") {
+        const rows = await getAlertaClientesLocal("vencidos");
+        return upsertPanel(
+          chatId,
+          renderAlertaClientesMarkdown(rows, "🔴 *CLIENTES VENCIDOS*", "Sin clientes vencidos."),
+          [
+            [{ text: "⬅️ Volver alertas", callback_data: "menu:alertas" }],
+            [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
+          ]
+        );
+      }
+
+      if (data === "alert:hoy") {
+        const rows = await getAlertaClientesLocal("hoy");
+        return upsertPanel(
+          chatId,
+          renderAlertaClientesMarkdown(rows, "🟠 *VENCEN HOY*", "Sin renovaciones para hoy."),
+          [
+            [{ text: "⬅️ Volver alertas", callback_data: "menu:alertas" }],
+            [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
+          ]
+        );
+      }
+
+      if (data === "alert:3dias") {
+        const rows = await getAlertaClientesLocal("3dias");
+        return upsertPanel(
+          chatId,
+          renderAlertaClientesMarkdown(rows, `⏳ *VENCEN EN 3 DÍAS (${escMD(addDaysDMY(hoyDMY(), 3))})*`, "Sin renovaciones en 3 días."),
+          [
+            [{ text: "⬅️ Volver alertas", callback_data: "menu:alertas" }],
+            [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
+          ]
+        );
+      }
+
+      if (data === "alert:inventario") {
+        const rows = await getInventarioCriticoLocal();
+        return upsertPanel(
+          chatId,
+          renderInventarioCriticoMarkdown(rows),
+          [
+            [{ text: "⬅️ Volver alertas", callback_data: "menu:alertas" }],
+            [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
+          ]
+        );
+      }
+
+      if (data === "alert:txt:hoy") {
+        return enviarTxtAlertasDiaLocal(chatId);
+      }
 
       if (data === "fin:menu:registro") return menuFinRegistro(chatId);
       if (data === "fin:menu:reportes") return menuFinReportes(chatId);
