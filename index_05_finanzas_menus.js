@@ -720,7 +720,10 @@ async function menuPrincipal(chatId) {
       { text: "📦 Inventario", callback_data: "menu:inventario" },
       { text: "👥 Clientes / CRM", callback_data: "menu:clientes" },
     ],
-    [{ text: "💰 Finanzas", callback_data: "menu:pagos" }],
+    [
+      { text: "💰 Finanzas", callback_data: "menu:pagos" },
+      { text: "🚨 Alertas", callback_data: "menu:alertas" },
+    ],
   ]);
 }
 
@@ -911,6 +914,25 @@ async function menuFinReportes(chatId) {
     [
       { text: "🧾 Cierre por rango", callback_data: "fin:menu:cierre:rango" },
       { text: "⬅️ Volver Finanzas", callback_data: "menu:pagos" },
+    ],
+    [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
+  ]);
+}
+
+
+async function menuAlertas(chatId) {
+  return upsertPanel(chatId, "🚨 *ALERTAS*\n\nSeleccione una opción:", [
+    [
+      { text: "🔴 Clientes vencidos", callback_data: "alert:vencidos" },
+      { text: "🟠 Vencen hoy", callback_data: "alert:hoy" },
+    ],
+    [
+      { text: "⏳ Vencen en 3 días", callback_data: "alert:3dias" },
+      { text: "📦 Inventario crítico", callback_data: "alert:inventario" },
+    ],
+    [
+      { text: "📄 TXT alertas del día", callback_data: "alert:txt:hoy" },
+      { text: "⬅️ Volver", callback_data: "go:inicio" },
     ],
     [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
   ]);
@@ -1674,6 +1696,7 @@ module.exports = {
   menuClientes,
   menuRenovaciones,
   menuPagos,
+  menuAlertas,
   menuFinRegistro,
   menuFinEliminarTipo,
   menuFinReportes,
