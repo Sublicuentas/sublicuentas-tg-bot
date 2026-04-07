@@ -1024,52 +1024,57 @@ function diffDaysFromTodayLocal(fechaDMY = "") {
 }
 
 async function getAlertaClientesLocal(tipo = "hoy") {
-  const snap = await db.collection("clientes").get();
-  const hoy = hoyDMY();
-  const fecha3 = addDaysDMY(hoy, 3);
-  const rows = [];
+  try {
+    const snap = await db.collection("clientes").get();
+    const hoy = hoyDMY();
+    const fecha3 = addDaysDMY(hoy, 3);
+    const rows = [];
 
-  snap.forEach((doc) => {
-    const c = doc.data() || {};
-    const servicios = Array.isArray(c.servicios) ? c.servicios : [];
+    snap.forEach((doc) => {
+      const c = doc.data() || {};
+      const servicios = Array.isArray(c.servicios) ? c.servicios : [];
 
-    servicios.forEach((s) => {
-      const fecha = String(s?.fechaRenovacion || "").trim();
-      if (!isFechaDMY(fecha)) return;
+      servicios.forEach((s) => {
+        const fecha = String(s?.fechaRenovacion || "").trim();
+        if (!isFechaDMY(fecha)) return;
 
-      let ok = false;
-      if (tipo === "vencidos") ok = Number(parseDMYtoTS(fecha) || 0) < Number(parseDMYtoTS(hoy) || 0);
-      else if (tipo === "hoy") ok = fecha === hoy;
-      else if (tipo === "3dias") ok = fecha === fecha3;
+        let ok = false;
+        if (tipo === "vencidos") ok = Number(parseDMYtoTS(fecha) || 0) < Number(parseDMYtoTS(hoy) || 0);
+        else if (tipo === "hoy") ok = fecha === hoy;
+        else if (tipo === "3dias") ok = fecha === fecha3;
 
-      if (!ok) return;
+        if (!ok) return;
 
-      rows.push({
-        clientId: doc.id,
-        nombrePerfil: String(c.nombrePerfil || "Sin nombre").trim(),
-        telefono: String(c.telefono || "-").trim(),
-        vendedor: String(c.vendedor || "-").trim(),
-        plataforma: normalizarPlataforma(s?.plataforma || ""),
-        correo: String(s?.correo || "-").trim(),
-        pin: String(s?.pin || "-").trim(),
-        precio: Number(s?.precio || 0),
-        fechaRenovacion: fecha,
-        atrasoDias: tipo === "vencidos" ? Math.max(1, diffDaysFromTodayLocal(fecha)) : 0,
+        rows.push({
+          clientId: doc.id,
+          nombrePerfil: String(c.nombrePerfil || "Sin nombre").trim(),
+          telefono: String(c.telefono || "-").trim(),
+          vendedor: String(c.vendedor || "-").trim(),
+          plataforma: normalizarPlataforma(s?.plataforma || ""),
+          correo: String(s?.correo || "-").trim(),
+          pin: String(s?.pin || "-").trim(),
+          precio: Number(s?.precio || 0),
+          fechaRenovacion: fecha,
+          atrasoDias: tipo === "vencidos" ? Math.max(1, diffDaysFromTodayLocal(fecha)) : 0,
+        });
       });
     });
-  });
 
-  rows.sort((a, b) => {
-    const fa = String(a.fechaRenovacion || "");
-    const fb = String(b.fechaRenovacion || "");
-    if (fa !== fb) return fa.localeCompare(fb, "es");
-    const va = String(a.vendedor || "");
-    const vb = String(b.vendedor || "");
-    if (va !== vb) return va.localeCompare(vb, "es", { sensitivity: "base" });
-    return String(a.nombrePerfil || "").localeCompare(String(b.nombrePerfil || ""), "es", { sensitivity: "base" });
-  });
+    rows.sort((a, b) => {
+      const fa = String(a.fechaRenovacion || "");
+      const fb = String(b.fechaRenovacion || "");
+      if (fa !== fb) return fa.localeCompare(fb, "es");
+      const va = String(a.vendedor || "");
+      const vb = String(b.vendedor || "");
+      if (va !== vb) return va.localeCompare(vb, "es", { sensitivity: "base" });
+      return String(a.nombrePerfil || "").localeCompare(String(b.nombrePerfil || ""), "es", { sensitivity: "base" });
+    });
 
-  return rows;
+    return rows;
+  } catch (e) {
+    logErr(`getAlertaClientesLocal:${tipo}`, e?.stack || e?.message || e);
+    return [];
+  }
 }
 
 function renderAlertaClientesMarkdown(rows = [], titulo = "", emptyText = "Sin resultados.") {
@@ -1105,42 +1110,47 @@ function renderAlertaClientesMarkdown(rows = [], titulo = "", emptyText = "Sin r
 }
 
 async function getInventarioCriticoLocal() {
-  const snap = await db.collection("inventario").get();
-  const rows = [];
+  try {
+    const snap = await db.collection("inventario").get();
+    const rows = [];
 
-  snap.forEach((doc) => {
-    const d = doc.data() || {};
-    const plataforma = normalizarPlataforma(d.plataforma || "");
-    const capacidad = Number(d.capacidad || d.total || getCapacidadCorreo(d, plataforma) || 1);
-    const clientes = Array.isArray(d.clientes) ? d.clientes : [];
-    const ocupados = Number.isFinite(Number(d.ocupados)) ? Number(d.ocupados) : clientes.length;
-    const disponiblesRaw = d.disponibles ?? d.disp;
-    const disponibles = Number.isFinite(Number(disponiblesRaw))
-      ? Number(disponiblesRaw)
-      : Math.max(0, capacidad - ocupados);
-    const acceso = String(d.correo || d.usuario || "").trim();
+    snap.forEach((doc) => {
+      const d = doc.data() || {};
+      const plataforma = normalizarPlataforma(d.plataforma || "");
+      const capacidad = Number(d.capacidad || d.total || getCapacidadCorreo(d, plataforma) || 1);
+      const clientes = Array.isArray(d.clientes) ? d.clientes : [];
+      const ocupados = Number.isFinite(Number(d.ocupados)) ? Number(d.ocupados) : clientes.length;
+      const disponiblesRaw = d.disponibles ?? d.disp;
+      const disponibles = Number.isFinite(Number(disponiblesRaw))
+        ? Number(disponiblesRaw)
+        : Math.max(0, capacidad - ocupados);
+      const acceso = String(d.correo || d.usuario || "").trim();
 
-    if (ocupados > capacidad || disponibles <= 0) {
-      rows.push({
-        id: doc.id,
-        plataforma,
-        acceso,
-        ocupados,
-        capacidad,
-        disponibles,
-        estado: ocupados > capacidad ? "SOBREOCUPADA" : "LLENA",
-      });
-    }
-  });
+      if (ocupados > capacidad || disponibles <= 0) {
+        rows.push({
+          id: doc.id,
+          plataforma,
+          acceso,
+          ocupados,
+          capacidad,
+          disponibles,
+          estado: ocupados > capacidad ? "SOBREOCUPADA" : "LLENA",
+        });
+      }
+    });
 
-  rows.sort((a, b) => {
-    if ((b.ocupados - b.capacidad) !== (a.ocupados - a.capacidad)) {
-      return (b.ocupados - b.capacidad) - (a.ocupados - a.capacidad);
-    }
-    return String(a.plataforma || "").localeCompare(String(b.plataforma || ""), "es", { sensitivity: "base" });
-  });
+    rows.sort((a, b) => {
+      if ((b.ocupados - b.capacidad) !== (a.ocupados - a.capacidad)) {
+        return (b.ocupados - b.capacidad) - (a.ocupados - a.capacidad);
+      }
+      return String(a.plataforma || "").localeCompare(String(b.plataforma || ""), "es", { sensitivity: "base" });
+    });
 
-  return rows;
+    return rows;
+  } catch (e) {
+    logErr("getInventarioCriticoLocal", e?.stack || e?.message || e);
+    return [];
+  }
 }
 
 function renderInventarioCriticoMarkdown(rows = []) {
@@ -1257,6 +1267,76 @@ async function enviarTxtAlertasDiaLocal(chatId) {
   } catch (e) {
     logErr("enviarTxtAlertasDiaLocal", e);
     return bot.sendMessage(chatId, txt);
+  }
+}
+
+function isAlertasCallbackLocal(data = "") {
+  return [
+    "menu:alertas",
+    "alert:vencidos", "alert:hoy", "alert:3dias", "alert:inventario", "alert:txt:hoy",
+    "alertas:vencidos", "alertas:hoy", "alertas:3dias", "alertas:inventario", "alertas:txt:hoy",
+  ].includes(String(data || ""));
+}
+
+async function mostrarPanelAlertaSeguro(chatId, tipo = "") {
+  try {
+    if (tipo === "vencidos") {
+      const rows = await getAlertaClientesLocal("vencidos");
+      return upsertPanel(
+        chatId,
+        renderAlertaClientesMarkdown(rows, "🔴 *CLIENTES VENCIDOS*", "Sin clientes vencidos."),
+        [
+          [{ text: "⬅️ Volver alertas", callback_data: "menu:alertas" }],
+          [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
+        ]
+      );
+    }
+
+    if (tipo === "hoy") {
+      const rows = await getAlertaClientesLocal("hoy");
+      return upsertPanel(
+        chatId,
+        renderAlertaClientesMarkdown(rows, "🟠 *VENCEN HOY*", "Sin renovaciones para hoy."),
+        [
+          [{ text: "⬅️ Volver alertas", callback_data: "menu:alertas" }],
+          [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
+        ]
+      );
+    }
+
+    if (tipo === "3dias") {
+      const fecha3 = addDaysDMY(hoyDMY(), 3);
+      const rows = await getAlertaClientesLocal("3dias");
+      return upsertPanel(
+        chatId,
+        renderAlertaClientesMarkdown(rows, `⏳ *VENCEN EN 3 DÍAS (${escMD(fecha3)})*`, "Sin renovaciones en 3 días."),
+        [
+          [{ text: "⬅️ Volver alertas", callback_data: "menu:alertas" }],
+          [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
+        ]
+      );
+    }
+
+    if (tipo === "inventario") {
+      const rows = await getInventarioCriticoLocal();
+      return upsertPanel(
+        chatId,
+        renderInventarioCriticoMarkdown(rows),
+        [
+          [{ text: "⬅️ Volver alertas", callback_data: "menu:alertas" }],
+          [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
+        ]
+      );
+    }
+
+    if (tipo === "txt") {
+      return enviarTxtAlertasDiaLocal(chatId);
+    }
+
+    return bot.sendMessage(chatId, "⚠️ Alerta no reconocida.");
+  } catch (e) {
+    logErr(`mostrarPanelAlertaSeguro:${tipo}`, e?.stack || e?.message || e);
+    return bot.sendMessage(chatId, "⚠️ Error interno en alertas. Revise logs.");
   }
 }
 
@@ -2044,56 +2124,24 @@ bot.on("callback_query", async (q) => {
       if (data === "menu:alertas") return menuAlertas(chatId);
       if (data === "menu:renovaciones") return menuRenovaciones(chatId, userId);
 
-      if (data === "alert:vencidos") {
-        const rows = await getAlertaClientesLocal("vencidos");
-        return upsertPanel(
-          chatId,
-          renderAlertaClientesMarkdown(rows, "🔴 *CLIENTES VENCIDOS*", "Sin clientes vencidos."),
-          [
-            [{ text: "⬅️ Volver alertas", callback_data: "menu:alertas" }],
-            [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
-          ]
-        );
+      if (data === "alert:vencidos" || data === "alertas:vencidos") {
+        return mostrarPanelAlertaSeguro(chatId, "vencidos");
       }
 
-      if (data === "alert:hoy") {
-        const rows = await getAlertaClientesLocal("hoy");
-        return upsertPanel(
-          chatId,
-          renderAlertaClientesMarkdown(rows, "🟠 *VENCEN HOY*", "Sin renovaciones para hoy."),
-          [
-            [{ text: "⬅️ Volver alertas", callback_data: "menu:alertas" }],
-            [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
-          ]
-        );
+      if (data === "alert:hoy" || data === "alertas:hoy") {
+        return mostrarPanelAlertaSeguro(chatId, "hoy");
       }
 
-      if (data === "alert:3dias") {
-        const rows = await getAlertaClientesLocal("3dias");
-        return upsertPanel(
-          chatId,
-          renderAlertaClientesMarkdown(rows, `⏳ *VENCEN EN 3 DÍAS (${escMD(addDaysDMY(hoyDMY(), 3))})*`, "Sin renovaciones en 3 días."),
-          [
-            [{ text: "⬅️ Volver alertas", callback_data: "menu:alertas" }],
-            [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
-          ]
-        );
+      if (data === "alert:3dias" || data === "alertas:3dias") {
+        return mostrarPanelAlertaSeguro(chatId, "3dias");
       }
 
-      if (data === "alert:inventario") {
-        const rows = await getInventarioCriticoLocal();
-        return upsertPanel(
-          chatId,
-          renderInventarioCriticoMarkdown(rows),
-          [
-            [{ text: "⬅️ Volver alertas", callback_data: "menu:alertas" }],
-            [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
-          ]
-        );
+      if (data === "alert:inventario" || data === "alertas:inventario") {
+        return mostrarPanelAlertaSeguro(chatId, "inventario");
       }
 
-      if (data === "alert:txt:hoy") {
-        return enviarTxtAlertasDiaLocal(chatId);
+      if (data === "alert:txt:hoy" || data === "alertas:txt:hoy") {
+        return mostrarPanelAlertaSeguro(chatId, "txt");
       }
 
       if (data === "fin:menu:registro") return menuFinRegistro(chatId);
