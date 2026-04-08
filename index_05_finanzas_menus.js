@@ -17,6 +17,7 @@ const {
   db,
   ExcelJS,
   PLATAFORMAS,
+  FINANZAS_COLLECTION,
 } = require("./index_01_core");
 
 const {
@@ -66,8 +67,10 @@ const PLATFORM_KEYS = Array.isArray(PLATAFORMAS)
   ? PLATAFORMAS
   : Object.keys(PLATAFORMAS || {});
 
-const FINANCE_COLLECTION_PRIMARY = "finanzas_movimientos";
-const FINANCE_COLLECTIONS_READ = [FINANCE_COLLECTION_PRIMARY];
+const FINANCE_COLLECTION_PRIMARY = String(FINANZAS_COLLECTION || "finanzas_movimientos").trim() || "finanzas_movimientos";
+const FINANCE_COLLECTIONS_READ = Array.from(
+  new Set([FINANCE_COLLECTION_PRIMARY, "finanzas_movimientos", "finanzas"].filter(Boolean))
+);
 
 // ===============================
 // HELPERS BASE
@@ -778,17 +781,19 @@ async function getFinanceDocByIdAny(id) {
   const docId = String(id || "").trim();
   if (!docId) return null;
 
-  try {
-    const snap = await db.collection(FINANCE_COLLECTION_PRIMARY).doc(docId).get();
-    if (snap.exists) {
-      return {
-        collection: FINANCE_COLLECTION_PRIMARY,
-        ref: db.collection(FINANCE_COLLECTION_PRIMARY).doc(docId),
-        row: normalizeFinanceDocRow(snap.id, snap.data() || {}),
-      };
+  for (const col of FINANCE_COLLECTIONS_READ) {
+    try {
+      const snap = await db.collection(col).doc(docId).get();
+      if (snap.exists) {
+        return {
+          collection: col,
+          ref: db.collection(col).doc(docId),
+          row: normalizeFinanceDocRow(snap.id, snap.data() || {}),
+        };
+      }
+    } catch (e) {
+      logErr(`getFinanceDocByIdAny:${col}`, e);
     }
-  } catch (e) {
-    logErr(`getFinanceDocByIdAny:${FINANCE_COLLECTION_PRIMARY}`, e);
   }
 
   return null;
@@ -798,14 +803,37 @@ async function saveFinancePayloadMirrored(docId, payload = {}) {
   const id = String(docId || "").trim();
   if (!id) throw new Error("ID de finanza inválido.");
 
-  await db.collection(FINANCE_COLLECTION_PRIMARY).doc(id).set(payload, { merge: false });
+  let ok = 0;
+  const errors = [];
+
+  for (const col of FINANCE_COLLECTIONS_READ) {
+    try {
+      await db.collection(col).doc(id).set(payload, { merge: false });
+      ok++;
+    } catch (e) {
+      errors.push(`${col}: ${e.message || e}`);
+      logErr(`saveFinancePayloadMirrored:${col}`, e);
+    }
+  }
+
+  if (!ok) {
+    throw new Error(`No se pudo guardar en finanzas. ${errors.join(" | ")}`);
+  }
+
   return { id, ...payload };
 }
 
 async function deleteFinanceDocMirrored(docId) {
   const id = String(docId || "").trim();
   if (!id) return;
-  await db.collection(FINANCE_COLLECTION_PRIMARY).doc(id).delete();
+
+  for (const col of FINANCE_COLLECTIONS_READ) {
+    try {
+      await db.collection(col).doc(id).delete();
+    } catch (e) {
+      logErr(`deleteFinanceDocMirrored:${col}`, e);
+    }
+  }
 }
 
 // ===============================
