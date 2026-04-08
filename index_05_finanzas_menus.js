@@ -1,15 +1,12 @@
-
-/* ✅ SUBLICUENTAS TG BOT — PARTE 5/6 FINAL CORREGIDA Y ACTUALIZADA
-   FINANZAS / REPORTES / EXCEL / MENÚS / ALERTAS
-   ------------------------------------------------
-   Incluye:
-   - Menú principal con Alertas
-   - Reportes por fecha y por rango
-   - Bancos por fecha, por rango y detalle por banco
-   - Top plataformas consolidado (sin duplicados por combos)
-   - Top combos separado
-   - Excel por rango
-   - Compatible con index_06_handlers
+/* ✅ SUBLICUENTAS TG BOT — PARTE 5/6 SIN DUPLICADOS + BANCOS EN EGRESOS
+   FINANZAS / REPORTES / EXCEL / MENÚS
+   -----------------------------------
+   Objetivo:
+   - Evitar lecturas masivas que queman cuota
+   - Usar SOLO finanzas_movimientos como colección oficial
+   - Leer por queries directas (fecha, mes, rango con fechaTS y fecha string)
+   - Soportar movimientos viejos y nuevos
+   - Usar los mismos bancos en ingresos y egresos
 */
 
 const fs = require("fs");
@@ -20,7 +17,6 @@ const {
   db,
   ExcelJS,
   PLATAFORMAS,
-  FINANZAS_COLLECTION,
 } = require("./index_01_core");
 
 const {
@@ -33,6 +29,7 @@ const {
   hoyDMY,
   moneyLps,
   logErr,
+  normalizarPlataforma,
 } = require("./index_02_utils_roles");
 
 const { humanPlataforma } = require("./index_03_clientes_crm");
@@ -69,14 +66,8 @@ const PLATFORM_KEYS = Array.isArray(PLATAFORMAS)
   ? PLATAFORMAS
   : Object.keys(PLATAFORMAS || {});
 
-const FINANCE_COLLECTIONS_READ = Array.from(
-  new Set([String(FINANZAS_COLLECTION || "").trim(), "finanzas_movimientos", "finanzas"].filter(Boolean))
-);
-
-const FINANCE_COLLECTION_PRIMARY =
-  FINANCE_COLLECTIONS_READ.includes("finanzas_movimientos")
-    ? "finanzas_movimientos"
-    : FINANCE_COLLECTIONS_READ[0];
+const FINANCE_COLLECTION_PRIMARY = "finanzas_movimientos";
+const FINANCE_COLLECTIONS_READ = [FINANCE_COLLECTION_PRIMARY];
 
 // ===============================
 // HELPERS BASE
@@ -96,6 +87,7 @@ function normalizeMonthKey(key = "") {
 
 function altMonthKey(key = "") {
   const k = normalizeMonthKey(key);
+  if (!k) return "";
   const m = k.match(/^(\d{4})-(\d{2})$/);
   return m ? `${m[2]}/${m[1]}` : "";
 }
@@ -135,7 +127,7 @@ function categoryOfPlat(key = "") {
     "paramount", "crunchyroll", "vix", "appletv", "universal"
   ].includes(k)) return "video";
   if (["spotify", "youtube", "deezer"].includes(k)) return "musica";
-  if (["oleadatv1", "oleadatv3", "iptv1", "iptv3", "iptv4", "latintv", "liontv", "icomplay", "smartone"].includes(k)) return "iptv";
+  if (["oleadatv1", "oleadatv3", "iptv1", "iptv3", "iptv4"].includes(k)) return "iptv";
   if (["canva", "gemini", "chatgpt"].includes(k)) return "diseno_ia";
 
   return "video";
@@ -166,10 +158,6 @@ function inventoryLabel(key = "") {
     canva: "Canva",
     gemini: "Gemini",
     chatgpt: "ChatGPT",
-    latintv: "Latin TV",
-    liontv: "Lion TV",
-    icomplay: "Icomplay",
-    smartone: "Smart One",
   };
   return labels[k] || humanPlatSafe(k);
 }
@@ -259,15 +247,57 @@ function parseFechaFlexible(raw = "") {
 }
 
 function extraerFechaMovimiento(r = {}) {
-  const f1 = normalizeDMY(r.fecha || "");
-  if (f1) return f1;
-  const f2 = tsToDMY(r.fechaTS || r.fecha_ts || null);
-  if (f2) return f2;
-  const f3 = tsToDMY(r.createdAt || r.created_at || null);
-  if (f3) return f3;
-  const f4 = tsToDMY(r.updatedAt || r.updated_at || null);
-  if (f4) return f4;
-  return "";
+  const normDMY = (val = "") => {
+    const s = String(val || "").trim();
+    let m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+    if (m) {
+      const dd = String(Number(m[1])).padStart(2, "0");
+      const mm = String(Number(m[2])).padStart(2, "0");
+      return `${dd}/${mm}/${m[3]}`;
+    }
+    return "";
+  };
+
+  const fromDateLike = (v) => {
+    try {
+      if (!v) return "";
+      const d = v?.toDate ? v.toDate() : (v instanceof Date ? v : null);
+      if (d instanceof Date && !isNaN(d.getTime())) return tsToDMY(d);
+
+      if (typeof v === "number" && Number.isFinite(v)) {
+        const dn = new Date(v);
+        if (!isNaN(dn.getTime())) return tsToDMY(dn);
+      }
+
+      if (typeof v === "string") {
+        const s = String(v).trim();
+        const dmy = normDMY(s);
+        if (dmy) return dmy;
+
+        let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+        if (m) {
+          const dd = String(Number(m[3])).padStart(2, "0");
+          const mm = String(Number(m[2])).padStart(2, "0");
+          return `${dd}/${mm}/${m[1]}`;
+        }
+
+        const di = new Date(s);
+        if (!isNaN(di.getTime())) return tsToDMY(di);
+      }
+    } catch (_) {}
+    return "";
+  };
+
+  return (
+    normDMY(r.fecha) ||
+    fromDateLike(r.fechaTS) ||
+    fromDateLike(r.fecha_ts) ||
+    fromDateLike(r.createdAt) ||
+    fromDateLike(r.created_at) ||
+    fromDateLike(r.updatedAt) ||
+    fromDateLike(r.updated_at) ||
+    ""
+  );
 }
 
 function finTipoLabel(tipo) {
@@ -329,7 +359,13 @@ function humanBanco(raw = "") {
 
 function finExtraLabel(m = {}) {
   const tipo = String(m.tipo || "").toLowerCase();
-  if (tipo === "egreso") return String(m.detalle || m.descripcion || "").trim();
+
+  if (tipo === "egreso") {
+    const banco = humanBanco(m.banco || m.metodo || "");
+    const detalle = String(m.detalle || m.descripcion || "").trim();
+    return detalle ? `${banco} • ${detalle}` : banco;
+  }
+
   return humanBanco(m.banco || m.metodo || "");
 }
 
@@ -363,6 +399,235 @@ function textoConfirmarEliminacionMovimiento(m = {}) {
   txt += "\n¿Desea eliminar este movimiento?";
   return txt;
 }
+function resumenFinanzasTextoPorRango(fechaInicio, fechaFin, list = []) {
+  const rows = Array.isArray(list) ? list : [];
+  let ingresos = 0;
+  let egresos = 0;
+
+  for (const r of rows) {
+    const monto = Number(r.monto || 0);
+    if (String(r.tipo || "").toLowerCase() === "egreso") egresos += monto;
+    else ingresos += monto;
+  }
+
+  const utilidad = ingresos - egresos;
+
+  let txt = `🗓️ RESUMEN DEL ${fechaInicio} AL ${fechaFin}\n\n`;
+  txt += `Ingresos: ${moneyLps(ingresos)}\n`;
+  txt += `Egresos: ${moneyLps(egresos)}\n`;
+  txt += `Utilidad: ${moneyLps(utilidad)}\n`;
+  txt += `Movimientos: ${String(rows.length)}\n`;
+
+  if (rows.length) {
+    txt += `\nDetalle:\n`;
+    txt += rows.slice(0, 30).map((r, i) => {
+      const tipo = String(r.tipo || "").toLowerCase() === "egreso" ? "➖" : "➕";
+      return `${i + 1}. ${tipo} ${textoMovimientoParaEliminar(r)}`;
+    }).join("\n");
+  }
+
+  return txt;
+}
+
+function agruparBancosDesdeLista(list = []) {
+  const map = {};
+  for (const r of Array.isArray(list) ? list : []) {
+    const bancoRaw = String(r.banco || r.metodo || "").trim();
+    const bancoKey = normalizarBancoKey(bancoRaw);
+    const bancoLabel = humanBanco(bancoRaw);
+    const monto = Number(r.monto || 0);
+
+    if (!map[bancoKey]) {
+      map[bancoKey] = { banco: bancoLabel, ingresos: 0, egresos: 0, neto: 0 };
+    }
+
+    if (String(r.tipo || "").trim().toLowerCase() === "egreso") {
+      map[bancoKey].egresos += monto;
+      map[bancoKey].neto -= monto;
+    } else {
+      map[bancoKey].ingresos += monto;
+      map[bancoKey].neto += monto;
+    }
+  }
+
+  return Object.values(map).sort((a, b) => {
+    const totalA = Number(a.ingresos || 0) + Number(a.egresos || 0);
+    const totalB = Number(b.ingresos || 0) + Number(b.egresos || 0);
+    return totalB - totalA;
+  });
+}
+
+function resumenBancosFechaTexto(fecha, list = []) {
+  const items = agruparBancosDesdeLista(list);
+  let txt = `🏦 RESUMEN POR BANCO — ${fecha}\n\n`;
+
+  if (!items.length) {
+    txt += "No hay movimientos para esa fecha.";
+    return txt;
+  }
+
+  txt += items.map((v, i) => (
+    `${i + 1}. ${v.banco}\n` +
+    `   Ingresos: ${moneyLps(v.ingresos)}\n` +
+    `   Egresos: ${moneyLps(v.egresos)}\n` +
+    `   Neto: ${moneyLps(v.neto)}`
+  )).join("\n\n");
+
+  return txt;
+}
+
+function resumenBancosRangoTexto(fechaInicio, fechaFin, list = []) {
+  const items = agruparBancosDesdeLista(list);
+  let txt = `🏦 RESUMEN POR BANCO — ${fechaInicio} al ${fechaFin}\n\n`;
+
+  if (!items.length) {
+    txt += "No hay movimientos para ese rango.";
+    return txt;
+  }
+
+  txt += items.map((v, i) => (
+    `${i + 1}. ${v.banco}\n` +
+    `   Ingresos: ${moneyLps(v.ingresos)}\n` +
+    `   Egresos: ${moneyLps(v.egresos)}\n` +
+    `   Neto: ${moneyLps(v.neto)}`
+  )).join("\n\n");
+
+  return txt;
+}
+
+function splitPlataformasNormalizadas(raw = "") {
+  const source = String(raw || "").trim();
+  if (!source) return [];
+
+  const normalized = source
+    .replace(/\s+y\s+/gi, ",")
+    .replace(/[+|&;]/g, ",")
+    .split(",")
+    .map((x) => String(x || "").trim())
+    .filter(Boolean);
+
+  const out = [];
+  for (const part of normalized.length ? normalized : [source]) {
+    const plat = normalizarPlataforma(part);
+    if (plat && PLATFORM_KEYS.includes(plat) && !out.includes(plat)) out.push(plat);
+  }
+
+  if (!out.length) {
+    const single = normalizarPlataforma(source);
+    if (single && PLATFORM_KEYS.includes(single)) out.push(single);
+  }
+
+  return out;
+}
+
+function resumenTopPlataformasGenerico(label = "", list = []) {
+  const map = {};
+
+  for (const r of Array.isArray(list) ? list : []) {
+    if (String(r.tipo || "").toLowerCase() === "egreso") continue;
+    const monto = Number(r.monto || 0);
+    if (!Number.isFinite(monto) || monto <= 0) continue;
+
+    const plats = splitPlataformasNormalizadas(r.plataforma || r.plataformas || "");
+    if (!plats.length) continue;
+
+    const porcion = monto / plats.length;
+    for (const plat of plats) {
+      map[plat] = (map[plat] || 0) + porcion;
+    }
+  }
+
+  const items = Object.entries(map).sort((a, b) => b[1] - a[1]).slice(0, 20);
+  let txt = `🏆 TOP PLATAFORMAS — ${label}\n\n`;
+
+  if (!items.length) {
+    txt += "No hay ingresos para ese período.";
+    return txt;
+  }
+
+  txt += items
+    .map(([plat, total], i) => `${i + 1}. ${humanPlatSafe(plat)} — ${moneyLps(total)}`)
+    .join("\n");
+
+  return txt;
+}
+
+function resumenTopPlataformasRangoTexto(fechaInicio, fechaFin, list = []) {
+  return resumenTopPlataformasGenerico(`${fechaInicio} al ${fechaFin}`, list);
+}
+
+function resumenTopCombosRangoTexto(fechaInicio, fechaFin, list = []) {
+  const map = {};
+
+  for (const r of Array.isArray(list) ? list : []) {
+    if (String(r.tipo || "").toLowerCase() === "egreso") continue;
+    const monto = Number(r.monto || 0);
+    if (!Number.isFinite(monto) || monto <= 0) continue;
+
+    const plats = splitPlataformasNormalizadas(r.plataforma || r.plataformas || "");
+    if (plats.length < 2) continue;
+
+    const combo = plats
+      .map((x) => humanPlatSafe(x))
+      .sort((a, b) => a.localeCompare(b, "es"))
+      .join(" + ");
+
+    map[combo] = (map[combo] || 0) + monto;
+  }
+
+  const items = Object.entries(map).sort((a, b) => b[1] - a[1]).slice(0, 20);
+  let txt = `🎯 TOP COMBOS — ${fechaInicio} al ${fechaFin}\n\n`;
+
+  if (!items.length) {
+    txt += "No hay combos para ese período.";
+    return txt;
+  }
+
+  txt += items.map(([combo, total], i) => `${i + 1}. ${combo} — ${moneyLps(total)}`).join("\n");
+  return txt;
+}
+
+function detalleBancoRangoTexto(banco = "", fechaInicio = "", fechaFin = "", list = []) {
+  const objetivo = normalizarBancoKey(banco);
+  const rows = (Array.isArray(list) ? list : []).filter(
+    (r) => normalizarBancoKey(r.banco || r.metodo || "") === objetivo
+  );
+
+  let ingresos = 0;
+  let egresos = 0;
+  const ing = [];
+  const egr = [];
+
+  for (const r of rows) {
+    const monto = Number(r.monto || 0);
+    const linea = `${r.fecha || extraerFechaMovimiento(r) || "-"} — ${moneyLps(monto)} — ${finConceptoLabel(r)}${finExtraLabel(r) ? ` — ${finExtraLabel(r)}` : ""}`;
+    if (String(r.tipo || "").toLowerCase() === "egreso") {
+      egresos += monto;
+      egr.push(linea);
+    } else {
+      ingresos += monto;
+      ing.push(linea);
+    }
+  }
+
+  let txt = `🏦 DETALLE BANCO: ${humanBanco(banco)}\n`;
+  txt += `📅 Del ${fechaInicio} al ${fechaFin}\n\n`;
+
+  if (!rows.length) {
+    txt += "No hay movimientos para ese banco en ese rango.";
+    return txt;
+  }
+
+  txt += "Ingresos:\n";
+  txt += ing.length ? ing.map((x, i) => `${i + 1}. ${x}`).join("\n") : "Sin ingresos";
+  txt += "\n\nEgresos:\n";
+  txt += egr.length ? egr.map((x, i) => `${i + 1}. ${x}`).join("\n") : "Sin egresos";
+  txt += `\n\nTotal ingresos: ${moneyLps(ingresos)}\n`;
+  txt += `Total egresos: ${moneyLps(egresos)}\n`;
+  txt += `Neto: ${moneyLps(ingresos - egresos)}`;
+
+  return txt;
+}
 
 function startEndDayTimestamps(dmy = "") {
   const dt = dmyToDate(dmy);
@@ -389,11 +654,48 @@ function startEndMonthTimestamps(monthKey = "") {
   };
 }
 
-function addRowsDedup(map, rows = [], source = "") {
+function getMonthBoundsDMY(monthKey = "") {
+  const key = normalizeMonthKey(monthKey);
+  const m = key.match(/^(\d{4})-(\d{2})$/);
+  if (!m) return null;
+
+  const yyyy = Number(m[1]);
+  const mm = Number(m[2]);
+  const lastDay = new Date(yyyy, mm, 0).getDate();
+
+  return {
+    ini: `01/${String(mm).padStart(2, "0")}/${yyyy}`,
+    fin: `${String(lastDay).padStart(2, "0")}/${String(mm).padStart(2, "0")}/${yyyy}`,
+  };
+}
+
+function monthsBetweenDMY(fechaInicio = "", fechaFin = "") {
+  const ini = dmyToDate(fechaInicio);
+  const fin = dmyToDate(fechaFin);
+  if (!ini || !fin) return [];
+
+  let a = new Date(ini.getFullYear(), ini.getMonth(), 1);
+  let b = new Date(fin.getFullYear(), fin.getMonth(), 1);
+
+  if (a.getTime() > b.getTime()) {
+    const temp = a;
+    a = b;
+    b = temp;
+  }
+
+  const out = [];
+  while (a.getTime() <= b.getTime()) {
+    out.push(`${a.getFullYear()}-${String(a.getMonth() + 1).padStart(2, "0")}`);
+    a = new Date(a.getFullYear(), a.getMonth() + 1, 1);
+  }
+
+  return out;
+}
+
+function addRowsDedup(map, rows = []) {
   for (const row of rows) {
     if (!row?.id) continue;
-    const key = `${source}:${row.id}`;
-    if (!map.has(key)) map.set(key, row);
+    if (!map.has(row.id)) map.set(row.id, row);
   }
 }
 
@@ -417,24 +719,78 @@ async function queryDocsByFieldRange(collectionName, field, ini, fin) {
   }
 }
 
+async function scanFinanceDocsFallbackByDate(fechaDMY = "") {
+  const fecha = normalizeDMY(fechaDMY);
+  if (!fecha) return [];
+
+  const map = new Map();
+
+  for (const col of FINANCE_COLLECTIONS_READ) {
+    try {
+      const snap = await db.collection(col).get();
+      for (const d of snap.docs) {
+        const row = normalizeFinanceDocRow(d.id, d.data() || {});
+        const real = extraerFechaMovimiento(row);
+        if (real === fecha) addRowsDedup(map, [{ ...row, fecha: real }], `${col}:fallbackDate`);
+      }
+    } catch (e) {
+      logErr(`scanFinanceDocsFallbackByDate:${col}`, e);
+    }
+  }
+
+  return Array.from(map.values()).sort((a, b) => dmyToMillis(b.fecha || "") - dmyToMillis(a.fecha || ""));
+}
+
+async function scanFinanceDocsFallbackByRange(fechaInicio = "", fechaFin = "") {
+  const ini = normalizeDMY(fechaInicio);
+  const fin = normalizeDMY(fechaFin);
+  if (!ini || !fin) return [];
+
+  let iniMs = dmyToMillis(ini);
+  let finMs = dmyToMillis(fin);
+  if (iniMs > finMs) {
+    const tmp = iniMs;
+    iniMs = finMs;
+    finMs = tmp;
+  }
+
+  const map = new Map();
+
+  for (const col of FINANCE_COLLECTIONS_READ) {
+    try {
+      const snap = await db.collection(col).get();
+      for (const d of snap.docs) {
+        const row = normalizeFinanceDocRow(d.id, d.data() || {});
+        const real = extraerFechaMovimiento(row);
+        const ms = dmyToMillis(real);
+        if (ms >= iniMs && ms <= finMs) addRowsDedup(map, [{ ...row, fecha: real }], `${col}:fallbackRange`);
+      }
+    } catch (e) {
+      logErr(`scanFinanceDocsFallbackByRange:${col}`, e);
+    }
+  }
+
+  return Array.from(map.values()).sort((a, b) => dmyToMillis(a.fecha || "") - dmyToMillis(b.fecha || ""));
+}
+
+
 async function getFinanceDocByIdAny(id) {
   const docId = String(id || "").trim();
   if (!docId) return null;
 
-  for (const col of FINANCE_COLLECTIONS_READ) {
-    try {
-      const snap = await db.collection(col).doc(docId).get();
-      if (snap.exists) {
-        return {
-          collection: col,
-          ref: db.collection(col).doc(docId),
-          row: normalizeFinanceDocRow(snap.id, snap.data() || {}),
-        };
-      }
-    } catch (e) {
-      logErr(`getFinanceDocByIdAny:${col}`, e);
+  try {
+    const snap = await db.collection(FINANCE_COLLECTION_PRIMARY).doc(docId).get();
+    if (snap.exists) {
+      return {
+        collection: FINANCE_COLLECTION_PRIMARY,
+        ref: db.collection(FINANCE_COLLECTION_PRIMARY).doc(docId),
+        row: normalizeFinanceDocRow(snap.id, snap.data() || {}),
+      };
     }
+  } catch (e) {
+    logErr(`getFinanceDocByIdAny:${FINANCE_COLLECTION_PRIMARY}`, e);
   }
+
   return null;
 }
 
@@ -442,107 +798,18 @@ async function saveFinancePayloadMirrored(docId, payload = {}) {
   const id = String(docId || "").trim();
   if (!id) throw new Error("ID de finanza inválido.");
 
-  let ok = 0;
-  const errors = [];
-  for (const col of FINANCE_COLLECTIONS_READ) {
-    try {
-      await db.collection(col).doc(id).set(payload, { merge: false });
-      ok++;
-    } catch (e) {
-      errors.push(`${col}: ${e.message || e}`);
-      logErr(`saveFinancePayloadMirrored:${col}`, e);
-    }
-  }
-
-  if (!ok) throw new Error(`No se pudo guardar en finanzas. ${errors.join(" | ")}`);
+  await db.collection(FINANCE_COLLECTION_PRIMARY).doc(id).set(payload, { merge: false });
   return { id, ...payload };
 }
 
 async function deleteFinanceDocMirrored(docId) {
   const id = String(docId || "").trim();
   if (!id) return;
-
-  for (const col of FINANCE_COLLECTIONS_READ) {
-    try {
-      await db.collection(col).doc(id).delete();
-    } catch (e) {
-      logErr(`deleteFinanceDocMirrored:${col}`, e);
-    }
-  }
-}
-
-function splitComboPlatforms(raw = "") {
-  const s = String(raw || "")
-    .toLowerCase()
-    .replace(/[+]/g, ",")
-    .replace(/\//g, ",")
-    .replace(/\sy\s/g, ",")
-    .replace(/\s*&\s*/g, ",");
-  const parts = s.split(",").map((x) => String(x || "").trim()).filter(Boolean);
-  const out = [];
-  for (const p of parts) {
-    const n = String(p)
-      .normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, "")
-      .replace(/\s+/g, " ")
-      .trim();
-    if (!n) continue;
-
-    const aliases = {
-      "netflix": "netflix",
-      "vip netflix": "vipnetflix",
-      "vipnetflix": "vipnetflix",
-      "disney": "disney",
-      "disney premium": "disney",
-      "disneyp": "disney",
-      "disney standard": "disney",
-      "disneys": "disney",
-      "hbo max": "hbomax",
-      "hbomax": "hbomax",
-      "hbo": "hbomax",
-      "prime video": "primevideo",
-      "primevideo": "primevideo",
-      "prime": "primevideo",
-      "paramount+": "paramount",
-      "paramount": "paramount",
-      "crunchyroll": "crunchyroll",
-      "vix": "vix",
-      "apple tv": "appletv",
-      "appletv": "appletv",
-      "universal": "universal",
-      "spotify": "spotify",
-      "youtube": "youtube",
-      "deezer": "deezer",
-      "iptv": "iptv",
-      "iptv 1": "iptv",
-      "iptv 3": "iptv",
-      "iptv 4": "iptv",
-      "oleada": "oleadatv",
-      "oleada tv": "oleadatv",
-      "oleadatv": "oleadatv",
-      "latin tv": "latintv",
-      "lion tv": "liontv",
-      "icomplay": "icomplay",
-      "smart one": "smartone",
-      "canva": "canva",
-      "gemini": "gemini",
-      "chatgpt": "chatgpt",
-      "plataformas": "plataformas",
-    };
-
-    out.push(aliases[n] || n);
-  }
-  return Array.from(new Set(out));
-}
-
-function comboLabelNormalized(raw = "") {
-  const parts = splitComboPlatforms(raw);
-  if (!parts.length) return "Sin plataforma";
-  return parts.map((x) => inventoryLabel(x)).sort((a, b) => a.localeCompare(b, "es")).join(" + ");
+  await db.collection(FINANCE_COLLECTION_PRIMARY).doc(id).delete();
 }
 
 // ===============================
-// MENÚS
+// MENÚS PRINCIPALES
 // ===============================
 async function menuPrincipal(chatId) {
   return upsertPanel(chatId, "📌 *MENÚ PRINCIPAL*\n\nSeleccione una opción:", [
@@ -557,35 +824,25 @@ async function menuPrincipal(chatId) {
   ]);
 }
 
-async function menuAlertas(chatId) {
-  return upsertPanel(chatId, "🚨 *ALERTAS*\n\nSeleccione una opción:", [
-    [
-      { text: "🔴 Clientes vencidos", callback_data: "alert:list:vencidos:0" },
-      { text: "🟠 Vencen hoy", callback_data: "alert:list:hoy:0" },
-    ],
-    [
-      { text: "⏳ Vencen en 3 días", callback_data: "alert:list:3dias:0" },
-      { text: "📦 Inventario crítico", callback_data: "alert:list:inventario:0" },
-    ],
-    [
-      { text: "📄 TXT alertas del día", callback_data: "alert:txt:hoy" },
-      { text: "⬅️ Volver", callback_data: "go:inicio" },
-    ],
-    [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
-  ]);
-}
-
 async function menuVendedor(chatId) {
-  return upsertPanel(chatId, "👤 *MENÚ VENDEDOR*\n\nSeleccione una opción:", [
+  return upsertPanel(
+    chatId,
+    "👤 *MENÚ VENDEDOR PRO*\n\nSeleccione una opción:",
     [
-      { text: "📅 Mis renovaciones", callback_data: "ren:mis" },
-      { text: "📄 TXT renovaciones", callback_data: "txt:mis" },
-    ],
-    [
-      { text: "👥 Mis clientes", callback_data: "vend:clientes" },
-      { text: "📝 TXT mis clientes", callback_data: "vend:clientes:txt" },
-    ],
-  ]);
+      [
+        { text: "📅 Mis renovaciones hoy", callback_data: "ren:mis:hoy" },
+        { text: "⏳ Renovaciones en 3 días", callback_data: "ren:mis:prox3" },
+      ],
+      [
+        { text: "📄 TXT renovaciones", callback_data: "txt:mis" },
+        { text: "👥 Mis clientes", callback_data: "vend:clientes" },
+      ],
+      [
+        { text: "🧾 TXT mis clientes", callback_data: "vend:clientes:txt" },
+        { text: "💰 Mi resumen", callback_data: "vend:resumen" },
+      ],
+    ]
+  );
 }
 
 async function menuInventario(chatId) {
@@ -656,7 +913,15 @@ async function menuClientes(chatId) {
       { text: "👤 Revendedores", callback_data: "rev:lista" },
     ],
     [
-      { text: "📄 TXT clientes", callback_data: "cli:txt:general" },
+      { text: "📄 TXT general", callback_data: "cli:txt:general" },
+      { text: "📒 Agenda simple", callback_data: "cli:txt:agenda" },
+    ],
+    [
+      { text: "🟢 TXT vigentes", callback_data: "cli:txt:vigentes" },
+      { text: "🔴 TXT no vigentes", callback_data: "cli:txt:no_vigentes" },
+    ],
+    [
+      { text: "📊 Resumen CRM", callback_data: "cli:crm:resumen" },
       { text: "🗂️ TXT vendedores", callback_data: "cli:txt:vendedores_split" },
     ],
     [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
@@ -733,7 +998,7 @@ async function menuFinReportes(chatId) {
     ],
     [
       { text: "🏦 Bancos por fecha", callback_data: "fin:menu:bancos_fecha" },
-      { text: "💵 Bancos por rango", callback_data: "fin:menu:bancos_rango" },
+      { text: "🏦 Bancos por rango", callback_data: "fin:menu:bancos_rango" },
     ],
     [
       { text: "🏦 Detalle banco", callback_data: "fin:menu:detalle_banco" },
@@ -746,6 +1011,25 @@ async function menuFinReportes(chatId) {
     [
       { text: "🧾 Cierre por rango", callback_data: "fin:menu:cierre:rango" },
       { text: "⬅️ Volver Finanzas", callback_data: "menu:pagos" },
+    ],
+    [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
+  ]);
+}
+
+
+async function menuAlertas(chatId) {
+  return upsertPanel(chatId, "🚨 *ALERTAS*\n\nSeleccione una opción:", [
+    [
+      { text: "🔴 Clientes vencidos", callback_data: "alert:vencidos" },
+      { text: "🟠 Vencen hoy", callback_data: "alert:hoy" },
+    ],
+    [
+      { text: "⏳ Vencen en 3 días", callback_data: "alert:3dias" },
+      { text: "📦 Inventario crítico", callback_data: "alert:inventario" },
+    ],
+    [
+      { text: "📄 TXT alertas del día", callback_data: "alert:txt:hoy" },
+      { text: "⬅️ Volver", callback_data: "go:inicio" },
     ],
     [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
   ]);
@@ -764,6 +1048,16 @@ function kbBancosFinanzas() {
   return { inline_keyboard: rows };
 }
 
+function kbBancosFinanzasEgreso() {
+  const buttons = FIN_BANCOS_LOCAL.map((b) => ({
+    text: String(b),
+    callback_data: `fin:egr:banco:${encodeURIComponent(String(b))}`,
+  }));
+  const rows = pairButtons(buttons);
+  rows.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
+  return { inline_keyboard: rows };
+}
+
 function kbMotivosFinanzas() {
   const buttons = FIN_MOTIVOS_EGRESO_LOCAL.map((m) => ({
     text: String(m),
@@ -774,19 +1068,8 @@ function kbMotivosFinanzas() {
   return { inline_keyboard: rows };
 }
 
-function kbDetalleBanco() {
-  const buttons = FIN_BANCOS_LOCAL.map((b) => ({
-    text: String(b),
-    callback_data: `fin:detbanco:pick:${encodeURIComponent(String(b))}`,
-  }));
-  const rows = pairButtons(buttons);
-  rows.push([{ text: "⬅️ Volver Reportes", callback_data: "fin:menu:reportes" }]);
-  rows.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
-  return { inline_keyboard: rows };
-}
-
 // ===============================
-// CRUD FINANZAS
+// CRUD
 // ===============================
 async function registrarIngresoTx({ monto, banco = "", plataforma = "", detalle = "", fecha = "", userId = "", userName = "" }) {
   const fechaOk = parseFechaFlexible(fecha || hoyDMY());
@@ -818,7 +1101,7 @@ async function registrarIngresoTx({ monto, banco = "", plataforma = "", detalle 
   return { id: docId, ...payload };
 }
 
-async function registrarEgresoTx({ monto, motivo = "", detalle = "", fecha = "", banco = "", userId = "", userName = "" }) {
+async function registrarEgresoTx({ monto, banco = "", motivo = "", detalle = "", fecha = "", userId = "", userName = "" }) {
   const fechaOk = parseFechaFlexible(fecha || hoyDMY());
   if (!fechaOk) throw new Error("Fecha inválida");
 
@@ -831,9 +1114,9 @@ async function registrarEgresoTx({ monto, motivo = "", detalle = "", fecha = "",
   const payload = {
     tipo: "egreso",
     monto: montoOk,
+    banco: humanBanco(String(banco || "").trim()),
     motivo: String(motivo || "").trim(),
     detalle: String(detalle || "").trim(),
-    banco: humanBanco(String(banco || "").trim()),
     fecha: fechaOk,
     fechaTS: dmyToTimestamp(fechaOk),
     mesKey,
@@ -861,14 +1144,20 @@ async function getMovimientosPorFecha(fechaDMY, _userId = null, _isSuper = false
   const range = startEndDayTimestamps(fecha);
 
   for (const col of FINANCE_COLLECTIONS_READ) {
-    addRowsDedup(map, await queryDocsByFieldEq(col, "fecha", fecha), col);
+    addRowsDedup(map, await queryDocsByFieldEq(col, "fecha", fecha), `${col}:eq`);
     if (range) addRowsDedup(map, await queryDocsByFieldRange(col, "fechaTS", range.iniTs, range.finTs), `${col}:ts`);
   }
 
-  return Array.from(map.values())
+  let out = Array.from(map.values())
     .map((r) => ({ ...r, fecha: extraerFechaMovimiento(r) || r.fecha || "" }))
     .filter((r) => String(r.fecha || "").trim() === fecha)
     .sort((a, b) => dmyToMillis(b.fecha || "") - dmyToMillis(a.fecha || ""));
+
+  if (!out.length) {
+    out = await scanFinanceDocsFallbackByDate(fecha);
+  }
+
+  return out;
 }
 
 async function getMovimientosPorMes(monthKey, _userId = null, _isSuper = false) {
@@ -889,7 +1178,7 @@ async function getMovimientosPorMes(monthKey, _userId = null, _isSuper = false) 
     if (range) addRowsDedup(map, await queryDocsByFieldRange(col, "fechaTS", range.iniTs, range.finTs), `${col}:range`);
   }
 
-  return Array.from(map.values())
+  let out = Array.from(map.values())
     .map((r) => {
       const fechaReal = extraerFechaMovimiento(r) || r.fecha || "";
       const mesReal = monthKeyFromDMYLocal(fechaReal);
@@ -905,6 +1194,14 @@ async function getMovimientosPorMes(monthKey, _userId = null, _isSuper = false) 
       return mes === key;
     })
     .sort((a, b) => dmyToMillis(b.fecha || "") - dmyToMillis(a.fecha || ""));
+
+  if (!out.length && range) {
+    const ini = tsToDMY(range.iniTs);
+    const fin = tsToDMY(range.finTs);
+    out = await scanFinanceDocsFallbackByRange(ini, fin);
+  }
+
+  return out;
 }
 
 async function getMovimientosPorRango(fechaInicio, fechaFin, _userId = null, _isSuper = false) {
@@ -933,13 +1230,19 @@ async function getMovimientosPorRango(fechaInicio, fechaFin, _userId = null, _is
     addRowsDedup(map, await queryDocsByFieldRange(col, "fechaTS", iniTs, finTs), `${col}:range`);
   }
 
-  return Array.from(map.values())
+  let out = Array.from(map.values())
     .map((r) => ({ ...r, fecha: extraerFechaMovimiento(r) || r.fecha || "" }))
     .filter((r) => {
       const ts = dmyToMillis(String(r.fecha || ""));
       return ts >= iniMs && ts <= finMs;
     })
     .sort((a, b) => dmyToMillis(a.fecha || "") - dmyToMillis(b.fecha || ""));
+
+  if (!out.length) {
+    out = await scanFinanceDocsFallbackByRange(ini, fin);
+  }
+
+  return out;
 }
 
 async function eliminarMovimientoFinanzas(id, _userId = null, _isSuper = false) {
@@ -982,206 +1285,14 @@ function resumenFinanzasTextoPorFecha(fecha, list = []) {
   return txt;
 }
 
-function resumenFinanzasTextoPorRango(fechaInicio, fechaFin, list = []) {
-  const rows = Array.isArray(list) ? list : [];
-  let ingresos = 0;
-  let egresos = 0;
-
-  for (const r of rows) {
-    const monto = Number(r.monto || 0);
-    if (String(r.tipo || "").toLowerCase() === "egreso") egresos += monto;
-    else ingresos += monto;
-  }
-
-  const utilidad = ingresos - egresos;
-
-  let txt = `🗓️ RESUMEN DEL ${fechaInicio} AL ${fechaFin}\n\n`;
-  txt += `Ingresos: ${moneyLps(ingresos)}\n`;
-  txt += `Egresos: ${moneyLps(egresos)}\n`;
-  txt += `Utilidad: ${moneyLps(utilidad)}\n`;
-  txt += `Movimientos: ${String(rows.length)}\n`;
-
-  if (rows.length) {
-    txt += `\nDetalle:\n`;
-    txt += rows.slice(0, 30).map((r, i) => {
-      const tipo = String(r.tipo || "").toLowerCase() === "egreso" ? "➖" : "➕";
-      return `${i + 1}. ${tipo} ${textoMovimientoParaEliminar(r)}`;
-    }).join("\n");
-  }
-
-  return txt;
-}
-
-function aggregateBanks(list = []) {
-  const map = {};
-  for (const r of Array.isArray(list) ? list : []) {
-    const bancoRaw = String(r.banco || r.metodo || "").trim();
-    const bancoKey = normalizarBancoKey(bancoRaw);
-    const bancoLabel = humanBanco(bancoRaw);
-    const monto = Number(r.monto || 0);
-
-    if (!map[bancoKey]) {
-      map[bancoKey] = { banco: bancoLabel, ingresos: 0, egresos: 0, neto: 0 };
-    }
-
-    if (String(r.tipo || "").trim().toLowerCase() === "egreso") {
-      map[bancoKey].egresos += monto;
-      map[bancoKey].neto -= monto;
-    } else {
-      map[bancoKey].ingresos += monto;
-      map[bancoKey].neto += monto;
-    }
-  }
-
-  return Object.values(map).sort((a, b) => {
-    const totalA = Number(a.ingresos || 0) + Number(a.egresos || 0);
-    const totalB = Number(b.ingresos || 0) + Number(b.egresos || 0);
-    return totalB - totalA;
-  });
-}
-
 function resumenBancosMesTexto(monthKey, list = []) {
   const label = monthLabelFromKeyLocal(monthKey);
-  const items = aggregateBanks(list);
-
-  let txt = `🏦 RESUMEN POR BANCO — ${label}\n\n`;
-  if (!items.length) {
-    txt += "No hay movimientos para este mes.";
-    return txt;
-  }
-
-  txt += items.map((v, i) => (
-    `${i + 1}. ${v.banco}\n` +
-    `   Ingresos: ${moneyLps(v.ingresos)}\n` +
-    `   Egresos: ${moneyLps(v.egresos)}\n` +
-    `   Neto: ${moneyLps(v.neto)}`
-  )).join("\n\n");
-
-  return txt;
-}
-
-function resumenBancosFechaTexto(fecha, list = []) {
-  const items = aggregateBanks(list);
-  let txt = `🏦 BANCOS DEL ${fecha}\n\n`;
-  if (!items.length) {
-    txt += "No hay movimientos para esa fecha.";
-    return txt;
-  }
-
-  txt += items.map((v, i) => (
-    `${i + 1}. ${v.banco}\n` +
-    `   Ingresos: ${moneyLps(v.ingresos)}\n` +
-    `   Egresos: ${moneyLps(v.egresos)}\n` +
-    `   Neto: ${moneyLps(v.neto)}`
-  )).join("\n\n");
-
-  return txt;
-}
-
-function resumenBancosRangoTexto(fechaInicio, fechaFin, list = []) {
-  const items = aggregateBanks(list);
-  let txt = `🏦 BANCOS DEL ${fechaInicio} AL ${fechaFin}\n\n`;
-  if (!items.length) {
-    txt += "No hay movimientos en ese rango.";
-    return txt;
-  }
-
-  txt += items.map((v, i) => (
-    `${i + 1}. ${v.banco}\n` +
-    `   Ingresos: ${moneyLps(v.ingresos)}\n` +
-    `   Egresos: ${moneyLps(v.egresos)}\n` +
-    `   Neto: ${moneyLps(v.neto)}`
-  )).join("\n\n");
-
-  return txt;
-}
-
-function detalleBancoTexto(banco, fechaInicio, fechaFin, list = []) {
-  const key = normalizarBancoKey(banco);
-  const rows = (Array.isArray(list) ? list : []).filter(
-    (r) => normalizarBancoKey(r.banco || r.metodo || "") === key
-  );
-
-  let ingresos = 0;
-  let egresos = 0;
-  for (const r of rows) {
-    const monto = Number(r.monto || 0);
-    if (String(r.tipo || "").toLowerCase() === "egreso") egresos += monto;
-    else ingresos += monto;
-  }
-
-  let txt = `🏦 DETALLE BANCO — ${humanBanco(banco)}\n`;
-  txt += `📅 Rango: ${fechaInicio} al ${fechaFin}\n\n`;
-  txt += `Ingresos: ${moneyLps(ingresos)}\n`;
-  txt += `Egresos: ${moneyLps(egresos)}\n`;
-  txt += `Neto: ${moneyLps(ingresos - egresos)}\n`;
-  txt += `Movimientos: ${rows.length}\n`;
-
-  if (!rows.length) {
-    txt += "\nNo hay movimientos para ese banco en el rango.";
-    return txt;
-  }
-
-  txt += "\n\nDetalle:\n";
-  txt += rows.slice(0, 50).map((r, i) => {
-    const sign = String(r.tipo || "").toLowerCase() === "egreso" ? "➖" : "➕";
-    return `${i + 1}. ${sign} ${textoMovimientoParaEliminar(r)}`;
-  }).join("\n");
-
-  return txt;
+  return resumenBancosRangoTexto(label, label, list).replace(`— ${label} al ${label}`, `— ${label}`);
 }
 
 function resumenTopPlataformasTexto(monthKey, list = []) {
-  const rows = Array.isArray(list) ? list : [];
   const label = monthLabelFromKeyLocal(monthKey);
-  const map = {};
-
-  for (const r of rows) {
-    if (String(r.tipo || "").toLowerCase() === "egreso") continue;
-    const parts = splitComboPlatforms(r.plataforma || "");
-    if (!parts.length) continue;
-
-    const monto = Number(r.monto || 0);
-    const share = parts.length ? monto / parts.length : monto;
-
-    for (const p of parts) {
-      map[p] = (map[p] || 0) + share;
-    }
-  }
-
-  const items = Object.entries(map).sort((a, b) => b[1] - a[1]).slice(0, 20);
-  let txt = `🏆 TOP PLATAFORMAS — ${label}\n\n`;
-
-  if (!items.length) {
-    txt += "No hay ingresos para este mes.";
-    return txt;
-  }
-
-  txt += items.map(([plat, total], i) => `${i + 1}. ${inventoryLabel(plat)} — ${moneyLps(total)}`).join("\n");
-  return txt;
-}
-
-function resumenTopCombosTexto(monthKey, list = []) {
-  const rows = Array.isArray(list) ? list : [];
-  const label = monthLabelFromKeyLocal(monthKey);
-  const map = {};
-
-  for (const r of rows) {
-    if (String(r.tipo || "").toLowerCase() === "egreso") continue;
-    const combo = comboLabelNormalized(r.plataforma || "");
-    map[combo] = (map[combo] || 0) + Number(r.monto || 0);
-  }
-
-  const items = Object.entries(map).sort((a, b) => b[1] - a[1]).slice(0, 20);
-  let txt = `🎯 TOP COMBOS — ${label}\n\n`;
-
-  if (!items.length) {
-    txt += "No hay ingresos para este mes.";
-    return txt;
-  }
-
-  txt += items.map(([combo, total], i) => `${i + 1}. ${combo} — ${moneyLps(total)}`).join("\n");
-  return txt;
+  return resumenTopPlataformasGenerico(label, list);
 }
 
 function cierreCajaTexto(fecha, list = []) {
@@ -1375,7 +1486,7 @@ async function exportarFinanzasRangoExcel(chatId, fechaInicio, fechaFin, _userId
     { header: "Tipo", key: "tipo", width: 12 },
     { header: "Monto", key: "monto", width: 15 },
     { header: "Plataforma/Motivo", key: "concepto", width: 30 },
-    { header: "Banco/Método", key: "extra", width: 22 },
+    { header: "Banco/Método", key: "extra", width: 28 },
     { header: "Detalle", key: "detalle", width: 35 },
     { header: "ID", key: "id", width: 28 },
   ];
@@ -1386,7 +1497,7 @@ async function exportarFinanzasRangoExcel(chatId, fechaInicio, fechaFin, _userId
       tipo: finTipoLabel(r.tipo),
       monto: Number(r.monto || 0),
       concepto: finConceptoLabel(r),
-      extra: finExtraLabel(r),
+      extra: humanBanco(r.banco || r.metodo || ""),
       detalle: r.detalle || r.descripcion || "",
       id: r.id,
     });
@@ -1416,12 +1527,13 @@ async function exportarFinanzasRangoExcel(chatId, fechaInicio, fechaFin, _userId
   await wb.xlsx.writeFile(tempPath);
 
   await bot.sendDocument(chatId, tempPath, { caption: `📊 Finanzas del ${ini} al ${fin}` });
+
   try { fs.unlinkSync(tempPath); } catch (_) {}
   return true;
 }
 
 // ===============================
-// COMPATIBILIDAD
+// COMPATIBILITY
 // ===============================
 async function listarMovimientosPorFechaYTipo(fechaDMY, tipo) {
   const rows = await getMovimientosPorFecha(fechaDMY);
@@ -1509,6 +1621,7 @@ async function eliminarMovimientoDefinitivo(chatId, movId, userId = null) {
   txt += `Fecha: ${String(extraerFechaMovimiento(mov) || mov.fecha || "-")}\n`;
   txt += `Monto: ${moneyLps(mov.monto || 0)}\n`;
   txt += `Concepto: ${finConceptoLabel(mov)}\n`;
+  if (mov.banco) txt += `Banco: ${humanBanco(mov.banco)}\n`;
   if (userId) txt += `Eliminado por: ${String(userId)}\n`;
 
   return upsertPanel(chatId, txt, [
@@ -1570,10 +1683,8 @@ async function resumenFinancieroPorMonthKey(monthKey) {
       egresos += monto;
     } else {
       ingresos += monto;
-      const parts = splitComboPlatforms(r.plataforma || "");
-      if (!parts.length) continue;
-      const share = monto / parts.length;
-      for (const p of parts) top[p] = (top[p] || 0) + share;
+      const key = String(r.plataforma || "").trim().toLowerCase();
+      if (key) top[key] = (top[key] || 0) + monto;
     }
   }
 
@@ -1607,7 +1718,7 @@ async function enviarReporteMesActual(chatId) {
   if (res.topOrdenado.length) {
     txt += `\n*Top plataformas vendidas:*\n`;
     txt += res.topOrdenado
-      .map((x, i) => `${i + 1}. ${escMD(inventoryLabel(x.plataforma))} — ${escMD(moneyLps(x.total || 0))}`)
+      .map((x, i) => `${i + 1}. ${escMD(humanPlatSafe(x.plataforma))} — ${escMD(moneyLps(x.total || 0))}`)
       .join("\n");
   }
 
@@ -1645,7 +1756,7 @@ async function exportarExcelMesActual(chatId) {
       tipo: finTipoLabel(r.tipo),
       monto: Number(r.monto || 0),
       concepto: finConceptoLabel(r),
-      extra: finExtraLabel(r),
+      extra: humanBanco(r.banco || r.metodo || ""),
       detalle: r.detalle || r.descripcion || "",
     });
   }
@@ -1675,7 +1786,6 @@ async function exportarExcelMesActual(chatId) {
 
 module.exports = {
   menuPrincipal,
-  menuAlertas,
   menuVendedor,
   menuInventario,
   menuInventarioVideo,
@@ -1685,12 +1795,13 @@ module.exports = {
   menuClientes,
   menuRenovaciones,
   menuPagos,
+  menuAlertas,
   menuFinRegistro,
   menuFinEliminarTipo,
   menuFinReportes,
   kbBancosFinanzas,
+  kbBancosFinanzasEgreso,
   kbMotivosFinanzas,
-  kbDetalleBanco,
   registrarIngresoTx,
   registrarEgresoTx,
   getMovimientosPorFecha,
@@ -1701,9 +1812,10 @@ module.exports = {
   resumenBancosMesTexto,
   resumenBancosFechaTexto,
   resumenBancosRangoTexto,
-  detalleBancoTexto,
+  detalleBancoRangoTexto,
   resumenTopPlataformasTexto,
-  resumenTopCombosTexto,
+  resumenTopPlataformasRangoTexto,
+  resumenTopCombosRangoTexto,
   cierreCajaTexto,
   cierreCajaTextoRango,
   textoConfirmarEliminacionMovimiento,
