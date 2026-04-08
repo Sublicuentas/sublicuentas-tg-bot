@@ -271,6 +271,27 @@ const PLATFORM_KEYS = Array.isArray(PLATAFORMAS)
   ? PLATAFORMAS
   : Object.keys(PLATAFORMAS || {});
 
+const ACCESS_CACHE_LOCAL = new Map();
+const ALERT_CACHE_LOCAL = new Map();
+
+function getCacheLocal(map, key) {
+  const row = map.get(String(key));
+  if (!row) return null;
+  if (Date.now() > Number(row.expireAt || 0)) {
+    map.delete(String(key));
+    return null;
+  }
+  return row.value;
+}
+
+function setCacheLocal(map, key, value, ttlMs = 60000) {
+  map.set(String(key), {
+    value,
+    expireAt: Date.now() + Number(ttlMs || 0),
+  });
+  return value;
+}
+
 function normalizeTelegramIdLocal(value = "") {
   return String(value == null ? "" : value).trim();
 }
@@ -344,36 +365,41 @@ async function safeGetRevendedorLocal(userId) {
   const uid = normalizeTelegramIdLocal(userId);
   if (!uid) return null;
 
+  const cached = getCacheLocal(ACCESS_CACHE_LOCAL, `rev:${uid}`);
+  if (cached !== null) return cached;
+
   try {
     const rev = await getRevendedorPorTelegramId(userId);
     if (rev && typeof rev === "object") {
-      return typeof normalizeRevendedorDoc === "function" ? normalizeRevendedorDoc(rev) : rev;
+      const norm = typeof normalizeRevendedorDoc === "function" ? normalizeRevendedorDoc(rev) : rev;
+      return setCacheLocal(ACCESS_CACHE_LOCAL, `rev:${uid}`, norm, 60000);
     }
   } catch (e) {
     logErr("safeGetRevendedorLocal:getRevendedorPorTelegramId", e?.stack || e?.message || e);
   }
 
   try {
-    const snap = await db.collection("revendedores").get();
-    let found = null;
+    const fields = ["telegramId", "telegramID", "userId"];
 
-    snap.forEach((d) => {
-      if (found) return;
-      const data = d.data() || {};
-      const tg = normalizeTelegramIdLocal(data.telegramId || data.telegramID || data.userId || "");
-      if (tg === uid) {
-        found = { id: d.id, ...data };
-      }
-    });
+    for (const field of fields) {
+      const snap = await db
+        .collection("revendedores")
+        .where(field, "==", uid)
+        .limit(1)
+        .get();
 
-    if (found) {
-      return typeof normalizeRevendedorDoc === "function" ? normalizeRevendedorDoc(found) : found;
+      if (snap.empty) continue;
+
+      const d = snap.docs[0];
+      const rev = { id: d.id, ...(d.data() || {}) };
+      const norm = typeof normalizeRevendedorDoc === "function" ? normalizeRevendedorDoc(rev) : rev;
+      return setCacheLocal(ACCESS_CACHE_LOCAL, `rev:${uid}`, norm, 60000);
     }
   } catch (e) {
     logErr("safeGetRevendedorLocal:fallback", e?.stack || e?.message || e);
   }
 
-  return null;
+  return setCacheLocal(ACCESS_CACHE_LOCAL, `rev:${uid}`, null, 15000);
 }
 
 async function safeIsVendedorLocal(userId) {
@@ -388,6 +414,50 @@ async function safeIsVendedorLocal(userId) {
 
   const rev = await safeGetRevendedorLocal(uid);
   return !!(rev && rev.nombre);
+}
+
+async function getAccessBundleLocal(userId) {
+  const uid = normalizeTelegramIdLocal(userId);
+  if (!uid) {
+    return { adminOk: false, superOk: false, vendOk: false, vend: null };
+  }
+
+  const cached = getCacheLocal(ACCESS_CACHE_LOCAL, `acc:${uid}`);
+  if (cached) return cached;
+
+  let superOk = false;
+  let adminOk = false;
+  let vend = null;
+
+  try {
+    superOk = await safeIsSuperAdminLocal(uid);
+  } catch (_) {}
+
+  adminOk = superOk;
+
+  if (!adminOk) {
+    try {
+      const doc = await db.collection("admins").doc(uid).get();
+      if (doc.exists) {
+        const data = doc.data() || {};
+        if (data.activo !== false) adminOk = true;
+      }
+    } catch (e) {
+      logErr("getAccessBundleLocal.adminDoc", e?.stack || e?.message || e);
+    }
+
+    if (!adminOk) {
+      try {
+        adminOk = await isAdmin(uid);
+      } catch (_) {}
+    }
+  }
+
+  vend = await safeGetRevendedorLocal(uid);
+  const vendOk = !!(vend && vend.nombre);
+
+  const bundle = { adminOk, superOk, vendOk, vend };
+  return setCacheLocal(ACCESS_CACHE_LOCAL, `acc:${uid}`, bundle, 60000);
 }
 
 async function getActiveAdminIdsLocal() {
@@ -451,8 +521,9 @@ async function sendBottomMainMenu(chatId, userId) {
 
     let text = "";
     let keyboard = [];
+    const access = await getAccessBundleLocal(userId);
 
-    if (await safeIsAdminLocal(userId)) {
+    if (access.adminOk) {
       text = "📌 *MENÚ PRINCIPAL*\n\nSeleccione una opción:";
       keyboard = [
         [
@@ -464,7 +535,7 @@ async function sendBottomMainMenu(chatId, userId) {
           { text: "🚨 Alertas", callback_data: "menu:alertas" },
         ],
       ];
-    } else if (await safeIsVendedorLocal(userId)) {
+    } else if (access.vendOk) {
       text = "👤 *MENÚ VENDEDOR PRO*\n\nSeleccione una opción:";
       keyboard = [
         [
@@ -884,8 +955,8 @@ async function userHasAccessFromMessage(msg) {
   const chatId = msg?.chat?.id;
   if (!chatId || !userId) return false;
 
-  if (await safeIsAdminLocal(userId)) return true;
-  if (await safeIsVendedorLocal(userId)) return true;
+  const access = await getAccessBundleLocal(userId);
+  if (access.adminOk || access.vendOk) return true;
 
   try {
     await bot.sendMessage(chatId, "⛔ Acceso denegado");
@@ -895,8 +966,10 @@ async function userHasAccessFromMessage(msg) {
 
 async function userHasAccessById(chatId, userId) {
   if (!chatId || !userId) return false;
-  if (await safeIsAdminLocal(userId)) return true;
-  if (await safeIsVendedorLocal(userId)) return true;
+
+  const access = await getAccessBundleLocal(userId);
+  if (access.adminOk || access.vendOk) return true;
+
   try {
     await bot.sendMessage(chatId, "⛔ Acceso denegado");
   } catch (_) {}
@@ -931,6 +1004,32 @@ async function linkRevendedorByNombre(nombre = "", telegramId = "") {
 
   await setTelegramIdToRevendedor(foundId, telegramId);
   return { ok: true, msg: "✅ Vendedor vinculado correctamente." };
+}
+
+async function saveMovimientoPatchLocal(id, patch = {}) {
+  const cols = Array.from(
+    new Set(
+      [String(FINANZAS_COLLECTION || "").trim(), "finanzas_movimientos", "finanzas"].filter(Boolean)
+    )
+  );
+
+  for (const col of cols) {
+    try {
+      const ref = db.collection(col).doc(String(id));
+      const doc = await ref.get();
+      if (!doc.exists) continue;
+
+      await ref.set(
+        {
+          ...patch,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+    } catch (e) {
+      logErr(`saveMovimientoPatchLocal:${col}`, e?.stack || e?.message || e);
+    }
+  }
 }
 
 function textoBtnEliminarMovimiento(m = {}) {
@@ -1025,6 +1124,10 @@ function diffDaysFromTodayLocal(fechaDMY = "") {
 
 async function getAlertaClientesLocal(tipo = "hoy") {
   try {
+    const cacheKey = `alerta:${tipo}:${hoyDMY()}`;
+    const cached = getCacheLocal(ALERT_CACHE_LOCAL, cacheKey);
+    if (cached) return cached;
+
     const snap = await db.collection("clientes").get();
     const hoy = hoyDMY();
     const fecha3 = addDaysDMY(hoy, 3);
@@ -1070,6 +1173,7 @@ async function getAlertaClientesLocal(tipo = "hoy") {
       return String(a.nombrePerfil || "").localeCompare(String(b.nombrePerfil || ""), "es", { sensitivity: "base" });
     });
 
+    setCacheLocal(ALERT_CACHE_LOCAL, cacheKey, rows, 30000);
     return rows;
   } catch (e) {
     logErr(`getAlertaClientesLocal:${tipo}`, e?.stack || e?.message || e);
@@ -1111,6 +1215,10 @@ function renderAlertaClientesMarkdown(rows = [], titulo = "", emptyText = "Sin r
 
 async function getInventarioCriticoLocal() {
   try {
+    const cacheKey = `inventario_critico:${hoyDMY()}`;
+    const cached = getCacheLocal(ALERT_CACHE_LOCAL, cacheKey);
+    if (cached) return cached;
+
     const snap = await db.collection("inventario").get();
     const rows = [];
 
@@ -1146,6 +1254,7 @@ async function getInventarioCriticoLocal() {
       return String(a.plataforma || "").localeCompare(String(b.plataforma || ""), "es", { sensitivity: "base" });
     });
 
+    setCacheLocal(ALERT_CACHE_LOCAL, cacheKey, rows, 30000);
     return rows;
   } catch (e) {
     logErr("getInventarioCriticoLocal", e?.stack || e?.message || e);
@@ -2077,15 +2186,17 @@ bot.on("callback_query", async (q) => {
     await answerCallbackSilentlySafe(q);
 
     if (!chatId) return;
-    if (!(await userHasAccessById(chatId, userId))) return;
+
+    const access = await getAccessBundleLocal(userId);
+    if (!access.adminOk && !access.vendOk) {
+      return bot.sendMessage(chatId, "⛔ Acceso denegado");
+    }
 
     bindPanelFromCallback(q);
 
-    const adminOk = await safeIsAdminLocal(userId);
-    const vend = await safeGetRevendedorLocal(userId);
-    const vendOk = !!(vend && vend.nombre);
-
-    if (!adminOk && !vendOk) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+    const adminOk = access.adminOk;
+    const vend = access.vend;
+    const vendOk = access.vendOk;
     if (data === "noop") return;
 
     if (data === "go:inicio") {
@@ -3565,10 +3676,13 @@ bot.on("message", async (msg) => {
   if (!chatId) return;
 
   try {
-    if (!(await userHasAccessFromMessage(msg))) return;
+    const access = await getAccessBundleLocal(userId);
+    if (!access.adminOk && !access.vendOk) {
+      return bot.sendMessage(chatId, "⛔ Acceso denegado");
+    }
 
-    const adminOk = await safeIsAdminLocal(userId);
-    const vendOk = await safeIsVendedorLocal(userId);
+    const adminOk = access.adminOk;
+    const vendOk = access.vendOk;
 
     if (wizard.has(String(chatId)) && text.startsWith("/")) {
       const cmdWizard = limpiarComandoTexto(text).split(" ")[0];
@@ -4084,10 +4198,9 @@ if (p.mode === "finTopCombosRangoFin") {
         if (!Number.isFinite(monto) || monto <= 0) return bot.sendMessage(chatId, "⚠️ Monto inválido.");
 
         pending.delete(String(chatId));
-        await db.collection(FINANZAS_COLLECTION).doc(String(p.id)).set(
-          { monto: Number(monto), updatedAt: admin.firestore.FieldValue.serverTimestamp() },
-          { merge: true }
-        );
+        await saveMovimientoPatchLocal(String(p.id), {
+          monto: Number(monto),
+        });
 
         return bot.sendMessage(chatId, "✅ Monto actualizado correctamente.");
       }
@@ -4096,10 +4209,9 @@ if (p.mode === "finTopCombosRangoFin") {
         if (!t) return bot.sendMessage(chatId, "⚠️ Escriba el banco.");
 
         pending.delete(String(chatId));
-        await db.collection(FINANZAS_COLLECTION).doc(String(p.id)).set(
-          { banco: t, updatedAt: admin.firestore.FieldValue.serverTimestamp() },
-          { merge: true }
-        );
+        await saveMovimientoPatchLocal(String(p.id), {
+          banco: t,
+        });
 
         return bot.sendMessage(chatId, "✅ Banco actualizado correctamente.");
       }
@@ -4108,10 +4220,9 @@ if (p.mode === "finTopCombosRangoFin") {
         if (!t) return bot.sendMessage(chatId, "⚠️ Escriba el motivo.");
 
         pending.delete(String(chatId));
-        await db.collection(FINANZAS_COLLECTION).doc(String(p.id)).set(
-          { motivo: t, updatedAt: admin.firestore.FieldValue.serverTimestamp() },
-          { merge: true }
-        );
+        await saveMovimientoPatchLocal(String(p.id), {
+          motivo: t,
+        });
 
         return bot.sendMessage(chatId, "✅ Motivo actualizado correctamente.");
       }
@@ -4120,10 +4231,9 @@ if (p.mode === "finTopCombosRangoFin") {
         if (!t) return bot.sendMessage(chatId, "⚠️ Escriba la plataforma.");
 
         pending.delete(String(chatId));
-        await db.collection(FINANZAS_COLLECTION).doc(String(p.id)).set(
-          { plataforma: t, updatedAt: admin.firestore.FieldValue.serverTimestamp() },
-          { merge: true }
-        );
+        await saveMovimientoPatchLocal(String(p.id), {
+          plataforma: t,
+        });
 
         return bot.sendMessage(chatId, "✅ Plataforma actualizada correctamente.");
       }
@@ -4132,10 +4242,9 @@ if (p.mode === "finTopCombosRangoFin") {
         if (!t) return bot.sendMessage(chatId, "⚠️ Escriba el detalle.");
 
         pending.delete(String(chatId));
-        await db.collection(FINANZAS_COLLECTION).doc(String(p.id)).set(
-          { detalle: t, updatedAt: admin.firestore.FieldValue.serverTimestamp() },
-          { merge: true }
-        );
+        await saveMovimientoPatchLocal(String(p.id), {
+          detalle: t,
+        });
 
         return bot.sendMessage(chatId, "✅ Detalle actualizado correctamente.");
       }
@@ -4144,15 +4253,11 @@ if (p.mode === "finTopCombosRangoFin") {
         if (!isFechaDMY(t)) return bot.sendMessage(chatId, "⚠️ Fecha inválida. Use dd/mm/yyyy");
 
         pending.delete(String(chatId));
-        await db.collection(FINANZAS_COLLECTION).doc(String(p.id)).set(
-          {
-            fecha: t,
-            fechaTS: parseDMYtoTS(t),
-            mesKey: getMonthKeyFromDMY(t),
-            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-          },
-          { merge: true }
-        );
+        await saveMovimientoPatchLocal(String(p.id), {
+          fecha: t,
+          fechaTS: parseDMYtoTS(t),
+          mesKey: getMonthKeyFromDMY(t),
+        });
 
         return bot.sendMessage(chatId, "✅ Fecha actualizada correctamente.");
       }
