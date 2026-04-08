@@ -1,12 +1,12 @@
-/* ✅ SUBLICUENTAS TG BOT — PARTE 5/6 SIN DUPLICADOS + BANCOS EN EGRESOS
+/* ✅ SUBLICUENTAS TG BOT — PARTE 5/6 CORREGIDA Y UNIFICADA
    FINANZAS / REPORTES / EXCEL / MENÚS
    -----------------------------------
-   Objetivo:
-   - Evitar lecturas masivas que queman cuota
-   - Usar SOLO finanzas_movimientos como colección oficial
-   - Leer por queries directas (fecha, mes, rango con fechaTS y fecha string)
-   - Soportar movimientos viejos y nuevos
-   - Usar los mismos bancos en ingresos y egresos
+   Ajustes:
+   - Lectura robusta sobre colección principal + colecciones legacy
+   - Escritura nueva SOLO en colección principal
+   - Edición / lectura / borrado por ID sobre cualquier colección detectada
+   - Soporte para fechas viejas y nuevas: fecha, fechaTS, createdAt, updatedAt, ISO
+   - Menú de alertas reexpuesto para la parte 6
 */
 
 const fs = require("fs");
@@ -17,6 +17,7 @@ const {
   db,
   ExcelJS,
   PLATAFORMAS,
+  FINANZAS_COLLECTION,
 } = require("./index_01_core");
 
 const {
@@ -66,14 +67,28 @@ const PLATFORM_KEYS = Array.isArray(PLATAFORMAS)
   ? PLATAFORMAS
   : Object.keys(PLATAFORMAS || {});
 
-const FINANCE_COLLECTION_PRIMARY = "finanzas_movimientos";
-const FINANCE_COLLECTIONS_READ = [FINANCE_COLLECTION_PRIMARY];
+const FINANCE_COLLECTION_PRIMARY =
+  String(FINANZAS_COLLECTION || "").trim() || "finanzas_movimientos";
+
+const FINANCE_COLLECTIONS_READ = Array.from(
+  new Set(
+    [
+      FINANCE_COLLECTION_PRIMARY,
+      "finanzas_movimientos",
+      "finanzas",
+    ].filter(Boolean)
+  )
+);
 
 // ===============================
 // HELPERS BASE
 // ===============================
-function normalizeFinanceDocRow(id, data = {}) {
-  return { id: String(id || ""), ...(data || {}) };
+function normalizeFinanceDocRow(id, data = {}, source = "") {
+  return {
+    id: String(id || ""),
+    _source: String(source || ""),
+    ...(data || {}),
+  };
 }
 
 function normalizeMonthKey(key = "") {
@@ -122,10 +137,13 @@ function categoryOfPlat(key = "") {
     return c;
   }
 
-  if ([
-    "netflix", "vipnetflix", "disneyp", "disneys", "hbomax", "primevideo",
-    "paramount", "crunchyroll", "vix", "appletv", "universal"
-  ].includes(k)) return "video";
+  if (
+    [
+      "netflix", "vipnetflix", "disneyp", "disneys", "hbomax", "primevideo",
+      "paramount", "crunchyroll", "vix", "appletv", "universal",
+    ].includes(k)
+  ) return "video";
+
   if (["spotify", "youtube", "deezer"].includes(k)) return "musica";
   if (["oleadatv1", "oleadatv3", "iptv1", "iptv3", "iptv4"].includes(k)) return "iptv";
   if (["canva", "gemini", "chatgpt"].includes(k)) return "diseno_ia";
@@ -172,9 +190,14 @@ function kbFromItems(items = []) {
 
 function dmyToDate(dmy = "") {
   const s = String(dmy || "").trim();
-  if (!/^\d{2}\/\d{2}\/\d{4}$/.test(s)) return null;
-  const [dd, mm, yyyy] = s.split("/").map(Number);
+  const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (!m) return null;
+
+  const dd = Number(m[1]);
+  const mm = Number(m[2]);
+  const yyyy = Number(m[3]);
   const dt = new Date(yyyy, mm - 1, dd, 12, 0, 0, 0);
+
   if (dt.getFullYear() !== yyyy || dt.getMonth() !== mm - 1 || dt.getDate() !== dd) return null;
   return dt;
 }
@@ -191,18 +214,49 @@ function dmyToTimestamp(dmy = "") {
 
 function normalizeDMY(s = "") {
   const v = String(s || "").trim();
-  const m = v.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-  if (!m) return "";
-  const dd = String(Number(m[1])).padStart(2, "0");
-  const mm = String(Number(m[2])).padStart(2, "0");
-  const yyyy = String(m[3]);
-  return `${dd}/${mm}/${yyyy}`;
+
+  let m = v.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (m) {
+    const dd = String(Number(m[1])).padStart(2, "0");
+    const mm = String(Number(m[2])).padStart(2, "0");
+    const yyyy = String(m[3]);
+    return `${dd}/${mm}/${yyyy}`;
+  }
+
+  m = v.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (m) {
+    const yyyy = String(m[1]);
+    const mm = String(Number(m[2])).padStart(2, "0");
+    const dd = String(Number(m[3])).padStart(2, "0");
+    return `${dd}/${mm}/${yyyy}`;
+  }
+
+  return "";
 }
 
 function tsToDMY(ts) {
   try {
-    const d = ts?.toDate ? ts.toDate() : new Date(ts);
+    if (!ts) return "";
+
+    let d = null;
+
+    if (typeof ts?.toDate === "function") {
+      d = ts.toDate();
+    } else if (ts instanceof Date) {
+      d = ts;
+    } else if (typeof ts === "number" && Number.isFinite(ts)) {
+      d = new Date(ts);
+    } else if (typeof ts === "string") {
+      const direct = normalizeDMY(ts);
+      if (direct) return direct;
+      const parsed = new Date(ts);
+      if (!isNaN(parsed.getTime())) d = parsed;
+    } else if (typeof ts === "object" && Number.isFinite(ts._seconds)) {
+      d = new Date(Number(ts._seconds) * 1000);
+    }
+
     if (!(d instanceof Date) || isNaN(d.getTime())) return "";
+
     const dd = String(d.getDate()).padStart(2, "0");
     const mm = String(d.getMonth() + 1).padStart(2, "0");
     const yyyy = String(d.getFullYear());
@@ -229,8 +283,8 @@ function monthLabelFromKeyLocal(key = "") {
   const m = norm.match(/^(\d{4})-(\d{2})$/);
   if (!m) return String(key || "");
   const meses = [
-    "Enero","Febrero","Marzo","Abril","Mayo","Junio",
-    "Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"
+    "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
+    "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre",
   ];
   return `${meses[Number(m[2]) - 1] || m[2]} ${m[1]}`;
 }
@@ -247,15 +301,14 @@ function parseFechaFlexible(raw = "") {
 }
 
 function extraerFechaMovimiento(r = {}) {
-  const f1 = normalizeDMY(r.fecha || "");
-  if (f1) return f1;
-  const f2 = tsToDMY(r.fechaTS || r.fecha_ts || null);
-  if (f2) return f2;
-  const f3 = tsToDMY(r.createdAt || r.created_at || null);
-  if (f3) return f3;
-  const f4 = tsToDMY(r.updatedAt || r.updated_at || null);
-  if (f4) return f4;
-  return "";
+  return (
+    normalizeDMY(r.fecha || "") ||
+    tsToDMY(r.fechaTS || r.fecha_ts || null) ||
+    tsToDMY(r.createdAt || r.created_at || null) ||
+    tsToDMY(r.updatedAt || r.updated_at || null) ||
+    tsToDMY(r.timestamp || r.ts || null) ||
+    ""
+  );
 }
 
 function finTipoLabel(tipo) {
@@ -357,6 +410,7 @@ function textoConfirmarEliminacionMovimiento(m = {}) {
   txt += "\n¿Desea eliminar este movimiento?";
   return txt;
 }
+
 function resumenFinanzasTextoPorRango(fechaInicio, fechaFin, list = []) {
   const rows = Array.isArray(list) ? list : [];
   let ingresos = 0;
@@ -424,12 +478,14 @@ function resumenBancosFechaTexto(fecha, list = []) {
     return txt;
   }
 
-  txt += items.map((v, i) => (
-    `${i + 1}. ${v.banco}\n` +
-    `   Ingresos: ${moneyLps(v.ingresos)}\n` +
-    `   Egresos: ${moneyLps(v.egresos)}\n` +
-    `   Neto: ${moneyLps(v.neto)}`
-  )).join("\n\n");
+  txt += items
+    .map((v, i) => (
+      `${i + 1}. ${v.banco}\n` +
+      `   Ingresos: ${moneyLps(v.ingresos)}\n` +
+      `   Egresos: ${moneyLps(v.egresos)}\n` +
+      `   Neto: ${moneyLps(v.neto)}`
+    ))
+    .join("\n\n");
 
   return txt;
 }
@@ -443,12 +499,14 @@ function resumenBancosRangoTexto(fechaInicio, fechaFin, list = []) {
     return txt;
   }
 
-  txt += items.map((v, i) => (
-    `${i + 1}. ${v.banco}\n` +
-    `   Ingresos: ${moneyLps(v.ingresos)}\n` +
-    `   Egresos: ${moneyLps(v.egresos)}\n` +
-    `   Neto: ${moneyLps(v.neto)}`
-  )).join("\n\n");
+  txt += items
+    .map((v, i) => (
+      `${i + 1}. ${v.banco}\n` +
+      `   Ingresos: ${moneyLps(v.ingresos)}\n` +
+      `   Egresos: ${moneyLps(v.egresos)}\n` +
+      `   Neto: ${moneyLps(v.neto)}`
+    ))
+    .join("\n\n");
 
   return txt;
 }
@@ -558,7 +616,10 @@ function detalleBancoRangoTexto(banco = "", fechaInicio = "", fechaFin = "", lis
 
   for (const r of rows) {
     const monto = Number(r.monto || 0);
-    const linea = `${r.fecha || extraerFechaMovimiento(r) || "-"} — ${moneyLps(monto)} — ${finConceptoLabel(r)}${finExtraLabel(r) ? ` — ${finExtraLabel(r)}` : ""}`;
+    const linea =
+      `${r.fecha || extraerFechaMovimiento(r) || "-"} — ${moneyLps(monto)} — ${finConceptoLabel(r)}` +
+      `${finExtraLabel(r) ? ` — ${finExtraLabel(r)}` : ""}`;
+
     if (String(r.tipo || "").toLowerCase() === "egreso") {
       egresos += monto;
       egr.push(linea);
@@ -657,10 +718,24 @@ function addRowsDedup(map, rows = []) {
   }
 }
 
+function mergeFinanceRows(base = {}, extra = {}) {
+  const out = { ...(base || {}) };
+  for (const [k, v] of Object.entries(extra || {})) {
+    if (
+      out[k] == null ||
+      out[k] === "" ||
+      (typeof out[k] === "number" && out[k] === 0)
+    ) {
+      out[k] = v;
+    }
+  }
+  return out;
+}
+
 async function queryDocsByFieldEq(collectionName, field, value) {
   try {
     const snap = await db.collection(collectionName).where(field, "==", value).get();
-    return snap.docs.map((d) => normalizeFinanceDocRow(d.id, d.data() || {}));
+    return snap.docs.map((d) => normalizeFinanceDocRow(d.id, d.data() || {}, collectionName));
   } catch (e) {
     logErr(`queryDocsByFieldEq:${collectionName}.${field}`, e);
     return [];
@@ -670,45 +745,145 @@ async function queryDocsByFieldEq(collectionName, field, value) {
 async function queryDocsByFieldRange(collectionName, field, ini, fin) {
   try {
     const snap = await db.collection(collectionName).where(field, ">=", ini).where(field, "<=", fin).get();
-    return snap.docs.map((d) => normalizeFinanceDocRow(d.id, d.data() || {}));
+    return snap.docs.map((d) => normalizeFinanceDocRow(d.id, d.data() || {}, collectionName));
   } catch (e) {
     logErr(`queryDocsByFieldRange:${collectionName}.${field}`, e);
     return [];
   }
 }
 
+async function getAllFinanceRowsRecovered() {
+  const byId = new Map();
+
+  for (const col of FINANCE_COLLECTIONS_READ) {
+    try {
+      const snap = await db.collection(col).get();
+      snap.forEach((d) => {
+        const row = normalizeFinanceDocRow(d.id, d.data() || {}, col);
+        if (!byId.has(d.id)) byId.set(d.id, row);
+        else byId.set(d.id, mergeFinanceRows(byId.get(d.id), row));
+      });
+    } catch (e) {
+      logErr(`getAllFinanceRowsRecovered:${col}`, e);
+    }
+  }
+
+  return Array.from(byId.values()).map((r) => ({
+    ...r,
+    fecha: extraerFechaMovimiento(r) || r.fecha || "",
+  }));
+}
+
+async function scanFinanceDocsFallbackByDate(fechaDMY = "") {
+  const fecha = normalizeDMY(fechaDMY);
+  if (!fecha) return [];
+
+  const rows = await getAllFinanceRowsRecovered();
+  return rows
+    .filter((r) => normalizeDMY(extraerFechaMovimiento(r) || r.fecha || "") === fecha)
+    .sort((a, b) => dmyToMillis(b.fecha || "") - dmyToMillis(a.fecha || ""));
+}
+
+async function scanFinanceDocsFallbackByRange(fechaInicio = "", fechaFin = "") {
+  const ini = normalizeDMY(fechaInicio);
+  const fin = normalizeDMY(fechaFin);
+  if (!ini || !fin) return [];
+
+  let iniMs = dmyToMillis(ini);
+  let finMs = dmyToMillis(fin);
+  if (iniMs > finMs) {
+    const temp = iniMs;
+    iniMs = finMs;
+    finMs = temp;
+  }
+
+  const rows = await getAllFinanceRowsRecovered();
+  return rows
+    .filter((r) => {
+      const ts = dmyToMillis(extraerFechaMovimiento(r) || r.fecha || "");
+      return ts >= iniMs && ts <= finMs;
+    })
+    .sort((a, b) => dmyToMillis(a.fecha || "") - dmyToMillis(b.fecha || ""));
+}
+
 async function getFinanceDocByIdAny(id) {
   const docId = String(id || "").trim();
   if (!docId) return null;
 
-  try {
-    const snap = await db.collection(FINANCE_COLLECTION_PRIMARY).doc(docId).get();
-    if (snap.exists) {
-      return {
-        collection: FINANCE_COLLECTION_PRIMARY,
-        ref: db.collection(FINANCE_COLLECTION_PRIMARY).doc(docId),
-        row: normalizeFinanceDocRow(snap.id, snap.data() || {}),
-      };
+  for (const col of FINANCE_COLLECTIONS_READ) {
+    try {
+      const snap = await db.collection(col).doc(docId).get();
+      if (snap.exists) {
+        return {
+          collection: col,
+          ref: db.collection(col).doc(docId),
+          row: normalizeFinanceDocRow(snap.id, snap.data() || {}, col),
+        };
+      }
+    } catch (e) {
+      logErr(`getFinanceDocByIdAny:${col}`, e);
     }
-  } catch (e) {
-    logErr(`getFinanceDocByIdAny:${FINANCE_COLLECTION_PRIMARY}`, e);
   }
 
   return null;
 }
 
-async function saveFinancePayloadMirrored(docId, payload = {}) {
+async function saveFinancePayload(docId, payload = {}) {
   const id = String(docId || "").trim();
   if (!id) throw new Error("ID de finanza inválido.");
-
   await db.collection(FINANCE_COLLECTION_PRIMARY).doc(id).set(payload, { merge: false });
   return { id, ...payload };
 }
 
-async function deleteFinanceDocMirrored(docId) {
+async function updateMovimientoFinanzas(docId, patch = {}) {
+  const id = String(docId || "").trim();
+  if (!id) throw new Error("ID de finanza inválido.");
+
+  let foundAny = false;
+  for (const col of FINANCE_COLLECTIONS_READ) {
+    try {
+      const ref = db.collection(col).doc(id);
+      const doc = await ref.get();
+      if (!doc.exists) continue;
+      foundAny = true;
+      await ref.set(
+        {
+          ...(patch || {}),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+    } catch (e) {
+      logErr(`updateMovimientoFinanzas:${col}`, e);
+    }
+  }
+
+  if (!foundAny) {
+    await db.collection(FINANCE_COLLECTION_PRIMARY).doc(id).set(
+      {
+        ...(patch || {}),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+  }
+
+  return getMovimientoFinanzaById(id);
+}
+
+async function deleteFinanceDocAny(docId) {
   const id = String(docId || "").trim();
   if (!id) return;
-  await db.collection(FINANCE_COLLECTION_PRIMARY).doc(id).delete();
+
+  for (const col of FINANCE_COLLECTIONS_READ) {
+    try {
+      const ref = db.collection(col).doc(id);
+      const doc = await ref.get();
+      if (doc.exists) await ref.delete();
+    } catch (e) {
+      logErr(`deleteFinanceDocAny:${col}`, e);
+    }
+  }
 }
 
 // ===============================
@@ -720,7 +895,10 @@ async function menuPrincipal(chatId) {
       { text: "📦 Inventario", callback_data: "menu:inventario" },
       { text: "👥 Clientes / CRM", callback_data: "menu:clientes" },
     ],
-    [{ text: "💰 Finanzas", callback_data: "menu:pagos" }],
+    [
+      { text: "💰 Finanzas", callback_data: "menu:pagos" },
+      { text: "🚨 Alertas", callback_data: "menu:alertas" },
+    ],
   ]);
 }
 
@@ -859,6 +1037,23 @@ async function menuPagos(chatId) {
   ]);
 }
 
+async function menuAlertas(chatId) {
+  return upsertPanel(chatId, "🚨 *ALERTAS*\n\nSeleccione una opción:", [
+    [
+      { text: "🔴 Clientes vencidos", callback_data: "alert:vencidos:0" },
+      { text: "🟠 Vencen hoy", callback_data: "alert:hoy:0" },
+    ],
+    [
+      { text: "⏳ Vencen en 3 días", callback_data: "alert:3dias:0" },
+      { text: "📦 Inventario crítico", callback_data: "alert:inventario:0" },
+    ],
+    [
+      { text: "📄 TXT alertas del día", callback_data: "alert:txt:hoy" },
+      { text: "⬅️ Volver", callback_data: "go:inicio" },
+    ],
+  ]);
+}
+
 async function menuFinRegistro(chatId) {
   return upsertPanel(chatId, "📒 *REGISTRO DE FINANZAS*\n\nSeleccione una opción:", [
     [
@@ -978,7 +1173,7 @@ async function registrarIngresoTx({ monto, banco = "", plataforma = "", detalle 
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
   };
 
-  await saveFinancePayloadMirrored(docId, payload);
+  await saveFinancePayload(docId, payload);
   return { id: docId, ...payload };
 }
 
@@ -1008,13 +1203,13 @@ async function registrarEgresoTx({ monto, banco = "", motivo = "", detalle = "",
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
   };
 
-  await saveFinancePayloadMirrored(docId, payload);
+  await saveFinancePayload(docId, payload);
   return { id: docId, ...payload };
 }
 
 async function getMovimientoFinanzaById(id) {
   const found = await getFinanceDocByIdAny(id);
-  return found ? found.row : null;
+  return found ? { ...found.row, fecha: extraerFechaMovimiento(found.row) || found.row.fecha || "" } : null;
 }
 
 async function getMovimientosPorFecha(fechaDMY, _userId = null, _isSuper = false) {
@@ -1032,10 +1227,13 @@ async function getMovimientosPorFecha(fechaDMY, _userId = null, _isSuper = false
     if (range) addRowsDedup(map, await queryDocsByFieldRange(col, "fechaTS", range.iniTs, range.finTs));
   }
 
-  return Array.from(map.values())
+  let rows = Array.from(map.values())
     .map((r) => ({ ...r, fecha: extraerFechaMovimiento(r) || r.fecha || "" }))
     .filter((r) => normalizeDMY(String(r.fecha || "")) === fecha)
     .sort((a, b) => dmyToMillis(b.fecha || "") - dmyToMillis(a.fecha || ""));
+
+  if (!rows.length) rows = await scanFinanceDocsFallbackByDate(fecha);
+  return rows;
 }
 
 async function getMovimientosPorMes(monthKey, _userId = null, _isSuper = false) {
@@ -1060,7 +1258,7 @@ async function getMovimientosPorMes(monthKey, _userId = null, _isSuper = false) 
     if (bounds) addRowsDedup(map, await queryDocsByFieldRange(col, "fecha", bounds.ini, bounds.fin));
   }
 
-  return Array.from(map.values())
+  let rows = Array.from(map.values())
     .map((r) => {
       const fechaReal = extraerFechaMovimiento(r) || r.fecha || "";
       const mesReal = monthKeyFromDMYLocal(fechaReal);
@@ -1076,6 +1274,9 @@ async function getMovimientosPorMes(monthKey, _userId = null, _isSuper = false) 
       return mes === key;
     })
     .sort((a, b) => dmyToMillis(b.fecha || "") - dmyToMillis(a.fecha || ""));
+
+  if (!rows.length && bounds) rows = await scanFinanceDocsFallbackByRange(bounds.ini, bounds.fin);
+  return rows;
 }
 
 async function getMovimientosPorRango(fechaInicio, fechaFin, _userId = null, _isSuper = false) {
@@ -1115,19 +1316,22 @@ async function getMovimientosPorRango(fechaInicio, fechaFin, _userId = null, _is
     }
   }
 
-  return Array.from(map.values())
+  let rows = Array.from(map.values())
     .map((r) => ({ ...r, fecha: extraerFechaMovimiento(r) || r.fecha || "" }))
     .filter((r) => {
       const ts = dmyToMillis(String(r.fecha || ""));
       return ts >= iniMs && ts <= finMs;
     })
     .sort((a, b) => dmyToMillis(a.fecha || "") - dmyToMillis(b.fecha || ""));
+
+  if (!rows.length) rows = await scanFinanceDocsFallbackByRange(ini, fin);
+  return rows;
 }
 
 async function eliminarMovimientoFinanzas(id, _userId = null, _isSuper = false) {
   const mov = await getMovimientoFinanzaById(id);
   if (!mov) throw new Error("Movimiento no encontrado.");
-  await deleteFinanceDocMirrored(String(id));
+  await deleteFinanceDocAny(String(id));
   return mov;
 }
 
@@ -1230,7 +1434,7 @@ function applyHeaderStyle(row) {
 }
 
 function applyMoneyFormat(cell) {
-  cell.numFmt = '#,##0.00';
+  cell.numFmt = "#,##0.00";
 }
 
 function applyIngresoRowStyle(row) {
@@ -1283,7 +1487,15 @@ function decorateFinanzasSheet(ws, rows = []) {
 }
 
 function decorateResumenSheet(resumen, meta = {}) {
-  const { fechaInicio = "", fechaFin = "", label = "", ingresos = 0, egresos = 0, utilidad = 0, movimientos = 0 } = meta;
+  const {
+    fechaInicio = "",
+    fechaFin = "",
+    label = "",
+    ingresos = 0,
+    egresos = 0,
+    utilidad = 0,
+    movimientos = 0,
+  } = meta;
 
   resumen.columns = [
     { header: "Concepto", key: "concepto", width: 24 },
@@ -1404,9 +1616,7 @@ async function exportarFinanzasRangoExcel(chatId, fechaInicio, fechaFin, _userId
 
   const tempPath = `/tmp/finanzas_${Date.now()}.xlsx`;
   await wb.xlsx.writeFile(tempPath);
-
   await bot.sendDocument(chatId, tempPath, { caption: `📊 Finanzas del ${ini} al ${fin}` });
-
   try { fs.unlinkSync(tempPath); } catch (_) {}
   return true;
 }
@@ -1427,7 +1637,8 @@ async function menuEliminarMovimientoEspecifico(chatId) { return menuFinEliminar
 
 async function pedirFechaEliminarMovimiento(chatId, tipo) {
   const titulo = String(tipo || "").toLowerCase() === "egreso" ? "EGRESO" : "INGRESO";
-  return upsertPanel(chatId,
+  return upsertPanel(
+    chatId,
     `🗑️ *ELIMINAR ${titulo} POR FECHA*\n\nEnvíe la fecha exacta en formato *dd/mm/yyyy*.\n\nEjemplo: *22/03/2026*`,
     [[
       { text: "⬅️ Volver eliminar", callback_data: "fin:menu:eliminar" },
@@ -1440,7 +1651,8 @@ async function listarMovimientosParaEliminarPorFecha(chatId, tipo, fechaDMY) {
   const rows = await listarMovimientosPorFechaYTipo(fechaDMY, tipo);
 
   if (!rows.length) {
-    return upsertPanel(chatId,
+    return upsertPanel(
+      chatId,
       `⚠️ No encontré *${tipo === "egreso" ? "egresos" : "ingresos"}* en la fecha *${fechaDMY}*.`,
       [
         [{
@@ -1467,7 +1679,8 @@ async function listarMovimientosParaEliminarPorFecha(chatId, tipo, fechaDMY) {
     { text: "🏠 Inicio", callback_data: "go:inicio" },
   ]);
 
-  return upsertPanel(chatId,
+  return upsertPanel(
+    chatId,
     `🗑️ *${tipo === "egreso" ? "EGRESOS" : "INGRESOS"} DEL ${fechaDMY}*\n\nSeleccione el movimiento exacto que desea borrar:`,
     keyboard
   );
@@ -1663,6 +1876,24 @@ async function exportarExcelMesActual(chatId) {
   ]]);
 }
 
+async function debugFinanzasPorFecha(fechaDMY) {
+  const fecha = normalizeDMY(fechaDMY);
+  const rows = await getAllFinanceRowsRecovered();
+  const hit = rows.filter((r) => normalizeDMY(extraerFechaMovimiento(r) || r.fecha || "") === fecha);
+  return {
+    fecha,
+    totalDocsLeidos: rows.length,
+    encontrados: hit.length,
+    muestra: hit.slice(0, 5).map((x) => ({
+      id: x.id,
+      tipo: x.tipo,
+      monto: x.monto,
+      fecha: extraerFechaMovimiento(x) || x.fecha,
+      fuente: x._source,
+    })),
+  };
+}
+
 module.exports = {
   menuPrincipal,
   menuVendedor,
@@ -1674,6 +1905,7 @@ module.exports = {
   menuClientes,
   menuRenovaciones,
   menuPagos,
+  menuAlertas,
   menuFinRegistro,
   menuFinEliminarTipo,
   menuFinReportes,
@@ -1699,6 +1931,7 @@ module.exports = {
   textoConfirmarEliminacionMovimiento,
   exportarFinanzasRangoExcel,
   eliminarMovimientoFinanzas,
+  updateMovimientoFinanzas,
   menuFinanzas,
   menuRegistroFinanzas,
   menuEliminarMovimientoEspecifico,
@@ -1715,5 +1948,5 @@ module.exports = {
   listarMovimientosPorFechaYTipo,
   getMovimientoFinanzaById,
   textoMovimientoParaEliminar,
+  debugFinanzasPorFecha,
 };
- 
