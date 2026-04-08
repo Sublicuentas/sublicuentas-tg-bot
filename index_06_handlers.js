@@ -292,6 +292,40 @@ function setCacheLocal(map, key, value, ttlMs = 60000) {
   return value;
 }
 
+function normalizeDMYFlexibleLocal(value = "") {
+  if (!value) return "";
+
+  if (typeof value === "string") {
+    const s = String(value).trim();
+
+    let m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+    if (m) {
+      const dd = String(Number(m[1])).padStart(2, "0");
+      const mm = String(Number(m[2])).padStart(2, "0");
+      return `${dd}/${mm}/${m[3]}`;
+    }
+
+    m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+    if (m) {
+      const dd = String(Number(m[3])).padStart(2, "0");
+      const mm = String(Number(m[2])).padStart(2, "0");
+      return `${dd}/${mm}/${m[1]}`;
+    }
+  }
+
+  try {
+    const d = value?.toDate ? value.toDate() : new Date(value);
+    if (!isNaN(d.getTime())) {
+      const dd = String(d.getDate()).padStart(2, "0");
+      const mm = String(d.getMonth() + 1).padStart(2, "0");
+      const yyyy = String(d.getFullYear());
+      return `${dd}/${mm}/${yyyy}`;
+    }
+  } catch (_) {}
+
+  return "";
+}
+
 function normalizeTelegramIdLocal(value = "") {
   return String(value == null ? "" : value).trim();
 }
@@ -369,34 +403,19 @@ async function safeGetRevendedorLocal(userId) {
   if (cached !== null) return cached;
 
   try {
-    const rev = await getRevendedorPorTelegramId(userId);
-    if (rev && typeof rev === "object") {
-      const norm = typeof normalizeRevendedorDoc === "function" ? normalizeRevendedorDoc(rev) : rev;
-      return setCacheLocal(ACCESS_CACHE_LOCAL, `rev:${uid}`, norm, 60000);
-    }
-  } catch (e) {
-    logErr("safeGetRevendedorLocal:getRevendedorPorTelegramId", e?.stack || e?.message || e);
-  }
-
-  try {
     const fields = ["telegramId", "telegramID", "userId"];
 
     for (const field of fields) {
-      const snap = await db
-        .collection("revendedores")
-        .where(field, "==", uid)
-        .limit(1)
-        .get();
-
-      if (snap.empty) continue;
-
-      const d = snap.docs[0];
-      const rev = { id: d.id, ...(d.data() || {}) };
-      const norm = typeof normalizeRevendedorDoc === "function" ? normalizeRevendedorDoc(rev) : rev;
-      return setCacheLocal(ACCESS_CACHE_LOCAL, `rev:${uid}`, norm, 60000);
+      const snap = await db.collection("revendedores").where(field, "==", uid).limit(1).get();
+      if (!snap.empty) {
+        const d = snap.docs[0];
+        const rev = { id: d.id, ...(d.data() || {}) };
+        const norm = typeof normalizeRevendedorDoc === "function" ? normalizeRevendedorDoc(rev) : rev;
+        return setCacheLocal(ACCESS_CACHE_LOCAL, `rev:${uid}`, norm, 60000);
+      }
     }
   } catch (e) {
-    logErr("safeGetRevendedorLocal:fallback", e?.stack || e?.message || e);
+    logErr("safeGetRevendedorLocal", e?.stack || e?.message || e);
   }
 
   return setCacheLocal(ACCESS_CACHE_LOCAL, `rev:${uid}`, null, 15000);
@@ -1129,8 +1148,9 @@ async function getAlertaClientesLocal(tipo = "hoy") {
     if (cached) return cached;
 
     const snap = await db.collection("clientes").get();
-    const hoy = hoyDMY();
-    const fecha3 = addDaysDMY(hoy, 3);
+    const hoy = normalizeDMYFlexibleLocal(hoyDMY());
+    const fecha3 = normalizeDMYFlexibleLocal(addDaysDMY(hoyDMY(), 3));
+    const hoyTs = Number(parseDMYtoTS(hoy) || 0);
     const rows = [];
 
     snap.forEach((doc) => {
@@ -1138,11 +1158,13 @@ async function getAlertaClientesLocal(tipo = "hoy") {
       const servicios = Array.isArray(c.servicios) ? c.servicios : [];
 
       servicios.forEach((s) => {
-        const fecha = String(s?.fechaRenovacion || "").trim();
-        if (!isFechaDMY(fecha)) return;
+        const fecha = normalizeDMYFlexibleLocal(s?.fechaRenovacion || s?.fecha || "");
+        if (!fecha) return;
 
+        const fechaTs = Number(parseDMYtoTS(fecha) || 0);
         let ok = false;
-        if (tipo === "vencidos") ok = Number(parseDMYtoTS(fecha) || 0) < Number(parseDMYtoTS(hoy) || 0);
+
+        if (tipo === "vencidos") ok = !!fechaTs && !!hoyTs && fechaTs < hoyTs;
         else if (tipo === "hoy") ok = fecha === hoy;
         else if (tipo === "3dias") ok = fecha === fecha3;
 
@@ -1154,27 +1176,24 @@ async function getAlertaClientesLocal(tipo = "hoy") {
           telefono: String(c.telefono || "-").trim(),
           vendedor: String(c.vendedor || "-").trim(),
           plataforma: normalizarPlataforma(s?.plataforma || ""),
-          correo: String(s?.correo || "-").trim(),
+          correo: String(s?.correo || s?.usuario || "-").trim(),
           pin: String(s?.pin || "-").trim(),
           precio: Number(s?.precio || 0),
           fechaRenovacion: fecha,
-          atrasoDias: tipo === "vencidos" ? Math.max(1, diffDaysFromTodayLocal(fecha)) : 0,
+          atrasoDias: tipo === "vencidos" && fechaTs && hoyTs
+            ? Math.max(1, Math.floor((hoyTs - fechaTs) / 86400000))
+            : 0,
         });
       });
     });
 
     rows.sort((a, b) => {
-      const fa = String(a.fechaRenovacion || "");
-      const fb = String(b.fechaRenovacion || "");
-      if (fa !== fb) return fa.localeCompare(fb, "es");
-      const va = String(a.vendedor || "");
-      const vb = String(b.vendedor || "");
-      if (va !== vb) return va.localeCompare(vb, "es", { sensitivity: "base" });
-      return String(a.nombrePerfil || "").localeCompare(String(b.nombrePerfil || ""), "es", { sensitivity: "base" });
+      if (a.fechaRenovacion !== b.fechaRenovacion) return a.fechaRenovacion.localeCompare(b.fechaRenovacion, "es");
+      if (a.vendedor !== b.vendedor) return a.vendedor.localeCompare(b.vendedor, "es", { sensitivity: "base" });
+      return a.nombrePerfil.localeCompare(b.nombrePerfil, "es", { sensitivity: "base" });
     });
 
-    setCacheLocal(ALERT_CACHE_LOCAL, cacheKey, rows, 30000);
-    return rows;
+    return setCacheLocal(ALERT_CACHE_LOCAL, cacheKey, rows, 30000);
   } catch (e) {
     logErr(`getAlertaClientesLocal:${tipo}`, e?.stack || e?.message || e);
     return [];
@@ -1247,15 +1266,8 @@ async function getInventarioCriticoLocal() {
       }
     });
 
-    rows.sort((a, b) => {
-      if ((b.ocupados - b.capacidad) !== (a.ocupados - a.capacidad)) {
-        return (b.ocupados - b.capacidad) - (a.ocupados - a.capacidad);
-      }
-      return String(a.plataforma || "").localeCompare(String(b.plataforma || ""), "es", { sensitivity: "base" });
-    });
-
-    setCacheLocal(ALERT_CACHE_LOCAL, cacheKey, rows, 30000);
-    return rows;
+    rows.sort((a, b) => (b.ocupados - b.capacidad) - (a.ocupados - a.capacidad));
+    return setCacheLocal(ALERT_CACHE_LOCAL, cacheKey, rows, 30000);
   } catch (e) {
     logErr("getInventarioCriticoLocal", e?.stack || e?.message || e);
     return [];
