@@ -105,6 +105,13 @@ const {
   aplicarAutoLleno,
 } = require("./index_04_inventario_correos");
 
+if (!global.__SUBLICUENTAS_LISTENERS_CLEANED__) {
+  try { bot.removeAllListeners("callback_query"); } catch (_) {}
+  try { bot.removeAllListeners("message"); } catch (_) {}
+  try { bot.removeAllListeners("text"); } catch (_) {}
+  global.__SUBLICUENTAS_LISTENERS_CLEANED__ = true;
+}
+
 const {
   menuPrincipal,
   menuVendedor,
@@ -4709,26 +4716,28 @@ async function enviarTxtRenovacionesDiarias7AM() {
   }
 }
 
-setInterval(async () => {
-  if (!hasRuntimeLock()) return;
+if (!global.__SUBLICUENTAS_AUTOTXT_INTERVAL__) {
+  global.__SUBLICUENTAS_AUTOTXT_INTERVAL__ = setInterval(async () => {
+    if (!hasRuntimeLock()) return;
 
-  try {
-    const { dmy, hh, mm } = getTimePartsNow();
+    try {
+      const { dmy, hh, mm } = getTimePartsNow();
 
-    if (hh === 7 && mm === 0) {
-      const dbLast = await getLastRunDB();
-      if (_lastDailyRun === dmy || dbLast === dmy) return;
+      if (hh === 7 && mm === 0) {
+        const dbLast = await getLastRunDB();
+        if (_lastDailyRun === dmy || dbLast === dmy) return;
 
-      _lastDailyRun = dmy;
-      await setLastRunDB(dmy);
-      await enviarTxtRenovacionesDiarias7AM();
+        _lastDailyRun = dmy;
+        await setLastRunDB(dmy);
+        await enviarTxtRenovacionesDiarias7AM();
 
-      console.log(`ℹ️ ✅ AutoTXT 7AM enviado (${dmy}) TZ=${TZ}`);
+        console.log(`ℹ️ ✅ AutoTXT 7AM enviado (${dmy}) TZ=${TZ}`);
+      }
+    } catch (e) {
+      logErr("AutoTXT", e?.stack || e?.message || e);
     }
-  } catch (e) {
-    logErr("AutoTXT", e?.stack || e?.message || e);
-  }
-}, 30 * 1000);
+  }, 30 * 1000);
+}
 
 // ===============================
 // HARDEN
