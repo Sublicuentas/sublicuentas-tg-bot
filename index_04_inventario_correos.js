@@ -294,8 +294,26 @@ async function buscarCorreoInventarioPorPlatCorreo(plataforma = "", acceso = "")
 // ===============================
 async function getInventarioRowsByPlataforma(plataforma = "") {
   const plat = normalizarPlataforma(plataforma);
-  const snap = await db.collection("inventario").where("plataforma", "==", plat).get();
-  const rows = snap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
+  let rows = [];
+
+  try {
+    const snap = await db.collection("inventario").where("plataforma", "==", plat).get();
+    rows = snap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
+  } catch (e) {
+    logErr("getInventarioRowsByPlataforma.where", e);
+  }
+
+  if (!rows.length) {
+    try {
+      const snapAll = await db.collection("inventario").get();
+      rows = snapAll.docs
+        .map((d) => ({ id: d.id, ...(d.data() || {}) }))
+        .filter((r) => normalizarPlataforma(r.plataforma || "") === plat);
+    } catch (e) {
+      logErr("getInventarioRowsByPlataforma.fallback", e);
+      rows = [];
+    }
+  }
 
   rows.sort((a, b) => {
     const da = getDisponibles(a, plat);
