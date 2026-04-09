@@ -604,98 +604,90 @@ async function generarDashboard(chatId) {
     const [dd, mm, yyyy] = hoy.split("/");
 
     // Mes actual y anterior
-    const mesActualKey = `${yyyy}-${mm}`;
-    const fechaMesAnterior = new Date(Number(yyyy), Number(mm) - 2, 1);
-    const mesAnteriorKey = `${fechaMesAnterior.getFullYear()}-${String(fechaMesAnterior.getMonth() + 1).padStart(2, "0")}`;
+    const mesActualKey = `${yyyy}-${String(mm).padStart(2, "0")}`;
+    const dMesAnt = new Date(Number(yyyy), Number(mm) - 2, 1);
+    const mesAnteriorKey = `${dMesAnt.getFullYear()}-${String(dMesAnt.getMonth() + 1).padStart(2, "0")}`;
 
-    // Datos financieros en paralelo
-    const [resMesActual, resMesAnterior] = await Promise.all([
-      resumenFinancieroPorMonthKey(mesActualKey),
-      resumenFinancieroPorMonthKey(mesAnteriorKey),
-    ]);
+    // Datos financieros — con fallback si falla
+    let resMesActual = { ingresos: 0, egresos: 0, utilidad: 0, topOrdenado: [] };
+    let resMesAnterior = { ingresos: 0, egresos: 0, utilidad: 0, topOrdenado: [] };
 
-    // Clientes y renovaciones
-    const snapClientes = await db.collection("clientes").get();
-    const clientes = snapClientes.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
+    try {
+      [resMesActual, resMesAnterior] = await Promise.all([
+        resumenFinancieroPorMonthKey(mesActualKey),
+        resumenFinancieroPorMonthKey(mesAnteriorKey),
+      ]);
+    } catch (e) { logErr("dashboard.finanzas", e); }
+
+    // Clientes
+    let clientes = [];
+    try {
+      const snapClientes = await db.collection("clientes").get();
+      clientes = snapClientes.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
+    } catch (e) { logErr("dashboard.clientes", e); }
+
     const totalClientes = clientes.length;
-
-    // Próximos 7 días
-    let renovacionesSemana = 0;
-    let clientesPorVencer = 0;
     const hoyDate = new Date(Number(yyyy), Number(mm) - 1, Number(dd));
-    const en7Dias = new Date(hoyDate); en7Dias.setDate(en7Dias.getDate() + 7);
+    const en7Dias = new Date(hoyDate.getTime()); en7Dias.setDate(en7Dias.getDate() + 7);
 
-    // Ingresos por vendedor en el mes actual
+    let renovacionesSemana = 0;
     const ingresoPorVendedor = {};
 
     for (const c of clientes) {
       const vendedor = String(c.vendedor || "Sin vendedor").trim();
       const servicios = Array.isArray(c.servicios) ? c.servicios : [];
-
       for (const s of servicios) {
         const fecha = String(s.fechaRenovacion || "").trim();
-        if (!fecha.match(/^\d{2}\/\d{2}\/\d{4}$/)) continue;
-
+        if (!/^\d{2}\/\d{2}\/\d{4}$/.test(fecha)) continue;
         const [fdd, fmm, fyyyy] = fecha.split("/");
         const fechaDate = new Date(Number(fyyyy), Number(fmm) - 1, Number(fdd));
-
-        if (fechaDate >= hoyDate && fechaDate <= en7Dias) {
-          renovacionesSemana++;
-          clientesPorVencer++;
-        }
-
+        if (fechaDate >= hoyDate && fechaDate <= en7Dias) renovacionesSemana++;
         const precio = Number(s.precio || 0);
         if (!ingresoPorVendedor[vendedor]) ingresoPorVendedor[vendedor] = 0;
         ingresoPorVendedor[vendedor] += precio;
       }
     }
 
-    // Top vendedor por cartera
-    const topVendedor = Object.entries(ingresoPorVendedor)
-      .sort((a, b) => b[1] - a[1])[0];
-
-    // Variación vs mes anterior
+    const topVendedor = Object.entries(ingresoPorVendedor).sort((a, b) => b[1] - a[1])[0];
     const varIngresos = resMesActual.ingresos - resMesAnterior.ingresos;
     const varPct = resMesAnterior.ingresos > 0
       ? ((varIngresos / resMesAnterior.ingresos) * 100).toFixed(1)
-      : "N/A";
+      : null;
     const varEmoji = varIngresos >= 0 ? "📈" : "📉";
-
     const labelActual = monthLabelFromKeyLocal(mesActualKey);
     const labelAnterior = monthLabelFromKeyLocal(mesAnteriorKey);
 
-    let txt = `📊 *DASHBOARD EJECUTIVO*\n`;
-    txt += `📅 ${escMD(hoy)}\n\n`;
+    const fmt = (n) => `${Number(n || 0).toFixed(2)} Lps`;
 
+    let txt = `📊 *DASHBOARD EJECUTIVO*\n📅 ${escMD(hoy)}\n\n`;
     txt += `💰 *FINANZAS — ${escMD(labelActual)}*\n`;
-    txt += `Ingresos: ${escMD(moneyLps(resMesActual.ingresos))}\n`;
-    txt += `Egresos: ${escMD(moneyLps(resMesActual.egresos))}\n`;
-    txt += `Utilidad: ${escMD(moneyLps(resMesActual.utilidad))}\n`;
-    txt += `vs ${escMD(labelAnterior)}: ${varEmoji} ${varPct !== "N/A" ? `${varPct}%` : "Sin datos"}\n\n`;
-
+    txt += `Ingresos: ${escMD(fmt(resMesActual.ingresos))}\n`;
+    txt += `Egresos: ${escMD(fmt(resMesActual.egresos))}\n`;
+    txt += `Utilidad: ${escMD(fmt(resMesActual.utilidad))}\n`;
+    txt += `vs ${escMD(labelAnterior)}: ${varEmoji} ${varPct !== null ? `${varPct}%` : "Sin datos anteriores"}\n\n`;
     txt += `👥 *CLIENTES*\n`;
     txt += `Total: ${escMD(String(totalClientes))}\n`;
     txt += `Renovaciones próximos 7 días: ${escMD(String(renovacionesSemana))}\n\n`;
 
     if (topVendedor) {
       txt += `🏆 *TOP VENDEDOR*\n`;
-      txt += `${escMD(topVendedor[0])}: ${escMD(moneyLps(topVendedor[1]))} en cartera\n\n`;
+      txt += `${escMD(topVendedor[0])}: ${escMD(fmt(topVendedor[1]))} en cartera\n\n`;
     }
 
-    if (resMesActual.topOrdenado.length) {
+    if (Array.isArray(resMesActual.topOrdenado) && resMesActual.topOrdenado.length) {
       txt += `📦 *TOP PLATAFORMAS (${escMD(labelActual)})*\n`;
       resMesActual.topOrdenado.slice(0, 5).forEach((x, i) => {
-        txt += `${i + 1}. ${escMD(humanPlatSafe(x.plataforma))} — ${escMD(moneyLps(x.total))}\n`;
+        txt += `${i + 1}. ${escMD(humanPlatSafe(x.plataforma))} — ${escMD(fmt(x.total))}\n`;
       });
     }
 
     return upsertPanel(chatId, txt, [
-      [{ text: "📊 Reporte completo Excel", callback_data: "fin:menu:excel_rango" }],
-      [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
+      [{ text: "📊 Reporte Excel", callback_data: "fin:menu:excel_rango" }],
+      [{ text: "🏠 Inicio",        callback_data: "go:inicio" }],
     ]);
   } catch (e) {
     logErr("generarDashboard", e);
-    return bot.sendMessage(chatId, "⚠️ Error generando dashboard. Revise logs.");
+    return bot.sendMessage(chatId, `⚠️ Error en dashboard: ${e?.message || "desconocido"}`);
   }
 }
 
