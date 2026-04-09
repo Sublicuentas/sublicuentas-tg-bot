@@ -27,7 +27,11 @@ const core = require("./index_01_core");
 const utils = require("./index_02_utils_roles");
 
 const { bot, admin, db, PLATAFORMAS } = core;
-const { cacheGet, cacheSet, cacheInvalidatePrefix } = core;
+
+// ✅ Fallbacks seguros: si index_01_core no exporta caché, se usa no-op para no romper el módulo
+const cacheGet           = typeof core.cacheGet            === "function" ? core.cacheGet            : () => null;
+const cacheSet           = typeof core.cacheSet            === "function" ? core.cacheSet            : () => {};
+const cacheInvalidatePrefix = typeof core.cacheInvalidatePrefix === "function" ? core.cacheInvalidatePrefix : () => {};
 
 const escMD = typeof utils.escMD === "function"
   ? utils.escMD
