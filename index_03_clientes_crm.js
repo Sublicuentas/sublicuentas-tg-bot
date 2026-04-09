@@ -1,13 +1,23 @@
-/* ✅ SUBLICUENTAS TG BOT — PARTE 3/6 OPTIMIZADA v2
+/* ✅ SUBLICUENTAS TG BOT — PARTE 3/6 OPTIMIZADA v3
    CLIENTES / CRM / WIZARD / TXT / RENOVACIONES
    -----------------------------------------------
    ✅ OPTIMIZACIONES v2:
-   - buscarClienteRobusto: primero queries indexadas, scan solo como fallback
-   - buscarPorTelefonoTodos: query por telefono_norm antes de scan
-   - obtenerRenovacionesPorFecha: scan con early-return por vendedor
+   - buscarClienteRobusto: queries indexadas primero, scan como fallback
+   - buscarPorTelefonoTodos: query exacta antes de scan
+   - obtenerRenovacionesPorFecha: early-return por vendedor
    - Caché de clientes individuales (getCliente)
-   - cacheInvalidatePrefix("clientes:") tras escrituras
-   - Sin cambios en wizard, TXT ni renovaciones
+   - cacheInvalidatePrefix tras escrituras
+
+   ✅ NUEVO v3 — ACCIONES DE RENOVACIÓN:
+   - menuRenovacionServicio: panel con 4 opciones por servicio
+       ✅ Renovar +30 días (automático)
+       📅 Renovar con fecha manual
+       🔄 Cambió de servicio (elimina y abre wizard para nuevo)
+       ❌ No renovó (elimina servicio + libera inventario)
+   - eliminarServicioTx: elimina servicio y libera slot en inventario
+   - menuListaRenovacion: lista de servicios a renovar por cliente
+   - renovacionesTextoConBotones: panel de renovaciones del día con botones por fila
+   - menuAccionRenovacionDesdePanel: mismas 4 opciones desde el panel del día
 */
 
 const fs = require("fs");
@@ -664,8 +674,134 @@ async function patchServicio(clientId, idx, patch = {}) {
 }
 
 // ===============================
-// WIZARD CLIENTE
+// ✅ ELIMINAR SERVICIO (con limpieza de inventario)
 // ===============================
+async function eliminarServicioTx(clientId, idx) {
+  const id = String(clientId || "").trim();
+  const ref = db.collection(CLIENTES_COLLECTION).doc(id);
+  const doc = await ref.get();
+  if (!doc.exists) throw new Error("Cliente no encontrado.");
+
+  const c = doc.data() || {};
+  const servicios = Array.isArray(c.servicios) ? c.servicios.slice() : [];
+  if (idx < 0 || idx >= servicios.length) throw new Error("Servicio inválido.");
+
+  const eliminado = servicios[idx];
+  servicios.splice(idx, 1);
+
+  await ref.set({ servicios, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+  cacheInvalidatePrefix(`clientes:doc:${id}`);
+
+  // Liberar slot en inventario
+  try {
+    await removeServicioDeInventario({
+      clienteNombre: c.nombrePerfil || "",
+      plataforma: eliminado.plataforma || "",
+      correo: eliminado.correo || "",
+      pin: eliminado.pin || "",
+    });
+  } catch (e) { logErr("eliminarServicioTx.removeInventario", e); }
+
+  return { ok: true, eliminado, nombreCliente: c.nombrePerfil || "" };
+}
+
+// ===============================
+// ✅ MENÚ DE LISTA RENOVACIÓN (desde ficha del cliente)
+// Muestra los servicios como botones para elegir cuál gestionar
+// ===============================
+async function menuListaRenovacion(chatId, clientId) {
+  const c = await getCliente(clientId);
+  if (!c) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
+
+  const servicios = serviciosConIndiceOriginal(Array.isArray(c.servicios) ? c.servicios : []);
+  if (!servicios.length) {
+    return upsertPanel(chatId, "🔄 *RENOVACIONES*\n\nEste cliente no tiene servicios.", [
+      [{ text: "➕ Agregar servicio", callback_data: `cli:serv:add:${clientId}` }],
+      [{ text: "⬅️ Volver ficha",   callback_data: `cli:view:${clientId}` }],
+      [{ text: "🏠 Inicio",          callback_data: "go:inicio" }],
+    ]);
+  }
+
+  const kb = servicios.map((s) => [{
+    text: safeBtnLabel(`${iconPlataforma(s.plataforma || "")} ${humanPlataforma(s.plataforma || "")} — ${s.fechaRenovacion || "sin fecha"}`),
+    callback_data: `cli:ren:one:${clientId}:${s.idxOriginal}`,
+  }]);
+  kb.push([{ text: "⬅️ Volver ficha", callback_data: `cli:view:${clientId}` }]);
+  kb.push([{ text: "🏠 Inicio",        callback_data: "go:inicio" }]);
+
+  return upsertPanel(chatId,
+    `🔄 *RENOVAR SERVICIO*\n👤 *${escMD(c.nombrePerfil || "Cliente")}*\n\nSeleccione el servicio a gestionar:`,
+    kb
+  );
+}
+
+// ===============================
+// ✅ MENÚ ACCIÓN DE RENOVACIÓN — 4 opciones por servicio
+// Usado desde ficha del cliente Y desde panel de renovaciones del día
+// ===============================
+async function menuRenovacionServicio(chatId, clientId, idx) {
+  const c = await getCliente(clientId);
+  if (!c) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
+
+  const servicios = Array.isArray(c.servicios) ? c.servicios : [];
+  if (idx < 0 || idx >= servicios.length) return bot.sendMessage(chatId, "⚠️ Servicio inválido.");
+
+  const s = servicios[idx];
+  const est = getEstadoServicio(s.fechaRenovacion || "");
+
+  const txt =
+    `🔄 *GESTIONAR RENOVACIÓN*\n\n` +
+    `👤 *${escMD(c.nombrePerfil || "Cliente")}*\n` +
+    `${iconPlataforma(s.plataforma || "")} *${escMD(humanPlataforma(s.plataforma || ""))}*\n` +
+    `${getIdentLabelLocal(s.plataforma || "") === "Usuario" ? "👤" : "📧"} ${escMD(s.correo || "-")}\n` +
+    `💰 ${escMD(`${Number(s.precio || 0).toFixed(2)} Lps`)}\n` +
+    `📅 Vence: ${escMD(s.fechaRenovacion || "-")} — ${est.emoji} ${escMD(est.texto)}\n\n` +
+    `¿Qué pasó con este servicio?`;
+
+  return upsertPanel(chatId, txt, [
+    [{ text: "✅ Renovó — +30 días",         callback_data: `cli:ren:auto:${clientId}:${idx}` }],
+    [{ text: "📅 Renovó — otra fecha",        callback_data: `cli:ren:manual:${clientId}:${idx}` }],
+    [{ text: "🔄 Cambió de servicio",         callback_data: `cli:ren:cambio:${clientId}:${idx}` }],
+    [{ text: "❌ No renovó — eliminar",       callback_data: `cli:ren:noren:ask:${clientId}:${idx}` }],
+    [{ text: "⬅️ Volver",                    callback_data: `cli:ren:list:${clientId}` }],
+    [{ text: "🏠 Inicio",                     callback_data: "go:inicio" }],
+  ]);
+}
+
+// ===============================
+// ✅ PANEL DE RENOVACIONES DEL DÍA CON BOTONES
+// Muestra lista + botón de acción por cada perfil
+// ===============================
+async function enviarPanelRenovacionesConAcciones(chatId, fecha, rows = []) {
+  if (!rows.length) {
+    return bot.sendMessage(chatId, `📅 *Renovaciones del ${escMD(fecha)}*\n\n_No hay renovaciones para esta fecha._`, { parse_mode: "Markdown" });
+  }
+
+  let total = 0;
+  rows.forEach((x) => { total += Number(x.precio || 0); });
+
+  let txt =
+    `📅 *RENOVACIONES DEL ${escMD(fecha)}*\n\n` +
+    `*Total perfiles:* ${rows.length}\n` +
+    `*Total esperado:* ${escMD(`${total.toFixed(2)} Lps`)}\n\n` +
+    `Seleccione un perfil para gestionar su renovación:`;
+
+  // Botón por cada renovación — máximo 20 para no saturar el panel
+  const kb = rows.slice(0, 20).map((x, i) => [{
+    text: safeBtnLabel(`${i + 1}. ${iconPlataforma(x.plataforma || "")} ${x.nombrePerfil || "Sin nombre"} — ${humanPlataforma(x.plataforma || "")}`),
+    callback_data: `ren:accion:${x.clientId}:${x.idx}`,
+  }]);
+
+  if (rows.length > 20) {
+    kb.push([{ text: `📄 Ver los ${rows.length - 20} restantes como TXT`, callback_data: `txt:hoy` }]);
+  }
+
+  kb.push([{ text: "📄 TXT de todas",  callback_data: "txt:hoy" }]);
+  kb.push([{ text: "⬅️ Volver",        callback_data: "menu:renovaciones" }]);
+  kb.push([{ text: "🏠 Inicio",         callback_data: "go:inicio" }]);
+
+  return upsertPanel(chatId, txt, kb);
+}
 async function wizardStart(chatId) {
   wizard.set(String(chatId), { step: 1, clientId: null, nombre: "", telefono: "", vendedor: "", servicio: {}, servStep: 1 });
   return upsertPanel(chatId, "👤 *NUEVO CLIENTE*\n\n(1/3) Escriba el *nombre del cliente*: ", [[{ text: "🏠 Inicio", callback_data: "go:inicio" }]]);
@@ -941,7 +1077,9 @@ module.exports = {
   getCliente, buscarPorTelefonoTodos, buscarClienteRobusto,
   enviarFichaCliente, enviarListaResultadosClientes, menuEditarCliente,
   menuListaServicios, menuServicio,
-  patchServicio, addServicioTx,
+  patchServicio, addServicioTx, eliminarServicioTx,
+  // ✅ NUEVO v3 — renovaciones con acciones
+  menuListaRenovacion, menuRenovacionServicio, enviarPanelRenovacionesConAcciones,
   kbPlataformasWiz, wizardStart, wizardNext,
   clienteResumenTXT, reporteClientesTXTGeneral, reporteClientesSplitPorVendedorTXT,
   enviarHistorialClienteTXT, enviarMisClientes, enviarMisClientesTXT,
