@@ -5,7 +5,7 @@
    Incluye:
    - Firebase init
    - Telegram bot singleton
-   - Fix 409 polling conflict
+   - Fix 409 polling conflict blindado
    - ExcelJS
    - Constantes de plataformas
    - Finanzas
@@ -59,6 +59,10 @@ function toBool(v, defaultValue = false) {
   if (["1", "true", "yes", "si", "sí", "on"].includes(s)) return true;
   if (["0", "false", "no", "off"].includes(s)) return false;
   return defaultValue;
+}
+
+function sleep(ms = 0) {
+  return new Promise((resolve) => setTimeout(resolve, Number(ms || 0)));
 }
 
 function normalizeImapAccount(row = {}) {
@@ -417,7 +421,9 @@ const DEFAULT_TOTALS = Object.fromEntries(
 // IMAP ACCOUNTS
 // ===============================
 const EMAIL_ACCOUNTS = Array.isArray(safeJsonParse(IMAP_ACCOUNTS_JSON, []))
-  ? safeJsonParse(IMAP_ACCOUNTS_JSON, []).map(normalizeImapAccount).filter((x) => x.enabled && (x.user || x.name))
+  ? safeJsonParse(IMAP_ACCOUNTS_JSON, [])
+      .map(normalizeImapAccount)
+      .filter((x) => x.enabled && (x.user || x.name))
   : [];
 
 // ===============================
@@ -430,6 +436,11 @@ if (!global.__SUBLICUENTAS_BOT__) {
 }
 
 const bot = global.__SUBLICUENTAS_BOT__;
+const INSTANCE_ID =
+  global.__SUBLICUENTAS_INSTANCE_ID__ ||
+  `inst_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+global.__SUBLICUENTAS_INSTANCE_ID__ = INSTANCE_ID;
 
 // ===============================
 // CORE STATE GLOBAL
@@ -439,9 +450,14 @@ if (!global.__SUBLICUENTAS_CORE_STATE__) {
     runtimeLock: true,
     isBooting: false,
     isPolling: false,
+    isStopping: false,
+    isRestarting409: false,
     bootCount: 0,
+    conflict409Count: 0,
+    lastConflictAt: 0,
     lastPollingErrorAt: 0,
     lastPollingError: null,
+    lastStartAt: 0,
     startedAt: Date.now(),
   };
 }
@@ -464,14 +480,14 @@ if (!global.__SUBLICUENTAS_PROCESS_HOOKS__) {
 
   process.on("SIGINT", async () => {
     try {
-      await stopBotPollingSafe();
+      await stopBotPollingSafe("SIGINT");
     } catch (_) {}
     process.exit(0);
   });
 
   process.on("SIGTERM", async () => {
     try {
-      await stopBotPollingSafe();
+      await stopBotPollingSafe("SIGTERM");
     } catch (_) {}
     process.exit(0);
   });
@@ -491,12 +507,18 @@ function releaseRuntimeLock() {
 function getCoreHealth() {
   return {
     ok: true,
+    instanceId: INSTANCE_ID,
     runtimeLock: CORE_STATE.runtimeLock,
     isBooting: CORE_STATE.isBooting,
     isPolling: CORE_STATE.isPolling,
+    isStopping: CORE_STATE.isStopping,
+    isRestarting409: CORE_STATE.isRestarting409,
     bootCount: CORE_STATE.bootCount,
+    conflict409Count: CORE_STATE.conflict409Count,
+    lastConflictAt: CORE_STATE.lastConflictAt,
     lastPollingErrorAt: CORE_STATE.lastPollingErrorAt,
     lastPollingError: CORE_STATE.lastPollingError,
+    lastStartAt: CORE_STATE.lastStartAt,
     startedAt: CORE_STATE.startedAt,
     uptimeSec: Math.floor((Date.now() - CORE_STATE.startedAt) / 1000),
     firebaseProject: FIREBASE_PROJECT_ID,
@@ -509,38 +531,83 @@ function getCoreHealth() {
 // ===============================
 // POLLING SAFE
 // ===============================
-async function stopBotPollingSafe() {
+async function stopBotPollingSafe(reason = "manual") {
+  if (CORE_STATE.isStopping) return;
+  CORE_STATE.isStopping = true;
+
   try {
-    await bot.stopPolling();
-  } catch (_) {}
-  CORE_STATE.isPolling = false;
+    try {
+      await bot.stopPolling();
+    } catch (_) {}
+  } finally {
+    CORE_STATE.isPolling = false;
+    CORE_STATE.isStopping = false;
+    console.log(`🛑 Polling detenido (${reason}) [${INSTANCE_ID}]`);
+  }
 }
 
-async function startBotPollingSafe() {
-  if (CORE_STATE.isBooting) return;
-  CORE_STATE.isBooting = true;
-  CORE_STATE.bootCount += 1;
+async function startBotPollingSafe(reason = "manual") {
+  if (!CORE_STATE.runtimeLock) {
+    console.log(`⛔ runtimeLock=false, no se inicia polling (${reason}) [${INSTANCE_ID}]`);
+    return;
+  }
+
+  if (global.__SUBLICUENTAS_POLLING_START_PROMISE__) {
+    return global.__SUBLICUENTAS_POLLING_START_PROMISE__;
+  }
+
+  global.__SUBLICUENTAS_POLLING_START_PROMISE__ = (async () => {
+    if (CORE_STATE.isBooting) return;
+
+    CORE_STATE.isBooting = true;
+    CORE_STATE.bootCount += 1;
+
+    try {
+      await stopBotPollingSafe(`pre-start:${reason}`);
+
+      try {
+        await bot.deleteWebHook({ drop_pending_updates: false });
+      } catch (_) {}
+
+      await sleep(1200);
+
+      await bot.startPolling({
+        restart: false,
+        params: {
+          timeout: 10,
+        },
+      });
+
+      CORE_STATE.isPolling = true;
+      CORE_STATE.lastStartAt = Date.now();
+      CORE_STATE.lastPollingError = null;
+
+      console.log(`✅ Bot iniciado correctamente (${reason}) [${INSTANCE_ID}]`);
+    } catch (err) {
+      CORE_STATE.isPolling = false;
+      CORE_STATE.lastPollingErrorAt = Date.now();
+      CORE_STATE.lastPollingError = String(err?.message || err || "");
+      console.error(`❌ Error iniciando polling (${reason}) [${INSTANCE_ID}]:`, err?.stack || err);
+    } finally {
+      CORE_STATE.isBooting = false;
+      global.__SUBLICUENTAS_POLLING_START_PROMISE__ = null;
+    }
+  })();
+
+  return global.__SUBLICUENTAS_POLLING_START_PROMISE__;
+}
+
+async function restartBotPollingSafe(reason = "manual", waitMs = 4000) {
+  if (CORE_STATE.isRestarting409) return;
+
+  CORE_STATE.isRestarting409 = true;
 
   try {
-    await bot.deleteWebHook({ drop_pending_updates: false }).catch(() => {});
-    await stopBotPollingSafe();
-
-    await bot.startPolling({
-      restart: true,
-      params: {
-        timeout: 10,
-      },
-    });
-
-    CORE_STATE.isPolling = true;
-    console.log("✅ Bot iniciado correctamente");
-  } catch (err) {
-    CORE_STATE.isPolling = false;
-    CORE_STATE.lastPollingErrorAt = Date.now();
-    CORE_STATE.lastPollingError = String(err?.message || err || "");
-    console.error("❌ Error iniciando polling:", err?.stack || err);
+    await stopBotPollingSafe(`restart:${reason}`);
+    await sleep(waitMs);
+    await startBotPollingSafe(`restart:${reason}`);
   } finally {
-    CORE_STATE.isBooting = false;
+    CORE_STATE.isRestarting409 = false;
   }
 }
 
@@ -556,30 +623,39 @@ if (!global.__SUBLICUENTAS_BOT_EVENTS__) {
     CORE_STATE.lastPollingError = msg;
     CORE_STATE.isPolling = false;
 
-    console.error("❌ polling_error:", err?.stack || err);
+    console.error(`❌ polling_error [${INSTANCE_ID}]:`, err?.stack || err);
 
     if (msg.includes("409")) {
-      console.error("⚠️ Detectado 409 Conflict. Se intentará reinicio limpio del polling...");
-      try {
-        await stopBotPollingSafe();
-      } catch (_) {}
+      const now = Date.now();
+      const elapsed = now - Number(CORE_STATE.lastConflictAt || 0);
 
-      setTimeout(async () => {
-        try {
-          await startBotPollingSafe();
-        } catch (e) {
-          console.error("❌ Error reintentando polling:", e?.stack || e);
-        }
-      }, 3000);
+      if (elapsed > 60000) {
+        CORE_STATE.conflict409Count = 0;
+      }
+
+      CORE_STATE.lastConflictAt = now;
+      CORE_STATE.conflict409Count += 1;
+
+      const waitMs = CORE_STATE.conflict409Count >= 3 ? 12000 : 5000;
+
+      console.error(
+        `⚠️ Detectado 409 Conflict. Intento ${CORE_STATE.conflict409Count}. Reintento en ${waitMs}ms [${INSTANCE_ID}]`
+      );
+
+      try {
+        await restartBotPollingSafe("409-conflict", waitMs);
+      } catch (e) {
+        console.error(`❌ Error reintentando polling [${INSTANCE_ID}]:`, e?.stack || e);
+      }
     }
   });
 
   bot.on("webhook_error", (err) => {
-    console.error("❌ webhook_error:", err?.stack || err);
+    console.error(`❌ webhook_error [${INSTANCE_ID}]:`, err?.stack || err);
   });
 
   bot.on("error", (err) => {
-    console.error("❌ bot_error:", err?.stack || err);
+    console.error(`❌ bot_error [${INSTANCE_ID}]:`, err?.stack || err);
   });
 }
 
@@ -590,6 +666,7 @@ console.log("✅ ExcelJS cargado");
 console.log(`✅ FIREBASE PROJECT: ${FIREBASE_PROJECT_ID}`);
 console.log(`🌐 HTTP KEEPALIVE activo en puerto ${PORT}`);
 console.log(`📩 Cuentas IMAP cargadas: ${EMAIL_ACCOUNTS.length}`);
+console.log(`🧠 CORE INSTANCE: ${INSTANCE_ID}`);
 
 if (ENABLE_NETFLIX_LISTENER) {
   console.log("🚀 Netflix Codes Listener iniciado...");
@@ -633,8 +710,10 @@ module.exports = {
   getCoreHealth,
   startBotPollingSafe,
   stopBotPollingSafe,
+  restartBotPollingSafe,
 
   // utils
   safeJsonParse,
   normalizeImapAccount,
+  sleep,
 };
