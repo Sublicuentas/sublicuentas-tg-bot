@@ -27,13 +27,13 @@ const { humanPlataforma, obtenerRenovacionesPorFecha } = require("./index_03_cli
 // CONFIG
 // ===============================
 const FIN_BANCOS_LOCAL = [
-  "BAC","Ficohsa","Atlántida","Banpaís","Occidente","Davivienda",
-  "Lafise","Efectivo","Tigo Money","Tengo","PayPal","Binance","Otro",
+  "🏦 BAC", "🏦 Ficohsa", "🏦 Atlántida", "🏦 Banpaís", "🏦 Occidente", "🏦 Davivienda",
+  "🏦 Lafise", "💵 Efectivo", "📱 Tigo Money", "📱 Tengo", "💳 PayPal", "🪙 Binance", "🔁 Otro",
 ];
 
 const FIN_MOTIVOS_EGRESO_LOCAL = [
-  "Renovaciones","Cuentas nuevas","Pago revendedor","Pago planilla",
-  "Publicidad","Otros gastos",
+  "🔄 Renovaciones", "🆕 Cuentas nuevas", "👤 Pago revendedor", "👥 Pago planilla",
+  "📣 Publicidad", "📦 Otros gastos",
 ];
 
 const PLATFORM_KEYS = Array.isArray(PLATAFORMAS) ? PLATAFORMAS : Object.keys(PLATAFORMAS || {});
@@ -64,7 +64,30 @@ function categoryOfPlat(key = "") {
 }
 function inventoryLabel(key = "") {
   const k = String(key || "").toLowerCase().trim();
-  const labels = { netflix:"Netflix", vipnetflix:"Netflix VIP", disneyp:"Disney Premium", disneys:"Disney Standard", hbomax:"HBO Max", primevideo:"Prime Video", paramount:"Paramount+", crunchyroll:"Crunchyroll", vix:"Vix", appletv:"Apple TV", universal:"Universal+", spotify:"Spotify", youtube:"YouTube", deezer:"Deezer", oleadatv1:"Oleada 1", oleadatv3:"Oleada 3", iptv1:"IPTV 1", iptv3:"IPTV 3", iptv4:"IPTV 4", canva:"Canva", gemini:"Gemini", chatgpt:"ChatGPT" };
+  const labels = {
+    netflix:     "📺 Netflix",
+    vipnetflix:  "🔥 Netflix VIP",
+    disneyp:     "🏰 Disney Premium",
+    disneys:     "🎬 Disney Standard",
+    hbomax:      "🎞️ HBO Max",
+    primevideo:  "🎥 Prime Video",
+    paramount:   "💿 Paramount+",
+    crunchyroll: "🍥 Crunchyroll",
+    vix:         "📱 Vix",
+    appletv:     "🍎 Apple TV",
+    universal:   "🌍 Universal+",
+    spotify:     "🎵 Spotify",
+    youtube:     "▶️ YouTube",
+    deezer:      "🎧 Deezer",
+    oleadatv1:   "🌊 Oleada 1",
+    oleadatv3:   "🌊 Oleada 3",
+    iptv1:       "📡 IPTV 1",
+    iptv3:       "📡 IPTV 3",
+    iptv4:       "📡 IPTV 4",
+    canva:       "🎨 Canva",
+    gemini:      "✨ Gemini",
+    chatgpt:     "🤖 ChatGPT",
+  };
   return labels[k] || humanPlatSafe(k);
 }
 function kbFromItems(items = []) {
@@ -334,16 +357,16 @@ async function deleteFinanceDocAny(docId) {
 async function menuPrincipal(chatId) {
   return upsertPanel(chatId, "📌 *MENÚ PRINCIPAL*\n\nSeleccione una opción:", [
     [{ text: "📦 Inventario",      callback_data: "menu:inventario" }, { text: "👥 Clientes / CRM",  callback_data: "menu:clientes" }],
-    [{ text: "💰 Finanzas",        callback_data: "menu:pagos" },      { text: "🚨 Alertas",         callback_data: "menu:alertas" }],
+    [{ text: "💰 Finanzas",        callback_data: "menu:pagos" },      { text: "🚨 Alertas",          callback_data: "menu:alertas" }],
     [{ text: "📊 Dashboard",       callback_data: "menu:dashboard" }],
   ]);
 }
 
 async function menuVendedor(chatId) {
-  return upsertPanel(chatId, "👤 *MENÚ VENDEDOR PRO*\n\nSeleccione una opción:", [
-    [{ text: "📅 Mis renovaciones hoy",  callback_data: "ren:mis:hoy" },    { text: "⏳ Renovaciones en 3 días", callback_data: "ren:mis:prox3" }],
-    [{ text: "📄 TXT renovaciones",      callback_data: "txt:mis" },        { text: "👥 Mis clientes",           callback_data: "vend:clientes" }],
-    [{ text: "🧾 TXT mis clientes",      callback_data: "vend:clientes:txt" }, { text: "💰 Mi resumen",          callback_data: "vend:resumen" }],
+  return upsertPanel(chatId, "👤 *MENÚ VENDEDOR*\n\nSeleccione una opción:", [
+    [{ text: "📅 Mis renovaciones hoy",     callback_data: "ren:mis:hoy" },       { text: "⏳ Próximos 3 días",         callback_data: "ren:mis:prox3" }],
+    [{ text: "📄 TXT renovaciones",         callback_data: "txt:mis" },            { text: "👥 Mis clientes",            callback_data: "vend:clientes" }],
+    [{ text: "🧾 TXT mis clientes",         callback_data: "vend:clientes:txt" },  { text: "💰 Mi resumen del mes",      callback_data: "vend:resumen" }],
   ]);
 }
 
@@ -362,36 +385,37 @@ async function menuInventarioDisenoIA(chatId) { const items = PLATFORM_KEYS.filt
 
 async function menuClientes(chatId) {
   return upsertPanel(chatId, "👥 *CLIENTES / CRM*\n\nSeleccione una opción:", [
-    [{ text: "➕ Nuevo cliente",     callback_data: "cli:wiz:start" },   { text: "🔎 Buscar cliente",    callback_data: "menu:buscar" }],
-    [{ text: "📅 Renovaciones",      callback_data: "menu:renovaciones" }, { text: "👤 Revendedores",     callback_data: "rev:lista" }],
-    [{ text: "📄 TXT general",       callback_data: "cli:txt:general" }, { text: "📒 Agenda simple",     callback_data: "cli:txt:agenda" }],
-    [{ text: "🟢 TXT vigentes",      callback_data: "cli:txt:vigentes" }, { text: "🔴 TXT no vigentes",  callback_data: "cli:txt:no_vigentes" }],
-    [{ text: "📊 Resumen CRM",       callback_data: "cli:crm:resumen" }, { text: "🗂️ TXT vendedores",   callback_data: "cli:txt:vendedores_split" }],
-    [{ text: "🏠 Inicio",            callback_data: "go:inicio" }],
+    [{ text: "➕ Nuevo cliente",          callback_data: "cli:wiz:start" },          { text: "🔎 Buscar cliente",          callback_data: "menu:buscar" }],
+    [{ text: "📅 Renovaciones del día",   callback_data: "menu:renovaciones" },      { text: "👤 Revendedores",            callback_data: "rev:lista" }],
+    [{ text: "📊 Resumen CRM",            callback_data: "cli:crm:resumen" },        { text: "🗂️ TXT por vendedor",       callback_data: "cli:txt:vendedores_split" }],
+    [{ text: "🟢 TXT vigentes",           callback_data: "cli:txt:vigentes" },       { text: "🔴 TXT no vigentes",        callback_data: "cli:txt:no_vigentes" }],
+    [{ text: "📄 TXT general",            callback_data: "cli:txt:general" },        { text: "📒 Agenda simple",          callback_data: "cli:txt:agenda" }],
+    [{ text: "🏠 Inicio",                 callback_data: "go:inicio" }],
   ]);
 }
 
 async function menuRenovaciones(chatId) {
   return upsertPanel(chatId, "📅 *RENOVACIONES*\n\nSeleccione una opción:", [
-    [{ text: "📅 Ver hoy",          callback_data: "ren:hoy" },         { text: "📄 TXT de hoy",       callback_data: "txt:hoy" }],
-    [{ text: "📤 Enviar TXT a todos", callback_data: "txt:todos:hoy" }, { text: "⬅️ Volver CRM",       callback_data: "menu:clientes" }],
-    [{ text: "🏠 Inicio",            callback_data: "go:inicio" }],
+    [{ text: "📋 Ver renovaciones hoy",   callback_data: "ren:hoy" },               { text: "📄 TXT de hoy",              callback_data: "txt:hoy" }],
+    [{ text: "📤 Enviar TXT a vendedores", callback_data: "txt:todos:hoy" },        { text: "⬅️ Volver CRM",             callback_data: "menu:clientes" }],
+    [{ text: "🏠 Inicio",                 callback_data: "go:inicio" }],
   ]);
 }
 
 async function menuPagos(chatId) {
   return upsertPanel(chatId, "💰 *FINANZAS*\n\nSeleccione una opción:", [
-    [{ text: "➕ Registrar ingreso", callback_data: "fin:menu:ingreso" }, { text: "➖ Registrar egreso",  callback_data: "fin:menu:egreso" }],
-    [{ text: "📒 Registro",          callback_data: "fin:menu:registro" }, { text: "🗑️ Eliminar",        callback_data: "fin:menu:eliminar" }],
-    [{ text: "📊 Reportes",          callback_data: "fin:menu:reportes" }, { text: "🏠 Inicio",           callback_data: "go:inicio" }],
+    [{ text: "➕ Registrar ingreso",  callback_data: "fin:menu:ingreso" },  { text: "➖ Registrar egreso",   callback_data: "fin:menu:egreso" }],
+    [{ text: "📒 Ver registro",       callback_data: "fin:menu:registro" }, { text: "🗑️ Eliminar movimiento", callback_data: "fin:menu:eliminar" }],
+    [{ text: "📊 Reportes",           callback_data: "fin:menu:reportes" }, { text: "🧾 Cierre de caja",      callback_data: "fin:menu:cierre" }],
+    [{ text: "🏠 Inicio",             callback_data: "go:inicio" }],
   ]);
 }
 
 async function menuAlertas(chatId) {
   return upsertPanel(chatId, "🚨 *ALERTAS*\n\nSeleccione una opción:", [
-    [{ text: "🔴 Clientes vencidos",  callback_data: "alert:vencidos:0" }, { text: "🟠 Vencen hoy",        callback_data: "alert:hoy:0" }],
-    [{ text: "⏳ Vencen en 3 días",   callback_data: "alert:3dias:0" },    { text: "📦 Inventario crítico", callback_data: "alert:inventario:0" }],
-    [{ text: "📄 TXT alertas del día", callback_data: "alert:txt:hoy" },   { text: "⬅️ Volver",            callback_data: "go:inicio" }],
+    [{ text: "🔴 Clientes vencidos",    callback_data: "alert:vencidos:0" },   { text: "🟠 Vencen hoy",           callback_data: "alert:hoy:0" }],
+    [{ text: "🟡 Vencen en 3 días",     callback_data: "alert:3dias:0" },      { text: "📦 Inventario crítico",    callback_data: "alert:inventario:0" }],
+    [{ text: "📄 TXT alertas del día",  callback_data: "alert:txt:hoy" },      { text: "⬅️ Volver",               callback_data: "go:inicio" }],
   ]);
 }
 
@@ -413,12 +437,12 @@ async function menuFinEliminarTipo(chatId) {
 
 async function menuFinReportes(chatId) {
   return upsertPanel(chatId, "📊 *REPORTES DE FINANZAS*\n\nSeleccione una opción:", [
-    [{ text: "📅 Resumen por fecha",  callback_data: "fin:menu:resumen_fecha" }, { text: "🗓️ Resumen por rango",  callback_data: "fin:menu:resumen_rango" }],
-    [{ text: "🏦 Bancos por fecha",   callback_data: "fin:menu:bancos_fecha" },  { text: "🏦 Bancos por rango",   callback_data: "fin:menu:bancos_rango" }],
-    [{ text: "🏦 Detalle banco",      callback_data: "fin:menu:detalle_banco" }, { text: "🏆 Top plataformas",    callback_data: "fin:menu:top_plataformas" }],
-    [{ text: "🎯 Top combos",         callback_data: "fin:menu:top_combos" },    { text: "📤 Excel por rango",    callback_data: "fin:menu:excel_rango" }],
-    [{ text: "🧾 Cierre por rango",   callback_data: "fin:menu:cierre:rango" },  { text: "⬅️ Volver Finanzas",   callback_data: "menu:pagos" }],
-    [{ text: "🏠 Inicio",             callback_data: "go:inicio" }],
+    [{ text: "📅 Resumen por fecha",    callback_data: "fin:menu:resumen_fecha" },  { text: "🗓️ Resumen por rango",   callback_data: "fin:menu:resumen_rango" }],
+    [{ text: "🏦 Bancos por fecha",     callback_data: "fin:menu:bancos_fecha" },   { text: "🏦 Bancos por rango",    callback_data: "fin:menu:bancos_rango" }],
+    [{ text: "🔍 Detalle por banco",    callback_data: "fin:menu:detalle_banco" },  { text: "🏆 Top plataformas",     callback_data: "fin:menu:top_plataformas" }],
+    [{ text: "🎯 Top combos",           callback_data: "fin:menu:top_combos" },     { text: "📤 Excel por rango",     callback_data: "fin:menu:excel_rango" }],
+    [{ text: "🧾 Cierre por rango",     callback_data: "fin:menu:cierre:rango" },   { text: "⬅️ Volver Finanzas",    callback_data: "menu:pagos" }],
+    [{ text: "🏠 Inicio",               callback_data: "go:inicio" }],
   ]);
 }
 
