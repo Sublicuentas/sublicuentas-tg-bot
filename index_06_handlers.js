@@ -1,16 +1,14 @@
-/* ✅ SUBLICUENTAS TG BOT — PARTE 6/6 CORREGIDA v3
+/* ✅ SUBLICUENTAS TG BOT — PARTE 6/6 FINAL OPTIMIZADA
    HANDLERS / COMANDOS / CALLBACKS / MESSAGE / AUTOTXT / HARDEN / HTTP
    -------------------------------------------------------------------
-   ✅ FIXES APLICADOS EN ESTA VERSIÓN:
-   - BÚSQUEDA: texto libre sin "/" ahora activa resolverBusquedaAdmin correctamente
-   - BÚSQUEDA: resolverBusquedaAdmin ya no hace return prematuro cuando inventario da 0
-   - BÚSQUEDA: buscarClientesFallbackLocal mejorado para búsquedas parciales por nombre
-   - ALERTAS: clientes vencidos corregido — comparación por string "yyyy-mm-dd" en lugar
-     de parseDMYtoTS que fallaba por zona horaria / medianoche
-   - ALERTAS: paginación 10 en 10 para vencidos, hoy, 3días e inventario crítico
-     con botones ⬅️ Anterior / Siguiente ➡️ y ⬅️ Volver alertas
-   - ALERTAS: callbacks alert:pg:tipo:page para navegación de páginas
-   - ALERTAS: callbacks alert:vencidos:0 etc. detectados con startsWith
+   ✅ MEJORAS INCLUIDAS:
+   - BÚSQUEDA: texto libre activa búsqueda directa para admins
+   - BÚSQUEDA: búsqueda parcial por nombre/vendedor/teléfono
+   - ALERTAS: bug vencidos corregido (comparación yyyy-mm-dd)
+   - ALERTAS: paginación 10 en 10 con ⬅️ Anterior / Siguiente ➡️
+   - DASHBOARD: /dashboard y botón en menú principal
+   - CACHÉ: roles y revendedores con invalidación tras cambios
+   - invalidarCacheAdmins() / invalidarCacheRevendedores() en admin cmds
 */
 
 const http = require("http");
@@ -57,6 +55,8 @@ const {
   moneyLps,
   hoyDMY,
   enviarTxtComoArchivo,
+  invalidarCacheAdmins,
+  invalidarCacheRevendedores,
 } = require("./index_02_utils_roles");
 
 const {
@@ -139,6 +139,7 @@ const {
   textoConfirmarEliminacionMovimiento,
   exportarFinanzasRangoExcel,
   eliminarMovimientoFinanzas,
+  generarDashboard,
 } = require("./index_05_finanzas_menus");
 
 // ===============================
@@ -1768,6 +1769,7 @@ bot.onText(/\/adminadd\s+(\d+)/i, async (msg, match) => {
   if (!(await safeIsSuperAdminLocal(userId))) return bot.sendMessage(chatId, "⛔ Solo SUPER ADMIN puede agregar admins.");
   const id = String(match[1] || "").trim();
   await db.collection("admins").doc(id).set({ activo: true, updatedAt: admin.firestore.FieldValue.serverTimestamp(), creadoPor: String(userId) }, { merge: true });
+  invalidarCacheAdmins();
   return bot.sendMessage(chatId, `✅ Admin agregado: ${id}`);
 });
 
@@ -1778,6 +1780,7 @@ bot.onText(/\/admindel\s+(\d+)/i, async (msg, match) => {
   if (!(await safeIsSuperAdminLocal(userId))) return bot.sendMessage(chatId, "⛔ Solo SUPER ADMIN puede eliminar admins.");
   const id = String(match[1] || "").trim();
   await db.collection("admins").doc(id).set({ activo: false, updatedAt: admin.firestore.FieldValue.serverTimestamp(), desactivadoPor: String(userId) }, { merge: true });
+  invalidarCacheAdmins();
   return bot.sendMessage(chatId, `🗑️ Admin desactivado: ${id}`);
 });
 
@@ -1835,6 +1838,15 @@ bot.onText(/\/stock/i, async (msg) => {
   const userId = msg.from.id;
   if (!(await safeIsAdminLocal(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
   return mostrarStockGeneral(chatId);
+});
+
+// ✅ NUEVO: Comando /dashboard
+bot.onText(/\/dashboard/i, async (msg) => {
+  if (!hasRuntimeLock()) return;
+  const chatId = msg.chat.id;
+  const userId = msg.from.id;
+  if (!(await safeIsAdminLocal(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+  return generarDashboard(chatId);
 });
 
 // ===============================
@@ -1941,6 +1953,7 @@ bot.on("callback_query", async (q) => {
 
     if (adminOk) {
       if (data === "menu:inventario") return menuInventario(chatId);
+      if (data === "menu:dashboard")  return generarDashboard(chatId);
       if (data === "menu:inventario:video") return menuInventarioVideo(chatId);
       if (data === "menu:inventario:musica") return menuInventarioMusica(chatId);
       if (data === "menu:inventario:iptv") return menuInventarioIptv(chatId);
