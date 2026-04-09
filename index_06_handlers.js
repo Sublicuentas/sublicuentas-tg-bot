@@ -451,42 +451,13 @@ async function sendBottomMainMenu(chatId, userId) {
   try {
     resetChatState(chatId);
 
-    let text = "";
-    let keyboard = [];
-
     if (await safeIsAdminLocal(userId)) {
-      text = "📌 *MENÚ PRINCIPAL*\n\nSeleccione una opción:";
-      keyboard = [
-        [
-          { text: "📦 Inventario", callback_data: "menu:inventario" },
-          { text: "👥 Clientes / CRM", callback_data: "menu:clientes" },
-        ],
-        [
-          { text: "💰 Finanzas", callback_data: "menu:pagos" },
-          { text: "🚨 Alertas", callback_data: "menu:alertas" },
-        ],
-      ];
+      return menuPrincipal(chatId);
     } else if (await safeIsVendedorLocal(userId)) {
-      text = "👤 *MENÚ VENDEDOR PRO*\n\nSeleccione una opción:";
-      keyboard = [
-        [
-          { text: "📅 Mis renovaciones hoy", callback_data: "ren:mis:hoy" },
-          { text: "⏳ Renovaciones en 3 días", callback_data: "ren:mis:prox3" },
-        ],
-        [
-          { text: "📄 TXT renovaciones", callback_data: "txt:mis" },
-          { text: "👥 Mis clientes", callback_data: "vend:clientes" },
-        ],
-        [
-          { text: "🧾 TXT mis clientes", callback_data: "vend:clientes:txt" },
-          { text: "💰 Mi resumen", callback_data: "vend:resumen" },
-        ],
-      ];
+      return menuVendedor(chatId);
     } else {
       return bot.sendMessage(chatId, "⛔ Acceso denegado");
     }
-
-    return upsertPanel(chatId, text, keyboard, "Markdown");
   } catch (err) {
     logErr("sendBottomMainMenu", err?.stack || err?.message || err);
     return bot.sendMessage(chatId, "⚠️ Error interno al abrir el menú.");
