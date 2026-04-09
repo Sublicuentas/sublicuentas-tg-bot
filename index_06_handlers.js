@@ -764,6 +764,7 @@ async function buscarClientesFallbackLocal(query = "") {
   const qDigits = onlyDigits(qRaw);
 
   if (!qNorm && !qDigits) return [];
+  if (isEmailLike(qRaw)) return [];
 
   const out = new Map();
 
@@ -776,42 +777,47 @@ async function buscarClientesFallbackLocal(query = "") {
   };
 
   try {
+    const jobs = [];
+
     if (qDigits && qDigits.length >= 7) {
-      const sTel = await db
-        .collection("clientes")
-        .where("telefono_norm", "==", qDigits)
-        .limit(20)
-        .get();
-
-      addSnap(sTel);
+      jobs.push(
+        db
+          .collection("clientes")
+          .where("telefono_norm", "==", qDigits)
+          .limit(10)
+          .get()
+      );
     }
 
-    if (qNorm && qNorm.length >= 2) {
-      const end = `${qNorm}\uf8ff`;
+    if (qNorm && qNorm.length >= 3) {
+      jobs.push(
+        db
+          .collection("clientes")
+          .where("nombre_norm", "==", qNorm)
+          .limit(10)
+          .get()
+      );
 
-      const sNombre = await db
-        .collection("clientes")
-        .where("nombre_norm", ">=", qNorm)
-        .where("nombre_norm", "<=", end)
-        .limit(20)
-        .get();
-
-      addSnap(sNombre);
-
-      const sVend = await db
-        .collection("clientes")
-        .where("vendedor_norm", ">=", qNorm)
-        .where("vendedor_norm", "<=", end)
-        .limit(20)
-        .get();
-
-      addSnap(sVend);
+      jobs.push(
+        db
+          .collection("clientes")
+          .where("vendedor_norm", "==", qNorm)
+          .limit(10)
+          .get()
+      );
     }
 
-    return Array.from(out.values()).slice(0, 30);
+    if (!jobs.length) return [];
+
+    const settled = await Promise.allSettled(jobs);
+    for (const item of settled) {
+      if (item.status === "fulfilled") addSnap(item.value);
+    }
+
+    return Array.from(out.values()).slice(0, 20);
   } catch (e) {
     logErr("buscarClientesFallbackLocal", e?.stack || e?.message || e);
-    return Array.from(out.values()).slice(0, 30);
+    return Array.from(out.values()).slice(0, 20);
   }
 }
 
@@ -821,8 +827,9 @@ async function resolverBusquedaAdmin(chatId, query = "") {
 
   const qDigits = onlyDigits(q);
   const qNorm = normalizeLooseText(q);
+  const isMail = isEmailLike(q);
 
-  if ((!qNorm || qNorm.length < 2) && (!qDigits || qDigits.length < 7)) {
+  if ((!qNorm || qNorm.length < 2) && (!qDigits || qDigits.length < 7) && !isMail) {
     return bot.sendMessage(
       chatId,
       "⚠️ Escriba al menos 2 letras o 7 dígitos para buscar."
@@ -854,12 +861,19 @@ async function resolverBusquedaAdmin(chatId, query = "") {
 
     return bot.sendMessage(
       chatId,
-      `🔎 *Coincidencias de inventario*\n\nAcceso: ${escMD(q)}\nSeleccione plataforma:`,
+      `🔎 *Coincidencias de inventario*
+
+Acceso: ${escMD(q)}
+Seleccione plataforma:`,
       {
         parse_mode: "Markdown",
         reply_markup: { inline_keyboard: kb },
       }
     );
+  }
+
+  if (isMail) {
+    return bot.sendMessage(chatId, "⚠️ Sin resultados.");
   }
 
   if (qDigits.length >= 7) {
@@ -880,7 +894,7 @@ async function resolverBusquedaAdmin(chatId, query = "") {
   if (!Array.isArray(resultados)) resultados = [];
 
   let extra = [];
-  if (!resultados.length) {
+  if (!resultados.length && qNorm.length >= 3) {
     extra = await buscarClientesFallbackLocal(q);
   }
 
