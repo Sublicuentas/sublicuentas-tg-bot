@@ -2625,25 +2625,28 @@ bot.on("callback_query", async (q) => {
 
       // ✅ PANEL DE ACCIÓN — 4 opciones por servicio (desde ficha del cliente)
       if (data.startsWith("cli:ren:one:")) {
-        const parts = data.split(":");
-        const clientId = parts[3];
-        const idx = Number(parts[4]);
+        const raw = data.slice("cli:ren:one:".length);
+        const lastColon = raw.lastIndexOf(":");
+        const clientId = raw.slice(0, lastColon);
+        const idx = Number(raw.slice(lastColon + 1));
         return menuRenovacionServicio(chatId, clientId, idx);
       }
 
       // ✅ ACCIÓN DESDE PANEL DEL DÍA
       if (data.startsWith("ren:accion:")) {
-        const parts = data.split(":");
-        const clientId = parts[2];
-        const idx = Number(parts[3]);
+        const raw = data.slice("ren:accion:".length);
+        const lastColon = raw.lastIndexOf(":");
+        const clientId = raw.slice(0, lastColon);
+        const idx = Number(raw.slice(lastColon + 1));
         return menuRenovacionServicio(chatId, clientId, idx);
       }
 
       // ✅ RENOVAR +30 DÍAS
       if (data.startsWith("cli:ren:auto:")) {
-        const parts = data.split(":");
-        const clientId = parts[3];
-        const idx = Number(parts[4]);
+        const raw = data.slice("cli:ren:auto:".length);
+        const lastColon = raw.lastIndexOf(":");
+        const clientId = raw.slice(0, lastColon);
+        const idx = Number(raw.slice(lastColon + 1));
         const ref = db.collection("clientes").doc(String(clientId));
         const doc = await ref.get();
         if (!doc.exists) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
@@ -2661,27 +2664,28 @@ bot.on("callback_query", async (q) => {
 
       // ✅ RENOVAR CON FECHA MANUAL
       if (data.startsWith("cli:ren:manual:")) {
-        const parts = data.split(":");
-        const clientId = parts[3];
-        const idx = Number(parts[4]);
+        const raw = data.slice("cli:ren:manual:".length);
+        const lastColon = raw.lastIndexOf(":");
+        const clientId = raw.slice(0, lastColon);
+        const idx = Number(raw.slice(lastColon + 1));
         pending.set(String(chatId), { mode: "cliRenovarFechaManual", clientId, idx });
         return upsertPanel(chatId, "📅 *Renovar (fecha manual)*\nEscriba la nueva fecha en formato dd/mm/yyyy:", [[{ text: "⬅️ Cancelar", callback_data: `cli:ren:one:${clientId}:${idx}` }]]);
       }
 
       // ✅ CAMBIÓ DE SERVICIO — elimina el actual y abre wizard para agregar uno nuevo
       if (data.startsWith("cli:ren:cambio:")) {
-        const parts = data.split(":");
-        const clientId = parts[3];
-        const idx = Number(parts[4]);
+        const raw = data.slice("cli:ren:cambio:".length);
+        const lastColon = raw.lastIndexOf(":");
+        const clientId = raw.slice(0, lastColon);
+        const idx = Number(raw.slice(lastColon + 1));
         try {
           const result = await eliminarServicioTx(clientId, idx);
           await bot.sendMessage(chatId,
             `🔄 *Servicio eliminado*\n\n` +
-            `📦 ${escMD(result.eliminado?.plataforma || "-")} — ${escMD(result.eliminado?.correo || "-")}\n` +
+            `📦 ${escMD(humanPlatAlertLocal(result.eliminado?.plataforma || "-"))} — ${escMD(result.eliminado?.correo || "-")}\n` +
             `_El slot en inventario fue liberado._\n\nAhora agregue el nuevo servicio:`,
             { parse_mode: "Markdown" }
           );
-          // Abrir wizard para agregar nuevo servicio al mismo cliente
           const st = wizard.get(String(chatId)) || {};
           wizard.set(String(chatId), { step: 4, clientId, nombre: result.nombreCliente, telefono: st.telefono || "", vendedor: st.vendedor || "", servicio: {}, servStep: 1 });
           return bot.sendMessage(chatId, "📌 Seleccione la nueva plataforma:", {
@@ -2695,9 +2699,12 @@ bot.on("callback_query", async (q) => {
 
       // ✅ NO RENOVÓ — pedir confirmación antes de eliminar
       if (data.startsWith("cli:ren:noren:ask:")) {
-        const parts = data.split(":");
-        const clientId = parts[4];
-        const idx = Number(parts[5]);
+        // Formato: cli:ren:noren:ask:CLIENTID:IDX
+        // clientId puede contener caracteres varios — tomamos todo excepto el último segmento
+        const raw = data.slice("cli:ren:noren:ask:".length); // "CLIENTID:IDX"
+        const lastColon = raw.lastIndexOf(":");
+        const clientId = raw.slice(0, lastColon);
+        const idx = Number(raw.slice(lastColon + 1));
         const c = await getCliente(clientId);
         if (!c) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
         const servicios = Array.isArray(c.servicios) ? c.servicios : [];
@@ -2705,7 +2712,7 @@ bot.on("callback_query", async (q) => {
         return upsertPanel(chatId,
           `❌ *NO RENOVÓ — CONFIRMAR ELIMINACIÓN*\n\n` +
           `👤 *${escMD(c.nombrePerfil || "Cliente")}*\n` +
-          `${iconPlataforma(s.plataforma || "")} *${escMD(humanPlatAlertLocal(s.plataforma || ""))}*\n` +
+          `📦 *${escMD(humanPlatAlertLocal(s.plataforma || ""))}*\n` +
           `${identIcon(s.plataforma || "")} ${escMD(s.correo || "-")}\n\n` +
           `_El servicio se eliminará y el slot en inventario quedará libre._\n\n¿Confirmar?`,
           [
@@ -2717,21 +2724,22 @@ bot.on("callback_query", async (q) => {
 
       // ✅ NO RENOVÓ — ejecutar eliminación
       if (data.startsWith("cli:ren:noren:ok:")) {
-        const parts = data.split(":");
-        const clientId = parts[4];
-        const idx = Number(parts[5]);
+        const raw = data.slice("cli:ren:noren:ok:".length);
+        const lastColon = raw.lastIndexOf(":");
+        const clientId = raw.slice(0, lastColon);
+        const idx = Number(raw.slice(lastColon + 1));
         try {
           const result = await eliminarServicioTx(clientId, idx);
           await bot.sendMessage(chatId,
             `✅ *Servicio eliminado correctamente*\n\n` +
-            `📦 ${escMD(result.eliminado?.plataforma || "-")} — ${escMD(result.eliminado?.correo || "-")}\n` +
+            `📦 ${escMD(humanPlatAlertLocal(result.eliminado?.plataforma || "-"))} — ${escMD(result.eliminado?.correo || "-")}\n` +
             `_Slot liberado en inventario._`,
             { parse_mode: "Markdown" }
           );
           return enviarFichaCliente(chatId, clientId);
         } catch (e) {
           logErr("cli:ren:noren:ok", e);
-          return bot.sendMessage(chatId, `⚠️ Error: ${e.message}`);
+          return bot.sendMessage(chatId, `⚠️ Error al eliminar: ${e.message}`);
         }
       }
 
