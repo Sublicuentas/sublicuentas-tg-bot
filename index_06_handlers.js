@@ -105,13 +105,6 @@ const {
   aplicarAutoLleno,
 } = require("./index_04_inventario_correos");
 
-if (!global.__SUBLICUENTAS_LISTENERS_CLEANED__) {
-  try { bot.removeAllListeners("callback_query"); } catch (_) {}
-  try { bot.removeAllListeners("message"); } catch (_) {}
-  try { bot.removeAllListeners("text"); } catch (_) {}
-  global.__SUBLICUENTAS_LISTENERS_CLEANED__ = true;
-}
-
 const {
   menuPrincipal,
   menuVendedor,
@@ -149,8 +142,6 @@ const {
   textoConfirmarEliminacionMovimiento,
   exportarFinanzasRangoExcel,
   eliminarMovimientoFinanzas,
-  getMovimientoFinanzaById,
-  updateMovimientoFinanzas,
 } = require("./index_05_finanzas_menus");
 
 // ===============================
@@ -771,42 +762,72 @@ async function buscarClientesFallbackLocal(query = "") {
   const qRaw = String(query || "").trim();
   const qNorm = normalizeLooseText(qRaw);
   const qDigits = onlyDigits(qRaw);
+
   if (!qNorm && !qDigits) return [];
 
+  const out = new Map();
+
+  const addSnap = (snap) => {
+    try {
+      snap.forEach((doc) => {
+        if (!out.has(doc.id)) out.set(doc.id, { id: doc.id, ...(doc.data() || {}) });
+      });
+    } catch (_) {}
+  };
+
   try {
-    const snap = await db.collection("clientes").get();
-    const out = [];
+    if (qDigits && qDigits.length >= 7) {
+      const sTel = await db
+        .collection("clientes")
+        .where("telefono_norm", "==", qDigits)
+        .limit(20)
+        .get();
 
-    snap.forEach((doc) => {
-      const data = doc.data() || {};
-      const nombre = String(data.nombrePerfil || "");
-      const nombreNorm = String(data.nombre_norm || normalizeLooseText(nombre));
-      const telefono = String(data.telefono || "");
-      const telefonoNorm = String(data.telefono_norm || onlyDigits(telefono));
-      const vendedor = String(data.vendedor || "");
-      const vendedorNorm = String(data.vendedor_norm || normalizeLooseText(vendedor));
-      const servicios = Array.isArray(data.servicios) ? data.servicios : [];
-      const correos = servicios.map((s) => String(s?.correo || "")).join(" ").toLowerCase();
+      addSnap(sTel);
+    }
 
-      let ok = false;
-      if (qDigits && qDigits.length >= 4 && telefonoNorm.includes(qDigits)) ok = true;
-      if (!ok && qNorm && nombreNorm.includes(qNorm)) ok = true;
-      if (!ok && qNorm && vendedorNorm.includes(qNorm)) ok = true;
-      if (!ok && qNorm && normalizeLooseText(correos).includes(qNorm)) ok = true;
+    if (qNorm && qNorm.length >= 2) {
+      const end = `${qNorm}\uf8ff`;
 
-      if (ok) out.push({ id: doc.id, ...data });
-    });
+      const sNombre = await db
+        .collection("clientes")
+        .where("nombre_norm", ">=", qNorm)
+        .where("nombre_norm", "<=", end)
+        .limit(20)
+        .get();
 
-    return out;
+      addSnap(sNombre);
+
+      const sVend = await db
+        .collection("clientes")
+        .where("vendedor_norm", ">=", qNorm)
+        .where("vendedor_norm", "<=", end)
+        .limit(20)
+        .get();
+
+      addSnap(sVend);
+    }
+
+    return Array.from(out.values()).slice(0, 30);
   } catch (e) {
-    logErr("buscarClientesFallbackLocal", e);
-    return [];
+    logErr("buscarClientesFallbackLocal", e?.stack || e?.message || e);
+    return Array.from(out.values()).slice(0, 30);
   }
 }
 
 async function resolverBusquedaAdmin(chatId, query = "") {
   const q = String(query || "").trim().replace(/^\/+/, "").trim();
   if (!q) return bot.sendMessage(chatId, "⚠️ Escriba algo para buscar.");
+
+  const qDigits = onlyDigits(q);
+  const qNorm = normalizeLooseText(q);
+
+  if ((!qNorm || qNorm.length < 2) && (!qDigits || qDigits.length < 7)) {
+    return bot.sendMessage(
+      chatId,
+      "⚠️ Escriba al menos 2 letras o 7 dígitos para buscar."
+    );
+  }
 
   let hits = [];
   try {
@@ -841,7 +862,7 @@ async function resolverBusquedaAdmin(chatId, query = "") {
     );
   }
 
-  if (onlyDigits(q).length >= 7) {
+  if (qDigits.length >= 7) {
     const resultados = await buscarPorTelefonoTodos(q);
     const dedup = dedupeClientes(resultados);
     if (!dedup.length) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
@@ -852,16 +873,18 @@ async function resolverBusquedaAdmin(chatId, query = "") {
   let resultados = [];
   try {
     resultados = await buscarClienteRobusto(q);
-  } catch (_) {}
-
-  if (!Array.isArray(resultados) || !resultados.length) {
-    resultados = await buscarClientesFallbackLocal(q);
-  } else {
-    const extra = await buscarClientesFallbackLocal(q);
-    resultados = [...resultados, ...extra];
+  } catch (_) {
+    resultados = [];
   }
 
-  const dedup = dedupeClientes(resultados);
+  if (!Array.isArray(resultados)) resultados = [];
+
+  let extra = [];
+  if (!resultados.length) {
+    extra = await buscarClientesFallbackLocal(q);
+  }
+
+  const dedup = dedupeClientes([...resultados, ...extra]);
 
   if (!dedup.length) return bot.sendMessage(chatId, "⚠️ Sin resultados.");
   if (dedup.length === 1) return enviarFichaCliente(chatId, dedup[0].id);
@@ -1718,9 +1741,12 @@ bot.onText(/\/editar_movimiento\s+([A-Za-z0-9_-]+)/i, async (msg, match) => {
   if (!(await safeIsAdminLocal(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
 
   const id = String(match[1] || "").trim();
-  const m = await getMovimientoFinanzaById(id);
+  const ref = db.collection(FINANZAS_COLLECTION).doc(id);
+  const doc = await ref.get();
 
-  if (!m) return bot.sendMessage(chatId, "⚠️ Movimiento no encontrado.");
+  if (!doc.exists) return bot.sendMessage(chatId, "⚠️ Movimiento no encontrado.");
+
+  const m = doc.data() || {};
 
   const txt =
     `✏️ *EDITAR MOVIMIENTO*\n\n` +
@@ -2396,10 +2422,12 @@ bot.on("callback_query", async (q) => {
 
       if (data.startsWith("fin:del:pick:")) {
         const id = String(data.split(":")[3] || "").trim();
-        const m = await getMovimientoFinanzaById(id);
+        const ref = db.collection(FINANZAS_COLLECTION).doc(id);
+        const doc = await ref.get();
 
-        if (!m) return bot.sendMessage(chatId, "⚠️ Movimiento no encontrado.");
+        if (!doc.exists) return bot.sendMessage(chatId, "⚠️ Movimiento no encontrado.");
 
+        const m = { id: doc.id, ...(doc.data() || {}) };
         const tipo = String(m.tipo || "").toLowerCase() === "egreso" ? "egreso" : "ingreso";
 
         return upsertPanel(
@@ -4088,7 +4116,10 @@ if (p.mode === "finTopCombosRangoFin") {
         if (!Number.isFinite(monto) || monto <= 0) return bot.sendMessage(chatId, "⚠️ Monto inválido.");
 
         pending.delete(String(chatId));
-        await updateMovimientoFinanzas(String(p.id), { monto: Number(monto) });
+        await db.collection(FINANZAS_COLLECTION).doc(String(p.id)).set(
+          { monto: Number(monto), updatedAt: admin.firestore.FieldValue.serverTimestamp() },
+          { merge: true }
+        );
 
         return bot.sendMessage(chatId, "✅ Monto actualizado correctamente.");
       }
@@ -4097,7 +4128,10 @@ if (p.mode === "finTopCombosRangoFin") {
         if (!t) return bot.sendMessage(chatId, "⚠️ Escriba el banco.");
 
         pending.delete(String(chatId));
-        await updateMovimientoFinanzas(String(p.id), { banco: t });
+        await db.collection(FINANZAS_COLLECTION).doc(String(p.id)).set(
+          { banco: t, updatedAt: admin.firestore.FieldValue.serverTimestamp() },
+          { merge: true }
+        );
 
         return bot.sendMessage(chatId, "✅ Banco actualizado correctamente.");
       }
@@ -4106,7 +4140,10 @@ if (p.mode === "finTopCombosRangoFin") {
         if (!t) return bot.sendMessage(chatId, "⚠️ Escriba el motivo.");
 
         pending.delete(String(chatId));
-        await updateMovimientoFinanzas(String(p.id), { motivo: t });
+        await db.collection(FINANZAS_COLLECTION).doc(String(p.id)).set(
+          { motivo: t, updatedAt: admin.firestore.FieldValue.serverTimestamp() },
+          { merge: true }
+        );
 
         return bot.sendMessage(chatId, "✅ Motivo actualizado correctamente.");
       }
@@ -4115,7 +4152,10 @@ if (p.mode === "finTopCombosRangoFin") {
         if (!t) return bot.sendMessage(chatId, "⚠️ Escriba la plataforma.");
 
         pending.delete(String(chatId));
-        await updateMovimientoFinanzas(String(p.id), { plataforma: t });
+        await db.collection(FINANZAS_COLLECTION).doc(String(p.id)).set(
+          { plataforma: t, updatedAt: admin.firestore.FieldValue.serverTimestamp() },
+          { merge: true }
+        );
 
         return bot.sendMessage(chatId, "✅ Plataforma actualizada correctamente.");
       }
@@ -4124,7 +4164,10 @@ if (p.mode === "finTopCombosRangoFin") {
         if (!t) return bot.sendMessage(chatId, "⚠️ Escriba el detalle.");
 
         pending.delete(String(chatId));
-        await updateMovimientoFinanzas(String(p.id), { detalle: t });
+        await db.collection(FINANZAS_COLLECTION).doc(String(p.id)).set(
+          { detalle: t, updatedAt: admin.firestore.FieldValue.serverTimestamp() },
+          { merge: true }
+        );
 
         return bot.sendMessage(chatId, "✅ Detalle actualizado correctamente.");
       }
@@ -4133,12 +4176,15 @@ if (p.mode === "finTopCombosRangoFin") {
         if (!isFechaDMY(t)) return bot.sendMessage(chatId, "⚠️ Fecha inválida. Use dd/mm/yyyy");
 
         pending.delete(String(chatId));
-        await updateMovimientoFinanzas(String(p.id), {
-          fecha: t,
-          fechaTS: parseDMYtoTS(t),
-          mesKey: getMonthKeyFromDMY(t),
-          monthKey: getMonthKeyFromDMY(t),
-        });
+        await db.collection(FINANZAS_COLLECTION).doc(String(p.id)).set(
+          {
+            fecha: t,
+            fechaTS: parseDMYtoTS(t),
+            mesKey: getMonthKeyFromDMY(t),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        );
 
         return bot.sendMessage(chatId, "✅ Fecha actualizada correctamente.");
       }
@@ -4716,28 +4762,26 @@ async function enviarTxtRenovacionesDiarias7AM() {
   }
 }
 
-if (!global.__SUBLICUENTAS_AUTOTXT_INTERVAL__) {
-  global.__SUBLICUENTAS_AUTOTXT_INTERVAL__ = setInterval(async () => {
-    if (!hasRuntimeLock()) return;
+setInterval(async () => {
+  if (!hasRuntimeLock()) return;
 
-    try {
-      const { dmy, hh, mm } = getTimePartsNow();
+  try {
+    const { dmy, hh, mm } = getTimePartsNow();
 
-      if (hh === 7 && mm === 0) {
-        const dbLast = await getLastRunDB();
-        if (_lastDailyRun === dmy || dbLast === dmy) return;
+    if (hh === 7 && mm === 0) {
+      const dbLast = await getLastRunDB();
+      if (_lastDailyRun === dmy || dbLast === dmy) return;
 
-        _lastDailyRun = dmy;
-        await setLastRunDB(dmy);
-        await enviarTxtRenovacionesDiarias7AM();
+      _lastDailyRun = dmy;
+      await setLastRunDB(dmy);
+      await enviarTxtRenovacionesDiarias7AM();
 
-        console.log(`ℹ️ ✅ AutoTXT 7AM enviado (${dmy}) TZ=${TZ}`);
-      }
-    } catch (e) {
-      logErr("AutoTXT", e?.stack || e?.message || e);
+      console.log(`ℹ️ ✅ AutoTXT 7AM enviado (${dmy}) TZ=${TZ}`);
     }
-  }, 30 * 1000);
-}
+  } catch (e) {
+    logErr("AutoTXT", e?.stack || e?.message || e);
+  }
+}, 30 * 1000);
 
 // ===============================
 // HARDEN
