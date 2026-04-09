@@ -2744,23 +2744,149 @@ bot.on("callback_query", async (q) => {
       }
 
       if (data.startsWith("cli:ren:all:ask:")) {
-        const clientId = data.split(":")[4];
-        return upsertPanel(chatId, "🔄 *Renovar todos +30 días*\n\n¿Desea renovar todos los servicios de este cliente?", [
+        const clientId = data.slice("cli:ren:all:ask:".length);
+        return upsertPanel(chatId, "⏫ *Renovar TODOS +30 días*\n\n¿Desea renovar todos los servicios de este cliente?", [
           [{ text: "✅ Confirmar", callback_data: `cli:ren:all:ok:${clientId}` }],
-          [{ text: "⬅️ Cancelar", callback_data: `cli:view:${clientId}` }],
+          [{ text: "⬅️ Cancelar", callback_data: `cli:ren:list:${clientId}` }],
         ]);
       }
 
       if (data.startsWith("cli:ren:all:ok:")) {
-        const clientId = data.split(":")[4];
+        const clientId = data.slice("cli:ren:all:ok:".length);
         const ref = db.collection("clientes").doc(String(clientId));
         const doc = await ref.get();
         if (!doc.exists) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
         const c = doc.data() || {};
         const servicios = Array.isArray(c.servicios) ? c.servicios : [];
         if (!servicios.length) return bot.sendMessage(chatId, "⚠️ Este cliente no tiene servicios.");
-        const nuevos = servicios.map((s) => { const base = isFechaDMY(String(s.fechaRenovacion || "")) ? String(s.fechaRenovacion) : hoyDMY(); return { ...s, fechaRenovacion: addDaysDMY(base, 30) }; });
+        const nuevos = servicios.map((s) => {
+          const base = isFechaDMY(String(s.fechaRenovacion || "")) ? String(s.fechaRenovacion) : hoyDMY();
+          return { ...s, fechaRenovacion: addDaysDMY(base, 30) };
+        });
         await ref.set({ servicios: nuevos, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        const { cacheInvalidatePrefix: cIP } = require("./index_01_core");
+        cIP(`clientes:doc:${clientId}`);
+        await bot.sendMessage(chatId, `✅ Todos los servicios renovados +30 días.`);
+        return enviarFichaCliente(chatId, clientId);
+      }
+
+      // ✅ BAJA MASIVA — mostrar servicios con checkboxes para seleccionar cuáles eliminar
+      if (data.startsWith("cli:baja:menu:")) {
+        const clientId = data.slice("cli:baja:menu:".length);
+        const c = await getCliente(clientId);
+        if (!c) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
+        const servicios = Array.isArray(c.servicios) ? c.servicios : [];
+        if (!servicios.length) return bot.sendMessage(chatId, "⚠️ Este cliente no tiene servicios.");
+
+        // Inicializar selección vacía en pending
+        pending.set(String(chatId), { mode: "bajaMasiva", clientId, seleccionados: [] });
+
+        let txt = `🗑️ *BAJA MASIVA DE SERVICIOS*\n👤 *${escMD(c.nombrePerfil || "Cliente")}*\n\n`;
+        txt += `Seleccione los servicios a *eliminar* (los que NO renovaron).\nLuego presione *Confirmar eliminación*.\n\n`;
+        txt += `_Ninguno seleccionado aún._`;
+
+        const kb = servicios.map((s, i) => [{
+          text: `⬜ ${humanPlatAlertLocal(s.plataforma || "")} — ${s.fechaRenovacion || "sin fecha"}`,
+          callback_data: `cli:baja:toggle:${clientId}:${i}`,
+        }]);
+        kb.push([{ text: "🗑️ Confirmar eliminación", callback_data: `cli:baja:confirm:${clientId}` }]);
+        kb.push([{ text: "⬅️ Volver renovaciones",   callback_data: `cli:ren:list:${clientId}` }]);
+
+        return upsertPanel(chatId, txt, kb);
+      }
+
+      // ✅ BAJA MASIVA — toggle selección de un servicio
+      if (data.startsWith("cli:baja:toggle:")) {
+        const raw = data.slice("cli:baja:toggle:".length);
+        const lastColon = raw.lastIndexOf(":");
+        const clientId = raw.slice(0, lastColon);
+        const idx = Number(raw.slice(lastColon + 1));
+
+        const ctx = pending.get(String(chatId));
+        if (!ctx || ctx.mode !== "bajaMasiva" || ctx.clientId !== clientId) {
+          // Reiniciar si el contexto expiró
+          return bot.sendMessage(chatId, "⚠️ La sesión expiró. Abra baja masiva de nuevo desde el menú de renovaciones.");
+        }
+
+        const c = await getCliente(clientId);
+        if (!c) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
+        const servicios = Array.isArray(c.servicios) ? c.servicios : [];
+
+        // Toggle idx en la lista de seleccionados
+        const sel = new Set(ctx.seleccionados || []);
+        if (sel.has(idx)) sel.delete(idx);
+        else sel.add(idx);
+        ctx.seleccionados = Array.from(sel);
+        pending.set(String(chatId), ctx);
+
+        // Reconstruir panel con checkboxes actualizados
+        const selCount = ctx.seleccionados.length;
+        let txt = `🗑️ *BAJA MASIVA DE SERVICIOS*\n👤 *${escMD(c.nombrePerfil || "Cliente")}*\n\n`;
+        txt += `Seleccione los servicios a *eliminar*.\nLuego presione *Confirmar eliminación*.\n\n`;
+        if (selCount === 0) txt += `_Ninguno seleccionado._`;
+        else txt += `*${selCount} seleccionado(s) para eliminar.*`;
+
+        const kb = servicios.map((s, i) => {
+          const marcado = sel.has(i);
+          return [{
+            text: `${marcado ? "✅" : "⬜"} ${humanPlatAlertLocal(s.plataforma || "")} — ${s.fechaRenovacion || "sin fecha"}`,
+            callback_data: `cli:baja:toggle:${clientId}:${i}`,
+          }];
+        });
+        kb.push([{ text: `🗑️ Confirmar eliminación${selCount ? ` (${selCount})` : ""}`, callback_data: `cli:baja:confirm:${clientId}` }]);
+        kb.push([{ text: "⬅️ Volver renovaciones", callback_data: `cli:ren:list:${clientId}` }]);
+
+        return upsertPanel(chatId, txt, kb);
+      }
+
+      // ✅ BAJA MASIVA — confirmar y ejecutar eliminación
+      if (data.startsWith("cli:baja:confirm:")) {
+        const clientId = data.slice("cli:baja:confirm:".length);
+        const ctx = pending.get(String(chatId));
+
+        if (!ctx || ctx.mode !== "bajaMasiva" || ctx.clientId !== clientId) {
+          return bot.sendMessage(chatId, "⚠️ La sesión expiró. Abra baja masiva de nuevo.");
+        }
+
+        const seleccionados = Array.isArray(ctx.seleccionados) ? ctx.seleccionados : [];
+        if (!seleccionados.length) {
+          return bot.sendMessage(chatId, "⚠️ No seleccionó ningún servicio. Toque los que desea eliminar primero.");
+        }
+
+        const c = await getCliente(clientId);
+        if (!c) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
+        const servicios = Array.isArray(c.servicios) ? c.servicios : [];
+
+        // Eliminar de mayor a menor índice para no desfasar el array
+        const indices = [...seleccionados].sort((a, b) => b - a);
+        const eliminados = [];
+
+        for (const idx of indices) {
+          if (idx < 0 || idx >= servicios.length) continue;
+          const s = servicios[idx];
+          eliminados.push(s);
+          servicios.splice(idx, 1);
+          // Liberar slot en inventario
+          try {
+            const { db: dbCore, admin: adminCore } = require("./index_01_core");
+            const { removeServicioDeInventario: removeInv } = require("./index_03_clientes_crm");
+            await removeInv({ clienteNombre: c.nombrePerfil || "", plataforma: s.plataforma || "", correo: s.correo || "", pin: s.pin || "" });
+          } catch (e) { logErr("bajaMasiva.removeInv", e); }
+        }
+
+        // Guardar servicios restantes
+        const ref = db.collection("clientes").doc(String(clientId));
+        await ref.set({ servicios, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        const { cacheInvalidatePrefix: cIP } = require("./index_01_core");
+        cIP(`clientes:doc:${clientId}`);
+        pending.delete(String(chatId));
+
+        let msg = `✅ *Baja masiva completada*\n\n`;
+        msg += `*Eliminados (${eliminados.length}):*\n`;
+        eliminados.forEach((s) => { msg += `• ${escMD(humanPlatAlertLocal(s.plataforma || ""))} — ${escMD(s.correo || "-")}\n`; });
+        msg += `\n*Servicios restantes:* ${servicios.length}`;
+
+        await bot.sendMessage(chatId, msg, { parse_mode: "Markdown" });
         return enviarFichaCliente(chatId, clientId);
       }
 
