@@ -496,13 +496,12 @@ async function enviarFichaCliente(chatId, clientId) {
   if (!c) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
 
   return upsertPanel(chatId, renderFichaClienteMarkdown(c), [
-    [{ text: "✏️ Editar cliente", callback_data: `cli:edit:menu:${c.id}` }],
-    [{ text: "🧩 Editar servicios", callback_data: `cli:serv:list:${c.id}` }],
-    [{ text: "🔄 Renovar servicio", callback_data: `cli:ren:list:${c.id}` }],
-    [{ text: "⏫ Renovar TODOS +30 días", callback_data: `cli:ren:all:ask:${c.id}` }],
-    [{ text: "➕ Agregar servicio", callback_data: `cli:serv:add:${c.id}` }],
+    [{ text: "✏️ Editar cliente",          callback_data: `cli:edit:menu:${c.id}` }],
+    [{ text: "🧩 Editar servicios",        callback_data: `cli:serv:list:${c.id}` }],
+    [{ text: "🔄 Gestionar renovaciones",  callback_data: `cli:ren:list:${c.id}` }],
+    [{ text: "➕ Agregar servicio",        callback_data: `cli:serv:add:${c.id}` }],
     [{ text: "📜 Historial TXT", callback_data: `cli:txt:hist:${c.id}` }, { text: "📄 TXT cliente", callback_data: `cli:txt:one:${c.id}` }],
-    [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
+    [{ text: "🏠 Inicio",                  callback_data: "go:inicio" }],
   ]);
 }
 
@@ -726,6 +725,7 @@ async function menuListaRenovacion(chatId, clientId) {
     text: safeBtnLabel(`${iconPlataforma(s.plataforma || "")} ${humanPlataforma(s.plataforma || "")} — ${s.fechaRenovacion || "sin fecha"}`),
     callback_data: `cli:ren:one:${clientId}:${s.idxOriginal}`,
   }]);
+  kb.push([{ text: "⏫ Renovar TODOS +30 días", callback_data: `cli:ren:all:ask:${clientId}` }]);
   kb.push([{ text: "⬅️ Volver ficha", callback_data: `cli:view:${clientId}` }]);
   kb.push([{ text: "🏠 Inicio",        callback_data: "go:inicio" }]);
 
