@@ -1,13 +1,16 @@
-/* ✅ SUBLICUENTAS TG BOT — PARTE 6/6 CORREGIDA
+/* ✅ SUBLICUENTAS TG BOT — PARTE 6/6 CORREGIDA v3
    HANDLERS / COMANDOS / CALLBACKS / MESSAGE / AUTOTXT / HARDEN / HTTP
    -------------------------------------------------------------------
    ✅ FIXES APLICADOS EN ESTA VERSIÓN:
    - BÚSQUEDA: texto libre sin "/" ahora activa resolverBusquedaAdmin correctamente
    - BÚSQUEDA: resolverBusquedaAdmin ya no hace return prematuro cuando inventario da 0
    - BÚSQUEDA: buscarClientesFallbackLocal mejorado para búsquedas parciales por nombre
-   - ALERTAS: callbacks alert:vencidos:0 / alert:hoy:0 / alert:3dias:0 / alert:inventario:0
-     ahora detectados con startsWith en lugar de igualdad exacta
-   - Resto de fixes previos mantenidos
+   - ALERTAS: clientes vencidos corregido — comparación por string "yyyy-mm-dd" en lugar
+     de parseDMYtoTS que fallaba por zona horaria / medianoche
+   - ALERTAS: paginación 10 en 10 para vencidos, hoy, 3días e inventario crítico
+     con botones ⬅️ Anterior / Siguiente ➡️ y ⬅️ Volver alertas
+   - ALERTAS: callbacks alert:pg:tipo:page para navegación de páginas
+   - ALERTAS: callbacks alert:vencidos:0 etc. detectados con startsWith
 */
 
 const http = require("http");
@@ -1045,11 +1048,23 @@ function diffDaysFromTodayLocal(fechaDMY = "") {
   return Math.floor((hoyTs - fechaTs) / 86400000);
 }
 
+// ✅ FIX VENCIDOS: comparación por string DMY es más confiable que timestamps
+// parseDMYtoTS usa Date.UTC con hora 12:00 y puede fallar en comparaciones exactas.
+// Comparar strings dd/mm/yyyy directamente es seguro porque el formato es fijo.
+function dmyToSortKey(dmy = "") {
+  // Convierte "dd/mm/yyyy" a "yyyy-mm-dd" para comparación lexicográfica correcta
+  const s = String(dmy || "").trim();
+  const m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (!m) return "";
+  return `${m[3]}-${m[2]}-${m[1]}`;
+}
+
 async function getAlertaClientesLocal(tipo = "hoy") {
   try {
     const snap = await db.collection("clientes").get();
     const hoy = hoyDMY();
     const fecha3 = addDaysDMY(hoy, 3);
+    const hoyKey = dmyToSortKey(hoy); // "yyyy-mm-dd" de hoy para comparar
     const rows = [];
 
     snap.forEach((doc) => {
@@ -1060,8 +1075,11 @@ async function getAlertaClientesLocal(tipo = "hoy") {
         const fecha = String(s?.fechaRenovacion || "").trim();
         if (!isFechaDMY(fecha)) return;
 
+        const fechaKey = dmyToSortKey(fecha);
         let ok = false;
-        if (tipo === "vencidos") ok = Number(parseDMYtoTS(fecha) || 0) < Number(parseDMYtoTS(hoy) || 0);
+
+        // ✅ FIX: vencidos = fechaKey < hoyKey (comparación de strings yyyy-mm-dd)
+        if (tipo === "vencidos") ok = fechaKey < hoyKey && fechaKey !== "";
         else if (tipo === "hoy") ok = fecha === hoy;
         else if (tipo === "3dias") ok = fecha === fecha3;
 
@@ -1083,9 +1101,9 @@ async function getAlertaClientesLocal(tipo = "hoy") {
     });
 
     rows.sort((a, b) => {
-      const fa = String(a.fechaRenovacion || "");
-      const fb = String(b.fechaRenovacion || "");
-      if (fa !== fb) return fa.localeCompare(fb, "es");
+      const fa = dmyToSortKey(a.fechaRenovacion || "");
+      const fb = dmyToSortKey(b.fechaRenovacion || "");
+      if (fa !== fb) return fa.localeCompare(fb);
       const va = String(a.vendedor || "");
       const vb = String(b.vendedor || "");
       if (va !== vb) return va.localeCompare(vb, "es", { sensitivity: "base" });
@@ -1099,17 +1117,30 @@ async function getAlertaClientesLocal(tipo = "hoy") {
   }
 }
 
-function renderAlertaClientesMarkdown(rows = [], titulo = "", emptyText = "Sin resultados.") {
+// ✅ PAGINACIÓN: renderiza solo la página indicada (10 registros por página)
+const ALERT_PAGE_SIZE = 10;
+
+function renderAlertaClientesMarkdown(rows = [], titulo = "", emptyText = "Sin resultados.", page = 0) {
   const items = Array.isArray(rows) ? rows : [];
-  let txt = `${titulo}\n\n`;
+  const totalPages = Math.max(1, Math.ceil(items.length / ALERT_PAGE_SIZE));
+  const safePage = Math.max(0, Math.min(Number(page || 0), totalPages - 1));
+  const start = safePage * ALERT_PAGE_SIZE;
+  const slice = items.slice(start, start + ALERT_PAGE_SIZE);
+
+  let txt = `${titulo}`;
+  if (items.length > ALERT_PAGE_SIZE) {
+    txt += ` — Página *${safePage + 1}/${totalPages}*`;
+  }
+  txt += `\n\n`;
 
   if (!items.length) {
     txt += `_${emptyText}_`;
     return txt;
   }
 
-  items.slice(0, 120).forEach((x, i) => {
-    txt += `*${i + 1})* ${escMD(x.nombrePerfil || "Sin nombre")}\n`;
+  slice.forEach((x, i) => {
+    const numGlobal = start + i + 1;
+    txt += `*${numGlobal})* ${escMD(x.nombrePerfil || "Sin nombre")}\n`;
     txt += `📱 ${escMD(x.telefono || "-")}\n`;
     txt += `🧾 ${escMD(x.vendedor || "-")}\n`;
     txt += `📦 ${escMD(humanPlatAlertLocal(x.plataforma || ""))}\n`;
@@ -1122,13 +1153,23 @@ function renderAlertaClientesMarkdown(rows = [], titulo = "", emptyText = "Sin r
     txt += `\n\n`;
   });
 
-  if (items.length > 120) {
-    txt += `_Mostrando 120 de ${items.length} resultados._`;
-  } else {
-    txt += `*Total:* ${escMD(String(items.length))}`;
-  }
-
+  txt += `*Total:* ${escMD(String(items.length))}`;
   return txt.trim();
+}
+
+// ✅ Construye los botones de navegación para alertas paginadas
+function buildAlertNavKeyboard(tipo = "", page = 0, totalRows = 0) {
+  const totalPages = Math.max(1, Math.ceil(totalRows / ALERT_PAGE_SIZE));
+  const nav = [];
+
+  if (page > 0) nav.push({ text: "⬅️ Anterior", callback_data: `alert:pg:${tipo}:${page - 1}` });
+  if (page < totalPages - 1) nav.push({ text: "Siguiente ➡️", callback_data: `alert:pg:${tipo}:${page + 1}` });
+
+  const kb = [];
+  if (nav.length) kb.push(nav);
+  kb.push([{ text: "⬅️ Volver alertas", callback_data: "menu:alertas" }]);
+  kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
+  return kb;
 }
 
 async function getInventarioCriticoLocal() {
@@ -1175,29 +1216,34 @@ async function getInventarioCriticoLocal() {
   }
 }
 
-function renderInventarioCriticoMarkdown(rows = []) {
+function renderInventarioCriticoMarkdown(rows = [], page = 0) {
   const items = Array.isArray(rows) ? rows : [];
-  let txt = `📦 *INVENTARIO CRÍTICO*\n\n`;
+  const totalPages = Math.max(1, Math.ceil(items.length / ALERT_PAGE_SIZE));
+  const safePage = Math.max(0, Math.min(Number(page || 0), totalPages - 1));
+  const start = safePage * ALERT_PAGE_SIZE;
+  const slice = items.slice(start, start + ALERT_PAGE_SIZE);
+
+  let txt = `📦 *INVENTARIO CRÍTICO*`;
+  if (items.length > ALERT_PAGE_SIZE) {
+    txt += ` — Página *${safePage + 1}/${totalPages}*`;
+  }
+  txt += `\n\n`;
 
   if (!items.length) {
     txt += `_Sin cuentas críticas._`;
     return txt;
   }
 
-  items.slice(0, 120).forEach((x, i) => {
-    txt += `*${i + 1})* ${escMD(humanPlatAlertLocal(x.plataforma || ""))}\n`;
+  slice.forEach((x, i) => {
+    const numGlobal = start + i + 1;
+    txt += `*${numGlobal})* ${escMD(humanPlatAlertLocal(x.plataforma || ""))}\n`;
     txt += `${getIdentLabelLocal(x.plataforma || "") === "Usuario" ? "👤" : "📧"} ${escMD(x.acceso || "-")}\n`;
     txt += `👥 ${escMD(String(x.ocupados))}/${escMD(String(x.capacidad))}\n`;
-    txt += `✅ ${escMD(String(x.disponibles))}\n`;
+    txt += `✅ Disp: ${escMD(String(x.disponibles))}\n`;
     txt += `📊 ${escMD(x.estado || "-")}\n\n`;
   });
 
-  if (items.length > 120) {
-    txt += `_Mostrando 120 de ${items.length} resultados._`;
-  } else {
-    txt += `*Total:* ${escMD(String(items.length))}`;
-  }
-
+  txt += `*Total:* ${escMD(String(items.length))}`;
   return txt.trim();
 }
 
@@ -1279,19 +1325,17 @@ async function enviarTxtAlertasDiaLocal(chatId) {
 }
 
 // ===============================
-// ✅ FIX: mostrarPanelAlertaSeguro con startsWith para detectar paginación
-// ===============================
-async function mostrarPanelAlertaSeguro(chatId, tipo = "") {
+// ✅ PAGINACIÓN ALERTAS: mostrarPanelAlertaSeguro recibe page y muestra 10 en 10
+async function mostrarPanelAlertaSeguro(chatId, tipo = "", page = 0) {
+  const safePage = Math.max(0, Number(page || 0));
+
   try {
     if (tipo === "vencidos") {
       const rows = await getAlertaClientesLocal("vencidos");
       return upsertPanel(
         chatId,
-        renderAlertaClientesMarkdown(rows, "🔴 *CLIENTES VENCIDOS*", "Sin clientes vencidos."),
-        [
-          [{ text: "⬅️ Volver alertas", callback_data: "menu:alertas" }],
-          [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
-        ]
+        renderAlertaClientesMarkdown(rows, "🔴 *CLIENTES VENCIDOS*", "Sin clientes vencidos.", safePage),
+        buildAlertNavKeyboard("vencidos", safePage, rows.length)
       );
     }
 
@@ -1299,11 +1343,8 @@ async function mostrarPanelAlertaSeguro(chatId, tipo = "") {
       const rows = await getAlertaClientesLocal("hoy");
       return upsertPanel(
         chatId,
-        renderAlertaClientesMarkdown(rows, "🟠 *VENCEN HOY*", "Sin renovaciones para hoy."),
-        [
-          [{ text: "⬅️ Volver alertas", callback_data: "menu:alertas" }],
-          [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
-        ]
+        renderAlertaClientesMarkdown(rows, "🟠 *VENCEN HOY*", "Sin renovaciones para hoy.", safePage),
+        buildAlertNavKeyboard("hoy", safePage, rows.length)
       );
     }
 
@@ -1312,11 +1353,8 @@ async function mostrarPanelAlertaSeguro(chatId, tipo = "") {
       const rows = await getAlertaClientesLocal("3dias");
       return upsertPanel(
         chatId,
-        renderAlertaClientesMarkdown(rows, `⏳ *VENCEN EN 3 DÍAS (${escMD(fecha3)})*`, "Sin renovaciones en 3 días."),
-        [
-          [{ text: "⬅️ Volver alertas", callback_data: "menu:alertas" }],
-          [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
-        ]
+        renderAlertaClientesMarkdown(rows, `⏳ *VENCEN EN 3 DÍAS (${escMD(fecha3)})*`, "Sin renovaciones en 3 días.", safePage),
+        buildAlertNavKeyboard("3dias", safePage, rows.length)
       );
     }
 
@@ -1324,11 +1362,8 @@ async function mostrarPanelAlertaSeguro(chatId, tipo = "") {
       const rows = await getInventarioCriticoLocal();
       return upsertPanel(
         chatId,
-        renderInventarioCriticoMarkdown(rows),
-        [
-          [{ text: "⬅️ Volver alertas", callback_data: "menu:alertas" }],
-          [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
-        ]
+        renderInventarioCriticoMarkdown(rows, safePage),
+        buildAlertNavKeyboard("inventario", safePage, rows.length)
       );
     }
 
@@ -1916,20 +1951,33 @@ bot.on("callback_query", async (q) => {
       if (data === "menu:renovaciones") return menuRenovaciones(chatId, userId);
 
       // ✅ FIX ALERTAS: usar startsWith para tolerar el sufijo :0 de paginación
+      // Formato: alert:vencidos:0 o alert:pg:vencidos:2 (navegación)
+      if (data.startsWith("alert:pg:")) {
+        // Paginación directa: alert:pg:tipo:page
+        const parts = data.split(":");
+        const tipo = parts[2] || "";
+        const pg = Number(parts[3] || 0);
+        return mostrarPanelAlertaSeguro(chatId, tipo, pg);
+      }
+
       if (data.startsWith("alert:vencidos") || data.startsWith("alertas:vencidos")) {
-        return mostrarPanelAlertaSeguro(chatId, "vencidos");
+        const pg = Number((data.split(":")[2]) || 0);
+        return mostrarPanelAlertaSeguro(chatId, "vencidos", isNaN(pg) ? 0 : pg);
       }
       if (data.startsWith("alert:hoy") || data.startsWith("alertas:hoy")) {
-        return mostrarPanelAlertaSeguro(chatId, "hoy");
+        const pg = Number((data.split(":")[2]) || 0);
+        return mostrarPanelAlertaSeguro(chatId, "hoy", isNaN(pg) ? 0 : pg);
       }
       if (data.startsWith("alert:3dias") || data.startsWith("alertas:3dias")) {
-        return mostrarPanelAlertaSeguro(chatId, "3dias");
+        const pg = Number((data.split(":")[2]) || 0);
+        return mostrarPanelAlertaSeguro(chatId, "3dias", isNaN(pg) ? 0 : pg);
       }
       if (data.startsWith("alert:inventario") || data.startsWith("alertas:inventario")) {
-        return mostrarPanelAlertaSeguro(chatId, "inventario");
+        const pg = Number((data.split(":")[2]) || 0);
+        return mostrarPanelAlertaSeguro(chatId, "inventario", isNaN(pg) ? 0 : pg);
       }
       if (data.startsWith("alert:txt:hoy") || data.startsWith("alertas:txt:hoy")) {
-        return mostrarPanelAlertaSeguro(chatId, "txt");
+        return mostrarPanelAlertaSeguro(chatId, "txt", 0);
       }
 
       if (data === "fin:menu:registro") return menuFinRegistro(chatId);
