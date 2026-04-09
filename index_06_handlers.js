@@ -82,6 +82,10 @@ const {
   menuServicio,
   patchServicio,
   addServicioTx,
+  eliminarServicioTx,
+  menuListaRenovacion,
+  menuRenovacionServicio,
+  enviarPanelRenovacionesConAcciones,
   serviciosConIndiceOriginal,
   clienteDuplicado,
 } = require("./index_03_clientes_crm");
@@ -2613,36 +2617,30 @@ bot.on("callback_query", async (q) => {
         return enviarFichaCliente(chatId, clientId);
       }
 
+      // ✅ LISTA DE SERVICIOS A RENOVAR (ficha del cliente)
       if (data.startsWith("cli:ren:list:")) {
         const clientId = data.split(":")[3];
-        const c = await getCliente(clientId);
-        if (!c) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
-        const servicios = serviciosConIndiceOriginal(Array.isArray(c.servicios) ? c.servicios : []);
-        if (!servicios.length) return bot.sendMessage(chatId, "⚠️ Este cliente no tiene servicios.");
-        const kb = servicios.map((s, i) => [{ text: safeBtnLabelLocal(`🔄 ${i + 1}) ${s.plataforma} — ${s.correo} (Ren: ${s.fechaRenovacion || "-"})`, 60), callback_data: `cli:ren:menu:${clientId}:${s.idxOriginal}` }]);
-        kb.push([{ text: "⬅️ Volver", callback_data: `cli:view:${clientId}` }]);
-        kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
-        return upsertPanel(chatId, "🔄 *RENOVAR SERVICIO*\nSeleccione cuál renovar:", kb);
+        return menuListaRenovacion(chatId, clientId);
       }
 
-      if (data.startsWith("cli:ren:menu:")) {
+      // ✅ PANEL DE ACCIÓN — 4 opciones por servicio (desde ficha del cliente)
+      if (data.startsWith("cli:ren:one:")) {
         const parts = data.split(":");
         const clientId = parts[3];
         const idx = Number(parts[4]);
-        const c = await getCliente(clientId);
-        if (!c) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
-        const servicios = Array.isArray(c.servicios) ? c.servicios : [];
-        if (idx < 0 || idx >= servicios.length) return bot.sendMessage(chatId, "⚠️ Servicio inválido.");
-        const s = servicios[idx] || {};
-        return upsertPanel(chatId, `🔄 *RENOVAR SERVICIO #${idx + 1}*\n📌 ${escMD(s.plataforma || "-")}\n${identIcon(s.plataforma || "")} ${escMD(s.correo || "-")}\n📅 Actual: *${escMD(s.fechaRenovacion || "-")}*`, [
-          [{ text: "➕ +30 días", callback_data: `cli:ren:+30:${clientId}:${idx}` }],
-          [{ text: "📅 Poner fecha manual", callback_data: `cli:ren:fecha:${clientId}:${idx}` }],
-          [{ text: "⬅️ Volver lista", callback_data: `cli:ren:list:${clientId}` }],
-          [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
-        ]);
+        return menuRenovacionServicio(chatId, clientId, idx);
       }
 
-      if (data.startsWith("cli:ren:+30:")) {
+      // ✅ ACCIÓN DESDE PANEL DEL DÍA
+      if (data.startsWith("ren:accion:")) {
+        const parts = data.split(":");
+        const clientId = parts[2];
+        const idx = Number(parts[3]);
+        return menuRenovacionServicio(chatId, clientId, idx);
+      }
+
+      // ✅ RENOVAR +30 DÍAS
+      if (data.startsWith("cli:ren:auto:")) {
         const parts = data.split(":");
         const clientId = parts[3];
         const idx = Number(parts[4]);
@@ -2652,11 +2650,89 @@ bot.on("callback_query", async (q) => {
         const c = doc.data() || {};
         const servicios = Array.isArray(c.servicios) ? c.servicios : [];
         if (idx < 0 || idx >= servicios.length) return bot.sendMessage(chatId, "⚠️ Servicio inválido.");
-        const actual = String(servicios[idx].fechaRenovacion || hoyDMY());
-        const base = isFechaDMY(actual) ? actual : hoyDMY();
-        servicios[idx] = { ...(servicios[idx] || {}), fechaRenovacion: addDaysDMY(base, 30) };
+        const base = isFechaDMY(String(servicios[idx].fechaRenovacion || "")) ? String(servicios[idx].fechaRenovacion) : hoyDMY();
+        servicios[idx] = { ...servicios[idx], fechaRenovacion: addDaysDMY(base, 30) };
         await ref.set({ servicios, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
-        return menuServicio(chatId, clientId, idx);
+        const { cacheInvalidatePrefix: cIP } = require("./index_01_core");
+        cIP(`clientes:doc:${clientId}`);
+        await bot.sendMessage(chatId, `✅ Renovado +30 días\nNueva fecha: *${escMD(servicios[idx].fechaRenovacion)}*`, { parse_mode: "Markdown" });
+        return enviarFichaCliente(chatId, clientId);
+      }
+
+      // ✅ RENOVAR CON FECHA MANUAL
+      if (data.startsWith("cli:ren:manual:")) {
+        const parts = data.split(":");
+        const clientId = parts[3];
+        const idx = Number(parts[4]);
+        pending.set(String(chatId), { mode: "cliRenovarFechaManual", clientId, idx });
+        return upsertPanel(chatId, "📅 *Renovar (fecha manual)*\nEscriba la nueva fecha en formato dd/mm/yyyy:", [[{ text: "⬅️ Cancelar", callback_data: `cli:ren:one:${clientId}:${idx}` }]]);
+      }
+
+      // ✅ CAMBIÓ DE SERVICIO — elimina el actual y abre wizard para agregar uno nuevo
+      if (data.startsWith("cli:ren:cambio:")) {
+        const parts = data.split(":");
+        const clientId = parts[3];
+        const idx = Number(parts[4]);
+        try {
+          const result = await eliminarServicioTx(clientId, idx);
+          await bot.sendMessage(chatId,
+            `🔄 *Servicio eliminado*\n\n` +
+            `📦 ${escMD(result.eliminado?.plataforma || "-")} — ${escMD(result.eliminado?.correo || "-")}\n` +
+            `_El slot en inventario fue liberado._\n\nAhora agregue el nuevo servicio:`,
+            { parse_mode: "Markdown" }
+          );
+          // Abrir wizard para agregar nuevo servicio al mismo cliente
+          const st = wizard.get(String(chatId)) || {};
+          wizard.set(String(chatId), { step: 4, clientId, nombre: result.nombreCliente, telefono: st.telefono || "", vendedor: st.vendedor || "", servicio: {}, servStep: 1 });
+          return bot.sendMessage(chatId, "📌 Seleccione la nueva plataforma:", {
+            reply_markup: { inline_keyboard: kbPlataformasWiz("wiz:plat", clientId) },
+          });
+        } catch (e) {
+          logErr("cli:ren:cambio", e);
+          return bot.sendMessage(chatId, `⚠️ Error: ${e.message}`);
+        }
+      }
+
+      // ✅ NO RENOVÓ — pedir confirmación antes de eliminar
+      if (data.startsWith("cli:ren:noren:ask:")) {
+        const parts = data.split(":");
+        const clientId = parts[4];
+        const idx = Number(parts[5]);
+        const c = await getCliente(clientId);
+        if (!c) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
+        const servicios = Array.isArray(c.servicios) ? c.servicios : [];
+        const s = servicios[idx] || {};
+        return upsertPanel(chatId,
+          `❌ *NO RENOVÓ — CONFIRMAR ELIMINACIÓN*\n\n` +
+          `👤 *${escMD(c.nombrePerfil || "Cliente")}*\n` +
+          `${iconPlataforma(s.plataforma || "")} *${escMD(humanPlatAlertLocal(s.plataforma || ""))}*\n` +
+          `${identIcon(s.plataforma || "")} ${escMD(s.correo || "-")}\n\n` +
+          `_El servicio se eliminará y el slot en inventario quedará libre._\n\n¿Confirmar?`,
+          [
+            [{ text: "✅ Sí, eliminar", callback_data: `cli:ren:noren:ok:${clientId}:${idx}` }],
+            [{ text: "⬅️ Cancelar",    callback_data: `cli:ren:one:${clientId}:${idx}` }],
+          ]
+        );
+      }
+
+      // ✅ NO RENOVÓ — ejecutar eliminación
+      if (data.startsWith("cli:ren:noren:ok:")) {
+        const parts = data.split(":");
+        const clientId = parts[4];
+        const idx = Number(parts[5]);
+        try {
+          const result = await eliminarServicioTx(clientId, idx);
+          await bot.sendMessage(chatId,
+            `✅ *Servicio eliminado correctamente*\n\n` +
+            `📦 ${escMD(result.eliminado?.plataforma || "-")} — ${escMD(result.eliminado?.correo || "-")}\n` +
+            `_Slot liberado en inventario._`,
+            { parse_mode: "Markdown" }
+          );
+          return enviarFichaCliente(chatId, clientId);
+        } catch (e) {
+          logErr("cli:ren:noren:ok", e);
+          return bot.sendMessage(chatId, `⚠️ Error: ${e.message}`);
+        }
       }
 
       if (data.startsWith("cli:ren:all:ask:")) {
@@ -2680,14 +2756,6 @@ bot.on("callback_query", async (q) => {
         return enviarFichaCliente(chatId, clientId);
       }
 
-      if (data.startsWith("cli:ren:fecha:")) {
-        const parts = data.split(":");
-        const clientId = parts[3];
-        const idx = Number(parts[4]);
-        pending.set(String(chatId), { mode: "cliRenovarFechaManual", clientId, idx });
-        return upsertPanel(chatId, "📅 *Renovar (fecha manual)*\nEscriba la nueva fecha en formato dd/mm/yyyy:", [[{ text: "⬅️ Cancelar", callback_data: `cli:ren:menu:${clientId}:${idx}` }]]);
-      }
-
       if (data === "txt:todos:hoy") {
         if (!(await safeIsSuperAdminLocal(userId))) return bot.sendMessage(chatId, "⛔ Solo SUPERADMIN.");
         return enviarTXTATodosHoy(chatId);
@@ -2697,7 +2765,9 @@ bot.on("callback_query", async (q) => {
     if (data === "ren:hoy") {
       const fecha = hoyDMY();
       const list = await obtenerRenovacionesPorFecha(fecha, adminOk ? null : vend?.nombre);
-      return bot.sendMessage(chatId, renovacionesTexto(list, fecha, adminOk ? null : vend?.nombre), { parse_mode: "Markdown" });
+      // ✅ Admin ve panel con botones de acción. Vendedor ve texto simple.
+      if (adminOk) return enviarPanelRenovacionesConAcciones(chatId, fecha, list);
+      return bot.sendMessage(chatId, renovacionesTexto(list, fecha, vend?.nombre), { parse_mode: "Markdown" });
     }
 
     if (data === "txt:hoy") {
