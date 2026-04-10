@@ -9,6 +9,8 @@
    - DASHBOARD: /dashboard y botón en menú principal
    - CACHÉ: roles y revendedores con invalidación tras cambios
    - invalidarCacheAdmins() / invalidarCacheRevendedores() en admin cmds
+   - HISTORIAL REAL: uso de enviarHistorialClienteTXTReal
+   - COMANDOS SIN SLASH: Atajos de texto directo
 */
 
 const http = require("http");
@@ -76,6 +78,7 @@ const {
   getCliente,
   clienteResumenTXT,
   enviarHistorialClienteTXT,
+  enviarHistorialClienteTXTReal,
   kbPlataformasWiz,
   menuEditarCliente,
   menuListaServicios,
@@ -1820,6 +1823,27 @@ bot.onText(/^\/menu(?:@\w+)?$/i, async (msg) => {
   return sendBottomMainMenu(chatId, userId);
 });
 
+// ✅ ATajos DE TEXTO SIN SLASH
+const COMANDOS_SIN_SLASH = [
+  { texto: "menu",       accion: (chatId, userId) => sendBottomMainMenu(chatId, userId), soloAdmin: false },
+  { texto: "inicio",     accion: (chatId, userId) => sendBottomMainMenu(chatId, userId), soloAdmin: false },
+  { texto: "inventario", accion: (chatId) => menuInventario(chatId), soloAdmin: true },
+  { texto: "finanzas",   accion: (chatId) => menuPagos(chatId), soloAdmin: true },
+  { texto: "clientes",   accion: (chatId) => menuClientes(chatId), soloAdmin: true },
+  { texto: "alertas",    accion: (chatId) => menuAlertas(chatId), soloAdmin: true },
+  { texto: "dashboard",  accion: (chatId) => generarDashboard(chatId), soloAdmin: true },
+];
+
+COMANDOS_SIN_SLASH.forEach(({ texto, accion, soloAdmin }) => {
+  bot.onText(new RegExp(`^${escapeRegex(texto)}$`, "i"), async (msg) => {
+    if (!hasRuntimeLock()) return;
+    const chatId = msg.chat.id; const userId = msg.from.id;
+    if (!(await userHasAccessFromMessage(msg))) return;
+    if (soloAdmin && !(await safeIsAdminLocal(userId))) return;
+    return accion(chatId, userId);
+  });
+});
+
 // ===============================
 // ATAJOS INVENTARIO
 // ===============================
@@ -2441,7 +2465,7 @@ bot.on("callback_query", async (q) => {
       if (data === "cli:crm:resumen") return enviarResumenCRMLocal(chatId);
       if (data === "cli:txt:vendedores_split") return reporteClientesSplitPorVendedorTXT(chatId);
 
-      if (data.startsWith("cli:txt:hist:")) return enviarHistorialClienteTXT(chatId, data.split(":")[3]);
+      if (data.startsWith("cli:txt:hist:")) return enviarHistorialClienteTXTReal(chatId, data.split(":")[3]);
 
       if (data.startsWith("cli:txt:one:")) {
         const clientId = data.split(":")[3];
