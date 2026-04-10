@@ -6,6 +6,7 @@
    ✅ AJUSTES CLAVE:
    - Se respeta correo || usuario en vistas y botones
    - disneys ajustado a capacidad 3
+   - ✅ v4: Eliminada línea "Tipo:" innecesaria del panel de cuenta
 */
 
 const {
@@ -487,6 +488,9 @@ async function mostrarStockGeneral(chatId) {
   }
 }
 
+// ===============================
+// ✅ PANEL DE CUENTA — sin línea "Tipo:"
+// ===============================
 async function mostrarPanelCorreo(chatId, plataforma = "", acceso = "") {
   const plat = normalizarPlataforma(plataforma);
   const found = await buscarCorreoInventarioPorPlatCorreo(plat, acceso);
@@ -497,10 +501,10 @@ async function mostrarPanelCorreo(chatId, plataforma = "", acceso = "") {
   const clave = String(data.clave || "Sin clave");
   const { capacidad, ocupados, disponibles, estado } = formatCuentaResumen(data, plat);
 
+  // ✅ Se eliminó la línea "🔐 Tipo:" — era innecesaria y quitaba espacio
   let txt = `📦 *PANEL DE CUENTA*\n\n`;
   txt += `📌 *Plataforma:* ${escMD(humanPlatSafe(plat))}\n`;
   txt += `${getIdentIcon(plat)} *${escMD(getIdentLabel(plat))}:* ${escMD(ident)}\n`;
-  txt += `🔐 *Tipo:* ${escMD(getAccessTypeLabel(plat))}\n`;
   txt += `🔑 *Clave:* ${escMD(clave)}\n`;
   txt += `👥 *Ocupados:* ${ocupados}/${capacidad}\n`;
   txt += `✅ *Disponibles:* ${disponibles}\n`;
