@@ -764,7 +764,10 @@ async function menuRenovacionServicio(chatId, clientId, idx) {
     `¿Qué pasó con este servicio?`;
 
   return upsertPanel(chatId, txt, [
-    [{ text: "✅ Renovó — +30 días",         callback_data: `cli:ren:auto:${clientId}:${idx}` }],
+    [
+      { text: "✅ +30 días",  callback_data: `cli:ren:auto:${clientId}:${idx}` },
+      { text: "✅ +31 días",  callback_data: `cli:ren:auto31:${clientId}:${idx}` },
+    ],
     [{ text: "📅 Renovó — otra fecha",        callback_data: `cli:ren:manual:${clientId}:${idx}` }],
     [{ text: "🔄 Cambió de servicio",         callback_data: `cli:ren:cambio:${clientId}:${idx}` }],
     [{ text: "❌ No renovó — eliminar",       callback_data: `cli:ren:noren:ask:${clientId}:${idx}` }],
