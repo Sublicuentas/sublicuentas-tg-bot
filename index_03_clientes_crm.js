@@ -1,23 +1,13 @@
-/* ✅ SUBLICUENTAS TG BOT — PARTE 3/6 OPTIMIZADA v3
-   CLIENTES / CRM / WIZARD / TXT / RENOVACIONES
+/* ✅ SUBLICUENTAS TG BOT — PARTE 3/6 OPTIMIZADA v4
+   CLIENTES / CRM / WIZARD / TXT / RENOVACIONES / HISTORIAL REAL
    -----------------------------------------------
-   ✅ OPTIMIZACIONES v2:
-   - buscarClienteRobusto: queries indexadas primero, scan como fallback
-   - buscarPorTelefonoTodos: query exacta antes de scan
-   - obtenerRenovacionesPorFecha: early-return por vendedor
-   - Caché de clientes individuales (getCliente)
-   - cacheInvalidatePrefix tras escrituras
-
-   ✅ NUEVO v3 — ACCIONES DE RENOVACIÓN:
-   - menuRenovacionServicio: panel con 4 opciones por servicio
-       ✅ Renovar +30 días (automático)
-       📅 Renovar con fecha manual
-       🔄 Cambió de servicio (elimina y abre wizard para nuevo)
-       ❌ No renovó (elimina servicio + libera inventario)
-   - eliminarServicioTx: elimina servicio y libera slot en inventario
-   - menuListaRenovacion: lista de servicios a renovar por cliente
-   - renovacionesTextoConBotones: panel de renovaciones del día con botones por fila
-   - menuAccionRenovacionDesdePanel: mismas 4 opciones desde el panel del día
+   ✅ NUEVO v4 — HISTORIAL REAL:
+   - registrarEventoHistorial: guarda cada cambio en colección historial_clientes
+   - getHistorialCliente: lee todos los eventos de un cliente
+   - generarHistorialTXT: genera TXT con servicios actuales + línea de tiempo de eventos
+   - enviarHistorialClienteTXTReal: envía el TXT real al chat
+   - Registro automático en: addServicioTx, patchServicio, eliminarServicioTx,
+     renovaciones (+30, +31, manual), cambio de servicio, no renovó
 */
 
 const fs = require("fs");
@@ -28,7 +18,6 @@ const utils = require("./index_02_utils_roles");
 
 const { bot, admin, db, PLATAFORMAS } = core;
 
-// ✅ Fallbacks seguros: si index_01_core no exporta caché, se usa no-op para no romper el módulo
 const cacheGet           = typeof core.cacheGet            === "function" ? core.cacheGet            : () => null;
 const cacheSet           = typeof core.cacheSet            === "function" ? core.cacheSet            : () => {};
 const cacheInvalidatePrefix = typeof core.cacheInvalidatePrefix === "function" ? core.cacheInvalidatePrefix : () => {};
@@ -59,6 +48,7 @@ const PLATFORM_KEYS = Array.isArray(PLATAFORMAS) ? PLATAFORMAS.map((x) => String
 const CLIENTES_COLLECTION    = "clientes";
 const INVENTARIO_COLLECTION  = "inventario";
 const REVENDEDORES_COLLECTION= "revendedores";
+const HISTORIAL_COLLECTION   = "historial_clientes";
 
 // ===============================
 // HELPERS GENERALES
@@ -284,12 +274,144 @@ async function removeServicioDeInventario({ clienteNombre = "", plataforma = "",
 }
 
 // ===============================
-// ✅ LECTURAS OPTIMIZADAS
+// ✅ HISTORIAL REAL DE CLIENTE
 // ===============================
 
 /**
- * getCliente: con caché de 120s por ID
+ * Registra un evento en la colección historial_clientes.
+ * Se llama automáticamente desde addServicioTx, patchServicio,
+ * eliminarServicioTx y acciones de renovación.
  */
+async function registrarEventoHistorial(clientId, evento = {}) {
+  try {
+    const ref = db.collection(HISTORIAL_COLLECTION).doc();
+    await ref.set({
+      clientId: String(clientId || ""),
+      fecha: hoyDMY(),
+      fechaTS: admin.firestore.FieldValue.serverTimestamp(),
+      ...evento,
+    });
+  } catch (e) {
+    logErr("registrarEventoHistorial", e);
+  }
+}
+
+/**
+ * Lee todos los eventos históricos de un cliente, ordenados por fecha.
+ */
+async function getHistorialCliente(clientId) {
+  try {
+    const snap = await db.collection(HISTORIAL_COLLECTION)
+      .where("clientId", "==", String(clientId || ""))
+      .get();
+
+    const eventos = snap.docs
+      .map((d) => ({ id: d.id, ...(d.data() || {}) }))
+      .sort((a, b) => {
+        const ta = a.fechaTS?.toMillis?.() || parseDMYtoTS(a.fecha || "") || 0;
+        const tb = b.fechaTS?.toMillis?.() || parseDMYtoTS(b.fecha || "") || 0;
+        return ta - tb;
+      });
+
+    return eventos;
+  } catch (e) {
+    logErr("getHistorialCliente", e);
+    return [];
+  }
+}
+
+/**
+ * Genera el TXT completo de historial:
+ * - Datos del cliente
+ * - Servicios actuales
+ * - Línea de tiempo de eventos (correos que ha tenido, cambios, pagos, renovaciones)
+ */
+async function generarHistorialTXT(clientId) {
+  const c = await getCliente(clientId);
+  if (!c) return null;
+
+  const eventos = await getHistorialCliente(clientId);
+  const servicios = Array.isArray(c.servicios) ? c.servicios : [];
+  const resumen = resumenGeneralCliente(servicios);
+
+  let txt = "============================\n";
+  txt += "HISTORIAL DEL CLIENTE\n";
+  txt += "============================\n\n";
+
+  txt += `Nombre: ${c.nombrePerfil || "Sin nombre"}\n`;
+  txt += `Telefono: ${c.telefono || "-"}\n`;
+  txt += `Vendedor: ${c.vendedor || "-"}\n`;
+  txt += `Estado actual: ${resumen.estadoTexto}\n`;
+  txt += `Total mensual actual: ${Number(resumen.total || 0).toFixed(2)} Lps\n`;
+  txt += `Proxima renovacion: ${resumen.proxima}\n`;
+  txt += `Servicios activos: ${servicios.length}\n\n`;
+
+  txt += "============================\n";
+  txt += "SERVICIOS ACTUALES\n";
+  txt += "============================\n";
+
+  if (!servicios.length) {
+    txt += "(sin servicios)\n";
+  } else {
+    servicios.forEach((s, i) => {
+      const est = getEstadoServicio(s.fechaRenovacion || "");
+      txt += `\n${i + 1}) ${humanPlataforma(s.plataforma || "")}\n`;
+      txt += `${getIdentLabelLocal(s.plataforma || "")}: ${s.correo || "-"}\n`;
+      txt += `Clave/PIN: ${s.pin || "-"}\n`;
+      txt += `Precio: ${Number(s.precio || 0).toFixed(2)} Lps\n`;
+      txt += `Renovacion: ${s.fechaRenovacion || "-"}\n`;
+      txt += `Estado: ${est.texto}\n`;
+    });
+  }
+
+  txt += "\n============================\n";
+  txt += "HISTORIAL DE EVENTOS\n";
+  txt += "============================\n\n";
+
+  if (!eventos.length) {
+    txt += "(Sin historial de eventos registrados aun)\n";
+  } else {
+    eventos.forEach((ev, i) => {
+      txt += `${i + 1}) [${ev.fecha || "-"}] ${ev.tipo || "evento"}\n`;
+      if (ev.descripcion)         txt += `   Detalle: ${ev.descripcion}\n`;
+      if (ev.plataforma)          txt += `   Plataforma: ${humanPlataforma(ev.plataforma)}\n`;
+      if (ev.correo)              txt += `   Correo/Usuario: ${ev.correo}\n`;
+      if (ev.correoAnterior)      txt += `   Correo anterior: ${ev.correoAnterior}\n`;
+      if (ev.pin)                 txt += `   PIN: ${ev.pin}\n`;
+      if (ev.precio !== undefined && ev.precio !== null)
+                                  txt += `   Precio: ${Number(ev.precio || 0).toFixed(2)} Lps\n`;
+      if (ev.precioAnterior !== undefined && ev.precioAnterior !== null)
+                                  txt += `   Precio anterior: ${Number(ev.precioAnterior || 0).toFixed(2)} Lps\n`;
+      if (ev.fechaRenovacion)     txt += `   Fecha renovacion: ${ev.fechaRenovacion}\n`;
+      if (ev.fechaAnterior)       txt += `   Fecha anterior: ${ev.fechaAnterior}\n`;
+      txt += "\n";
+    });
+  }
+
+  return txt;
+}
+
+/**
+ * Envía el historial real al chat como archivo TXT.
+ */
+async function enviarHistorialClienteTXTReal(chatId, clientId) {
+  const c = await getCliente(clientId);
+  if (!c) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
+
+  const contenido = await generarHistorialTXT(clientId);
+  if (!contenido) return bot.sendMessage(chatId, "⚠️ No se pudo generar el historial.");
+
+  return enviarTxtComoArchivo(
+    chatId,
+    contenido,
+    `historial_${fileSafeName(c.nombrePerfil || clientId, "cliente").replace(/\.txt$/i, "")}.txt`
+  );
+}
+
+// ===============================
+// ✅ LECTURAS OPTIMIZADAS
+// ===============================
+
 async function getCliente(clientId) {
   const id = String(clientId || "").trim();
   if (!id) return null;
@@ -311,7 +433,6 @@ async function clienteDuplicado(nombre = "", telefono = "", excludeId = null) {
   const telefonoNorm = onlyDigits(telefono);
   if (!nombreNorm || !telefonoNorm) return false;
 
-  // ✅ Query indexada en lugar de scan completo
   try {
     const snap = await db.collection(CLIENTES_COLLECTION)
       .where("nombre_norm", "==", nombreNorm)
@@ -325,7 +446,6 @@ async function clienteDuplicado(nombre = "", telefono = "", excludeId = null) {
     }
     return false;
   } catch (_) {
-    // Fallback scan si los índices no existen aún
     const snap = await db.collection(CLIENTES_COLLECTION).get();
     for (const d of snap.docs) {
       if (excludeId && String(d.id) === String(excludeId)) continue;
@@ -336,16 +456,12 @@ async function clienteDuplicado(nombre = "", telefono = "", excludeId = null) {
   }
 }
 
-/**
- * buscarPorTelefonoTodos: query por telefono_norm primero
- */
 async function buscarPorTelefonoTodos(query = "") {
   const q = onlyDigits(query);
   if (!q) return [];
 
   const out = new Map();
 
-  // ✅ Query exacta por telefono_norm (índice simple, no requiere índice compuesto)
   try {
     const snap = await db.collection(CLIENTES_COLLECTION)
       .where("telefono_norm", "==", q)
@@ -354,7 +470,6 @@ async function buscarPorTelefonoTodos(query = "") {
     snap.forEach((d) => { if (!out.has(d.id)) out.set(d.id, { id: d.id, ...(d.data() || {}) }); });
   } catch (_) {}
 
-  // Si no encontró nada con exacto, hacer scan parcial solo por teléfono
   if (!out.size) {
     const snap = await db.collection(CLIENTES_COLLECTION).get();
     snap.forEach((d) => {
@@ -367,9 +482,6 @@ async function buscarPorTelefonoTodos(query = "") {
   return Array.from(out.values());
 }
 
-/**
- * buscarClienteRobusto: queries indexadas primero, scan solo si no hay resultados
- */
 async function buscarClienteRobusto(query = "") {
   const q = String(query || "").trim();
   const qNorm = normTxt(q);
@@ -378,7 +490,6 @@ async function buscarClienteRobusto(query = "") {
 
   const out = new Map();
 
-  // ✅ PASO 1: Queries indexadas (baratas)
   const jobs = [];
 
   if (qDigits && qDigits.length >= 7) {
@@ -401,10 +512,8 @@ async function buscarClienteRobusto(query = "") {
     }
   }
 
-  // Si ya tenemos resultados de queries indexadas, devolverlos
   if (out.size > 0) return Array.from(out.values()).slice(0, 30);
 
-  // ✅ PASO 2: Scan completo solo si queries no encontraron nada (búsqueda parcial)
   const snap = await db.collection(CLIENTES_COLLECTION).get();
 
   snap.forEach((d) => {
@@ -588,7 +697,7 @@ async function menuServicio(chatId, clientId, idx) {
 }
 
 // ===============================
-// ESCRITURAS CRM (invalidan caché)
+// ESCRITURAS CRM (invalidan caché + registran historial)
 // ===============================
 async function addServicioTx(clientId, servicio = {}) {
   const id = String(clientId || "").trim();
@@ -620,8 +729,18 @@ async function addServicioTx(clientId, servicio = {}) {
   servicios.push({ plataforma: plat, correo: ident, pin, precio, fechaRenovacion });
   await ref.set({ servicios, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
 
-  // ✅ Invalidar caché del cliente
   cacheInvalidatePrefix(`clientes:doc:${id}`);
+
+  // ✅ Registrar en historial
+  await registrarEventoHistorial(id, {
+    tipo: "servicio_agregado",
+    descripcion: `Se agregó ${humanPlataforma(plat)}`,
+    plataforma: plat,
+    correo: ident,
+    pin,
+    precio,
+    fechaRenovacion,
+  });
 
   return { ok: true, servicio: { plataforma: plat, correo: ident, pin, precio, fechaRenovacion }, sync };
 }
@@ -660,8 +779,32 @@ async function patchServicio(clientId, idx, patch = {}) {
   servicios[idx] = siguiente;
   await ref.set({ servicios, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
 
-  // ✅ Invalidar caché del cliente
   cacheInvalidatePrefix(`clientes:doc:${String(clientId)}`);
+
+  // ✅ Registrar cambios relevantes en historial
+  const cambios = [];
+  if (patch.correo && patch.correo !== actual.correo)
+    cambios.push(`Correo: ${actual.correo || "-"} → ${patch.correo}`);
+  if (patch.pin && patch.pin !== actual.pin)
+    cambios.push(`PIN cambiado`);
+  if (patch.precio !== undefined && patch.precio !== actual.precio)
+    cambios.push(`Precio: ${Number(actual.precio || 0).toFixed(2)} → ${Number(patch.precio || 0).toFixed(2)} Lps`);
+  if (patch.fechaRenovacion && patch.fechaRenovacion !== actual.fechaRenovacion)
+    cambios.push(`Fecha: ${actual.fechaRenovacion || "-"} → ${patch.fechaRenovacion}`);
+  if (patch.plataforma && normalizarPlataforma(patch.plataforma) !== normalizarPlataforma(actual.plataforma || ""))
+    cambios.push(`Plataforma: ${humanPlataforma(actual.plataforma)} → ${humanPlataforma(patch.plataforma)}`);
+
+  if (cambios.length) {
+    await registrarEventoHistorial(String(clientId), {
+      tipo: "servicio_editado",
+      descripcion: cambios.join(" | "),
+      plataforma: siguiente.plataforma,
+      correo: siguiente.correo,
+      correoAnterior: actual.correo,
+      precioAnterior: actual.precio,
+      fechaAnterior: actual.fechaRenovacion,
+    });
+  }
 
   const cambioInventario =
     normalizarPlataforma(previo.plataforma || "") !== normalizarPlataforma(siguiente.plataforma || "") ||
@@ -677,7 +820,7 @@ async function patchServicio(clientId, idx, patch = {}) {
 }
 
 // ===============================
-// ✅ ELIMINAR SERVICIO (con limpieza de inventario)
+// ✅ ELIMINAR SERVICIO (con limpieza de inventario + historial)
 // ===============================
 async function eliminarServicioTx(clientId, idx) {
   const id = String(clientId || "").trim();
@@ -705,12 +848,22 @@ async function eliminarServicioTx(clientId, idx) {
     });
   } catch (e) { logErr("eliminarServicioTx.removeInventario", e); }
 
+  // ✅ Registrar en historial
+  await registrarEventoHistorial(id, {
+    tipo: "servicio_eliminado",
+    descripcion: `Se eliminó ${humanPlataforma(eliminado.plataforma || "")}`,
+    plataforma: eliminado.plataforma || "",
+    correo: eliminado.correo || "",
+    pin: eliminado.pin || "",
+    precio: eliminado.precio || 0,
+    fechaRenovacion: eliminado.fechaRenovacion || "",
+  });
+
   return { ok: true, eliminado, nombreCliente: c.nombrePerfil || "" };
 }
 
 // ===============================
-// ✅ MENÚ DE LISTA RENOVACIÓN (desde ficha del cliente)
-// Muestra los servicios como botones para elegir cuál gestionar
+// ✅ MENÚ DE LISTA RENOVACIÓN
 // ===============================
 async function menuListaRenovacion(chatId, clientId) {
   const c = await getCliente(clientId);
@@ -745,7 +898,6 @@ async function menuListaRenovacion(chatId, clientId) {
 
 // ===============================
 // ✅ MENÚ ACCIÓN DE RENOVACIÓN — 4 opciones por servicio
-// Usado desde ficha del cliente Y desde panel de renovaciones del día
 // ===============================
 async function menuRenovacionServicio(chatId, clientId, idx) {
   const c = await getCliente(clientId);
@@ -781,7 +933,6 @@ async function menuRenovacionServicio(chatId, clientId, idx) {
 
 // ===============================
 // ✅ PANEL DE RENOVACIONES DEL DÍA CON BOTONES
-// Muestra lista + botón de acción por cada perfil
 // ===============================
 async function enviarPanelRenovacionesConAcciones(chatId, fecha, rows = []) {
   if (!rows.length) {
@@ -797,7 +948,6 @@ async function enviarPanelRenovacionesConAcciones(chatId, fecha, rows = []) {
     `*Total esperado:* ${escMD(`${total.toFixed(2)} Lps`)}\n\n` +
     `Seleccione un perfil para gestionar su renovación:`;
 
-  // Botón por cada renovación — máximo 20 para no saturar el panel
   const kb = rows.slice(0, 20).map((x, i) => [{
     text: safeBtnLabel(`${i + 1}. ${iconPlataforma(x.plataforma || "")} ${x.nombrePerfil || "Sin nombre"} — ${humanPlataforma(x.plataforma || "")}`),
     callback_data: `ren:accion:${x.clientId}:${x.idx}`,
@@ -813,6 +963,7 @@ async function enviarPanelRenovacionesConAcciones(chatId, fecha, rows = []) {
 
   return upsertPanel(chatId, txt, kb);
 }
+
 async function wizardStart(chatId) {
   wizard.set(String(chatId), { step: 1, clientId: null, nombre: "", telefono: "", vendedor: "", servicio: {}, servStep: 1 });
   return upsertPanel(chatId, "👤 *NUEVO CLIENTE*\n\n(1/3) Escriba el *nombre del cliente*: ", [[{ text: "🏠 Inicio", callback_data: "go:inicio" }]]);
@@ -879,6 +1030,12 @@ async function wizardNext(chatId, rawText = "") {
           createdAt: admin.firestore.FieldValue.serverTimestamp(),
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         });
+
+        // ✅ Registrar creación del cliente en historial
+        await registrarEventoHistorial(clientId, {
+          tipo: "cliente_creado",
+          descripcion: `Cliente creado por vendedor: ${st.vendedor}`,
+        });
       }
 
       await addServicioTx(clientId, {
@@ -913,7 +1070,6 @@ async function obtenerRenovacionesPorFecha(fechaDMY, vendedor = null) {
     const c = d.data() || {};
     const vendedorCliente = String(c.vendedor || "").trim();
 
-    // ✅ Early-return por vendedor (evita procesar servicios innecesarios)
     if (vendedorNorm && normTxt(vendedorCliente) !== vendedorNorm) return;
 
     const servicios = Array.isArray(c.servicios) ? c.servicios : [];
@@ -1054,10 +1210,9 @@ async function reporteClientesSplitPorVendedorTXT(chatId) {
   return bot.sendMessage(chatId, `✅ TXT por vendedor generados: ${enviados}`);
 }
 
+// ✅ Mantiene compatibilidad — ahora llama a enviarHistorialClienteTXTReal
 async function enviarHistorialClienteTXT(chatId, clientId) {
-  const c = await getCliente(clientId);
-  if (!c) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
-  return enviarTxtComoArchivo(chatId, clienteResumenTXT(c), `historial_${fileSafeName(c.nombrePerfil || clientId, "cliente").replace(/\.txt$/i, "")}.txt`);
+  return enviarHistorialClienteTXTReal(chatId, clientId);
 }
 
 async function enviarMisClientes(chatId, vendedorNombre = "") {
@@ -1089,10 +1244,11 @@ module.exports = {
   enviarFichaCliente, enviarListaResultadosClientes, menuEditarCliente,
   menuListaServicios, menuServicio,
   patchServicio, addServicioTx, eliminarServicioTx, removeServicioDeInventario,
-  // ✅ NUEVO v3 — renovaciones con acciones
   menuListaRenovacion, menuRenovacionServicio, enviarPanelRenovacionesConAcciones,
   kbPlataformasWiz, wizardStart, wizardNext,
   clienteResumenTXT, reporteClientesTXTGeneral, reporteClientesSplitPorVendedorTXT,
-  enviarHistorialClienteTXT, enviarMisClientes, enviarMisClientesTXT,
+  enviarHistorialClienteTXT, enviarHistorialClienteTXTReal,
+  generarHistorialTXT, getHistorialCliente, registrarEventoHistorial,
+  enviarMisClientes, enviarMisClientesTXT,
   obtenerRenovacionesPorFecha, renovacionesTexto, enviarTXT, enviarTXTATodosHoy,
 };
