@@ -2797,6 +2797,34 @@ bot.on("callback_query", async (q) => {
         return enviarFichaCliente(chatId, clientId);
       }
 
+      // ✅ RENOVAR TODOS +31 DÍAS
+      if (data.startsWith("cli:ren:all31:ask:")) {
+        const clientId = data.slice("cli:ren:all31:ask:".length);
+        return upsertPanel(chatId, "⏫ *Renovar TODOS +31 días*\n\n¿Desea renovar todos los servicios de este cliente?", [
+          [{ text: "✅ Confirmar", callback_data: `cli:ren:all31:ok:${clientId}` }],
+          [{ text: "⬅️ Cancelar", callback_data: `cli:ren:list:${clientId}` }],
+        ]);
+      }
+
+      if (data.startsWith("cli:ren:all31:ok:")) {
+        const clientId = data.slice("cli:ren:all31:ok:".length);
+        const ref = db.collection("clientes").doc(String(clientId));
+        const doc = await ref.get();
+        if (!doc.exists) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
+        const c = doc.data() || {};
+        const servicios = Array.isArray(c.servicios) ? c.servicios : [];
+        if (!servicios.length) return bot.sendMessage(chatId, "⚠️ Este cliente no tiene servicios.");
+        const nuevos31 = servicios.map((s) => {
+          const base = isFechaDMY(String(s.fechaRenovacion || "")) ? String(s.fechaRenovacion) : hoyDMY();
+          return { ...s, fechaRenovacion: addDaysDMY(base, 31) };
+        });
+        await ref.set({ servicios: nuevos31, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        const { cacheInvalidatePrefix: cIP31 } = require("./index_01_core");
+        cIP31(`clientes:doc:${clientId}`);
+        await bot.sendMessage(chatId, `✅ Todos los servicios renovados +31 días.`);
+        return enviarFichaCliente(chatId, clientId);
+      }
+
       // ✅ BAJA MASIVA — mostrar servicios con checkboxes para seleccionar cuáles eliminar
       if (data.startsWith("cli:baja:menu:")) {
         const clientId = data.slice("cli:baja:menu:".length);
