@@ -729,7 +729,10 @@ async function menuListaRenovacion(chatId, clientId) {
     text: safeBtnLabel(`${iconPlataforma(s.plataforma || "")} ${humanPlataforma(s.plataforma || "")} — ${s.fechaRenovacion || "sin fecha"}`),
     callback_data: `cli:ren:one:${clientId}:${s.idxOriginal}`,
   }]);
-  kb.push([{ text: "⏫ Renovar TODOS +30 días",  callback_data: `cli:ren:all:ask:${clientId}` }]);
+  kb.push([
+    { text: "⏫ Todos +30 días", callback_data: `cli:ren:all:ask:${clientId}` },
+    { text: "⏫ Todos +31 días", callback_data: `cli:ren:all31:ask:${clientId}` },
+  ]);
   kb.push([{ text: "🗑️ Baja masiva de servicios", callback_data: `cli:baja:menu:${clientId}` }]);
   kb.push([{ text: "⬅️ Volver ficha", callback_data: `cli:view:${clientId}` }]);
   kb.push([{ text: "🏠 Inicio",        callback_data: "go:inicio" }]);
