@@ -168,6 +168,25 @@ function parseFechaFlexible(raw = "") {
   return parseFechaFinanceInput(s) || null;
 }
 
+// ✅ Valida que una fecha de finanzas no sea de un mes futuro
+// Permite el mes actual y meses pasados, bloquea meses futuros
+function validarFechaFinanzas(fecha) {
+  if (!isFechaDMY(fecha)) return { ok: false, msg: "Fecha inválida. Use dd/mm/yyyy o escriba hoy." };
+  const [dd, mm, yyyy] = fecha.split("/").map(Number);
+  const hoy = new Date();
+  const añoHoy = hoy.getFullYear();
+  const mesHoy = hoy.getMonth() + 1;
+  // Bloquear si el año es futuro, o si es el año actual pero mes futuro
+  if (yyyy > añoHoy || (yyyy === añoHoy && mm > mesHoy)) {
+    const meses = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
+    return {
+      ok: false,
+      msg: `⚠️ *Fecha futura detectada*\n\nEscribiste: *${fecha}*\nHoy estamos en: *${String(mesHoy).padStart(2,"0")}/${añoHoy}* (${meses[mesHoy-1]})\n\n¿Pusiste el mes equivocado? Corrígela y reenvía.`
+    };
+  }
+  return { ok: true };
+}
+
 function addDaysDMY(baseDmy = "", days = 0) {
   if (!isFechaDMY(baseDmy)) return hoyDMY();
   const [dd, mm, yyyy] = String(baseDmy).split("/").map(Number);
@@ -2641,6 +2660,27 @@ bot.on("callback_query", async (q) => {
         return enviarFichaCliente(chatId, clientId);
       }
 
+      // ✅ RENOVAR +31 DÍAS
+      if (data.startsWith("cli:ren:auto31:")) {
+        const raw = data.slice("cli:ren:auto31:".length);
+        const lastColon = raw.lastIndexOf(":");
+        const clientId = raw.slice(0, lastColon);
+        const idx = Number(raw.slice(lastColon + 1));
+        const ref = db.collection("clientes").doc(String(clientId));
+        const doc = await ref.get();
+        if (!doc.exists) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
+        const c = doc.data() || {};
+        const servicios = Array.isArray(c.servicios) ? c.servicios : [];
+        if (idx < 0 || idx >= servicios.length) return bot.sendMessage(chatId, "⚠️ Servicio inválido.");
+        const base31 = isFechaDMY(String(servicios[idx].fechaRenovacion || "")) ? String(servicios[idx].fechaRenovacion) : hoyDMY();
+        servicios[idx] = { ...servicios[idx], fechaRenovacion: addDaysDMY(base31, 31) };
+        await ref.set({ servicios, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        const { cacheInvalidatePrefix: cIP31 } = require("./index_01_core");
+        cIP31(`clientes:doc:${clientId}`);
+        await bot.sendMessage(chatId, `✅ Renovado +31 días\nNueva fecha: *${escMD(servicios[idx].fechaRenovacion)}*`, { parse_mode: "Markdown" });
+        return enviarFichaCliente(chatId, clientId);
+      }
+
       // ✅ RENOVAR CON FECHA MANUAL
       if (data.startsWith("cli:ren:manual:")) {
         const raw = data.slice("cli:ren:manual:".length);
@@ -3062,6 +3102,9 @@ bot.on("message", async (msg) => {
       if (p.mode === "finIngresoFecha") {
         const fecha = parseFechaFlexible(t);
         if (!fecha) return bot.sendMessage(chatId, "⚠️ Fecha inválida. Use dd/mm/yyyy o escriba hoy.");
+        // ✅ Bloquear fechas de meses futuros
+        const vf = validarFechaFinanzas(fecha);
+        if (!vf.ok) return bot.sendMessage(chatId, vf.msg, { parse_mode: "Markdown" });
         pending.delete(String(chatId));
         const ok = await registrarIngresoTx({ monto: p.monto, banco: p.banco, plataforma: p.plataforma, detalle: p.detalle || "", fecha, userId, userName: msg.from?.first_name || "" });
         return bot.sendMessage(chatId, `✅ *Ingreso registrado*\n\n💰 Monto: ${moneyLps(ok.monto)}\n🏦 Banco: ${escMD(ok.banco)}\n📦 Plataforma(s): ${escMD(ok.plataforma || "-")}\n📝 Detalle: ${escMD(ok.detalle || "-")}\n📅 Fecha: ${escMD(ok.fecha)}\n🆔 ID: \`${ok.id}\``, {
@@ -3085,6 +3128,9 @@ bot.on("message", async (msg) => {
       if (p.mode === "finEgresoFecha") {
         const fecha = parseFechaFlexible(t);
         if (!fecha) return bot.sendMessage(chatId, "⚠️ Fecha inválida. Use dd/mm/yyyy o escriba hoy.");
+        // ✅ Bloquear fechas de meses futuros
+        const vf2 = validarFechaFinanzas(fecha);
+        if (!vf2.ok) return bot.sendMessage(chatId, vf2.msg, { parse_mode: "Markdown" });
         pending.delete(String(chatId));
         const ok = await registrarEgresoTx({ monto: p.monto, banco: p.banco, motivo: p.motivo, detalle: p.detalle || "", fecha, userId, userName: msg.from?.first_name || "" });
         return bot.sendMessage(chatId, `✅ *Egreso registrado*\n\n💸 Monto: ${moneyLps(ok.monto)}\n🏦 Banco: ${escMD(ok.banco || "-")}\n🧾 Motivo: ${escMD(ok.motivo)}\n📝 Detalle: ${escMD(ok.detalle || "-")}\n📅 Fecha: ${escMD(ok.fecha)}\n🆔 ID: \`${ok.id}\``, {
