@@ -452,9 +452,17 @@ async function sendBottomMainMenu(chatId, userId) {
     resetChatState(chatId);
 
     if (await safeIsAdminLocal(userId)) {
-      return menuPrincipal(chatId);
+      return upsertPanel(chatId, "📌 *MENÚ PRINCIPAL*\n\nSeleccione una opción:", [
+        [{ text: "📦 Inventario",     callback_data: "menu:inventario" }, { text: "👥 Clientes / CRM", callback_data: "menu:clientes" }],
+        [{ text: "💰 Finanzas",       callback_data: "menu:pagos" },      { text: "🚨 Alertas",        callback_data: "menu:alertas" }],
+        [{ text: "📊 Dashboard",      callback_data: "menu:dashboard" }],
+      ], "Markdown");
     } else if (await safeIsVendedorLocal(userId)) {
-      return menuVendedor(chatId);
+      return upsertPanel(chatId, "👤 *MENÚ VENDEDOR*\n\nSeleccione una opción:", [
+        [{ text: "📅 Mis renovaciones hoy",  callback_data: "ren:mis:hoy" },      { text: "⏳ Próximos 3 días",      callback_data: "ren:mis:prox3" }],
+        [{ text: "📄 TXT renovaciones",      callback_data: "txt:mis" },           { text: "👥 Mis clientes",         callback_data: "vend:clientes" }],
+        [{ text: "🧾 TXT mis clientes",      callback_data: "vend:clientes:txt" }, { text: "💰 Mi resumen del mes",   callback_data: "vend:resumen" }],
+      ], "Markdown");
     } else {
       return bot.sendMessage(chatId, "⛔ Acceso denegado");
     }
@@ -2640,7 +2648,15 @@ bot.on("callback_query", async (q) => {
         const clientId = raw.slice(0, lastColon);
         const idx = Number(raw.slice(lastColon + 1));
         pending.set(String(chatId), { mode: "cliRenovarFechaManual", clientId, idx });
-        return upsertPanel(chatId, "📅 *Renovar (fecha manual)*\nEscriba la nueva fecha en formato dd/mm/yyyy:", [[{ text: "⬅️ Cancelar", callback_data: `cli:ren:one:${clientId}:${idx}` }]]);
+        return upsertPanel(chatId,
+          "📅 *Renovar — fecha personalizada*\n\n" +
+          "Escriba la fecha o los días a sumar:\n\n" +
+          "• `dd/mm/yyyy` — fecha exacta\n" +
+          "• `+40` — suma 40 días desde la fecha actual del servicio\n" +
+          "• `+3m` — suma 3 meses\n" +
+          "• `+90` — suma 90 días",
+          [[{ text: "⬅️ Cancelar", callback_data: `cli:ren:one:${clientId}:${idx}` }]]
+        );
       }
 
       // ✅ CAMBIÓ DE SERVICIO — elimina el actual y abre wizard para agregar uno nuevo
@@ -3373,7 +3389,30 @@ bot.on("message", async (msg) => {
       }
 
       if (p.mode === "cliRenovarFechaManual") {
-        if (!isFechaDMY(t)) return bot.sendMessage(chatId, "⚠️ Formato inválido. Use dd/mm/yyyy");
+        // Acepta: dd/mm/yyyy | +40 | +3m | +90
+        let fechaFinal = "";
+        const tClean = t.trim();
+
+        if (isFechaDMY(tClean)) {
+          fechaFinal = tClean;
+        } else if (/^\+\d+m$/i.test(tClean)) {
+          // +3m = suma N meses desde hoy
+          const meses = parseInt(tClean.slice(1));
+          const hoy = hoyDMY();
+          const [dd, mm, yyyy] = hoy.split("/").map(Number);
+          const dt = new Date(Date.UTC(yyyy, mm - 1 + meses, dd, 12));
+          fechaFinal = `${String(dt.getUTCDate()).padStart(2,"0")}/${String(dt.getUTCMonth()+1).padStart(2,"0")}/${dt.getUTCFullYear()}`;
+        } else if (/^\+\d+$/.test(tClean)) {
+          // +40 = suma N días desde hoy
+          const dias = parseInt(tClean.slice(1));
+          fechaFinal = addDaysDMY(hoyDMY(), dias);
+        } else {
+          return bot.sendMessage(chatId,
+            "⚠️ Formato inválido.\n\nUse:\n• `dd/mm/yyyy` — fecha exacta\n• `+40` — suma 40 días\n• `+3m` — suma 3 meses",
+            { parse_mode: "Markdown" }
+          );
+        }
+
         pending.delete(String(chatId));
         const ref = db.collection("clientes").doc(String(p.clientId));
         const doc = await ref.get();
@@ -3381,8 +3420,9 @@ bot.on("message", async (msg) => {
         const c = doc.data() || {};
         const servicios = Array.isArray(c.servicios) ? c.servicios : [];
         if (p.idx < 0 || p.idx >= servicios.length) return bot.sendMessage(chatId, "⚠️ Servicio inválido.");
-        servicios[p.idx] = { ...(servicios[p.idx] || {}), fechaRenovacion: t };
+        servicios[p.idx] = { ...(servicios[p.idx] || {}), fechaRenovacion: fechaFinal };
         await ref.set({ servicios, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        await bot.sendMessage(chatId, `✅ Fecha actualizada: *${fechaFinal}*`, { parse_mode: "Markdown" });
         return menuServicio(chatId, p.clientId, p.idx);
       }
 
@@ -3542,21 +3582,30 @@ async function enviarTxtRenovacionesDiarias7AM() {
   if (!hasRuntimeLock()) return;
   const { dmy } = getTimePartsNow();
   const adminIds = new Set(await getActiveAdminIdsLocal());
-  try {
-    for (const adminId of adminIds) {
-      try { await enviarTxtRenovacionesAdminPro(adminId); } catch (e) { logErr(`AutoTXT:admin:${adminId}`, e); }
-    }
-  } catch (e) { logErr("AutoTXT:admins", e); }
 
+  // ✅ Enviar a todos los revendedores (incluyendo admins que sean vendedores)
+  // Solo el TXT filtrado por su propio nombre de vendedor
   const revendedores = await getActiveRevendedoresLocal();
+  const revendedoresEnviados = new Set();
+
   for (const rev of revendedores) {
     try {
-      if (adminIds.has(normalizeTelegramIdLocal(rev.telegramId))) continue;
       const sent = await enviarTxtRenovacionesVendedorPro(rev.telegramId, rev.nombre);
       if (!sent) continue;
+      revendedoresEnviados.add(normalizeTelegramIdLocal(rev.telegramId));
       await db.collection("revendedores").doc(rev.id).set({ autoLastSent: dmy, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
     } catch (e) { logErr(`AutoTXT:revendedor:${rev.id}`, e); }
   }
+
+  // ✅ Admins que NO son revendedores reciben el TXT GENERAL (con todos)
+  try {
+    for (const adminId of adminIds) {
+      try {
+        if (revendedoresEnviados.has(normalizeTelegramIdLocal(adminId))) continue;
+        await enviarTxtRenovacionesAdminPro(adminId);
+      } catch (e) { logErr(`AutoTXT:admin:${adminId}`, e); }
+    }
+  } catch (e) { logErr("AutoTXT:admins", e); }
 }
 
 setInterval(async () => {
