@@ -1,13 +1,11 @@
-/* ✅ SUBLICUENTAS TG BOT — PARTE 5/6 OPTIMIZADA v2
+/* ✅ SUBLICUENTAS TG BOT — PARTE 5/6 OPTIMIZADA v3
    FINANZAS / REPORTES / EXCEL / MENÚS / DASHBOARD / BACKUP DOMINICAL
    -------------------------------------------------------------------
-   ✅ NUEVO EN v2:
-   - /dashboard — resumen ejecutivo: ingresos mes, vs mes anterior,
-     renovaciones semana, top vendedor, clientes por vencer
-   - Backup dominical: cada domingo 9PM envía Excel completo a todos
-     los admins activos
-   - Notificación 9PM día anterior a vendedores y admins
-   - Sin cambios en finanzas, reportes ni Excel
+   ✅ CAMBIO v3:
+   - Recordatorios de vencimiento: de 9PM → 11AM del día anterior
+   - Función renombrada: enviarNotificacion9PM → enviarRecordatorios11AM
+   - Scheduler actualizado: hh === 11 en lugar de hh === 21
+   - Backup dominical se mantiene a las 9PM los domingos
 */
 
 const fs = require("fs");
@@ -43,7 +41,6 @@ const FINANCE_COLLECTIONS_READ = Array.from(new Set([FINANCE_COLLECTION_PRIMARY,
 
 // ===============================
 // HELPERS BASE
-// (idénticos a v1 — omitidos por brevedad, se copian completos)
 // ===============================
 function normalizeFinanceDocRow(id, data = {}, source = "") { return { id: String(id || ""), _source: String(source || ""), ...(data || {}) }; }
 function normalizeMonthKey(key = "") { const s = String(key || "").trim(); let m = s.match(/^(\d{4})-(\d{2})$/); if (m) return `${m[1]}-${m[2]}`; m = s.match(/^(\d{2})\/(\d{4})$/); if (m) return `${m[2]}-${m[1]}`; return ""; }
@@ -65,28 +62,13 @@ function categoryOfPlat(key = "") {
 function inventoryLabel(key = "") {
   const k = String(key || "").toLowerCase().trim();
   const labels = {
-    netflix:     "📺 Netflix",
-    vipnetflix:  "🔥 Netflix VIP",
-    disneyp:     "🏰 Disney Premium",
-    disneys:     "🎬 Disney Standard",
-    hbomax:      "🎞️ HBO Max",
-    primevideo:  "🎥 Prime Video",
-    paramount:   "💿 Paramount+",
-    crunchyroll: "🍥 Crunchyroll",
-    vix:         "📱 Vix",
-    appletv:     "🍎 Apple TV",
-    universal:   "🌍 Universal+",
-    spotify:     "🎵 Spotify",
-    youtube:     "▶️ YouTube",
-    deezer:      "🎧 Deezer",
-    oleadatv1:   "🌊 Oleada 1",
-    oleadatv3:   "🌊 Oleada 3",
-    iptv1:       "📡 IPTV 1",
-    iptv3:       "📡 IPTV 3",
-    iptv4:       "📡 IPTV 4",
-    canva:       "🎨 Canva",
-    gemini:      "✨ Gemini",
-    chatgpt:     "🤖 ChatGPT",
+    netflix:"📺 Netflix", vipnetflix:"🔥 Netflix VIP", disneyp:"🏰 Disney Premium",
+    disneys:"🎬 Disney Standard", hbomax:"🎞️ HBO Max", primevideo:"🎥 Prime Video",
+    paramount:"💿 Paramount+", crunchyroll:"🍥 Crunchyroll", vix:"📱 Vix",
+    appletv:"🍎 Apple TV", universal:"🌍 Universal+", spotify:"🎵 Spotify",
+    youtube:"▶️ YouTube", deezer:"🎧 Deezer", oleadatv1:"🌊 Oleada 1",
+    oleadatv3:"🌊 Oleada 3", iptv1:"📡 IPTV 1", iptv3:"📡 IPTV 3", iptv4:"📡 IPTV 4",
+    canva:"🎨 Canva", gemini:"✨ Gemini", chatgpt:"🤖 ChatGPT",
   };
   return labels[k] || humanPlatSafe(k);
 }
@@ -356,25 +338,25 @@ async function deleteFinanceDocAny(docId) {
 // ===============================
 async function menuPrincipal(chatId) {
   return upsertPanel(chatId, "📌 *MENÚ PRINCIPAL*\n\nSeleccione una opción:", [
-    [{ text: "📦 Inventario",      callback_data: "menu:inventario" }, { text: "👥 Clientes / CRM",  callback_data: "menu:clientes" }],
-    [{ text: "💰 Finanzas",        callback_data: "menu:pagos" },      { text: "🚨 Alertas",          callback_data: "menu:alertas" }],
-    [{ text: "📊 Dashboard",       callback_data: "menu:dashboard" }],
+    [{ text: "📦 Inventario", callback_data: "menu:inventario" }, { text: "👥 Clientes / CRM", callback_data: "menu:clientes" }],
+    [{ text: "💰 Finanzas", callback_data: "menu:pagos" }, { text: "🚨 Alertas", callback_data: "menu:alertas" }],
+    [{ text: "📊 Dashboard", callback_data: "menu:dashboard" }],
   ]);
 }
 
 async function menuVendedor(chatId) {
   return upsertPanel(chatId, "👤 *MENÚ VENDEDOR*\n\nSeleccione una opción:", [
-    [{ text: "📅 Mis renovaciones hoy",     callback_data: "ren:mis:hoy" },       { text: "⏳ Próximos 3 días",         callback_data: "ren:mis:prox3" }],
-    [{ text: "📄 TXT renovaciones",         callback_data: "txt:mis" },            { text: "👥 Mis clientes",            callback_data: "vend:clientes" }],
-    [{ text: "🧾 TXT mis clientes",         callback_data: "vend:clientes:txt" },  { text: "💰 Mi resumen del mes",      callback_data: "vend:resumen" }],
+    [{ text: "📅 Mis renovaciones hoy", callback_data: "ren:mis:hoy" }, { text: "⏳ Próximos 3 días", callback_data: "ren:mis:prox3" }],
+    [{ text: "📄 TXT renovaciones", callback_data: "txt:mis" }, { text: "👥 Mis clientes", callback_data: "vend:clientes" }],
+    [{ text: "🧾 TXT mis clientes", callback_data: "vend:clientes:txt" }, { text: "💰 Mi resumen del mes", callback_data: "vend:resumen" }],
   ]);
 }
 
 async function menuInventario(chatId) {
   return upsertPanel(chatId, "📦 *INVENTARIO*\n\nSeleccione una categoría:", [
-    [{ text: "🎬 Video",     callback_data: "menu:inventario:video" },   { text: "🎵 Música",       callback_data: "menu:inventario:musica" }],
-    [{ text: "📡 IPTV",      callback_data: "menu:inventario:iptv" },    { text: "🎨 Diseño e IA",  callback_data: "menu:inventario:designai" }],
-    [{ text: "📊 Stock general", callback_data: "inv:general" },          { text: "🏠 Inicio",       callback_data: "go:inicio" }],
+    [{ text: "🎬 Video", callback_data: "menu:inventario:video" }, { text: "🎵 Música", callback_data: "menu:inventario:musica" }],
+    [{ text: "📡 IPTV", callback_data: "menu:inventario:iptv" }, { text: "🎨 Diseño e IA", callback_data: "menu:inventario:designai" }],
+    [{ text: "📊 Stock general", callback_data: "inv:general" }, { text: "🏠 Inicio", callback_data: "go:inicio" }],
   ]);
 }
 
@@ -385,46 +367,46 @@ async function menuInventarioDisenoIA(chatId) { const items = PLATFORM_KEYS.filt
 
 async function menuClientes(chatId) {
   return upsertPanel(chatId, "👥 *CLIENTES / CRM*\n\nSeleccione una opción:", [
-    [{ text: "➕ Nuevo cliente",          callback_data: "cli:wiz:start" },          { text: "🔎 Buscar cliente",          callback_data: "menu:buscar" }],
-    [{ text: "📅 Renovaciones del día",   callback_data: "menu:renovaciones" },      { text: "👤 Revendedores",            callback_data: "rev:lista" }],
-    [{ text: "📊 Resumen CRM",            callback_data: "cli:crm:resumen" },        { text: "🗂️ TXT por vendedor",       callback_data: "cli:txt:vendedores_split" }],
-    [{ text: "🟢 TXT vigentes",           callback_data: "cli:txt:vigentes" },       { text: "🔴 TXT no vigentes",        callback_data: "cli:txt:no_vigentes" }],
-    [{ text: "📄 TXT general",            callback_data: "cli:txt:general" },        { text: "📒 Agenda simple",          callback_data: "cli:txt:agenda" }],
-    [{ text: "🏠 Inicio",                 callback_data: "go:inicio" }],
+    [{ text: "➕ Nuevo cliente", callback_data: "cli:wiz:start" }, { text: "🔎 Buscar cliente", callback_data: "menu:buscar" }],
+    [{ text: "📅 Renovaciones del día", callback_data: "menu:renovaciones" }, { text: "👤 Revendedores", callback_data: "rev:lista" }],
+    [{ text: "📊 Resumen CRM", callback_data: "cli:crm:resumen" }, { text: "🗂️ TXT por vendedor", callback_data: "cli:txt:vendedores_split" }],
+    [{ text: "🟢 TXT vigentes", callback_data: "cli:txt:vigentes" }, { text: "🔴 TXT no vigentes", callback_data: "cli:txt:no_vigentes" }],
+    [{ text: "📄 TXT general", callback_data: "cli:txt:general" }, { text: "📒 Agenda simple", callback_data: "cli:txt:agenda" }],
+    [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
   ]);
 }
 
 async function menuRenovaciones(chatId) {
   return upsertPanel(chatId, "📅 *RENOVACIONES*\n\nSeleccione una opción:", [
-    [{ text: "📋 Ver renovaciones hoy",   callback_data: "ren:hoy" },               { text: "📄 TXT de hoy",              callback_data: "txt:hoy" }],
-    [{ text: "📤 Enviar TXT a vendedores", callback_data: "txt:todos:hoy" },        { text: "⬅️ Volver CRM",             callback_data: "menu:clientes" }],
-    [{ text: "🏠 Inicio",                 callback_data: "go:inicio" }],
+    [{ text: "📋 Ver renovaciones hoy", callback_data: "ren:hoy" }, { text: "📄 TXT de hoy", callback_data: "txt:hoy" }],
+    [{ text: "📤 Enviar TXT a vendedores", callback_data: "txt:todos:hoy" }, { text: "⬅️ Volver CRM", callback_data: "menu:clientes" }],
+    [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
   ]);
 }
 
 async function menuPagos(chatId) {
   return upsertPanel(chatId, "💰 *FINANZAS*\n\nSeleccione una opción:", [
-    [{ text: "➕ Registrar ingreso",  callback_data: "fin:menu:ingreso" },  { text: "➖ Registrar egreso",   callback_data: "fin:menu:egreso" }],
-    [{ text: "📒 Ver registro",       callback_data: "fin:menu:registro" }, { text: "🗑️ Eliminar movimiento", callback_data: "fin:menu:eliminar" }],
-    [{ text: "📊 Reportes",           callback_data: "fin:menu:reportes" }, { text: "🧾 Cierre de caja",      callback_data: "fin:menu:cierre" }],
-    [{ text: "🏠 Inicio",             callback_data: "go:inicio" }],
+    [{ text: "➕ Registrar ingreso", callback_data: "fin:menu:ingreso" }, { text: "➖ Registrar egreso", callback_data: "fin:menu:egreso" }],
+    [{ text: "📒 Ver registro", callback_data: "fin:menu:registro" }, { text: "🗑️ Eliminar movimiento", callback_data: "fin:menu:eliminar" }],
+    [{ text: "📊 Reportes", callback_data: "fin:menu:reportes" }, { text: "🧾 Cierre de caja", callback_data: "fin:menu:cierre" }],
+    [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
   ]);
 }
 
 async function menuAlertas(chatId) {
   return upsertPanel(chatId, "🚨 *ALERTAS*\n\nSeleccione una opción:", [
-    [{ text: "🔴 Clientes vencidos",    callback_data: "alert:vencidos:0" },   { text: "🟠 Vencen hoy",           callback_data: "alert:hoy:0" }],
-    [{ text: "🟡 Vencen en 3 días",     callback_data: "alert:3dias:0" },      { text: "📦 Inventario crítico",    callback_data: "alert:inventario:0" }],
-    [{ text: "📄 TXT alertas del día",  callback_data: "alert:txt:hoy" },      { text: "⬅️ Volver",               callback_data: "go:inicio" }],
+    [{ text: "🔴 Clientes vencidos", callback_data: "alert:vencidos:0" }, { text: "🟠 Vencen hoy", callback_data: "alert:hoy:0" }],
+    [{ text: "🟡 Vencen en 3 días", callback_data: "alert:3dias:0" }, { text: "📦 Inventario crítico", callback_data: "alert:inventario:0" }],
+    [{ text: "📄 TXT alertas del día", callback_data: "alert:txt:hoy" }, { text: "⬅️ Volver", callback_data: "go:inicio" }],
   ]);
 }
 
 async function menuFinRegistro(chatId) {
   return upsertPanel(chatId, "📒 *REGISTRO DE FINANZAS*\n\nSeleccione una opción:", [
-    [{ text: "➕ Registrar ingreso",   callback_data: "fin:menu:ingreso" }, { text: "➖ Registrar egreso",   callback_data: "fin:menu:egreso" }],
-    [{ text: "🗑️ Eliminar movimiento", callback_data: "fin:menu:eliminar" }, { text: "🧾 Cierre de caja",    callback_data: "fin:menu:cierre" }],
-    [{ text: "📊 Reportes",            callback_data: "fin:menu:reportes" }, { text: "⬅️ Volver Finanzas",  callback_data: "menu:pagos" }],
-    [{ text: "🏠 Inicio",              callback_data: "go:inicio" }],
+    [{ text: "➕ Registrar ingreso", callback_data: "fin:menu:ingreso" }, { text: "➖ Registrar egreso", callback_data: "fin:menu:egreso" }],
+    [{ text: "🗑️ Eliminar movimiento", callback_data: "fin:menu:eliminar" }, { text: "🧾 Cierre de caja", callback_data: "fin:menu:cierre" }],
+    [{ text: "📊 Reportes", callback_data: "fin:menu:reportes" }, { text: "⬅️ Volver Finanzas", callback_data: "menu:pagos" }],
+    [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
   ]);
 }
 
@@ -437,12 +419,12 @@ async function menuFinEliminarTipo(chatId) {
 
 async function menuFinReportes(chatId) {
   return upsertPanel(chatId, "📊 *REPORTES DE FINANZAS*\n\nSeleccione una opción:", [
-    [{ text: "📅 Resumen por fecha",    callback_data: "fin:menu:resumen_fecha" },  { text: "🗓️ Resumen por rango",   callback_data: "fin:menu:resumen_rango" }],
-    [{ text: "🏦 Bancos por fecha",     callback_data: "fin:menu:bancos_fecha" },   { text: "🏦 Bancos por rango",    callback_data: "fin:menu:bancos_rango" }],
-    [{ text: "🔍 Detalle por banco",    callback_data: "fin:menu:detalle_banco" },  { text: "🏆 Top plataformas",     callback_data: "fin:menu:top_plataformas" }],
-    [{ text: "🎯 Top combos",           callback_data: "fin:menu:top_combos" },     { text: "📤 Excel por rango",     callback_data: "fin:menu:excel_rango" }],
-    [{ text: "🧾 Cierre por rango",     callback_data: "fin:menu:cierre:rango" },   { text: "⬅️ Volver Finanzas",    callback_data: "menu:pagos" }],
-    [{ text: "🏠 Inicio",               callback_data: "go:inicio" }],
+    [{ text: "📅 Resumen por fecha", callback_data: "fin:menu:resumen_fecha" }, { text: "🗓️ Resumen por rango", callback_data: "fin:menu:resumen_rango" }],
+    [{ text: "🏦 Bancos por fecha", callback_data: "fin:menu:bancos_fecha" }, { text: "🏦 Bancos por rango", callback_data: "fin:menu:bancos_rango" }],
+    [{ text: "🔍 Detalle por banco", callback_data: "fin:menu:detalle_banco" }, { text: "🏆 Top plataformas", callback_data: "fin:menu:top_plataformas" }],
+    [{ text: "🎯 Top combos", callback_data: "fin:menu:top_combos" }, { text: "📤 Excel por rango", callback_data: "fin:menu:excel_rango" }],
+    [{ text: "🧾 Cierre por rango", callback_data: "fin:menu:cierre:rango" }, { text: "⬅️ Volver Finanzas", callback_data: "menu:pagos" }],
+    [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
   ]);
 }
 
@@ -599,40 +581,21 @@ async function resumenFinancieroPorMonthKey(monthKey) {
 async function generarDashboard(chatId) {
   try {
     await bot.sendMessage(chatId, "⏳ Calculando dashboard...");
-
     const hoy = hoyDMY();
     const [dd, mm, yyyy] = hoy.split("/");
-
-    // Mes actual y anterior
     const mesActualKey = `${yyyy}-${String(mm).padStart(2, "0")}`;
     const dMesAnt = new Date(Number(yyyy), Number(mm) - 2, 1);
     const mesAnteriorKey = `${dMesAnt.getFullYear()}-${String(dMesAnt.getMonth() + 1).padStart(2, "0")}`;
-
-    // Datos financieros — con fallback si falla
     let resMesActual = { ingresos: 0, egresos: 0, utilidad: 0, topOrdenado: [] };
     let resMesAnterior = { ingresos: 0, egresos: 0, utilidad: 0, topOrdenado: [] };
-
-    try {
-      [resMesActual, resMesAnterior] = await Promise.all([
-        resumenFinancieroPorMonthKey(mesActualKey),
-        resumenFinancieroPorMonthKey(mesAnteriorKey),
-      ]);
-    } catch (e) { logErr("dashboard.finanzas", e); }
-
-    // Clientes
+    try { [resMesActual, resMesAnterior] = await Promise.all([resumenFinancieroPorMonthKey(mesActualKey), resumenFinancieroPorMonthKey(mesAnteriorKey)]); } catch (e) { logErr("dashboard.finanzas", e); }
     let clientes = [];
-    try {
-      const snapClientes = await db.collection("clientes").get();
-      clientes = snapClientes.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
-    } catch (e) { logErr("dashboard.clientes", e); }
-
+    try { const snapClientes = await db.collection("clientes").get(); clientes = snapClientes.docs.map((d) => ({ id: d.id, ...(d.data() || {}) })); } catch (e) { logErr("dashboard.clientes", e); }
     const totalClientes = clientes.length;
     const hoyDate = new Date(Number(yyyy), Number(mm) - 1, Number(dd));
     const en7Dias = new Date(hoyDate.getTime()); en7Dias.setDate(en7Dias.getDate() + 7);
-
     let renovacionesSemana = 0;
     const ingresoPorVendedor = {};
-
     for (const c of clientes) {
       const vendedor = String(c.vendedor || "Sin vendedor").trim();
       const servicios = Array.isArray(c.servicios) ? c.servicios : [];
@@ -647,18 +610,13 @@ async function generarDashboard(chatId) {
         ingresoPorVendedor[vendedor] += precio;
       }
     }
-
     const topVendedor = Object.entries(ingresoPorVendedor).sort((a, b) => b[1] - a[1])[0];
     const varIngresos = resMesActual.ingresos - resMesAnterior.ingresos;
-    const varPct = resMesAnterior.ingresos > 0
-      ? ((varIngresos / resMesAnterior.ingresos) * 100).toFixed(1)
-      : null;
+    const varPct = resMesAnterior.ingresos > 0 ? ((varIngresos / resMesAnterior.ingresos) * 100).toFixed(1) : null;
     const varEmoji = varIngresos >= 0 ? "📈" : "📉";
     const labelActual = monthLabelFromKeyLocal(mesActualKey);
     const labelAnterior = monthLabelFromKeyLocal(mesAnteriorKey);
-
     const fmt = (n) => `${Number(n || 0).toFixed(2)} Lps`;
-
     let txt = `📊 *DASHBOARD EJECUTIVO*\n📅 ${escMD(hoy)}\n\n`;
     txt += `💰 *FINANZAS — ${escMD(labelActual)}*\n`;
     txt += `Ingresos: ${escMD(fmt(resMesActual.ingresos))}\n`;
@@ -668,42 +626,31 @@ async function generarDashboard(chatId) {
     txt += `👥 *CLIENTES*\n`;
     txt += `Total: ${escMD(String(totalClientes))}\n`;
     txt += `Renovaciones próximos 7 días: ${escMD(String(renovacionesSemana))}\n\n`;
-
-    if (topVendedor) {
-      txt += `🏆 *TOP VENDEDOR*\n`;
-      txt += `${escMD(topVendedor[0])}: ${escMD(fmt(topVendedor[1]))} en cartera\n\n`;
-    }
-
+    if (topVendedor) { txt += `🏆 *TOP VENDEDOR*\n`; txt += `${escMD(topVendedor[0])}: ${escMD(fmt(topVendedor[1]))} en cartera\n\n`; }
     if (Array.isArray(resMesActual.topOrdenado) && resMesActual.topOrdenado.length) {
       txt += `📦 *TOP PLATAFORMAS (${escMD(labelActual)})*\n`;
-      resMesActual.topOrdenado.slice(0, 5).forEach((x, i) => {
-        txt += `${i + 1}. ${escMD(humanPlatSafe(x.plataforma))} — ${escMD(fmt(x.total))}\n`;
-      });
+      resMesActual.topOrdenado.slice(0, 5).forEach((x, i) => { txt += `${i + 1}. ${escMD(humanPlatSafe(x.plataforma))} — ${escMD(fmt(x.total))}\n`; });
     }
-
     return upsertPanel(chatId, txt, [
       [{ text: "📊 Reporte Excel", callback_data: "fin:menu:excel_rango" }],
-      [{ text: "🏠 Inicio",        callback_data: "go:inicio" }],
+      [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
     ]);
-  } catch (e) {
-    logErr("generarDashboard", e);
-    return bot.sendMessage(chatId, `⚠️ Error en dashboard: ${e?.message || "desconocido"}`);
-  }
+  } catch (e) { logErr("generarDashboard", e); return bot.sendMessage(chatId, `⚠️ Error en dashboard: ${e?.message || "desconocido"}`); }
 }
 
 // ===============================
-// ✅ NOTIFICACIÓN 9PM — DÍA ANTERIOR
-// Envía renovaciones del día siguiente a admins y vendedores a las 9PM
+// ✅ RECORDATORIOS 11AM — DÍA ANTERIOR
+// Envía a admins y vendedores las renovaciones de mañana a las 11AM
+// Así tienen tiempo de avisar a sus clientes durante el día
 // ===============================
-async function enviarNotificacion9PM() {
+async function enviarRecordatorios11AM() {
   try {
-    // Fecha de mañana
     const hoy = hoyDMY();
     const [dd, mm, yyyy] = hoy.split("/");
     const mananaDate = new Date(Number(yyyy), Number(mm) - 1, Number(dd) + 1);
     const manana = `${String(mananaDate.getDate()).padStart(2,"0")}/${String(mananaDate.getMonth()+1).padStart(2,"0")}/${mananaDate.getFullYear()}`;
 
-    // Obtener admins activos
+    // Admins activos
     const snapAdmins = await db.collection("admins").get();
     const adminIds = [];
     snapAdmins.forEach((d) => {
@@ -713,33 +660,31 @@ async function enviarNotificacion9PM() {
       if (tg) adminIds.push(tg);
     });
 
-    // Renovaciones de mañana para admins (todas)
-    const rowsMañanaGlobal = await obtenerRenovacionesPorFecha(manana, null);
+    // Renovaciones de mañana — todas (para admins)
+    const rowsMananaGlobal = await obtenerRenovacionesPorFecha(manana, null);
 
     for (const adminId of adminIds) {
       try {
-        if (!rowsMañanaGlobal.length) continue;
-        let msg = `🔔 *AVISO: Renovaciones de mañana (${escMD(manana)})*\n\n`;
-        msg += `*Total:* ${rowsMañanaGlobal.length} perfil(es)\n\n`;
-        rowsMañanaGlobal.slice(0, 20).forEach((x, i) => {
-          msg += `${i + 1}. ${escMD(x.nombrePerfil || "Sin nombre")} — ${escMD(x.plataforma || "-")} — ${escMD(moneyLps(x.precio))}\n`;
+        if (!rowsMananaGlobal.length) continue;
+        let msg = `🔔 *RECORDATORIO: Renovaciones de mañana (${escMD(manana)})*\n\n`;
+        msg += `*Total:* ${rowsMananaGlobal.length} perfil(es)\n\n`;
+        rowsMananaGlobal.slice(0, 20).forEach((x, i) => {
+          msg += `${i + 1}. ${escMD(x.nombrePerfil || "Sin nombre")} — ${escMD(humanPlatSafe(x.plataforma || ""))} — ${escMD(moneyLps(x.precio))}\n`;
         });
-        if (rowsMañanaGlobal.length > 20) msg += `\n_...y ${rowsMañanaGlobal.length - 20} más._`;
+        if (rowsMananaGlobal.length > 20) msg += `\n_...y ${rowsMananaGlobal.length - 20} más._`;
         await bot.sendMessage(adminId, msg, { parse_mode: "Markdown" });
-      } catch (e) { logErr(`notif9PM:admin:${adminId}`, e); }
+      } catch (e) { logErr(`recordatorio11AM:admin:${adminId}`, e); }
     }
 
-    // Notificación por vendedor
+    // Notificación filtrada por vendedor
     const snapRev = await db.collection("revendedores").get();
     for (const d of snapRev.docs) {
       const rev = d.data() || {};
       if (!rev.activo || !rev.telegramId || !rev.nombre) continue;
-
       try {
         const rowsVend = await obtenerRenovacionesPorFecha(manana, rev.nombre);
         if (!rowsVend.length) continue;
-
-        let msg = `🔔 *AVISO: Tus renovaciones de mañana (${escMD(manana)})*\n\n`;
+        let msg = `🔔 *RECORDATORIO: Tus renovaciones de mañana (${escMD(manana)})*\n\n`;
         msg += `*Total:* ${rowsVend.length} perfil(es)\n\n`;
         rowsVend.forEach((x, i) => {
           msg += `${i + 1}. ${escMD(x.nombrePerfil || "Sin nombre")}\n`;
@@ -747,20 +692,18 @@ async function enviarNotificacion9PM() {
           msg += `   📦 ${escMD(humanPlatSafe(x.plataforma || ""))}\n`;
           msg += `   💰 ${escMD(moneyLps(x.precio))}\n\n`;
         });
-
         await bot.sendMessage(rev.telegramId, msg, { parse_mode: "Markdown" });
-      } catch (e) { logErr(`notif9PM:rev:${rev.nombre}`, e); }
+      } catch (e) { logErr(`recordatorio11AM:rev:${rev.nombre}`, e); }
     }
 
-    console.log(`✅ Notificaciones 9PM enviadas para renovaciones del ${manana}`);
+    console.log(`✅ Recordatorios 11AM enviados para renovaciones del ${manana}`);
   } catch (e) {
-    logErr("enviarNotificacion9PM", e);
+    logErr("enviarRecordatorios11AM", e);
   }
 }
 
 // ===============================
 // ✅ BACKUP DOMINICAL — DOMINGO 9PM
-// Excel completo + resumen del mes a todos los admins activos
 // ===============================
 async function ejecutarBackupDominical() {
   try {
@@ -768,46 +711,22 @@ async function ejecutarBackupDominical() {
     const [, mm, yyyy] = hoy.split("/");
     const mesKey = `${yyyy}-${String(mm).padStart(2, "0")}`;
     const label = monthLabelFromKeyLocal(mesKey);
-
     console.log(`🗄️ Iniciando backup dominical — ${hoy}`);
-
-    // Obtener todos los movimientos del mes
     const rows = await getMovimientosPorMes(mesKey);
     let ingresos = 0, egresos = 0;
-    for (const r of rows) {
-      const monto = Number(r.monto || 0);
-      if (String(r.tipo || "").toLowerCase() === "egreso") egresos += monto;
-      else ingresos += monto;
-    }
-
-    // Todos los clientes
+    for (const r of rows) { const monto = Number(r.monto || 0); if (String(r.tipo || "").toLowerCase() === "egreso") egresos += monto; else ingresos += monto; }
     const snapClientes = await db.collection("clientes").get();
     const clientes = snapClientes.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
-
-    // Generar Excel
     const wb = new ExcelJS.Workbook();
-    wb.creator = "Sublicuentas Bot";
-    wb.created = new Date();
-
-    // Hoja finanzas del mes
+    wb.creator = "Sublicuentas Bot"; wb.created = new Date();
     const wsFinanzas = wb.addWorksheet(`Finanzas ${label}`);
     wsFinanzas.columns = [
       { header: "Fecha", key: "fecha", width: 14 }, { header: "Tipo", key: "tipo", width: 10 },
       { header: "Monto", key: "monto", width: 14 }, { header: "Plataforma/Motivo", key: "concepto", width: 28 },
       { header: "Banco", key: "banco", width: 20 }, { header: "Detalle", key: "detalle", width: 30 },
     ];
-    for (const r of rows) {
-      wsFinanzas.addRow({
-        fecha: r.fecha || "", tipo: finTipoLabel(r.tipo),
-        monto: Number(r.monto || 0), concepto: finConceptoLabel(r),
-        banco: humanBanco(r.banco || r.metodo || ""), detalle: r.detalle || "",
-      });
-    }
-    // Estilo básico header
-    wsFinanzas.getRow(1).font = { bold: true };
-    wsFinanzas.views = [{ state: "frozen", ySplit: 1 }];
-
-    // Hoja clientes
+    for (const r of rows) { wsFinanzas.addRow({ fecha: r.fecha || "", tipo: finTipoLabel(r.tipo), monto: Number(r.monto || 0), concepto: finConceptoLabel(r), banco: humanBanco(r.banco || r.metodo || ""), detalle: r.detalle || "" }); }
+    wsFinanzas.getRow(1).font = { bold: true }; wsFinanzas.views = [{ state: "frozen", ySplit: 1 }];
     const wsClientes = wb.addWorksheet("Clientes");
     wsClientes.columns = [
       { header: "Nombre", key: "nombre", width: 28 }, { header: "Teléfono", key: "telefono", width: 16 },
@@ -816,27 +735,17 @@ async function ejecutarBackupDominical() {
     ];
     for (const c of clientes) {
       const servicios = Array.isArray(c.servicios) ? c.servicios : [];
-      let total = 0, proxima = "";
-      let proximaTs = Infinity;
+      let total = 0, proxima = "", proximaTs = Infinity;
       for (const s of servicios) {
         total += Number(s.precio || 0);
         const f = String(s.fechaRenovacion || "").trim();
-        if (f) {
-          const [fdd, fmm, fyyyy] = f.split("/");
-          const ts = new Date(Number(fyyyy), Number(fmm) - 1, Number(fdd)).getTime();
-          if (ts < proximaTs) { proximaTs = ts; proxima = f; }
-        }
+        if (f) { const [fdd, fmm, fyyyy] = f.split("/"); const ts = new Date(Number(fyyyy), Number(fmm) - 1, Number(fdd)).getTime(); if (ts < proximaTs) { proximaTs = ts; proxima = f; } }
       }
       wsClientes.addRow({ nombre: c.nombrePerfil || "", telefono: c.telefono || "", vendedor: c.vendedor || "", servicios: servicios.length, total, proxima });
     }
-    wsClientes.getRow(1).font = { bold: true };
-    wsClientes.views = [{ state: "frozen", ySplit: 1 }];
-
-    // Guardar archivo temporal
+    wsClientes.getRow(1).font = { bold: true }; wsClientes.views = [{ state: "frozen", ySplit: 1 }];
     const tempPath = `/tmp/backup_dominical_${hoy.replace(/\//g, "-")}.xlsx`;
     await wb.xlsx.writeFile(tempPath);
-
-    // Mensaje de resumen
     const resumenMsg =
       `🗄️ *BACKUP DOMINICAL — ${escMD(hoy)}*\n\n` +
       `📊 *Finanzas ${escMD(label)}*\n` +
@@ -846,36 +755,26 @@ async function ejecutarBackupDominical() {
       `Movimientos: ${rows.length}\n\n` +
       `👥 *Clientes*: ${clientes.length} registrados\n\n` +
       `_El archivo Excel contiene todas las finanzas del mes y la lista completa de clientes._`;
-
-    // Enviar a todos los admins activos
     const snapAdmins = await db.collection("admins").get();
     let enviados = 0;
-
     for (const d of snapAdmins.docs) {
       const data = d.data() || {};
       if (data.activo === false) continue;
       const tg = String(data.telegramId || data.userId || d.id || "").trim();
       if (!tg) continue;
-
-      try {
-        await bot.sendMessage(tg, resumenMsg, { parse_mode: "Markdown" });
-        await bot.sendDocument(tg, tempPath, { caption: `📊 Backup ${hoy}` });
-        enviados++;
-      } catch (e) { logErr(`backup:admin:${tg}`, e); }
+      try { await bot.sendMessage(tg, resumenMsg, { parse_mode: "Markdown" }); await bot.sendDocument(tg, tempPath, { caption: `📊 Backup ${hoy}` }); enviados++; } catch (e) { logErr(`backup:admin:${tg}`, e); }
     }
-
     try { fs.unlinkSync(tempPath); } catch (_) {}
-
     console.log(`✅ Backup dominical enviado a ${enviados} admin(s) — ${hoy}`);
-  } catch (e) {
-    logErr("ejecutarBackupDominical", e);
-  }
+  } catch (e) { logErr("ejecutarBackupDominical", e); }
 }
 
 // ===============================
-// ✅ SCHEDULER: 9PM notificaciones + domingo 9PM backup
+// ✅ SCHEDULER
+// - 11AM todos los días → recordatorio de renovaciones del día siguiente
+// - Domingo 9PM → backup dominical con Excel
 // ===============================
-let _lastNotif9PM = "";
+let _lastRecordatorio11AM = "";
 let _lastBackupDominical = "";
 
 function getTimePartsNowLocal() {
@@ -886,15 +785,13 @@ function getTimePartsNowLocal() {
     year: "numeric", month: "2-digit", day: "2-digit",
     weekday: "short",
   }).formatToParts(now);
-
   const obj = {};
   fmt.forEach((p) => { if (p.type !== "literal") obj[p.type] = p.value; });
-
   return {
     dmy: `${obj.day}/${obj.month}/${obj.year}`,
     hh: Number(obj.hour),
     mm: Number(obj.minute),
-    weekday: String(obj.weekday || "").toLowerCase(), // "dom", "lun", etc.
+    weekday: String(obj.weekday || "").toLowerCase(),
   };
 }
 
@@ -905,14 +802,13 @@ if (!global.__SUBLICUENTAS_SCHEDULER__) {
     try {
       const { dmy, hh, mm, weekday } = getTimePartsNowLocal();
 
-      // 9PM todos los días — aviso renovaciones del día siguiente
-      if (hh === 21 && mm === 0 && _lastNotif9PM !== dmy) {
-        _lastNotif9PM = dmy;
-        await enviarNotificacion9PM();
+      // ✅ 11AM todos los días — recordatorio de renovaciones del día siguiente
+      if (hh === 11 && mm === 0 && _lastRecordatorio11AM !== dmy) {
+        _lastRecordatorio11AM = dmy;
+        await enviarRecordatorios11AM();
       }
 
       // Domingo 9PM — backup dominical
-      // "dom" en español Honduras; verificar con weekday
       const esDomingo = weekday.startsWith("dom") || weekday === "sun" || weekday === "su";
       if (esDomingo && hh === 21 && mm === 0 && _lastBackupDominical !== dmy) {
         _lastBackupDominical = dmy;
@@ -923,7 +819,7 @@ if (!global.__SUBLICUENTAS_SCHEDULER__) {
     }
   }, 30 * 1000);
 
-  console.log("⏰ Scheduler activo: notif 9PM diaria + backup dominical 9PM");
+  console.log("⏰ Scheduler activo: recordatorio 11AM diario + backup dominical domingo 9PM");
 }
 
 // ===============================
@@ -961,8 +857,7 @@ function decorateResumenSheet(resumen, meta = {}) {
   resumen.addRow({ concepto: "Utilidad", valor: Number(utilidad||0), visual: visualBar(Math.abs(utilidad||0), maxBase) });
   resumen.addRow({ concepto: "Movimientos", valor: Number(movimientos||0), visual: "" });
   for (let i = 2; i <= resumen.rowCount; i++) {
-    const row = resumen.getRow(i);
-    const concepto = String(row.getCell("A").value || "");
+    const row = resumen.getRow(i); const concepto = String(row.getCell("A").value || "");
     if (["Ingresos","Egresos","Utilidad","Movimientos"].includes(concepto)) row.font = { bold: true };
     if (concepto === "Ingresos") { row.getCell("A").font = { bold: true, color: { argb: "008000" } }; row.getCell("B").fill = { type: "pattern", pattern: "solid", fgColor: { argb: "E2F0D9" } }; applyMoneyFormat(row.getCell("B")); row.getCell("C").font = { color: { argb: "008000" } }; }
     if (concepto === "Egresos") { row.getCell("A").font = { bold: true, color: { argb: "C00000" } }; row.getCell("B").fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FCE4D6" } }; applyMoneyFormat(row.getCell("B")); row.getCell("C").font = { color: { argb: "C00000" } }; }
@@ -976,21 +871,16 @@ async function exportarFinanzasRangoExcel(chatId, fechaInicio, fechaFin, _userId
   const ini = parseFechaFlexible(fechaInicio), fin = parseFechaFlexible(fechaFin);
   if (!ini || !fin) throw new Error("Fechas inválidas.");
   if (dmyToMillis(ini) > dmyToMillis(fin)) throw new Error("La fecha inicial no puede ser mayor a la final.");
-
   const rows = (await getMovimientosPorRango(ini, fin)).map((r) => ({ ...r, fecha: extraerFechaMovimiento(r) || r.fecha || "" }));
   const wb = new ExcelJS.Workbook(); wb.creator = "Sublicuentas Bot"; wb.created = new Date();
-
   const ws = wb.addWorksheet("Finanzas");
   ws.columns = [{ header: "Fecha", key: "fecha", width: 15 }, { header: "Tipo", key: "tipo", width: 12 }, { header: "Monto", key: "monto", width: 15 }, { header: "Plataforma/Motivo", key: "concepto", width: 30 }, { header: "Banco/Método", key: "extra", width: 28 }, { header: "Detalle", key: "detalle", width: 35 }, { header: "ID", key: "id", width: 28 }];
   for (const r of rows) ws.addRow({ fecha: r.fecha || "", tipo: finTipoLabel(r.tipo), monto: Number(r.monto || 0), concepto: finConceptoLabel(r), extra: humanBanco(r.banco || r.metodo || ""), detalle: r.detalle || r.descripcion || "", id: r.id });
   decorateFinanzasSheet(ws, rows);
-
   let ingresos = 0, egresos = 0;
   for (const r of rows) { const monto = Number(r.monto || 0); if (String(r.tipo||"").toLowerCase() === "egreso") egresos += monto; else ingresos += monto; }
-
   const resumen = wb.addWorksheet("Resumen");
   decorateResumenSheet(resumen, { fechaInicio: ini, fechaFin: fin, ingresos, egresos, utilidad: ingresos - egresos, movimientos: rows.length });
-
   const tempPath = `/tmp/finanzas_${Date.now()}.xlsx`;
   await wb.xlsx.writeFile(tempPath);
   await bot.sendDocument(chatId, tempPath, { caption: `📊 Finanzas del ${ini} al ${fin}` });
@@ -1025,8 +915,8 @@ module.exports = {
   exportarFinanzasRangoExcel, eliminarMovimientoFinanzas,
   getMovimientoFinanzaById, textoMovimientoParaEliminar,
   resumenFinancieroPorMonthKey, listarMovimientosPorFechaYTipo,
-  // ✅ NUEVO
-  generarDashboard, enviarNotificacion9PM, ejecutarBackupDominical,
+  // ✅ v3: recordatorio renombrado a 11AM
+  generarDashboard, enviarRecordatorios11AM, ejecutarBackupDominical,
   // compat
   menuFinanzas, menuRegistroFinanzas, menuEliminarMovimientoEspecifico, menuReportesFinanzas,
 };
