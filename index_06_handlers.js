@@ -474,16 +474,16 @@ async function sendBottomMainMenu(chatId, userId) {
     resetChatState(chatId);
 
     if (await safeIsAdminLocal(userId)) {
-      return upsertPanel(chatId, "🏠 *SUBLICUENTAS — MENÚ PRINCIPAL*\n─────────────────────────\nSeleccione una opción:", [
-        [{ text: "🔵 📦 INVENTARIO", callback_data: "menu:inventario" }, { text: "🟢 👥 CLIENTES / CRM", callback_data: "menu:clientes" }],
-        [{ text: "🟡 💰 FINANZAS",   callback_data: "menu:pagos" },      { text: "🔴 🚨 ALERTAS",        callback_data: "menu:alertas" }],
-        [{ text: "🟣 📊 DASHBOARD EJECUTIVO", callback_data: "menu:dashboard" }],
+      return upsertPanel(chatId, "📌 *MENÚ PRINCIPAL*\n\nSeleccione una opción:", [
+        [{ text: "📦 Inventario",     callback_data: "menu:inventario" }, { text: "👥 Clientes / CRM", callback_data: "menu:clientes" }],
+        [{ text: "💰 Finanzas",       callback_data: "menu:pagos" },      { text: "🚨 Alertas",        callback_data: "menu:alertas" }],
+        [{ text: "📊 Dashboard",      callback_data: "menu:dashboard" }],
       ], "Markdown");
     } else if (await safeIsVendedorLocal(userId)) {
-      return upsertPanel(chatId, "👤 *MENÚ VENDEDOR*\n─────────────────────────\nSeleccione una opción:", [
-        [{ text: "🟢 📅 RENOVACIONES HOY", callback_data: "ren:mis:hoy" }, { text: "🟠 ⏳ PRÓXIMOS 3 DÍAS", callback_data: "ren:mis:prox3" }],
-        [{ text: "🔵 📄 TXT Renovaciones", callback_data: "txt:mis" },     { text: "🟢 👥 Mis Clientes",     callback_data: "vend:clientes" }],
-        [{ text: "🔵 🧾 TXT Mis Clientes", callback_data: "vend:clientes:txt" }, { text: "🟣 💰 Mi Resumen del Mes", callback_data: "vend:resumen" }],
+      return upsertPanel(chatId, "👤 *MENÚ VENDEDOR*\n\nSeleccione una opción:", [
+        [{ text: "📅 Mis renovaciones hoy",  callback_data: "ren:mis:hoy" },      { text: "⏳ Próximos 3 días",      callback_data: "ren:mis:prox3" }],
+        [{ text: "📄 TXT renovaciones",      callback_data: "txt:mis" },           { text: "👥 Mis clientes",         callback_data: "vend:clientes" }],
+        [{ text: "🧾 TXT mis clientes",      callback_data: "vend:clientes:txt" }, { text: "💰 Mi resumen del mes",   callback_data: "vend:resumen" }],
       ], "Markdown");
     } else {
       return bot.sendMessage(chatId, "⛔ Acceso denegado");
