@@ -609,11 +609,11 @@ async function enviarFichaCliente(chatId, clientId) {
   if (!c) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
 
   return upsertPanel(chatId, renderFichaClienteMarkdown(c), [
-    [{ text: "✏️ Editar cliente",          callback_data: `cli:edit:menu:${c.id}` }],
-    [{ text: "🧩 Editar servicios",        callback_data: `cli:serv:list:${c.id}` }],
-    [{ text: "🔄 Gestionar renovaciones",  callback_data: `cli:ren:list:${c.id}` }],
-    [{ text: "➕ Agregar servicio",        callback_data: `cli:serv:add:${c.id}` }],
-    [{ text: "📜 Historial TXT", callback_data: `cli:txt:hist:${c.id}` }, { text: "📄 TXT cliente", callback_data: `cli:txt:one:${c.id}` }],
+    [{ text: "✏️ EDITAR CLIENTE",          callback_data: `cli:edit:menu:${c.id}` }],
+    [{ text: "🧩 EDITAR SERVICIOS",        callback_data: `cli:serv:list:${c.id}` }],
+    [{ text: "🔄 GESTIONAR RENOVACIONES",  callback_data: `cli:ren:list:${c.id}` }],
+    [{ text: "➕ AGREGAR SERVICIO",        callback_data: `cli:serv:add:${c.id}` }],
+    [{ text: "📜 Historial TXT", callback_data: `cli:txt:hist:${c.id}` }, { text: "📄 TXT Cliente", callback_data: `cli:txt:one:${c.id}` }],
     [{ text: "🏠 Inicio",                  callback_data: "go:inicio" }],
   ]);
 }
@@ -638,10 +638,10 @@ async function menuEditarCliente(chatId, clientId) {
   return upsertPanel(chatId,
     `✏️ *EDITAR CLIENTE*\n\n👤 *Nombre:* ${escMD(c.nombrePerfil || "-")}\n📱 *Teléfono:* ${escMD(c.telefono || "-")}\n🧾 *Vendedor:* ${escMD(c.vendedor || "-")}\n\nSeleccione qué desea editar:`,
     [
-      [{ text: "👤 Editar nombre",   callback_data: `cli:edit:nombre:${clientId}` }],
-      [{ text: "📱 Editar teléfono", callback_data: `cli:edit:tel:${clientId}` }],
-      [{ text: "🧾 Editar vendedor", callback_data: `cli:edit:vend:${clientId}` }],
-      [{ text: "⬅️ Volver ficha",   callback_data: `cli:view:${clientId}` }],
+      [{ text: "👤 Cambiar Nombre",   callback_data: `cli:edit:nombre:${clientId}` }],
+      [{ text: "📱 Cambiar Teléfono", callback_data: `cli:edit:tel:${clientId}` }],
+      [{ text: "🧾 Cambiar Vendedor", callback_data: `cli:edit:vend:${clientId}` }],
+      [{ text: "⬅️ Volver Ficha",   callback_data: `cli:view:${clientId}` }],
       [{ text: "🏠 Inicio",          callback_data: "go:inicio" }],
     ]
   );
@@ -685,14 +685,12 @@ async function menuServicio(chatId, clientId, idx) {
     `📅 *Renovación:* ${escMD(s.fechaRenovacion || "-")}\n📊 *Estado:* ${est.emoji} ${escMD(est.texto)}`;
 
   return upsertPanel(chatId, txt, [
-    [{ text: "📌 Cambiar plataforma",     callback_data: `cli:serv:edit:plat:${clientId}:${idx}` }],
+    [{ text: "📌 Cambiar Plataforma",     callback_data: `cli:serv:edit:plat:${clientId}:${idx}` }],
     [{ text: `${getIdentLabelLocal(s.plataforma || "") === "Usuario" ? "👤" : "📧"} Cambiar ${getIdentLabelLocal(s.plataforma || "").toLowerCase()}`, callback_data: `cli:serv:edit:mail:${clientId}:${idx}` }],
-    [{ text: "🔐 Cambiar clave/PIN",      callback_data: `cli:serv:edit:pin:${clientId}:${idx}` }],
-    [{ text: "💰 Cambiar precio",         callback_data: `cli:serv:edit:precio:${clientId}:${idx}` }],
-    [{ text: "📅 Cambiar fecha",          callback_data: `cli:serv:edit:fecha:${clientId}:${idx}` }],
-    [{ text: "🗑️ Eliminar servicio",     callback_data: `cli:serv:del:ask:${clientId}:${idx}` }],
-    [{ text: "⬅️ Volver servicios",      callback_data: `cli:serv:list:${clientId}` }],
-    [{ text: "🏠 Inicio",                 callback_data: "go:inicio" }],
+    [{ text: "🔐 Cambiar Clave/PIN",      callback_data: `cli:serv:edit:pin:${clientId}:${idx}` }, { text: "💰 Cambiar Precio",  callback_data: `cli:serv:edit:precio:${clientId}:${idx}` }],
+    [{ text: "📅 Cambiar Fecha Renovación", callback_data: `cli:serv:edit:fecha:${clientId}:${idx}` }],
+    [{ text: "🗑️ ELIMINAR SERVICIO",     callback_data: `cli:serv:del:ask:${clientId}:${idx}` }],
+    [{ text: "⬅️ Volver Servicios",      callback_data: `cli:serv:list:${clientId}` }, { text: "🏠 Inicio", callback_data: "go:inicio" }],
   ]);
 }
 
@@ -883,12 +881,11 @@ async function menuListaRenovacion(chatId, clientId) {
     callback_data: `cli:ren:one:${clientId}:${s.idxOriginal}`,
   }]);
   kb.push([
-    { text: "⏫ Todos +30 días", callback_data: `cli:ren:all:ask:${clientId}` },
-    { text: "⏫ Todos +31 días", callback_data: `cli:ren:all31:ask:${clientId}` },
+    { text: "⏫ TODOS +30 días", callback_data: `cli:ren:all:ask:${clientId}` },
+    { text: "⏫ TODOS +31 días", callback_data: `cli:ren:all31:ask:${clientId}` },
   ]);
-  kb.push([{ text: "🗑️ Baja masiva de servicios", callback_data: `cli:baja:menu:${clientId}` }]);
-  kb.push([{ text: "⬅️ Volver ficha", callback_data: `cli:view:${clientId}` }]);
-  kb.push([{ text: "🏠 Inicio",        callback_data: "go:inicio" }]);
+  kb.push([{ text: "🗑️ Baja Masiva de Servicios", callback_data: `cli:baja:menu:${clientId}` }]);
+  kb.push([{ text: "⬅️ Volver Ficha", callback_data: `cli:view:${clientId}` }, { text: "🏠 Inicio", callback_data: "go:inicio" }]);
 
   return upsertPanel(chatId,
     `🔄 *RENOVAR SERVICIO*\n👤 *${escMD(c.nombrePerfil || "Cliente")}*\n\nSeleccione el servicio a gestionar:`,
@@ -920,14 +917,13 @@ async function menuRenovacionServicio(chatId, clientId, idx) {
 
   return upsertPanel(chatId, txt, [
     [
-      { text: "✅ +30 días",  callback_data: `cli:ren:auto:${clientId}:${idx}` },
-      { text: "✅ +31 días",  callback_data: `cli:ren:auto31:${clientId}:${idx}` },
+      { text: "✅ RENOVAR +30 días",  callback_data: `cli:ren:auto:${clientId}:${idx}` },
+      { text: "✅ RENOVAR +31 días",  callback_data: `cli:ren:auto31:${clientId}:${idx}` },
     ],
-    [{ text: "📅 Renovó — otra fecha",        callback_data: `cli:ren:manual:${clientId}:${idx}` }],
-    [{ text: "🔄 Cambió de servicio",         callback_data: `cli:ren:cambio:${clientId}:${idx}` }],
-    [{ text: "❌ No renovó — eliminar",       callback_data: `cli:ren:noren:ask:${clientId}:${idx}` }],
-    [{ text: "⬅️ Volver",                    callback_data: `cli:ren:list:${clientId}` }],
-    [{ text: "🏠 Inicio",                     callback_data: "go:inicio" }],
+    [{ text: "📅 Renovó — Otra Fecha",        callback_data: `cli:ren:manual:${clientId}:${idx}` }],
+    [{ text: "🔄 Cambió de Servicio",         callback_data: `cli:ren:cambio:${clientId}:${idx}` }],
+    [{ text: "❌ NO RENOVÓ — Eliminar",       callback_data: `cli:ren:noren:ask:${clientId}:${idx}` }],
+    [{ text: "⬅️ Volver",                    callback_data: `cli:ren:list:${clientId}` }, { text: "🏠 Inicio", callback_data: "go:inicio" }],
   ]);
 }
 
