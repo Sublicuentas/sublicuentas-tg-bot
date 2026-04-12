@@ -18,6 +18,8 @@ const {
 
 // ===============================
 // ESTADO GLOBAL / MAPS
+// panelMsgId y pending permanecen en memoria (son efímeros por sesión)
+// wizard usa Firebase para sobrevivir reinicios y deploys de Render
 // ===============================
 if (!global.__SUBLICUENTAS_PANEL_MSG_ID__) global.__SUBLICUENTAS_PANEL_MSG_ID__ = new Map();
 if (!global.__SUBLICUENTAS_PENDING__)       global.__SUBLICUENTAS_PENDING__       = new Map();
@@ -25,7 +27,71 @@ if (!global.__SUBLICUENTAS_WIZARD__)        global.__SUBLICUENTAS_WIZARD__      
 
 const panelMsgId = global.__SUBLICUENTAS_PANEL_MSG_ID__;
 const pending    = global.__SUBLICUENTAS_PENDING__;
-const wizard     = global.__SUBLICUENTAS_WIZARD__;
+
+// ✅ WIZARD con persistencia en Firebase
+// Usa memoria como caché rápido + Firebase como respaldo compartido entre instancias
+const _wizardMemory = global.__SUBLICUENTAS_WIZARD__;
+
+const wizard = {
+  has(chatId) {
+    const key = String(chatId);
+    return _wizardMemory.has(key);
+  },
+  get(chatId) {
+    const key = String(chatId);
+    return _wizardMemory.get(key) || null;
+  },
+  set(chatId, value) {
+    const key = String(chatId);
+    _wizardMemory.set(key, value);
+    // Persistir en Firebase en background (sin await para no bloquear)
+    try {
+      db.collection("bot_state").doc(`wizard_${key}`).set({
+        chatId: key, state: JSON.stringify(value),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        expiresAt: Date.now() + 30 * 60 * 1000, // 30 min TTL
+      }, { merge: false }).catch(() => {});
+    } catch (_) {}
+    return _wizardMemory;
+  },
+  delete(chatId) {
+    const key = String(chatId);
+    _wizardMemory.delete(key);
+    try {
+      db.collection("bot_state").doc(`wizard_${key}`).delete().catch(() => {});
+    } catch (_) {}
+    return true;
+  },
+};
+
+// ✅ Al iniciar, restaurar wizards activos desde Firebase (para sobrevivir deploys)
+if (!global.__SUBLICUENTAS_WIZARD_RESTORED__) {
+  global.__SUBLICUENTAS_WIZARD_RESTORED__ = true;
+  (async () => {
+    try {
+      const now = Date.now();
+      const snap = await db.collection("bot_state").get();
+      let restored = 0;
+      snap.forEach((d) => {
+        const data = d.data() || {};
+        if (!d.id.startsWith("wizard_")) return;
+        if (Number(data.expiresAt || 0) < now) {
+          d.ref.delete().catch(() => {}); return;
+        }
+        try {
+          const state = JSON.parse(String(data.state || "null"));
+          if (state && data.chatId) {
+            _wizardMemory.set(String(data.chatId), state);
+            restored++;
+          }
+        } catch (_) {}
+      });
+      if (restored > 0) console.log(`✅ Wizards restaurados desde Firebase: ${restored}`);
+    } catch (e) {
+      console.error("⚠️ No se pudieron restaurar wizards:", e?.message || e);
+    }
+  })();
+}
 
 // ===============================
 // LOGS
@@ -359,38 +425,20 @@ async function getRevendedorPorTelegramId(userId) {
 
     if (await isAdmin(uid)) return null;
 
-    // ✅ Caché del revendedor — TTL 10 minutos
+    // ✅ Caché del revendedor
     const cacheKey = `revendedores:bytg:${uid}`;
     const cached = cacheGet(cacheKey);
     if (cached !== null) return cached === "__null__" ? null : cached;
 
-    // ✅ Optimizado: consulta por campo en lugar de .get() completo
+    const snap = await db.collection("revendedores").get();
     let found = null;
-    try {
-      const snap1 = await db.collection("revendedores").where("telegramId", "==", uid).limit(1).get();
-      if (!snap1.empty) found = { id: snap1.docs[0].id, ...snap1.docs[0].data() };
-    } catch (_) {}
 
-    // Fallback: buscar por userId si no encontró por telegramId
-    if (!found) {
-      try {
-        const snap2 = await db.collection("revendedores").where("userId", "==", uid).limit(1).get();
-        if (!snap2.empty) found = { id: snap2.docs[0].id, ...snap2.docs[0].data() };
-      } catch (_) {}
-    }
-
-    // Fallback final: scan completo (solo si los queries anteriores fallan)
-    if (!found) {
-      try {
-        const snapAll = await db.collection("revendedores").get();
-        snapAll.forEach((d) => {
-          if (found) return;
-          const data = d.data() || {};
-          const tg = String(data.telegramId || data.userId || "").trim();
-          if (tg === uid) found = { id: d.id, ...data };
-        });
-      } catch (_) {}
-    }
+    snap.forEach((d) => {
+      if (found) return;
+      const data = d.data() || {};
+      const tg = String(data.telegramId || data.userId || "").trim();
+      if (tg === uid) found = { id: d.id, ...data };
+    });
 
     if (!found) { cacheSet(cacheKey, "__null__"); return null; }
 
