@@ -197,12 +197,12 @@ const CACHE = global.__SUBLICUENTAS_CACHE__;
 
 // TTL por prefijo de clave
 const CACHE_TTL = {
-  admins:       90  * 1000,
-  revendedores: 90  * 1000,
-  clientes:     120 * 1000,
-  inventario:   60  * 1000,
-  config:       60  * 1000,
-  default:      60  * 1000,
+  admins:       600 * 1000,  // 10 minutos — cambian muy poco
+  revendedores: 600 * 1000,  // 10 minutos — cambian muy poco
+  clientes:     300 * 1000,  // 5 minutos
+  inventario:   120 * 1000,  // 2 minutos
+  config:       120 * 1000,  // 2 minutos
+  default:      120 * 1000,  // 2 minutos
 };
 
 function getCacheTTL(key = "") {
