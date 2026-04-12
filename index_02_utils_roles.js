@@ -39,7 +39,8 @@ const wizard = {
   },
   get(chatId) {
     const key = String(chatId);
-    return _wizardMemory.get(key) || null;
+    const val = _wizardMemory.get(key);
+    return val !== undefined ? val : null;
   },
   set(chatId, value) {
     const key = String(chatId);
