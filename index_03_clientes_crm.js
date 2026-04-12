@@ -1042,11 +1042,14 @@ async function wizardNext(chatId, rawText = "") {
 
       wizard.set(String(chatId), { step: 4, clientId, nombre: st.nombre, telefono: st.telefono, vendedor: st.vendedor, servicio: {}, servStep: 1 });
 
-      return upsertPanel(chatId, "✅ *Servicio guardado correctamente*\n\nSeleccione qué desea hacer ahora:", [
-        [{ text: "➕ Agregar otra", callback_data: `wiz:addmore:${clientId}` }],
-        [{ text: "✅ Finalizar",    callback_data: `wiz:finish:${clientId}` }],
-        [{ text: "🏠 Inicio",       callback_data: "go:inicio" }],
-      ]);
+      return bot.sendMessage(chatId, "✅ *Servicio guardado correctamente*\n\nSeleccione qué desea hacer ahora:", {
+        parse_mode: "Markdown",
+        reply_markup: { inline_keyboard: [
+          [{ text: "➕ Agregar otra", callback_data: `wiz:addmore:${clientId}` }],
+          [{ text: "✅ Finalizar",    callback_data: `wiz:finish:${clientId}` }],
+          [{ text: "🏠 Inicio",       callback_data: "go:inicio" }],
+        ]},
+      });
     }
   }
 }
