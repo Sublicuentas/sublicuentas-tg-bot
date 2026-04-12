@@ -3620,18 +3620,10 @@ bot.on("message", async (msg) => {
       return;
     }
 
-    // ── ✅ FIX: Texto libre sin "/" → wizard tiene prioridad, luego búsqueda ──
+    // ── Texto libre sin "/" → solo búsqueda (wizard y pending ya fueron manejados arriba) ──
     if (!text.startsWith("/") && adminOk) {
       const t = text.trim();
       if (t.length >= 2) {
-        // ✅ Si hay wizard activo, el texto va al wizard, NO a búsqueda
-        if (wizard.has(String(chatId))) {
-          return wizardNext(chatId, text);
-        }
-        // ✅ Si hay pending activo, el texto va al pending, NO a búsqueda
-        if (pending.has(String(chatId))) {
-          return;
-        }
         return resolverBusquedaAdmin(chatId, t);
       }
     }
