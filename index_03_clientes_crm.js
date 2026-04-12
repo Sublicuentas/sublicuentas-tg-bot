@@ -961,20 +961,8 @@ async function enviarPanelRenovacionesConAcciones(chatId, fecha, rows = []) {
 }
 
 async function wizardStart(chatId) {
-  // ✅ Primero setear wizard, luego enviar mensaje
-  // Usar sendMessage directo (no upsertPanel) para evitar fallos silenciosos
-  // que corrompan el estado del wizard cuando panelMsgId no existe
   wizard.set(String(chatId), { step: 1, clientId: null, nombre: "", telefono: "", vendedor: "", servicio: {}, servStep: 1 });
-  try {
-    return await bot.sendMessage(chatId,
-      "👤 *NUEVO CLIENTE*\n\n(1/3) Escriba el *nombre del cliente*:",
-      { parse_mode: "Markdown", reply_markup: { inline_keyboard: [[{ text: "🏠 Inicio", callback_data: "go:inicio" }]] } }
-    );
-  } catch (e) {
-    logErr("wizardStart:sendMessage", e);
-    // Si falla el mensaje, limpiar wizard para no dejar estado roto
-    wizard.delete(String(chatId));
-  }
+  return upsertPanel(chatId, "👤 *NUEVO CLIENTE*\n\n(1/3) Escriba el *nombre del cliente*: ", [[{ text: "🏠 Inicio", callback_data: "go:inicio" }]]);
 }
 
 async function wizardNext(chatId, rawText = "") {
