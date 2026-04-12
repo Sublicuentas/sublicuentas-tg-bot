@@ -359,20 +359,38 @@ async function getRevendedorPorTelegramId(userId) {
 
     if (await isAdmin(uid)) return null;
 
-    // ✅ Caché del revendedor
+    // ✅ Caché del revendedor — TTL 10 minutos
     const cacheKey = `revendedores:bytg:${uid}`;
     const cached = cacheGet(cacheKey);
     if (cached !== null) return cached === "__null__" ? null : cached;
 
-    const snap = await db.collection("revendedores").get();
+    // ✅ Optimizado: consulta por campo en lugar de .get() completo
     let found = null;
+    try {
+      const snap1 = await db.collection("revendedores").where("telegramId", "==", uid).limit(1).get();
+      if (!snap1.empty) found = { id: snap1.docs[0].id, ...snap1.docs[0].data() };
+    } catch (_) {}
 
-    snap.forEach((d) => {
-      if (found) return;
-      const data = d.data() || {};
-      const tg = String(data.telegramId || data.userId || "").trim();
-      if (tg === uid) found = { id: d.id, ...data };
-    });
+    // Fallback: buscar por userId si no encontró por telegramId
+    if (!found) {
+      try {
+        const snap2 = await db.collection("revendedores").where("userId", "==", uid).limit(1).get();
+        if (!snap2.empty) found = { id: snap2.docs[0].id, ...snap2.docs[0].data() };
+      } catch (_) {}
+    }
+
+    // Fallback final: scan completo (solo si los queries anteriores fallan)
+    if (!found) {
+      try {
+        const snapAll = await db.collection("revendedores").get();
+        snapAll.forEach((d) => {
+          if (found) return;
+          const data = d.data() || {};
+          const tg = String(data.telegramId || data.userId || "").trim();
+          if (tg === uid) found = { id: d.id, ...data };
+        });
+      } catch (_) {}
+    }
 
     if (!found) { cacheSet(cacheKey, "__null__"); return null; }
 
