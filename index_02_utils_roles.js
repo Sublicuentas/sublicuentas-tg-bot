@@ -18,8 +18,6 @@ const {
 
 // ===============================
 // ESTADO GLOBAL / MAPS
-// panelMsgId y pending permanecen en memoria (son efímeros por sesión)
-// wizard usa Firebase para sobrevivir reinicios y deploys de Render
 // ===============================
 if (!global.__SUBLICUENTAS_PANEL_MSG_ID__) global.__SUBLICUENTAS_PANEL_MSG_ID__ = new Map();
 if (!global.__SUBLICUENTAS_PENDING__)       global.__SUBLICUENTAS_PENDING__       = new Map();
@@ -27,72 +25,7 @@ if (!global.__SUBLICUENTAS_WIZARD__)        global.__SUBLICUENTAS_WIZARD__      
 
 const panelMsgId = global.__SUBLICUENTAS_PANEL_MSG_ID__;
 const pending    = global.__SUBLICUENTAS_PENDING__;
-
-// ✅ WIZARD con persistencia en Firebase
-// Usa memoria como caché rápido + Firebase como respaldo compartido entre instancias
-const _wizardMemory = global.__SUBLICUENTAS_WIZARD__;
-
-const wizard = {
-  has(chatId) {
-    const key = String(chatId);
-    return _wizardMemory.has(key);
-  },
-  get(chatId) {
-    const key = String(chatId);
-    const val = _wizardMemory.get(key);
-    return val !== undefined ? val : null;
-  },
-  set(chatId, value) {
-    const key = String(chatId);
-    _wizardMemory.set(key, value);
-    // Persistir en Firebase en background (sin await para no bloquear)
-    try {
-      db.collection("bot_state").doc(`wizard_${key}`).set({
-        chatId: key, state: JSON.stringify(value),
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        expiresAt: Date.now() + 30 * 60 * 1000, // 30 min TTL
-      }, { merge: false }).catch(() => {});
-    } catch (_) {}
-    return _wizardMemory;
-  },
-  delete(chatId) {
-    const key = String(chatId);
-    _wizardMemory.delete(key);
-    try {
-      db.collection("bot_state").doc(`wizard_${key}`).delete().catch(() => {});
-    } catch (_) {}
-    return true;
-  },
-};
-
-// ✅ Al iniciar, restaurar wizards activos desde Firebase (para sobrevivir deploys)
-if (!global.__SUBLICUENTAS_WIZARD_RESTORED__) {
-  global.__SUBLICUENTAS_WIZARD_RESTORED__ = true;
-  (async () => {
-    try {
-      const now = Date.now();
-      const snap = await db.collection("bot_state").get();
-      let restored = 0;
-      snap.forEach((d) => {
-        const data = d.data() || {};
-        if (!d.id.startsWith("wizard_")) return;
-        if (Number(data.expiresAt || 0) < now) {
-          d.ref.delete().catch(() => {}); return;
-        }
-        try {
-          const state = JSON.parse(String(data.state || "null"));
-          if (state && data.chatId) {
-            _wizardMemory.set(String(data.chatId), state);
-            restored++;
-          }
-        } catch (_) {}
-      });
-      if (restored > 0) console.log(`✅ Wizards restaurados desde Firebase: ${restored}`);
-    } catch (e) {
-      console.error("⚠️ No se pudieron restaurar wizards:", e?.message || e);
-    }
-  })();
-}
+const wizard     = global.__SUBLICUENTAS_WIZARD__;
 
 // ===============================
 // LOGS
