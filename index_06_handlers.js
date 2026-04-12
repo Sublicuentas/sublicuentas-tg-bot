@@ -3102,6 +3102,9 @@ bot.on("message", async (msg) => {
     // ── Flujo wizard (texto libre, admin) ──
     if (wizard.has(String(chatId))) {
       if (!adminOk) return;
+      // ✅ No procesar como wizard si el texto es un comando de menú
+      const TEXTOS_MENU = new Set(["menu","inicio","inventario","finanzas","clientes","alertas","dashboard"]);
+      if (TEXTOS_MENU.has(String(text||"").trim().toLowerCase())) return;
       return wizardNext(chatId, text);
     }
 
@@ -3624,6 +3627,9 @@ bot.on("message", async (msg) => {
     if (!text.startsWith("/") && adminOk) {
       const t = text.trim();
       if (t.length >= 2) {
+        // ✅ Ignorar textos que son comandos sin slash — ya los maneja bot.onText
+        const TEXTOS_RESERVADOS = new Set(["menu","inicio","inventario","finanzas","clientes","alertas","dashboard"]);
+        if (TEXTOS_RESERVADOS.has(t.toLowerCase())) return;
         return resolverBusquedaAdmin(chatId, t);
       }
     }
