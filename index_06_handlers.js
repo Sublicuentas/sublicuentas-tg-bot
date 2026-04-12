@@ -458,15 +458,15 @@ async function answerCallbackSilentlySafe(q) {
 }
 
 function resetChatState(chatId) {
-  try {
-    pending?.delete?.(String(chatId));
-  } catch (_) {}
-  try {
-    wizard?.delete?.(String(chatId));
-  } catch (_) {}
-  try {
-    panelMsgId?.delete?.(String(chatId));
-  } catch (_) {}
+  try { pending?.delete?.(String(chatId)); } catch (_) {}
+  try { panelMsgId?.delete?.(String(chatId)); } catch (_) {}
+  // ✅ NO borrar wizard aquí — se borra solo en go:inicio o al finalizar
+}
+
+function resetChatStateFull(chatId) {
+  try { pending?.delete?.(String(chatId)); } catch (_) {}
+  try { wizard?.delete?.(String(chatId)); } catch (_) {}
+  try { panelMsgId?.delete?.(String(chatId)); } catch (_) {}
 }
 
 async function sendBottomMainMenu(chatId, userId) {
@@ -1959,7 +1959,7 @@ bot.on("callback_query", async (q) => {
     if (data === "noop") return;
 
     if (data === "go:inicio") {
-      resetChatState(chatId);
+      resetChatStateFull(chatId);
       if (adminOk) return menuPrincipal(chatId);
       return menuVendedor(chatId);
     }
@@ -3102,9 +3102,6 @@ bot.on("message", async (msg) => {
     // ── Flujo wizard (texto libre, admin) ──
     if (wizard.has(String(chatId))) {
       if (!adminOk) return;
-      // ✅ No procesar como wizard si el texto es un comando de menú
-      const TEXTOS_MENU = new Set(["menu","inicio","inventario","finanzas","clientes","alertas","dashboard"]);
-      if (TEXTOS_MENU.has(String(text||"").trim().toLowerCase())) return;
       return wizardNext(chatId, text);
     }
 
@@ -3623,13 +3620,18 @@ bot.on("message", async (msg) => {
       return;
     }
 
-    // ── Texto libre sin "/" → solo búsqueda (wizard y pending ya fueron manejados arriba) ──
+    // ── ✅ FIX: Texto libre sin "/" → wizard tiene prioridad, luego búsqueda ──
     if (!text.startsWith("/") && adminOk) {
       const t = text.trim();
       if (t.length >= 2) {
-        // ✅ Ignorar textos que son comandos sin slash — ya los maneja bot.onText
-        const TEXTOS_RESERVADOS = new Set(["menu","inicio","inventario","finanzas","clientes","alertas","dashboard"]);
-        if (TEXTOS_RESERVADOS.has(t.toLowerCase())) return;
+        // ✅ Si hay wizard activo, el texto va al wizard, NO a búsqueda
+        if (wizard.has(String(chatId))) {
+          return wizardNext(chatId, text);
+        }
+        // ✅ Si hay pending activo, el texto va al pending, NO a búsqueda
+        if (pending.has(String(chatId))) {
+          return;
+        }
         return resolverBusquedaAdmin(chatId, t);
       }
     }
