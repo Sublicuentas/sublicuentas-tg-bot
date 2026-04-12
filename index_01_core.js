@@ -356,9 +356,9 @@ async function startBotPollingSafe(reason = "manual") {
 
     try {
       await stopBotPollingSafe(`pre-start:${reason}`);
-      try { await bot.deleteWebHook({ drop_pending_updates: false }); } catch (_) {}
+      try { await bot.deleteWebHook({ drop_pending_updates: true }); } catch (_) {}
       await sleep(1200);
-      await bot.startPolling({ restart: false, params: { timeout: 10 } });
+      await bot.startPolling({ restart: false, params: { timeout: 30, allowed_updates: ["message","callback_query"] } });
       CORE_STATE.isPolling = true;
       CORE_STATE.lastStartAt = Date.now();
       CORE_STATE.lastPollingError = null;
@@ -408,7 +408,7 @@ if (!global.__SUBLICUENTAS_BOT_EVENTS__) {
       if (elapsed > 60000) CORE_STATE.conflict409Count = 0;
       CORE_STATE.lastConflictAt = now;
       CORE_STATE.conflict409Count += 1;
-      const waitMs = CORE_STATE.conflict409Count >= 3 ? 12000 : 5000;
+      const waitMs = CORE_STATE.conflict409Count >= 3 ? 30000 : 15000;
       console.error(`⚠️ Detectado 409 Conflict. Intento ${CORE_STATE.conflict409Count}. Reintento en ${waitMs}ms [${INSTANCE_ID}]`);
       try { await restartBotPollingSafe("409-conflict", waitMs); } catch (e) {
         console.error(`❌ Error reintentando polling [${INSTANCE_ID}]:`, e?.stack || e);
