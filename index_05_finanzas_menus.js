@@ -338,28 +338,28 @@ async function deleteFinanceDocAny(docId) {
 // ===============================
 async function menuPrincipal(chatId) {
   return upsertPanel(chatId,
-    "🏠 *SUBLICUENTAS — MENÚ PRINCIPAL*\n─────────────────────────\nSeleccione una opción:", [
-    [{ text: "🔵 📦 INVENTARIO", callback_data: "menu:inventario" }, { text: "🟢 👥 CLIENTES / CRM", callback_data: "menu:clientes" }],
-    [{ text: "🟡 💰 FINANZAS", callback_data: "menu:pagos" }, { text: "🔴 🚨 ALERTAS", callback_data: "menu:alertas" }],
-    [{ text: "🟣 📊 DASHBOARD EJECUTIVO", callback_data: "menu:dashboard" }],
+    "📌 *MENÚ PRINCIPAL*\n\nSeleccione una opción:", [
+    [{ text: "📦 Inventario", callback_data: "menu:inventario" }, { text: "👥 Clientes / CRM", callback_data: "menu:clientes" }],
+    [{ text: "💰 Finanzas", callback_data: "menu:pagos" }, { text: "🚨 Alertas", callback_data: "menu:alertas" }],
+    [{ text: "📊 Dashboard", callback_data: "menu:dashboard" }],
   ]);
 }
 
 async function menuVendedor(chatId) {
   return upsertPanel(chatId,
-    "👤 *MENÚ VENDEDOR*\n─────────────────────────\nSeleccione una opción:", [
-    [{ text: "🟢 📅 RENOVACIONES HOY", callback_data: "ren:mis:hoy" }, { text: "🟠 ⏳ PRÓXIMOS 3 DÍAS", callback_data: "ren:mis:prox3" }],
-    [{ text: "🔵 📄 TXT Renovaciones", callback_data: "txt:mis" }, { text: "🟢 👥 Mis Clientes", callback_data: "vend:clientes" }],
-    [{ text: "🔵 🧾 TXT Mis Clientes", callback_data: "vend:clientes:txt" }, { text: "🟣 💰 Mi Resumen del Mes", callback_data: "vend:resumen" }],
+    "👤 *MENÚ VENDEDOR*\n\nSeleccione una opción:", [
+    [{ text: "📅 Mis renovaciones hoy", callback_data: "ren:mis:hoy" }, { text: "⏳ Próximos 3 días", callback_data: "ren:mis:prox3" }],
+    [{ text: "📄 TXT renovaciones", callback_data: "txt:mis" }, { text: "👥 Mis clientes", callback_data: "vend:clientes" }],
+    [{ text: "🧾 TXT mis clientes", callback_data: "vend:clientes:txt" }, { text: "💰 Mi resumen del mes", callback_data: "vend:resumen" }],
   ]);
 }
 
 async function menuInventario(chatId) {
   return upsertPanel(chatId,
-    "📦 *INVENTARIO DE CUENTAS*\n─────────────────────────\nSeleccione una categoría:", [
-    [{ text: "🔵 🎬 VIDEO / STREAMING", callback_data: "menu:inventario:video" }, { text: "🟣 🎵 MÚSICA", callback_data: "menu:inventario:musica" }],
-    [{ text: "🟢 📡 IPTV / TV EN VIVO", callback_data: "menu:inventario:iptv" }, { text: "🟡 🎨 DISEÑO e IA", callback_data: "menu:inventario:designai" }],
-    [{ text: "🔵 📊 Stock General", callback_data: "inv:general" }],
+    "📦 *INVENTARIO*\n\nSeleccione una categoría:", [
+    [{ text: "🎬 Video", callback_data: "menu:inventario:video" }, { text: "🎵 Música", callback_data: "menu:inventario:musica" }],
+    [{ text: "📡 IPTV", callback_data: "menu:inventario:iptv" }, { text: "🎨 Diseño e IA", callback_data: "menu:inventario:designai" }],
+    [{ text: "📊 Stock general", callback_data: "inv:general" }],
     [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
   ]);
 }
@@ -371,71 +371,71 @@ async function menuInventarioDisenoIA(chatId) { const items = PLATFORM_KEYS.filt
 
 async function menuClientes(chatId) {
   return upsertPanel(chatId,
-    "👥 *CRM — GESTIÓN DE CLIENTES*\n─────────────────────────\nSeleccione una opción:", [
-    [{ text: "🟢 ➕ NUEVO CLIENTE", callback_data: "cli:wiz:start" }, { text: "🔵 🔎 BUSCAR CLIENTE", callback_data: "menu:buscar" }],
-    [{ text: "🟠 📅 RENOVACIONES DEL DÍA", callback_data: "menu:renovaciones" }, { text: "🔵 👤 Revendedores", callback_data: "rev:lista" }],
-    [{ text: "🟣 📊 Resumen CRM", callback_data: "cli:crm:resumen" }, { text: "🔵 🗂️ TXT por Vendedor", callback_data: "cli:txt:vendedores_split" }],
-    [{ text: "🟢 ✅ TXT Vigentes", callback_data: "cli:txt:vigentes" }, { text: "🔴 ❌ TXT No Vigentes", callback_data: "cli:txt:no_vigentes" }],
-    [{ text: "🔵 📄 TXT General", callback_data: "cli:txt:general" }, { text: "🔵 📒 Agenda Simple", callback_data: "cli:txt:agenda" }],
+    "👥 *CLIENTES / CRM*\n\nSeleccione una opción:", [
+    [{ text: "➕ Nuevo cliente", callback_data: "cli:wiz:start" }, { text: "🔎 Buscar cliente", callback_data: "menu:buscar" }],
+    [{ text: "📅 Renovaciones del día", callback_data: "menu:renovaciones" }, { text: "👤 Revendedores", callback_data: "rev:lista" }],
+    [{ text: "📊 Resumen CRM", callback_data: "cli:crm:resumen" }, { text: "🗂️ TXT por vendedor", callback_data: "cli:txt:vendedores_split" }],
+    [{ text: "🟢 TXT vigentes", callback_data: "cli:txt:vigentes" }, { text: "🔴 TXT no vigentes", callback_data: "cli:txt:no_vigentes" }],
+    [{ text: "📄 TXT general", callback_data: "cli:txt:general" }, { text: "📒 Agenda simple", callback_data: "cli:txt:agenda" }],
     [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
   ]);
 }
 
 async function menuRenovaciones(chatId) {
   return upsertPanel(chatId,
-    "📅 *RENOVACIONES DEL DÍA*\n─────────────────────────\nSeleccione una opción:", [
-    [{ text: "🟢 📋 VER RENOVACIONES HOY", callback_data: "ren:hoy" }, { text: "🔵 📄 TXT de Hoy", callback_data: "txt:hoy" }],
-    [{ text: "🟡 📤 Enviar TXT a Vendedores", callback_data: "txt:todos:hoy" }],
+    "📅 *RENOVACIONES*\n\nSeleccione una opción:", [
+    [{ text: "📋 Ver renovaciones hoy", callback_data: "ren:hoy" }, { text: "📄 TXT de hoy", callback_data: "txt:hoy" }],
+    [{ text: "📤 Enviar TXT a vendedores", callback_data: "txt:todos:hoy" }, { text: "⬅️ Volver CRM", callback_data: "menu:clientes" }],
     [{ text: "⬅️ Volver CRM", callback_data: "menu:clientes" }, { text: "🏠 Inicio", callback_data: "go:inicio" }],
   ]);
 }
 
 async function menuPagos(chatId) {
   return upsertPanel(chatId,
-    "💰 *FINANZAS*\n─────────────────────────\nSeleccione una opción:", [
-    [{ text: "🟢 ➕ REGISTRAR INGRESO", callback_data: "fin:menu:ingreso" }, { text: "🔴 ➖ REGISTRAR EGRESO", callback_data: "fin:menu:egreso" }],
-    [{ text: "🔵 📒 Ver Registro", callback_data: "fin:menu:registro" }, { text: "🔴 🗑️ Eliminar Movimiento", callback_data: "fin:menu:eliminar" }],
-    [{ text: "🟣 📊 Reportes", callback_data: "fin:menu:reportes" }, { text: "🟡 🧾 Cierre de Caja", callback_data: "fin:menu:cierre" }],
+    "💰 *FINANZAS*\n\nSeleccione una opción:", [
+    [{ text: "➕ Registrar ingreso", callback_data: "fin:menu:ingreso" }, { text: "➖ Registrar egreso", callback_data: "fin:menu:egreso" }],
+    [{ text: "📒 Ver registro", callback_data: "fin:menu:registro" }, { text: "🗑️ Eliminar movimiento", callback_data: "fin:menu:eliminar" }],
+    [{ text: "📊 Reportes", callback_data: "fin:menu:reportes" }, { text: "🧾 Cierre de caja", callback_data: "fin:menu:cierre" }],
     [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
   ]);
 }
 
 async function menuAlertas(chatId) {
   return upsertPanel(chatId,
-    "🚨 *ALERTAS Y VENCIMIENTOS*\n─────────────────────────\nSeleccione una opción:", [
-    [{ text: "🔴 ❗ CLIENTES VENCIDOS", callback_data: "alert:vencidos:0" }, { text: "🟠 ⚠️ VENCEN HOY", callback_data: "alert:hoy:0" }],
-    [{ text: "🟡 ⏳ VENCEN EN 3 DÍAS", callback_data: "alert:3dias:0" }, { text: "🔴 📦 INVENTARIO CRÍTICO", callback_data: "alert:inventario:0" }],
-    [{ text: "🔵 📄 TXT Alertas del Día", callback_data: "alert:txt:hoy" }],
+    "🚨 *ALERTAS*\n\nSeleccione una opción:", [
+    [{ text: "🔴 Clientes vencidos", callback_data: "alert:vencidos:0" }, { text: "🟠 Vencen hoy", callback_data: "alert:hoy:0" }],
+    [{ text: "🟡 Vencen en 3 días", callback_data: "alert:3dias:0" }, { text: "📦 Inventario crítico", callback_data: "alert:inventario:0" }],
+    [{ text: "📄 TXT alertas del día", callback_data: "alert:txt:hoy" }, { text: "⬅️ Volver", callback_data: "go:inicio" }],
     [{ text: "⬅️ Volver", callback_data: "go:inicio" }],
   ]);
 }
 
 async function menuFinRegistro(chatId) {
   return upsertPanel(chatId,
-    "📒 *REGISTRO DE FINANZAS*\n─────────────────────────\nSeleccione una opción:", [
-    [{ text: "🟢 ➕ REGISTRAR INGRESO", callback_data: "fin:menu:ingreso" }, { text: "🔴 ➖ REGISTRAR EGRESO", callback_data: "fin:menu:egreso" }],
+    "📒 *REGISTRO DE FINANZAS*\n\nSeleccione una opción:", [
+    [{ text: "➕ Registrar ingreso", callback_data: "fin:menu:ingreso" }, { text: "➖ Registrar egreso", callback_data: "fin:menu:egreso" }],
     [{ text: "🗑️ Eliminar Movimiento", callback_data: "fin:menu:eliminar" }, { text: "🧾 Cierre de Caja", callback_data: "fin:menu:cierre" }],
-    [{ text: "🟣 📊 Ver Reportes", callback_data: "fin:menu:reportes" }],
+    [{ text: "📊 Reportes", callback_data: "fin:menu:reportes" }, { text: "⬅️ Volver Finanzas", callback_data: "menu:pagos" }],
     [{ text: "⬅️ Volver Finanzas", callback_data: "menu:pagos" }, { text: "🏠 Inicio", callback_data: "go:inicio" }],
   ]);
 }
 
 async function menuFinEliminarTipo(chatId) {
   return upsertPanel(chatId,
-    "🗑️ *ELIMINAR MOVIMIENTO*\n─────────────────────────\n¿Qué desea buscar?", [
-    [{ text: "➕ Buscar Ingresos", callback_data: "fin:menu:eliminar:ingreso" }, { text: "➖ Buscar Egresos", callback_data: "fin:menu:eliminar:egreso" }],
+    "🗑️ *ELIMINAR MOVIMIENTO*\n\nSeleccione qué desea buscar:", [
+    [{ text: "➕ Buscar ingresos", callback_data: "fin:menu:eliminar:ingreso" }, { text: "➖ Buscar egresos", callback_data: "fin:menu:eliminar:egreso" }],
     [{ text: "⬅️ Volver Finanzas", callback_data: "menu:pagos" }, { text: "🏠 Inicio", callback_data: "go:inicio" }],
   ]);
 }
 
 async function menuFinReportes(chatId) {
   return upsertPanel(chatId,
-    "📊 *REPORTES DE FINANZAS*\n─────────────────────────\nSeleccione un reporte:", [
-    [{ text: "🔵 📅 Resumen por Fecha", callback_data: "fin:menu:resumen_fecha" }, { text: "🔵 🗓️ Resumen por Rango", callback_data: "fin:menu:resumen_rango" }],
-    [{ text: "🟡 🏦 Bancos por Fecha", callback_data: "fin:menu:bancos_fecha" }, { text: "🟡 🏦 Bancos por Rango", callback_data: "fin:menu:bancos_rango" }],
-    [{ text: "🟡 🔍 Detalle por Banco", callback_data: "fin:menu:detalle_banco" }, { text: "🟣 🏆 Top Plataformas", callback_data: "fin:menu:top_plataformas" }],
-    [{ text: "🟣 🎯 Top Combos", callback_data: "fin:menu:top_combos" }, { text: "🟢 📤 Excel por Rango", callback_data: "fin:menu:excel_rango" }],
-    [{ text: "🟡 🧾 Cierre por Rango", callback_data: "fin:menu:cierre:rango" }],
+    "📊 *REPORTES DE FINANZAS*\n\nSeleccione una opción:", [
+    [{ text: "📅 Resumen por fecha", callback_data: "fin:menu:resumen_fecha" }, { text: "🗓️ Resumen por rango", callback_data: "fin:menu:resumen_rango" }],
+    [{ text: "🏦 Bancos por fecha", callback_data: "fin:menu:bancos_fecha" }, { text: "🏦 Bancos por rango", callback_data: "fin:menu:bancos_rango" }],
+    [{ text: "🔍 Detalle por banco", callback_data: "fin:menu:detalle_banco" }, { text: "🏆 Top plataformas", callback_data: "fin:menu:top_plataformas" }],
+    [{ text: "🎯 Top combos", callback_data: "fin:menu:top_combos" }, { text: "📤 Excel por rango", callback_data: "fin:menu:excel_rango" }],
+    [{ text: "🧾 Cierre por rango", callback_data: "fin:menu:cierre:rango" }, { text: "⬅️ Volver Finanzas", callback_data: "menu:pagos" }],
     [{ text: "⬅️ Volver Finanzas", callback_data: "menu:pagos" }, { text: "🏠 Inicio", callback_data: "go:inicio" }],
   ]);
 }
