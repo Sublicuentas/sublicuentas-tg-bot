@@ -3626,6 +3626,9 @@ bot.on("message", async (msg) => {
     if (!text.startsWith("/") && adminOk) {
       const t = text.trim();
       if (t.length >= 2) {
+        // ✅ Ignorar comandos de menú — ya los maneja bot.onText
+        const IGNORAR = new Set(["menu","inicio","inventario","finanzas","clientes","alertas","dashboard"]);
+        if (IGNORAR.has(t.toLowerCase())) return;
         return resolverBusquedaAdmin(chatId, t);
       }
     }
