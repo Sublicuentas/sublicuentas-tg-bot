@@ -9,7 +9,6 @@ const { simpleParser } = require("mailparser");
 const { bot } = require("./index_01_core");
 const { isAdmin, logErr, escMD } = require("./index_02_utils_roles");
 
-// Se ajustó para que tome IMAP_HOST_1 si existe en Render
 const IMAP_HOST = process.env.IMAP_HOST_1 || process.env.EMAIL_IMAP_HOST || "premium48.web-hosting.com";
 const IMAP_PORT = Number(process.env.EMAIL_IMAP_PORT || 993);
 const IMAP_USER = process.env.EMAIL_ADMIN_USER || "admin@sublicuentas.com";
@@ -27,21 +26,35 @@ function esDisney(from="",subject=""){const f=from.toLowerCase();const s=subject
 function esHogar(subject="",text=""){const s=subject.toLowerCase();const t=text.toLowerCase();return s.includes("hogar")||s.includes("household")||s.includes("extra member")||t.includes("netflix hogar");}
 
 function extraerCodigo(text="", html=""){
-  const f = text || html.replace(/<[^>]+>/g," ");
+  // 1. Limpiamos HTML
+  let f = text || html.replace(/<[^>]+>/g," ");
+  // 2. Ocultamos palabras comunes del correo que confunden la búsqueda cercana
+  f = f.replace(/\b(disney|netflix|para|hogar|acceso|unico|este|code)\b/gi, "    ");
+  
   const pats = [
-    /[Cc][oóOÓ]digo.{0,30}?\b([A-Z0-9]{4,8})\b/,
-    /\b(?:es|is)[\s:]+([A-Z0-9]{4,8})\b/,
-    /[Cc]ode.{0,30}?\b([A-Z0-9]{4,8})\b/,
-    /\b([0-9]{4})\b/,
-    /\b([0-9]{6})\b/
+    // Prioridad 1: Códigos de 6 a 8 caracteres (Disney y Hogar)
+    /[Cc][oóOÓ]digo.{0,60}?\b([A-Z0-9]{6,8})\b/g,
+    /\b(?:es|is)[\s:]+([A-Z0-9]{6,8})\b/g,
+    
+    // Prioridad 2: Códigos de 4 caracteres (Netflix estándar)
+    /[Cc][oóOÓ]digo.{0,60}?\b([A-Z0-9]{4})\b/g,
+    /\b(?:es|is)[\s:]+([A-Z0-9]{4})\b/g,
+    
+    // Prioridad 3: Respaldo de solo números directos (Disney primero, luego Netflix)
+    /\b([0-9]{6})\b/g,
+    /\b([0-9]{4})\b/g
   ];
 
   for(const p of pats){
-    const m = f.match(p);
-    if(m && m[1]){
-      const codigo = m[1].trim();
-      if(!["2023", "2024", "2025", "2026", "2027", "NETFLIX", "DISNEY", "PARA"].includes(codigo.toUpperCase())) {
-         return codigo;
+    // Extraemos TODAS las coincidencias del patrón actual sin detenernos en la primera
+    const matches = [...f.matchAll(p)];
+    for(const m of matches){
+      if(m && m[1]){
+        const codigo = m[1].trim();
+        // Validamos que tenga al menos un número y no sea un año común
+        if(/\d/.test(codigo) && !["2023", "2024", "2025", "2026", "2027"].includes(codigo.toUpperCase())) {
+           return codigo;
+        }
       }
     }
   }
