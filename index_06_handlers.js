@@ -471,7 +471,7 @@ function resetChatStateFull(chatId) {
 
 async function sendBottomMainMenu(chatId, userId) {
   try {
-    resetChatState(chatId);
+    resetChatStateFull(chatId);
 
     if (await safeIsAdminLocal(userId)) {
       return upsertPanel(chatId, "📌 *MENÚ PRINCIPAL*\n\nSeleccione una opción:", [
@@ -1811,7 +1811,7 @@ bot.onText(/^\/start(?:@\w+)?$/i, async (msg) => {
   if (!hasRuntimeLock()) return;
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-  resetChatState(chatId);
+  resetChatStateFull(chatId);
   return sendBottomMainMenu(chatId, userId);
 });
 
@@ -1819,7 +1819,7 @@ bot.onText(/^\/menu(?:@\w+)?$/i, async (msg) => {
   if (!hasRuntimeLock()) return;
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-  resetChatState(chatId);
+  resetChatStateFull(chatId);
   return sendBottomMainMenu(chatId, userId);
 });
 
@@ -1840,6 +1840,8 @@ COMANDOS_SIN_SLASH.forEach(({ texto, accion, soloAdmin }) => {
     const chatId = msg.chat.id; const userId = msg.from.id;
     if (!(await userHasAccessFromMessage(msg))) return;
     if (soloAdmin && !(await safeIsAdminLocal(userId))) return;
+    // ✅ Limpiar pending y wizard al escribir cualquier comando de menú
+    resetChatStateFull(chatId);
     return accion(chatId, userId);
   });
 });
