@@ -1,6 +1,6 @@
 /* ✅ SUBLICUENTAS TG BOT — PARTE 7/7
    IMAP — EXTRACTOR DE CÓDIGOS NETFLIX / DISNEY
-   Usa imapflow (ya instalado en el proyecto)
+   Usa imapflow, mailparser y extracción web nativa
 */
 
 const { ImapFlow } = require("imapflow");
@@ -26,7 +26,6 @@ function esDisney(from="",subject=""){const f=from.toLowerCase();const s=subject
 function esHogar(subject="",text=""){const s=subject.toLowerCase();const t=text.toLowerCase();return s.includes("hogar")||s.includes("household")||s.includes("extra member")||t.includes("netflix hogar");}
 
 function extraerCodigo(text="", html="", esD = false){
-  // Limpieza agresiva: Priorizamos texto plano. Si no hay, limpiamos el HTML borrando los estilos CSS para evitar colores como #000000
   let f = "";
   if (text && text.trim().length > 20) {
     f = text;
@@ -38,14 +37,11 @@ function extraerCodigo(text="", html="", esD = false){
   }
   
   const pats = [];
-  
   if (esD) {
-    // REGLAS ESTRICTAS PARA DISNEY (Solo 6 dígitos exactos)
     pats.push(/[Cc][oóOÓ]digo.{0,40}?\b(\d{6})\b/g);
     pats.push(/\b(?:es|is|código)[\s:]+(\d{6})\b/g);
-    pats.push(/\b(\d{6})\b/g); // Respaldo absoluto
+    pats.push(/\b(\d{6})\b/g); 
   } else {
-    // REGLAS PARA NETFLIX (4, 6 u 8 caracteres)
     pats.push(/[Cc][oóOÓ]digo.{0,40}?\b([A-Z0-9]{4,8})\b/g);
     pats.push(/\b(?:es|is)[\s:]+([A-Z0-9]{4,8})\b/g);
     pats.push(/\b([0-9]{4})\b/g);
@@ -57,15 +53,11 @@ function extraerCodigo(text="", html="", esD = false){
     for(const m of matches){
       if(m && m[1]){
         const codigo = m[1].trim();
-        
-        // Filtro anti-basura (Ignorar colores HTML, años y números comunes de prueba)
         const basura = ["000000", "123456", "0000", "1111", "1234", "FFFFFF"];
         const anios = ["2023", "2024", "2025", "2026", "2027"];
         
         if(!basura.includes(codigo.toUpperCase()) && !anios.includes(codigo)) {
-           // Si es Disney, validar obligatoriamente que sean 6 números numéricos
            if(esD && !/^\d{6}$/.test(codigo)) continue;
-           // Validar que al menos tenga un número general
            if(/\d/.test(codigo)) return codigo;
         }
       }
@@ -78,6 +70,29 @@ function extraerLink(text="",html=""){
   const f=html||text;
   const pats=[/https:\/\/www\.netflix\.com\/password[^\s"<>\]]+/i,/https:\/\/www\.netflix\.com\/[^\s"<>\]]*reset[^\s"<>\]]*/i,/https:\/\/[^\s"<>\]]*netflix[^\s"<>\]]*password[^\s"<>\]]*/i,/https:\/\/[^\s"<>\]]*disneyplus[^\s"<>\]]*reset[^\s"<>\]]*/i];
   for(const p of pats){const m=f.match(p);if(m?.[0])return m[0].replace(/&amp;/g,"&").trim();}
+  return null;
+}
+
+// NUEVO: Extrae el enlace del botón "Obtener código"
+function extraerLinkObtenerCodigo(html="") {
+  const pat = /https:\/\/[^"'>]+netflix\.com[^"'>]*(?:travel|verify|temporary|update|account\/travel)[^"'>]*/i;
+  const m = html.match(pat);
+  if(m) return m[0].replace(/&amp;/g, "&").trim();
+  return null;
+}
+
+// NUEVO: Intenta raspar el código directamente de la web de Netflix
+async function scrapearCodigoWeb(url) {
+  try {
+    if(typeof fetch !== "undefined") {
+      const res = await fetch(url, {
+        headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" }
+      });
+      const html = await res.text();
+      const m1 = html.match(/>\s*([0-9]{4})\s*</); // Busca 4 dígitos entre etiquetas
+      if (m1 && m1[1]) return m1[1];
+    }
+  } catch(e) { /* Error silencioso si Netflix bloquea */ }
   return null;
 }
 
@@ -110,16 +125,34 @@ async function cmdCode(chatId,correo){
   try{
     const emails=await buscarEmails(correo);
     if(!emails.length) return bot.sendMessage(chatId,`📭 Sin emails recientes para *${escMD(correo)}*`,{parse_mode:"Markdown"});
+    
     for(const e of emails){
       const esN=esNetflix(e.from,e.subject);
       const esD=esDisney(e.from,e.subject);
-      if(!esN && !esD) continue; // Si no es ni netflix ni disney, pasa al siguiente correo
+      if(!esN && !esD) continue; 
       
-      // Enviamos la variable "esD" para que la función sepa si debe aplicar las reglas de Disney
-      const codigo=extraerCodigo(e.text,e.html, esD); 
-      if(!codigo) continue;
+      let codigo = extraerCodigo(e.text, e.html, esD); 
+      let linkWeb = null;
+
+      // Si no hay código escrito pero es Netflix, verificamos si trae enlace de web
+      if(!codigo && esN) {
+         linkWeb = extraerLinkObtenerCodigo(e.html);
+         if(linkWeb) {
+            codigo = await scrapearCodigoWeb(linkWeb); // Intenta extraerlo solo
+         }
+      }
+
+      if(!codigo && !linkWeb) continue;
       
-      return bot.sendMessage(chatId,`${esN?"🎬":"🏰"} *CÓDIGO ${esN?"NETFLIX":"DISNEY+"}*\n\n📧 *Correo:* ${escMD(correo)}\n🔑 *Código:* \`${codigo}\`\n📨 *Asunto:* ${escMD(e.subject)}\n🕐 *Fecha:* ${escMD(formatearFecha(e.date))}`,{parse_mode:"Markdown"});
+      if(codigo) {
+         return bot.sendMessage(chatId,`${esN?"🎬":"🏰"} *CÓDIGO ${esN?"NETFLIX":"DISNEY+"}*\n\n📧 *Correo:* ${escMD(correo)}\n🔑 *Código:* \`${codigo}\`\n📨 *Asunto:* ${escMD(e.subject)}\n🕐 *Fecha:* ${escMD(formatearFecha(e.date))}`,{parse_mode:"Markdown"});
+      } else if (linkWeb) {
+         // Rescate: Si Netflix nos bloquea el rastreo, enviamos el botón directo
+         return bot.sendMessage(chatId,`🎬 *CÓDIGO NETFLIX (VIA WEB)*\n\n📧 *Correo:* ${escMD(correo)}\n⚠️ Netflix exige generar este código en su página web. Toca el botón rojo de abajo:\n\n📨 *Asunto:* ${escMD(e.subject)}`, {
+             parse_mode: "Markdown",
+             reply_markup: { inline_keyboard: [[{ text: "📍 Abrir Enlace de Netflix", url: linkWeb }]] }
+         });
+      }
     }
     return bot.sendMessage(chatId,`⚠️ Sin código en emails de *${escMD(correo)}*`,{parse_mode:"Markdown"});
   }catch(e){logErr("cmdCode",e);return bot.sendMessage(chatId,`❌ Error: ${escMD(e?.message||"desconocido")}`,{parse_mode:"Markdown"});}
@@ -151,45 +184,9 @@ async function cmdHogar(chatId,correo){
       if(!esNetflix(e.from,e.subject)) continue;
       if(!esHogar(e.subject,e.text)) continue;
       
-      const codigo=extraerCodigo(e.text,e.html, false); if(!codigo) continue;
-      return bot.sendMessage(chatId,`🏠 *CÓDIGO NETFLIX HOGAR*\n\n📧 *Correo:* ${escMD(correo)}\n🔑 *Código:* \`${codigo}\`\n📨 *Asunto:* ${escMD(e.subject)}\n🕐 *Fecha:* ${escMD(formatearFecha(e.date))}`,{parse_mode:"Markdown"});
-    }
-    return bot.sendMessage(chatId,`⚠️ Sin código de hogar para *${escMD(correo)}*`,{parse_mode:"Markdown"});
-  }catch(e){logErr("cmdHogar",e);return bot.sendMessage(chatId,`❌ Error: ${escMD(e?.message||"desconocido")}`,{parse_mode:"Markdown"});}
-}
+      let codigo = extraerCodigo(e.text,e.html, false); 
+      let linkWeb = null;
 
-async function cmdInbox(chatId,correo){
-  if(!correo) return bot.sendMessage(chatId,"⚠️ Uso: /inbox correo@dominio.com");
-  await bot.sendMessage(chatId,`📬 Revisando inbox de *${escMD(correo)}*...`,{parse_mode:"Markdown"});
-  try{
-    const emails=await buscarEmails(correo,5);
-    if(!emails.length) return bot.sendMessage(chatId,`📭 Sin emails recientes para *${escMD(correo)}*`,{parse_mode:"Markdown"});
-    let txt=`📬 *ÚLTIMOS EMAILS*\n📧 ${escMD(correo)}\n\n`;
-    emails.forEach((e,i)=>{txt+=`*${i+1}.* ${escMD(e.subject||"(sin asunto)")}\n   📨 ${escMD(e.from)}\n   🕐 ${escMD(formatearFecha(e.date))}\n\n`;});
-    return bot.sendMessage(chatId,txt,{parse_mode:"Markdown"});
-  }catch(e){logErr("cmdInbox",e);return bot.sendMessage(chatId,`❌ Error: ${escMD(e?.message||"desconocido")}`,{parse_mode:"Markdown"});}
-}
-
-if(!global.__SUBLICUENTAS_IMAP_READY__){
-  global.__SUBLICUENTAS_IMAP_READY__=true;
-
-  bot.onText(/^\/code\s+(\S+)/i,async(msg,match)=>{const chatId=msg.chat.id;const userId=msg.from.id;if(!(await isAdmin(userId)))return bot.sendMessage(chatId,"⛔ Acceso denegado");return cmdCode(chatId,normalizarCorreo(match[1]));});
-  bot.onText(/^\/link\s+(\S+)/i,async(msg,match)=>{const chatId=msg.chat.id;const userId=msg.from.id;if(!(await isAdmin(userId)))return bot.sendMessage(chatId,"⛔ Acceso denegado");return cmdLink(chatId,normalizarCorreo(match[1]));});
-  bot.onText(/^\/hogar\s+(\S+)/i,async(msg,match)=>{const chatId=msg.chat.id;const userId=msg.from.id;if(!(await isAdmin(userId)))return bot.sendMessage(chatId,"⛔ Acceso denegado");return cmdHogar(chatId,normalizarCorreo(match[1]));});
-  bot.onText(/^\/inbox\s+(\S+)/i,async(msg,match)=>{const chatId=msg.chat.id;const userId=msg.from.id;if(!(await isAdmin(userId)))return bot.sendMessage(chatId,"⛔ Acceso denegado");return cmdInbox(chatId,normalizarCorreo(match[1]));});
-
-  bot.onText(/^\/imap_test$/i,async(msg)=>{
-    const chatId=msg.chat.id;const userId=msg.from.id;
-    if(!(await isAdmin(userId)))return bot.sendMessage(chatId,"⛔ Acceso denegado");
-    try{
-      await bot.sendMessage(chatId,"🔌 Probando conexión IMAP...");
-      const c=new ImapFlow({host:IMAP_HOST,port:IMAP_PORT,secure:true,auth:{user:IMAP_USER,pass:IMAP_PASS},logger:false,tls:{rejectUnauthorized:false}});
-      await c.connect(); await c.logout();
-      return bot.sendMessage(chatId,`✅ Conexión IMAP exitosa\n\n🌐 Host: \`${IMAP_HOST}\`\n👤 Usuario: \`${IMAP_USER}\``,{parse_mode:"Markdown"});
-    }catch(e){return bot.sendMessage(chatId,`❌ Error IMAP:\n${escMD(e?.message||String(e))}`,{parse_mode:"Markdown"});}
-  });
-
-  console.log("✅ Módulo IMAP cargado (imapflow) — /code /link /hogar /inbox /imap_test");
-}
-
-module.exports={cmdCode,cmdLink,cmdHogar,cmdInbox};
+      if(!codigo) {
+         linkWeb = extraerLinkObtenerCodigo(e.html);
+         if(linkWeb
