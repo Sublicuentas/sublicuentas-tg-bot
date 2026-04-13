@@ -9,7 +9,8 @@ const { simpleParser } = require("mailparser");
 const { bot } = require("./index_01_core");
 const { isAdmin, logErr, escMD } = require("./index_02_utils_roles");
 
-const IMAP_HOST = process.env.EMAIL_IMAP_HOST  || "sublicuentas.com";
+// Se ajustó para que tome IMAP_HOST_1 si existe en Render
+const IMAP_HOST = process.env.IMAP_HOST_1 || process.env.EMAIL_IMAP_HOST || "premium48.web-hosting.com";
 const IMAP_PORT = Number(process.env.EMAIL_IMAP_PORT || 993);
 const IMAP_USER = process.env.EMAIL_ADMIN_USER || "admin@sublicuentas.com";
 const IMAP_PASS = process.env.EMAIL_ADMIN_PASS || "";
@@ -25,10 +26,25 @@ function esNetflix(from="",subject=""){const f=from.toLowerCase();const s=subjec
 function esDisney(from="",subject=""){const f=from.toLowerCase();const s=subject.toLowerCase();return f.includes("disney")||s.includes("disney");}
 function esHogar(subject="",text=""){const s=subject.toLowerCase();const t=text.toLowerCase();return s.includes("hogar")||s.includes("household")||s.includes("extra member")||t.includes("netflix hogar");}
 
-function extraerCodigo(text="",html=""){
-  const f=text||html.replace(/<[^>]+>/g," ");
-  const pats=[/c[oó]digo[:\s]+([A-Z0-9]{4,8})\b/i,/verification code[:\s]+([A-Z0-9]{4,8})\b/i,/tu c[oó]digo es[:\s]+([A-Z0-9]{4,8})\b/i,/c[oó]digo temporal[:\s]+([A-Z0-9]{4,8})\b/i,/enter this code[:\s]+([A-Z0-9]{4,8})\b/i,/use this code[:\s]+([A-Z0-9]{4,8})\b/i,/\b([A-Z0-9]{6})\b/];
-  for(const p of pats){const m=f.match(p);if(m?.[1])return m[1].trim();}
+function extraerCodigo(text="", html=""){
+  const f = text || html.replace(/<[^>]+>/g," ");
+  const pats = [
+    /[Cc][oóOÓ]digo.{0,30}?\b([A-Z0-9]{4,8})\b/,
+    /\b(?:es|is)[\s:]+([A-Z0-9]{4,8})\b/,
+    /[Cc]ode.{0,30}?\b([A-Z0-9]{4,8})\b/,
+    /\b([0-9]{4})\b/,
+    /\b([0-9]{6})\b/
+  ];
+
+  for(const p of pats){
+    const m = f.match(p);
+    if(m && m[1]){
+      const codigo = m[1].trim();
+      if(!["2023", "2024", "2025", "2026", "2027", "NETFLIX", "DISNEY", "PARA"].includes(codigo.toUpperCase())) {
+         return codigo;
+      }
+    }
+  }
   return null;
 }
 
