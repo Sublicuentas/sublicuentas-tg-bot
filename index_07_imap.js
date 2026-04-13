@@ -189,4 +189,56 @@ async function cmdHogar(chatId,correo){
 
       if(!codigo) {
          linkWeb = extraerLinkObtenerCodigo(e.html);
-         if(linkWeb
+         if(linkWeb) codigo = await scrapearCodigoWeb(linkWeb);
+      }
+
+      if(!codigo && !linkWeb) continue;
+
+      if(codigo) {
+         return bot.sendMessage(chatId,`🏠 *CÓDIGO NETFLIX HOGAR*\n\n📧 *Correo:* ${escMD(correo)}\n🔑 *Código:* \`${codigo}\`\n📨 *Asunto:* ${escMD(e.subject)}\n🕐 *Fecha:* ${escMD(formatearFecha(e.date))}`,{parse_mode:"Markdown"});
+      } else if (linkWeb) {
+         return bot.sendMessage(chatId,`🏠 *CÓDIGO NETFLIX HOGAR*\n\n📧 *Correo:* ${escMD(correo)}\n⚠️ Netflix envió un enlace seguro para este código. Ábrelo aquí:\n\n📨 *Asunto:* ${escMD(e.subject)}`,{
+             parse_mode:"Markdown",
+             reply_markup: { inline_keyboard: [[{ text: "🏠 Abrir Enlace Hogar", url: linkWeb }]] }
+         });
+      }
+    }
+    return bot.sendMessage(chatId,`⚠️ Sin código de hogar para *${escMD(correo)}*`,{parse_mode:"Markdown"});
+  }catch(e){logErr("cmdHogar",e);return bot.sendMessage(chatId,`❌ Error: ${escMD(e?.message||"desconocido")}`,{parse_mode:"Markdown"});}
+}
+
+async function cmdInbox(chatId,correo){
+  if(!correo) return bot.sendMessage(chatId,"⚠️ Uso: /inbox correo@dominio.com");
+  await bot.sendMessage(chatId,`📬 Revisando inbox de *${escMD(correo)}*...`,{parse_mode:"Markdown"});
+  try{
+    const emails=await buscarEmails(correo,5);
+    if(!emails.length) return bot.sendMessage(chatId,`📭 Sin emails recientes para *${escMD(correo)}*`,{parse_mode:"Markdown"});
+    let txt=`📬 *ÚLTIMOS EMAILS*\n📧 ${escMD(correo)}\n\n`;
+    emails.forEach((e,i)=>{txt+=`*${i+1}.* ${escMD(e.subject||"(sin asunto)")}\n   📨 ${escMD(e.from)}\n   🕐 ${escMD(formatearFecha(e.date))}\n\n`;});
+    return bot.sendMessage(chatId,txt,{parse_mode:"Markdown"});
+  }catch(e){logErr("cmdInbox",e);return bot.sendMessage(chatId,`❌ Error: ${escMD(e?.message||"desconocido")}`,{parse_mode:"Markdown"});}
+}
+
+if(!global.__SUBLICUENTAS_IMAP_READY__){
+  global.__SUBLICUENTAS_IMAP_READY__=true;
+
+  bot.onText(/^\/code\s+(\S+)/i,async(msg,match)=>{const chatId=msg.chat.id;const userId=msg.from.id;if(!(await isAdmin(userId)))return bot.sendMessage(chatId,"⛔ Acceso denegado");return cmdCode(chatId,normalizarCorreo(match[1]));});
+  bot.onText(/^\/link\s+(\S+)/i,async(msg,match)=>{const chatId=msg.chat.id;const userId=msg.from.id;if(!(await isAdmin(userId)))return bot.sendMessage(chatId,"⛔ Acceso denegado");return cmdLink(chatId,normalizarCorreo(match[1]));});
+  bot.onText(/^\/hogar\s+(\S+)/i,async(msg,match)=>{const chatId=msg.chat.id;const userId=msg.from.id;if(!(await isAdmin(userId)))return bot.sendMessage(chatId,"⛔ Acceso denegado");return cmdHogar(chatId,normalizarCorreo(match[1]));});
+  bot.onText(/^\/inbox\s+(\S+)/i,async(msg,match)=>{const chatId=msg.chat.id;const userId=msg.from.id;if(!(await isAdmin(userId)))return bot.sendMessage(chatId,"⛔ Acceso denegado");return cmdInbox(chatId,normalizarCorreo(match[1]));});
+
+  bot.onText(/^\/imap_test$/i,async(msg)=>{
+    const chatId=msg.chat.id;const userId=msg.from.id;
+    if(!(await isAdmin(userId)))return bot.sendMessage(chatId,"⛔ Acceso denegado");
+    try{
+      await bot.sendMessage(chatId,"🔌 Probando conexión IMAP...");
+      const c=new ImapFlow({host:IMAP_HOST,port:IMAP_PORT,secure:true,auth:{user:IMAP_USER,pass:IMAP_PASS},logger:false,tls:{rejectUnauthorized:false}});
+      await c.connect(); await c.logout();
+      return bot.sendMessage(chatId,`✅ Conexión IMAP exitosa\n\n🌐 Host: \`${IMAP_HOST}\`\n👤 Usuario: \`${IMAP_USER}\``,{parse_mode:"Markdown"});
+    }catch(e){return bot.sendMessage(chatId,`❌ Error IMAP:\n${escMD(e?.message||String(e))}`,{parse_mode:"Markdown"});}
+  });
+
+  console.log("✅ Módulo IMAP cargado (imapflow) — /code /link /hogar /inbox /imap_test");
+}
+
+module.exports={cmdCode,cmdLink,cmdHogar,cmdInbox};
