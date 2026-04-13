@@ -25,35 +25,48 @@ function esNetflix(from="",subject=""){const f=from.toLowerCase();const s=subjec
 function esDisney(from="",subject=""){const f=from.toLowerCase();const s=subject.toLowerCase();return f.includes("disney")||s.includes("disney");}
 function esHogar(subject="",text=""){const s=subject.toLowerCase();const t=text.toLowerCase();return s.includes("hogar")||s.includes("household")||s.includes("extra member")||t.includes("netflix hogar");}
 
-function extraerCodigo(text="", html=""){
-  // 1. Limpiamos HTML
-  let f = text || html.replace(/<[^>]+>/g," ");
-  // 2. Ocultamos palabras comunes del correo que confunden la búsqueda cercana
-  f = f.replace(/\b(disney|netflix|para|hogar|acceso|unico|este|code)\b/gi, "    ");
+function extraerCodigo(text="", html="", esD = false){
+  // Limpieza agresiva: Priorizamos texto plano. Si no hay, limpiamos el HTML borrando los estilos CSS para evitar colores como #000000
+  let f = "";
+  if (text && text.trim().length > 20) {
+    f = text;
+  } else {
+    f = html.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, " ")
+            .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, " ")
+            .replace(/<[^>]+>/g, " ")
+            .replace(/&[a-z]+;/gi, " ");
+  }
   
-  const pats = [
-    // Prioridad 1: Códigos de 6 a 8 caracteres (Disney y Hogar)
-    /[Cc][oóOÓ]digo.{0,60}?\b([A-Z0-9]{6,8})\b/g,
-    /\b(?:es|is)[\s:]+([A-Z0-9]{6,8})\b/g,
-    
-    // Prioridad 2: Códigos de 4 caracteres (Netflix estándar)
-    /[Cc][oóOÓ]digo.{0,60}?\b([A-Z0-9]{4})\b/g,
-    /\b(?:es|is)[\s:]+([A-Z0-9]{4})\b/g,
-    
-    // Prioridad 3: Respaldo de solo números directos (Disney primero, luego Netflix)
-    /\b([0-9]{6})\b/g,
-    /\b([0-9]{4})\b/g
-  ];
+  const pats = [];
+  
+  if (esD) {
+    // REGLAS ESTRICTAS PARA DISNEY (Solo 6 dígitos exactos)
+    pats.push(/[Cc][oóOÓ]digo.{0,40}?\b(\d{6})\b/g);
+    pats.push(/\b(?:es|is|código)[\s:]+(\d{6})\b/g);
+    pats.push(/\b(\d{6})\b/g); // Respaldo absoluto
+  } else {
+    // REGLAS PARA NETFLIX (4, 6 u 8 caracteres)
+    pats.push(/[Cc][oóOÓ]digo.{0,40}?\b([A-Z0-9]{4,8})\b/g);
+    pats.push(/\b(?:es|is)[\s:]+([A-Z0-9]{4,8})\b/g);
+    pats.push(/\b([0-9]{4})\b/g);
+    pats.push(/\b([A-Z0-9]{6,8})\b/g);
+  }
 
   for(const p of pats){
-    // Extraemos TODAS las coincidencias del patrón actual sin detenernos en la primera
     const matches = [...f.matchAll(p)];
     for(const m of matches){
       if(m && m[1]){
         const codigo = m[1].trim();
-        // Validamos que tenga al menos un número y no sea un año común
-        if(/\d/.test(codigo) && !["2023", "2024", "2025", "2026", "2027"].includes(codigo.toUpperCase())) {
-           return codigo;
+        
+        // Filtro anti-basura (Ignorar colores HTML, años y números comunes de prueba)
+        const basura = ["000000", "123456", "0000", "1111", "1234", "FFFFFF"];
+        const anios = ["2023", "2024", "2025", "2026", "2027"];
+        
+        if(!basura.includes(codigo.toUpperCase()) && !anios.includes(codigo)) {
+           // Si es Disney, validar obligatoriamente que sean 6 números numéricos
+           if(esD && !/^\d{6}$/.test(codigo)) continue;
+           // Validar que al menos tenga un número general
+           if(/\d/.test(codigo)) return codigo;
         }
       }
     }
@@ -98,9 +111,14 @@ async function cmdCode(chatId,correo){
     const emails=await buscarEmails(correo);
     if(!emails.length) return bot.sendMessage(chatId,`📭 Sin emails recientes para *${escMD(correo)}*`,{parse_mode:"Markdown"});
     for(const e of emails){
-      if(!esNetflix(e.from,e.subject)&&!esDisney(e.from,e.subject)) continue;
-      const codigo=extraerCodigo(e.text,e.html); if(!codigo) continue;
       const esN=esNetflix(e.from,e.subject);
+      const esD=esDisney(e.from,e.subject);
+      if(!esN && !esD) continue; // Si no es ni netflix ni disney, pasa al siguiente correo
+      
+      // Enviamos la variable "esD" para que la función sepa si debe aplicar las reglas de Disney
+      const codigo=extraerCodigo(e.text,e.html, esD); 
+      if(!codigo) continue;
+      
       return bot.sendMessage(chatId,`${esN?"🎬":"🏰"} *CÓDIGO ${esN?"NETFLIX":"DISNEY+"}*\n\n📧 *Correo:* ${escMD(correo)}\n🔑 *Código:* \`${codigo}\`\n📨 *Asunto:* ${escMD(e.subject)}\n🕐 *Fecha:* ${escMD(formatearFecha(e.date))}`,{parse_mode:"Markdown"});
     }
     return bot.sendMessage(chatId,`⚠️ Sin código en emails de *${escMD(correo)}*`,{parse_mode:"Markdown"});
@@ -132,7 +150,8 @@ async function cmdHogar(chatId,correo){
     for(const e of emails){
       if(!esNetflix(e.from,e.subject)) continue;
       if(!esHogar(e.subject,e.text)) continue;
-      const codigo=extraerCodigo(e.text,e.html); if(!codigo) continue;
+      
+      const codigo=extraerCodigo(e.text,e.html, false); if(!codigo) continue;
       return bot.sendMessage(chatId,`🏠 *CÓDIGO NETFLIX HOGAR*\n\n📧 *Correo:* ${escMD(correo)}\n🔑 *Código:* \`${codigo}\`\n📨 *Asunto:* ${escMD(e.subject)}\n🕐 *Fecha:* ${escMD(formatearFecha(e.date))}`,{parse_mode:"Markdown"});
     }
     return bot.sendMessage(chatId,`⚠️ Sin código de hogar para *${escMD(correo)}*`,{parse_mode:"Markdown"});
