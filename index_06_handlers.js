@@ -2479,7 +2479,7 @@ bot.on("callback_query", async (q) => {
       }
 
       if (data.startsWith("cli:view:")) return enviarFichaCliente(chatId, data.split(":")[2]);
-      if (data === "cli:wiz:start") return wizardStart(chatId);
+      if (data === "cli:wiz:start") { pending.delete(String(chatId)); return wizardStart(chatId); }
 
       if (data.startsWith("wiz:plat:")) {
         const parts = data.split(":");
