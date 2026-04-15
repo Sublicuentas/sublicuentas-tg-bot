@@ -139,30 +139,52 @@ function finConceptoLabel(m = {}) {
   if (tipo === "egreso") return String(m.motivo || m.detalle || m.descripcion || "Egreso").trim();
   return String(m.plataforma || m.detalle || m.descripcion || m.cliente || "Ingreso").trim();
 }
+
 function normalizarBancoKey(raw = "") {
   const s = String(raw || "").trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
   if (!s) return "sin_banco";
-  if (["bac","b.a.c","b a c"].includes(s)) return "bac";
-  if (["atlantida","banco atlantida"].includes(s)) return "atlantida";
-  if (["ficohsa","banco ficohsa"].includes(s)) return "ficohsa";
-  if (["banpais","banco banpais"].includes(s)) return "banpais";
-  if (["occidente","banco occidente"].includes(s)) return "occidente";
-  if (["davivienda","banco davivienda"].includes(s)) return "davivienda";
-  if (["lafise","banco lafise"].includes(s)) return "lafise";
-  if (["tigo money","tigomoney","tigo"].includes(s)) return "tigo_money";
-  if (["paypal","pay pal"].includes(s)) return "paypal";
-  if (["binance"].includes(s)) return "binance";
-  if (["efectivo","cash"].includes(s)) return "efectivo";
-  if (["transferencia","transferencia bancaria"].includes(s)) return "transferencia";
-  if (["tengo"].includes(s)) return "tengo";
-  if (["otro","otros"].includes(s)) return "otro";
-  return s.replace(/\s+/g, "_");
+
+  if (s.includes("bac")) return "bac";
+  if (s.includes("atlantida")) return "atlantida";
+  if (s.includes("ficohsa")) return "ficohsa";
+  if (s.includes("banpais")) return "banpais";
+  if (s.includes("occidente")) return "occidente";
+  if (s.includes("davivienda")) return "davivienda";
+  if (s.includes("lafise")) return "lafise";
+  if (s.includes("tigo")) return "tigo_money";
+  if (s.includes("paypal")) return "paypal";
+  if (s.includes("binance")) return "binance";
+  if (s.includes("efectivo") || s.includes("cash")) return "efectivo";
+  if (s.includes("transferencia")) return "transferencia";
+  if (s.includes("tengo")) return "tengo";
+  if (s.includes("otro")) return "otro";
+
+  const sinEmojis = s.replace(/[^\w\s.-]/gi, '').trim().replace(/\s+/g, "_");
+  return sinEmojis || "sin_banco";
 }
+
 function humanBanco(raw = "") {
   const key = normalizarBancoKey(raw);
-  const map = { bac:"BAC", atlantida:"Atlántida", ficohsa:"Ficohsa", banpais:"Banpaís", occidente:"Occidente", davivienda:"Davivienda", lafise:"Lafise", tigo_money:"Tigo Money", paypal:"PayPal", binance:"Binance", efectivo:"Efectivo", transferencia:"Transferencia", tengo:"Tengo", otro:"Otro", sin_banco:"Sin banco" };
+  const map = { 
+    bac: "🏦 BAC", 
+    atlantida: "🏦 Atlántida", 
+    ficohsa: "🏦 Ficohsa", 
+    banpais: "🏦 Banpaís", 
+    occidente: "🏦 Occidente", 
+    davivienda: "🏦 Davivienda", 
+    lafise: "🏦 Lafise", 
+    tigo_money: "📱 Tigo Money", 
+    paypal: "💳 PayPal", 
+    binance: "🪙 Binance", 
+    efectivo: "💵 Efectivo", 
+    transferencia: "🔁 Transferencia", 
+    tengo: "📱 Tengo", 
+    otro: "🔁 Otro", 
+    sin_banco: "Sin banco" 
+  };
   return map[key] || String(raw || "Sin banco").trim() || "Sin banco";
 }
+
 function finExtraLabel(m = {}) {
   const tipo = String(m.tipo || "").toLowerCase();
   const banco = humanBanco(m.banco || m.metodo || "");
