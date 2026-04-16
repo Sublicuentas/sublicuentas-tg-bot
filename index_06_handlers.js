@@ -1841,8 +1841,8 @@ COMANDOS_SIN_SLASH.forEach(({ texto, accion, soloAdmin }) => {
     const chatId = msg.chat.id; const userId = msg.from.id;
     if (!(await userHasAccessFromMessage(msg))) return;
 
-    // ✅ CORRECCIÓN MÁGICA: Olvidar el panel viejo al escribir texto
-    try { panelMsgId?.delete?.(String(chatId)); } catch (_) {}
+    // ✅ CORRECCIÓN MÁGICA: Forzar mensaje nuevo abajo al escribir texto
+    try { panelMsgId.delete(String(chatId)); } catch (e) {}
     if (soloAdmin && !(await safeIsAdminLocal(userId))) return;
     // ✅ Limpiar pending y wizard al escribir cualquier comando de menú
     resetChatStateFull(chatId);
@@ -3057,6 +3057,9 @@ bot.on("message", async (msg) => {
 
   try {
     if (!(await userHasAccessFromMessage(msg))) return;
+
+    // ✅ CORRECCIÓN MÁGICA: Forzar mensaje nuevo abajo al escribir texto
+    try { panelMsgId.delete(String(chatId)); } catch (e) {}
 
     const adminOk = await safeIsAdminLocal(userId);
     const vendOk = await safeIsVendedorLocal(userId);
