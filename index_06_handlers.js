@@ -1840,6 +1840,9 @@ COMANDOS_SIN_SLASH.forEach(({ texto, accion, soloAdmin }) => {
     if (!hasRuntimeLock()) return;
     const chatId = msg.chat.id; const userId = msg.from.id;
     if (!(await userHasAccessFromMessage(msg))) return;
+
+    // ✅ CORRECCIÓN MÁGICA: Olvidar el panel viejo al escribir texto
+    try { panelMsgId?.delete?.(String(chatId)); } catch (_) {}
     if (soloAdmin && !(await safeIsAdminLocal(userId))) return;
     // ✅ Limpiar pending y wizard al escribir cualquier comando de menú
     resetChatStateFull(chatId);
