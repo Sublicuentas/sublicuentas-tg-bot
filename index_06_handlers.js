@@ -203,8 +203,9 @@ function addDaysDMY(baseDmy = "", days = 0) {
 
 function safeBtnLabelLocal(txt = "", max = 60) {
   const s = String(txt || "").replace(/\s+/g, " ").trim();
-  if (s.length <= max) return s;
-  return `${s.slice(0, Math.max(0, max - 1)).trim()}…`;
+  const chars = Array.from(s);
+  if (chars.length <= max) return s;
+  return chars.slice(0, 55).join("") + "...";
 }
 
 function platMetaLocal(plataforma = "") {
@@ -870,7 +871,7 @@ async function resolverBusquedaAdmin(chatId, query = "") {
         plat: normalizarPlataforma(invHits[0].plataforma),
         correo: q,
       });
-      return enviarSubmenuInventario(chatId, invHits[0].plataforma, q);
+      return enviarSubmenuInventario(chatId, hits[0].plataforma, q);
     }
 
     if (invHits.length > 1) {
