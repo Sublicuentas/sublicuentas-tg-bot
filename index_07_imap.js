@@ -74,56 +74,78 @@ function esHogar(subject="",text=""){
  * Para Disney busca también en HTML directamente.
  */
 function extraerCodigoInteligente(text = "", subject = "", html = "") {
-  const basuraAnios = ["2024", "2025", "2026", "2027"];
+  const basuraAnios = new Set(["2024", "2025", "2026", "2027"]);
 
-  // ── 1. Búsqueda en subject + text plano ──────────────────────────────
+  // Limpia un candidato y valida
+  function esValido(c = "") {
+    const s = c.replace(/\s/g, "");
+    return /^\d{4,6}$/.test(s) && !basuraAnios.has(s) ? s : null;
+  }
+
+  // ── 1. Disney: dígitos con un espacio entre cada uno (0 5 6 6 6 5) ──
+  // Patrón: exactamente 6 dígitos separados por un espacio cada uno
+  const disneyEsp6 = (subject + " " + text + " " + html.replace(/<[^>]+>/g, " "))
+    .match(/\b(\d)\s(\d)\s(\d)\s(\d)\s(\d)\s(\d)\b/g);
+  if (disneyEsp6) {
+    for (const m of disneyEsp6) {
+      const v = esValido(m.replace(/\s/g, ""));
+      if (v) return v;
+    }
+  }
+
+  // ── 2. Búsqueda en texto plano + asunto ──────────────────────────────
   const fuente = (subject + " " + text).replace(/\s+/g, " ");
 
-  // 6 dígitos exactos
-  const match6 = fuente.match(/\b\d{6}\b/g);
+  // 6 dígitos juntos (con o sin leading zero — usar \d{6} sin \b al inicio)
+  const match6 = fuente.match(/(?<!\d)(\d{6})(?!\d)/g);
   if (match6) {
-    for (const c of match6) if (!basuraAnios.includes(c)) return c;
+    for (const c of match6) { const v = esValido(c); if (v) return v; }
   }
 
-  // 6 dígitos con espacio al medio (ej. 123 456)
-  const match6Esp = fuente.match(/\b(\d{3})\s+(\d{3})\b/);
-  if (match6Esp) return (match6Esp[1] + match6Esp[2]);
+  // 6 dígitos con espacio al medio tipo Netflix (123 456)
+  const match6Mid = fuente.match(/(?<!\d)(\d{3})\s(\d{3})(?!\d)/g);
+  if (match6Mid) {
+    for (const m of match6Mid) { const v = esValido(m); if (v) return v; }
+  }
 
   // 4 dígitos
-  const match4 = fuente.match(/\b\d{4}\b/g);
+  const match4 = fuente.match(/(?<!\d)(\d{4})(?!\d)/g);
   if (match4) {
-    for (const c of match4) if (!basuraAnios.includes(c)) return c;
+    for (const c of match4) { const v = esValido(c); if (v) return v; }
   }
 
-  // ── 2. Búsqueda en HTML (necesario para Disney y Prime) ──────────────
+  // ── 3. Búsqueda en HTML (Disney, Prime y otros) ──────────────────────
   if (html) {
-    const htmlLimpio = html.replace(/\s+/g, " ");
+    // Quitar tags para buscar en texto visible del HTML
+    const htmlTexto = html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
 
-    // Patrón Disney: el código suele estar en un <td> o <div> grande, solo dígitos
-    // Buscar 6 dígitos rodeados de tags HTML
-    const htmlMatch6 = htmlLimpio.match(/>\s*(\d{6})\s*</g);
+    // Disney con espacios entre dígitos en texto del HTML
+    const htmlEsp6 = htmlTexto.match(/\b(\d)\s(\d)\s(\d)\s(\d)\s(\d)\s(\d)\b/g);
+    if (htmlEsp6) {
+      for (const m of htmlEsp6) { const v = esValido(m); if (v) return v; }
+    }
+
+    // 6 dígitos directos en texto HTML
+    const htmlMatch6 = htmlTexto.match(/(?<!\d)(\d{6})(?!\d)/g);
     if (htmlMatch6) {
-      for (const bloque of htmlMatch6) {
+      for (const c of htmlMatch6) { const v = esValido(c); if (v) return v; }
+    }
+
+    // 6 dígitos entre tags HTML (>056665<)
+    const tagMatch6 = html.replace(/\s+/g, " ").match(/>\s*(\d[\s\d]{4,10}\d)\s*</g);
+    if (tagMatch6) {
+      for (const bloque of tagMatch6) {
         const num = bloque.replace(/[^\d]/g, "");
-        if (num.length === 6 && !basuraAnios.includes(num)) return num;
+        if (num.length === 6 && !basuraAnios.has(num)) return num;
+        if (num.length === 4 && !basuraAnios.has(num)) return num; // fallback 4
       }
     }
 
-    // Patrón Disney alternativo: font-size grande con número
-    const fontMatch = htmlLimpio.match(/font-size\s*:\s*\d+px[^>]*>\s*(\d{4,6})\s*</i);
-    if (fontMatch && fontMatch[1] && !basuraAnios.includes(fontMatch[1])) return fontMatch[1];
-
-    // Patrón con tracking-widespace (Disney usa esto frecuentemente)
-    const trackMatch = htmlLimpio.match(/letter-spacing[^>]*>\s*(\d{4,6})\s*</i);
-    if (trackMatch && trackMatch[1] && !basuraAnios.includes(trackMatch[1])) return trackMatch[1];
-
-    // Fallback HTML: 4 dígitos en tags
-    const htmlMatch4 = htmlLimpio.match(/>\s*(\d{4})\s*</g);
-    if (htmlMatch4) {
-      for (const bloque of htmlMatch4) {
-        const num = bloque.replace(/[^\d]/g, "");
-        if (num.length === 4 && !basuraAnios.includes(num)) return num;
-      }
+    // font-size grande (código resaltado)
+    const fontMatch = html.replace(/\s+/g, " ").match(/font-size\s*:\s*\d+px[^>]*>([\d\s]{6,13})</i);
+    if (fontMatch && fontMatch[1]) {
+      const v = esValido(fontMatch[1]);
+      if (v) return v;
     }
   }
 
@@ -216,7 +238,6 @@ async function buscarEmails(correo, limite=15) {
 /** /code — Netflix o Disney+ */
 async function cmdCode(chatId, correo){
   if(!correo) return bot.sendMessage(chatId,"⚠️ Uso: /code correo@dominio.com");
-  await bot.sendMessage(chatId,`🔎 Buscando código para *${escMD(correo)}*...`,{parse_mode:"Markdown"});
   try{
     const emails = await buscarEmails(correo);
     if(!emails.length) return bot.sendMessage(chatId,`📬 Sin emails recientes para *${escMD(correo)}*`,{parse_mode:"Markdown"});
@@ -226,7 +247,6 @@ async function cmdCode(chatId, correo){
       const isD = esDisney(e.from, e.subject);
       if(!isN && !isD) continue;
 
-      // Pasar HTML también para que Disney funcione
       let codigo = extraerCodigoInteligente(e.text, e.subject, e.html);
       let linkWeb = null;
 
@@ -264,7 +284,6 @@ async function cmdCode(chatId, correo){
 /** /link — Reset de contraseña: Netflix, Disney+, HBO Max */
 async function cmdLink(chatId, correo){
   if(!correo) return bot.sendMessage(chatId,"⚠️ Uso: /link correo@dominio.com");
-  await bot.sendMessage(chatId,`🔎 Buscando link de reset para *${escMD(correo)}*...`,{parse_mode:"Markdown"});
   try{
     const emails = await buscarEmails(correo);
     if(!emails.length) return bot.sendMessage(chatId,`📬 Sin emails recientes para *${escMD(correo)}*`,{parse_mode:"Markdown"});
@@ -298,7 +317,6 @@ async function cmdLink(chatId, correo){
 /** /hogar — Código de Netflix hogar */
 async function cmdHogar(chatId, correo){
   if(!correo) return bot.sendMessage(chatId,"⚠️ Uso: /hogar correo@dominio.com");
-  await bot.sendMessage(chatId,`🔎 Buscando código hogar para *${escMD(correo)}*...`,{parse_mode:"Markdown"});
   try{
     const emails = await buscarEmails(correo);
     if(!emails.length) return bot.sendMessage(chatId,`📬 Sin emails para *${escMD(correo)}*`,{parse_mode:"Markdown"});
@@ -337,7 +355,6 @@ async function cmdHogar(chatId, correo){
 /** /prime — Código OTP de Prime Video (6 dígitos) */
 async function cmdPrime(chatId, correo){
   if(!correo) return bot.sendMessage(chatId,"⚠️ Uso: /prime correo@dominio.com");
-  await bot.sendMessage(chatId,`🔎 Buscando código de *Prime Video* para *${escMD(correo)}*...`,{parse_mode:"Markdown"});
   try{
     const emails = await buscarEmails(correo);
     if(!emails.length) return bot.sendMessage(chatId,`📬 Sin emails recientes para *${escMD(correo)}*`,{parse_mode:"Markdown"});
@@ -364,7 +381,6 @@ async function cmdPrime(chatId, correo){
 /** /inbox — Ver últimos emails del correo */
 async function cmdInbox(chatId, correo){
   if(!correo) return bot.sendMessage(chatId,"⚠️ Uso: /inbox correo@dominio.com");
-  await bot.sendMessage(chatId,`📥 Inbox de *${escMD(correo)}*...`,{parse_mode:"Markdown"});
   try{
     const emails = await buscarEmails(correo,5);
     if(!emails.length) return bot.sendMessage(chatId,`📬 Sin emails para *${escMD(correo)}*`,{parse_mode:"Markdown"});
