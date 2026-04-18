@@ -34,9 +34,31 @@ function formatearFecha(date) {
 // ===============================
 // DETECTORES DE PLATAFORMA
 // ===============================
+// Netflix en general
 function esNetflix(from="",subject=""){
   const f=from.toLowerCase(); const s=subject.toLowerCase();
-  return f.includes("netflix")||s.includes("netflix")||s.includes("verificaci")||s.includes("seguridad")||s.includes("confirmaci")||s.includes("actualiza");
+  return f.includes("netflix") || s.includes("netflix");
+}
+
+// Netflix OTP/codigo: verificacion, seguridad, hogar — excluye resets
+function esNetflixCodigo(from="",subject=""){
+  if(!esNetflix(from,subject)) return false;
+  const s=subject.toLowerCase();
+  // Excluir emails de reset de contrasena
+  if(s.includes("restablecimiento")||s.includes("reset")||s.includes("password")||
+     s.includes("contrase")||s.includes("cambio")||s.includes("actualiza")) return false;
+  // Solo si tiene palabras de codigo/verificacion, o viene del from de netflix sin asunto sospechoso
+  return s.includes("verificaci")||s.includes("seguridad")||s.includes("acceso")||
+         s.includes("confirmaci")||s.includes("hogar")||s.includes("household")||
+         s.includes("codigo")||s.includes("temporal")||s.includes("inicio de sesi");
+}
+
+// Netflix reset de contrasena/correo -> para /link
+function esNetflixReset(from="",subject=""){
+  if(!esNetflix(from,subject)) return false;
+  const s=subject.toLowerCase();
+  return s.includes("restablecimiento")||s.includes("reset")||s.includes("password")||
+         s.includes("contrase")||s.includes("cambio")||s.includes("actualiza");
 }
 
 function esDisney(from="",subject=""){
@@ -243,7 +265,7 @@ async function cmdCode(chatId, correo){
     if(!emails.length) return bot.sendMessage(chatId,`📬 Sin emails recientes para *${escMD(correo)}*`,{parse_mode:"Markdown"});
 
     for(const e of emails){
-      const isN = esNetflix(e.from, e.subject);
+      const isN = esNetflixCodigo(e.from, e.subject);
       const isD = esDisney(e.from, e.subject);
       if(!isN && !isD) continue;
 
@@ -289,7 +311,7 @@ async function cmdLink(chatId, correo){
     if(!emails.length) return bot.sendMessage(chatId,`📬 Sin emails recientes para *${escMD(correo)}*`,{parse_mode:"Markdown"});
 
     for(const e of emails){
-      const isN  = esNetflix(e.from, e.subject);
+      const isN  = esNetflixReset(e.from, e.subject);
       const isD  = esDisney(e.from, e.subject);
       const isH  = esHBO(e.from, e.subject);
       if(!isN && !isD && !isH) continue;
@@ -322,7 +344,8 @@ async function cmdHogar(chatId, correo){
     if(!emails.length) return bot.sendMessage(chatId,`📬 Sin emails para *${escMD(correo)}*`,{parse_mode:"Markdown"});
 
     for(const e of emails){
-      if(!esNetflix(e.from,e.subject) || !esHogar(e.subject,e.text)) continue;
+      if(!esNetflixCodigo(e.from,e.subject) && !esNetflixReset(e.from,e.subject)) continue;
+      if(!esHogar(e.subject,e.text)) continue;
 
       let codigo = extraerCodigoInteligente(e.text, e.subject, e.html);
       let linkWeb = null;
