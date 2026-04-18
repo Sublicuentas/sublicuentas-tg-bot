@@ -176,22 +176,32 @@ function extraerCodigoInteligente(text = "", subject = "", html = "") {
 
 // Links de reset de contraseña/correo
 function extraerLink(text="", html="") {
-  const f = html || text;
+  // Buscar primero en HTML (tiene los links reales), luego en text
+  const fuentes = [html, text].filter(Boolean);
   const pats = [
-    // Netflix
+    // Netflix password/reset
+    /https:\/\/www\.netflix\.com\/password[^\s"<>\]&]+(?:&amp;|&)[^\s"<>\]]*/i,
     /https:\/\/www\.netflix\.com\/password[^\s"<>\]]+/i,
     /https:\/\/www\.netflix\.com\/[^\s"<>\]]*reset[^\s"<>\]]*/i,
     /https:\/\/[^\s"<>\]]*netflix[^\s"<>\]]*password[^\s"<>\]]*/i,
     // Disney
-    /https:\/\/[^\s"<>\]]*disneyplus[^\s"<>\]]*reset[^\s"<>\]]*/i,
+    /https:\/\/[^\s"<>\]]*disneyplus[^\s"<>\]]*(?:reset|password|account)[^\s"<>\]]*/i,
     /https:\/\/[^\s"<>\]]*disney[^\s"<>\]]*account[^\s"<>\]]*/i,
-    // HBO Max
+    // HBO Max / Max
     /https:\/\/[^\s"<>\]]*hbomax[^\s"<>\]]*(?:reset|password|account|verify)[^\s"<>\]]*/i,
     /https:\/\/[^\s"<>\]]*max\.com[^\s"<>\]]*(?:reset|password|account|verify|email)[^\s"<>\]]*/i,
   ];
-  for (const p of pats) {
-    const m = f.match(p);
-    if (m?.[0]) return m[0].replace(/&amp;/g,"&").trim();
+  for (const f of fuentes) {
+    for (const p of pats) {
+      const m = f.match(p);
+      if (m?.[0]) {
+        // Decodificar &amp; y limpiar comillas/espacios que puedan haber quedado
+        let url = m[0].replace(/&amp;/g,"&").replace(/["\s>]+$/,"").trim();
+        // Decodificar %XX si es necesario (URLs que vienen encoded en el HTML)
+        try { url = decodeURIComponent(url.replace(/\+/g," ")); } catch(_) {}
+        return url;
+      }
+    }
   }
   return null;
 }
@@ -357,8 +367,8 @@ async function cmdLink(chatId, correo){
         `📧 *Correo:* ${escMD(correo)}\n` +
         `📨 *Asunto:* ${escMD(e.subject)}\n` +
         `🕒 *Fecha:* ${escMD(formatearFecha(e.date))}\n\n` +
-        `🔗 *Link:*\n${link}`,
-        {parse_mode:"Markdown", disable_web_page_preview:true}
+        `Toca el botón para abrir el link:`,
+        {parse_mode:"Markdown", reply_markup:{inline_keyboard:[[{text:`${emoji} Abrir link ${plat}`, url:link}]]}}
       );
     }
     return bot.sendMessage(chatId,`⚠️ Sin link de reset para *${escMD(correo)}*`,{parse_mode:"Markdown"});
