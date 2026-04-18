@@ -1,11 +1,11 @@
-/* ✅ SUBLICUENTAS TG BOT — PARTE 7/7 v7 CORREGIDA
-   IMAP — EXTRACTOR DE CÓDIGOS NETFLIX / DISNEY / VERIFICACIÓN (6 DÍGITOS)
-   Usa imapflow, mailparser y extracción web nativa
+/* ✅ SUBLICUENTAS TG BOT — PARTE 7/7 v9 FINAL
+   IMAP — EXTRACTOR DE CÓDIGOS NETFLIX / DISNEY / VERIFICACIÓN
+   Usa imapflow, mailparser y extracción web nativa (scraping)
    ------------------------------------------------------------
-   ✅ MEJORAS v7 CORREGIDA:
-   - Integración de extraerCodigoInteligente en cmdCode y cmdHogar.
-   - Detección de 6 dígitos para Verificación de cuenta y Cambio de correo.
-   - Mantenimiento de lógica de rascado web (scrapearCodigoWeb).
+   ✅ MEJORAS v9:
+   - Recuperada TODA la lógica original de scraping web (fetch).
+   - Arreglada la detección de 6 dígitos para Disney y Seguridad Netflix.
+   - Mantenidos comandos /code, /link, /hogar e /inbox originales.
 */
 
 const { ImapFlow } = require("imapflow");
@@ -32,22 +32,35 @@ function esNetflix(from="",subject=""){
 }
 function esDisney(from="",subject=""){
   const f=from.toLowerCase(); const s=subject.toLowerCase();
-  return f.includes("disney")||s.includes("disney");
+  return f.includes("disney")||s.includes("disneyplus")||s.includes("disney plus");
 }
 function esHogar(subject="",text=""){
   const s=subject.toLowerCase(); const t=text.toLowerCase();
   return s.includes("hogar")||s.includes("household")||s.includes("extra member")||t.includes("netflix hogar");
 }
 
-// ✅ Función Inteligente: Detecta 6 dígitos (Seguridad) o 4 dígitos (Hogar)
-function extraerCodigoInteligente(text = "", subject = "") {
-  const fullText = (subject + " " + text).replace(/\s+/g, " ");
-  // Buscar 6 dígitos con espacio (ej. 123 456) o pegados (123456)
-  const match6 = fullText.match(/\b(\d{3})\s?(\d{3})\b/);
-  if (match6) return (match6[1] + match6[2]);
-  // Si no hay de 6, buscar el clásico de 4
-  const match4 = fullText.match(/\b\d{4}\b/);
-  return match4 ? match4[0] : null;
+// ✅ Función Inteligente Integrada: Busca 6 o 4 dígitos ignorando años
+function extraerCodigoInteligente(text = "", subject = "", esD = false) {
+  const fuente = (subject + " " + text).replace(/\s+/g, " ");
+  const basuraAnios = ["2024", "2025", "2026", "2027"];
+
+  // 1. Prioridad 6 dígitos (Disney y Verificación Netflix)
+  const match6 = fuente.match(/\b\d{6}\b/g);
+  if (match6) {
+    for (const c of match6) if (!basuraAnios.includes(c)) return c;
+  }
+
+  // 2. Netflix 6 dígitos con espacio (ej. 123 456)
+  const match6Esp = fuente.match(/\b(\d{3})\s+(\d{3})\b/);
+  if (match6Esp) return (match6Esp[1] + match6Esp[2]);
+
+  // 3. Fallback 4 dígitos (Hogar/Acceso)
+  const match4 = fuente.match(/\b\d{4}\b/g);
+  if (match4) {
+    for (const c of match4) if (!basuraAnios.includes(c)) return c;
+  }
+
+  return null;
 }
 
 function extraerLink(text="",html=""){
@@ -71,7 +84,7 @@ async function scrapearCodigoWeb(url) {
         headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" }
       });
       const html = await res.text();
-      const m1 = html.match(/>\s*([0-9]{4})\s*</); 
+      const m1 = html.match(/>\s*([0-9]{4,6})\s*</); 
       if (m1 && m1[1]) return m1[1];
     }
   } catch(e) { }
@@ -107,34 +120,20 @@ async function cmdCode(chatId,correo){
   try{
     const emails=await buscarEmails(correo);
     if(!emails.length) return bot.sendMessage(chatId,`📬 Sin emails recientes para *${escMD(correo)}*`,{parse_mode:"Markdown"});
-    
     for(const e of emails){
-      const esN=esNetflix(e.from,e.subject);
-      const esD=esDisney(e.from,e.subject);
-      if(!esN && !esD) continue; 
-      
-      // ✅ ACTUALIZADO: Usa la nueva función inteligente de 4 o 6 dígitos
-      let codigo = extraerCodigoInteligente(e.text, e.subject); 
+      const isN=esNetflix(e.from,e.subject); const isD=esDisney(e.from,e.subject);
+      if(!isN && !isD) continue; 
+      let codigo = extraerCodigoInteligente(e.text, e.subject, isD); 
       let linkWeb = null;
-
-      if(!codigo && esN) {
+      if(!codigo && isN) {
          linkWeb = extraerLinkObtenerCodigo(e.html);
          if(linkWeb) codigo = await scrapearCodigoWeb(linkWeb);
       }
-
-      if(!codigo && !linkWeb) continue;
-      
-      if(codigo) {
-         return bot.sendMessage(chatId,`${esN?"🎬":"🏰"} *CÓDIGO ${esN?"NETFLIX":"DISNEY+"}*\n\n📧 *Correo:* ${escMD(correo)}\n🔑 *Código:* \`${codigo}\`\n📨 *Asunto:* ${escMD(e.subject)}\n🕒 *Fecha:* ${escMD(formatearFecha(e.date))}`,{parse_mode:"Markdown"});
-      } else if (linkWeb) {
-         return bot.sendMessage(chatId,`🎬 *CÓDIGO NETFLIX (VIA WEB)*\n\n📧 *Correo:* ${escMD(correo)}\n⚠️ Netflix exige generar este código en su página web. Toca el botón de abajo:\n\n📨 *Asunto:* ${escMD(e.subject)}`, {
-             parse_mode: "Markdown",
-             reply_markup: { inline_keyboard: [[{ text: "🔎 Abrir Enlace de Netflix", url: linkWeb }]] }
-         });
-      }
+      if(codigo) return bot.sendMessage(chatId,`${isN?"🎬":"🏰"} *CÓDIGO ${isN?"NETFLIX":"DISNEY+"}*\n\n📧 *Correo:* ${escMD(correo)}\n🔑 *Código:* \`${codigo}\`\n📨 *Asunto:* ${escMD(e.subject)}\n🕒 *Fecha:* ${escMD(formatearFecha(e.date))}`,{parse_mode:"Markdown"});
+      if(linkWeb) return bot.sendMessage(chatId,`🎬 *CÓDIGO NETFLIX (VIA WEB)*\n\n📧 *Correo:* ${escMD(correo)}\n⚠️ Toca el botón para ver el código en la web:\n\n📨 *Asunto:* ${escMD(e.subject)}`, {parse_mode: "Markdown",reply_markup: { inline_keyboard: [[{ text: "🔎 Abrir Enlace de Netflix", url: linkWeb }]] }});
     }
-    return bot.sendMessage(chatId,`⚠️ Sin código en emails de *${escMD(correo)}*`,{parse_mode:"Markdown"});
-  }catch(e){logErr("cmdCode",e);return bot.sendMessage(chatId,`❌ Error: ${escMD(e?.message||"desconocido")}`,{parse_mode:"Markdown"});}
+    return bot.sendMessage(chatId,`⚠️ Sin código para *${escMD(correo)}*`,{parse_mode:"Markdown"});
+  }catch(e){logErr("cmdCode",e);return bot.sendMessage(chatId,`❌ Error: ${escMD(e?.message||"IMAP error")}`,{parse_mode:"Markdown"});}
 }
 
 async function cmdLink(chatId,correo){
@@ -146,11 +145,11 @@ async function cmdLink(chatId,correo){
     for(const e of emails){
       if(!esNetflix(e.from,e.subject)&&!esDisney(e.from,e.subject)) continue;
       const link=extraerLink(e.text,e.html); if(!link) continue;
-      const esN=esNetflix(e.from,e.subject);
-      return bot.sendMessage(chatId,`${esN?"🎬":"🏰"} *LINK RESET ${esN?"NETFLIX":"DISNEY+"}*\n\n📧 *Correo:* ${escMD(correo)}\n📨 *Asunto:* ${escMD(e.subject)}\n🕒 *Fecha:* ${escMD(formatearFecha(e.date))}\n\n🔗 *Link:*\n${link}`,{parse_mode:"Markdown",disable_web_page_preview:true});
+      const isN=esNetflix(e.from,e.subject);
+      return bot.sendMessage(chatId,`${isN?"🎬":"🏰"} *LINK RESET ${isN?"NETFLIX":"DISNEY+"}*\n\n📧 *Correo:* ${escMD(correo)}\n🔗 *Link:*\n${link}`,{parse_mode:"Markdown",disable_web_page_preview:true});
     }
     return bot.sendMessage(chatId,`⚠️ Sin link de reset para *${escMD(correo)}*`,{parse_mode:"Markdown"});
-  }catch(e){logErr("cmdLink",e);return bot.sendMessage(chatId,`❌ Error: ${escMD(e?.message||"desconocido")}`,{parse_mode:"Markdown"});}
+  }catch(e){logErr("cmdLink",e); return bot.sendMessage(chatId,"❌ Error.");}
 }
 
 async function cmdHogar(chatId,correo){
@@ -158,67 +157,41 @@ async function cmdHogar(chatId,correo){
   await bot.sendMessage(chatId,`🔎 Buscando código hogar para *${escMD(correo)}*...`,{parse_mode:"Markdown"});
   try{
     const emails=await buscarEmails(correo);
-    if(!emails.length) return bot.sendMessage(chatId,`📬 Sin emails recientes para *${escMD(correo)}*`,{parse_mode:"Markdown"});
+    if(!emails.length) return bot.sendMessage(chatId,`📬 Sin emails para *${escMD(correo)}*`,{parse_mode:"Markdown"});
     for(const e of emails){
-      if(!esNetflix(e.from,e.subject)) continue;
-      if(!esHogar(e.subject,e.text)) continue;
-      
-      // ✅ ACTUALIZADO: Usa la nueva función inteligente
-      let codigo = extraerCodigoInteligente(e.text, e.subject); 
+      if(!esNetflix(e.from,e.subject) || !esHogar(e.subject,e.text)) continue;
+      let codigo = extraerCodigoInteligente(e.text, e.subject, false); 
       let linkWeb = null;
-
       if(!codigo) {
          linkWeb = extraerLinkObtenerCodigo(e.html);
          if(linkWeb) codigo = await scrapearCodigoWeb(linkWeb);
       }
-
-      if(!codigo && !linkWeb) continue;
-
-      if(codigo) {
-         return bot.sendMessage(chatId,`🏠 *CÓDIGO NETFLIX HOGAR*\n\n📧 *Correo:* ${escMD(correo)}\n🔑 *Código:* \`${codigo}\`\n📨 *Asunto:* ${escMD(e.subject)}\n🕒 *Fecha:* ${escMD(formatearFecha(e.date))}`,{parse_mode:"Markdown"});
-      } else if (linkWeb) {
-         return bot.sendMessage(chatId,`🏠 *CÓDIGO NETFLIX HOGAR*\n\n📧 *Correo:* ${escMD(correo)}\n⚠️ Netflix envió un enlace seguro para este código. Ábrelo aquí:\n\n📨 *Asunto:* ${escMD(e.subject)}`,{
-             parse_mode:"Markdown",
-             reply_markup: { inline_keyboard: [[{ text: "🏠 Abrir Enlace Hogar", url: linkWeb }]] }
-         });
-      }
+      if(codigo) return bot.sendMessage(chatId,`🏠 *CÓDIGO NETFLIX HOGAR*\n\n📧 *Correo:* ${escMD(correo)}\n🔑 *Código:* \`${codigo}\`\n🕒 *Fecha:* ${escMD(formatearFecha(e.date))}`,{parse_mode:"Markdown"});
+      if(linkWeb) return bot.sendMessage(chatId,`🏠 *CÓDIGO NETFLIX HOGAR*\n\n📧 *Correo:* ${escMD(correo)}\n⚠️ Abrir enlace seguro:\n\n📨 *Asunto:* ${escMD(e.subject)}`,{parse_mode:"Markdown",reply_markup: { inline_keyboard: [[{ text: "🏠 Abrir Enlace Hogar", url: linkWeb }]] }});
     }
     return bot.sendMessage(chatId,`⚠️ Sin código de hogar para *${escMD(correo)}*`,{parse_mode:"Markdown"});
-  }catch(e){logErr("cmdHogar",e);return bot.sendMessage(chatId,`❌ Error: ${escMD(e?.message||"desconocido")}`,{parse_mode:"Markdown"});}
+  }catch(e){logErr("cmdHogar",e); return bot.sendMessage(chatId,"❌ Error.");}
 }
 
 async function cmdInbox(chatId,correo){
   if(!correo) return bot.sendMessage(chatId,"⚠️ Uso: /inbox correo@dominio.com");
-  await bot.sendMessage(chatId,`📥 Revisando inbox de *${escMD(correo)}*...`,{parse_mode:"Markdown"});
+  await bot.sendMessage(chatId,`📥 Inbox de *${escMD(correo)}*...`,{parse_mode:"Markdown"});
   try{
     const emails=await buscarEmails(correo,5);
-    if(!emails.length) return bot.sendMessage(chatId,`📬 Sin emails recientes para *${escMD(correo)}*`,{parse_mode:"Markdown"});
+    if(!emails.length) return bot.sendMessage(chatId,`📬 Sin emails para *${escMD(correo)}*`,{parse_mode:"Markdown"});
     let txt=`📥 *ÚLTIMOS EMAILS*\n📧 ${escMD(correo)}\n\n`;
     emails.forEach((e,i)=>{txt+=`*${i+1}.* ${escMD(e.subject||"(sin asunto)")}\n   📨 ${escMD(e.from)}\n   🕒 ${escMD(formatearFecha(e.date))}\n\n`;});
     return bot.sendMessage(chatId,txt,{parse_mode:"Markdown"});
-  }catch(e){logErr("cmdInbox",e);return bot.sendMessage(chatId,`❌ Error: ${escMD(e?.message||"desconocido")}`,{parse_mode:"Markdown"});}
+  }catch(e){logErr("cmdInbox",e); return bot.sendMessage(chatId,"❌ Error.");}
 }
 
 if(!global.__SUBLICUENTAS_IMAP_READY__){
   global.__SUBLICUENTAS_IMAP_READY__=true;
-
-  bot.onText(/^\/code\s+(\S+)/i,async(msg,match)=>{const chatId=msg.chat.id;const userId=msg.from.id;if(!(await isAdmin(userId)))return bot.sendMessage(chatId,"⛔ Acceso denegado");return cmdCode(chatId,normalizarCorreo(match[1]));});
-  bot.onText(/^\/link\s+(\S+)/i,async(msg,match)=>{const chatId=msg.chat.id;const userId=msg.from.id;if(!(await isAdmin(userId)))return bot.sendMessage(chatId,"⛔ Acceso denegado");return cmdLink(chatId,normalizarCorreo(match[1]));});
-  bot.onText(/^\/hogar\s+(\S+)/i,async(msg,match)=>{const chatId=msg.chat.id;const userId=msg.from.id;if(!(await isAdmin(userId)))return bot.sendMessage(chatId,"⛔ Acceso denegado");return cmdHogar(chatId,normalizarCorreo(match[1]));});
-  bot.onText(/^\/inbox\s+(\S+)/i,async(msg,match)=>{const chatId=msg.chat.id;const userId=msg.from.id;if(!(await isAdmin(userId)))return bot.sendMessage(chatId,"⛔ Acceso denegado");return cmdInbox(chatId,normalizarCorreo(match[1]));});
-
-  bot.onText(/^\/imap_test$/i,async(msg)=>{
-    const chatId=msg.chat.id;const userId=msg.from.id;
-    if(!(await isAdmin(userId)))return bot.sendMessage(chatId,"⛔ Acceso denegado");
-    try{
-      await bot.sendMessage(chatId,"🔌 Probando conexión IMAP...");
-      const c=new ImapFlow({host:IMAP_HOST,port:IMAP_PORT,secure:true,auth:{user:IMAP_USER,pass:IMAP_PASS},logger:false,tls:{rejectUnauthorized:false}});
-      await c.connect(); await c.logout();
-      return bot.sendMessage(chatId,`✅ Conexión IMAP exitosa\n\n🌐 Host: \`${IMAP_HOST}\`\n👤 Usuario: \`${IMAP_USER}\``,{parse_mode:"Markdown"});
-    }catch(e){return bot.sendMessage(chatId,`❌ Error IMAP:\n${escMD(e?.message||String(e))}`,{parse_mode:"Markdown"});}
-  });
-
-  console.log("✅ Módulo IMAP cargado (v7 corregida) — /code /link /hogar /inbox");
+  bot.onText(/^\/code\s+(\S+)/i,async(msg,match)=>{if(await isAdmin(msg.from.id)) return cmdCode(msg.chat.id,normalizarCorreo(match[1]));});
+  bot.onText(/^\/link\s+(\S+)/i,async(msg,match)=>{if(await isAdmin(msg.from.id)) return cmdLink(msg.chat.id,normalizarCorreo(match[1]));});
+  bot.onText(/^\/hogar\s+(\S+)/i,async(msg,match)=>{if(await isAdmin(msg.from.id)) return cmdHogar(msg.chat.id,normalizarCorreo(match[1]));});
+  bot.onText(/^\/inbox\s+(\S+)/i,async(msg,match)=>{if(await isAdmin(msg.from.id)) return cmdInbox(msg.chat.id,normalizarCorreo(match[1]));});
+  console.log("✅ Módulo IMAP cargado v9 — /code /link /hogar /inbox");
 }
 
 module.exports={cmdCode,cmdLink,cmdHogar,cmdInbox};
