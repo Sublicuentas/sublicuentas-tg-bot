@@ -222,6 +222,12 @@ async function scrapearCodigoWeb(url) {
 // LECTURA IMAP
 // ===============================
 async function buscarEmails(correo, limite=15) {
+  // Todos los emails llegan al inbox del hosting (admin@sublicuentas.com).
+  // No filtramos por to: porque el destinatario es el hosting, no el cliente.
+  // En cambio: traemos los ultimos N emails recientes y filtramos los que
+  // mencionan el correo del cliente en el body, html, subject o headers.
+  const correoBuscar = String(correo||"").trim().toLowerCase();
+
   const client = new ImapFlow({
     host:IMAP_HOST, port:IMAP_PORT, secure:true,
     auth:{user:IMAP_USER, pass:IMAP_PASS},
@@ -232,25 +238,49 @@ async function buscarEmails(correo, limite=15) {
   try {
     const lock = await client.getMailboxLock("INBOX");
     try {
-      const desde=new Date(); desde.setDate(desde.getDate()-7);
-      const uids = await client.search({to:correo, since:desde});
-      if(!uids||!uids.length) return [];
-      const ids=uids.slice(-limite);
-      for await(const msg of client.fetch(ids,{source:true})){
+      const desde=new Date(); desde.setDate(desde.getDate()-2); // ultimos 2 dias
+      // Intentar buscar por body text (mas preciso). Si falla, traer todos recientes.
+      let uids = [];
+      try {
+        uids = await client.search({body: correoBuscar, since: desde});
+      } catch(_) {}
+      // Fallback: si no encontro nada por body, buscar todos los recientes
+      if(!uids || !uids.length) {
+        uids = await client.search({since: desde});
+      }
+      if(!uids || !uids.length) return [];
+
+      // Tomar los ultimos (mas recientes)
+      const ids = uids.slice(-Math.min(uids.length, 50));
+
+      for await(const msg of client.fetch(ids, {source:true})){
         try{
-          const p=await simpleParser(msg.source);
+          const p = await simpleParser(msg.source);
+          const bodyText = String(p.text||"").toLowerCase();
+          const bodyHtml = String(p.html||"").toLowerCase();
+          const subj     = String(p.subject||"").toLowerCase();
+          const toAddr   = (p.to?.text||"").toLowerCase();
+          const allText  = bodyText + " " + bodyHtml + " " + subj + " " + toAddr;
+
+          // Solo incluir si menciona el correo del cliente en algun campo
+          if(!allText.includes(correoBuscar)) continue;
+
           emails.push({
-            from:  String(p.from?.text||""),
+            from:    String(p.from?.text||""),
             subject: String(p.subject||""),
-            text:  String(p.text||""),
-            html:  String(p.html||""),
-            date:  p.date||new Date(),
+            text:    String(p.text||""),
+            html:    String(p.html||""),
+            date:    p.date||new Date(),
           });
+
+          if(emails.length >= limite) break;
         }catch(_){}
       }
     } finally { lock.release(); }
   } finally { await client.logout(); }
-  return emails.reverse();
+
+  // Ordenar de mas reciente a mas antiguo
+  return emails.sort((a,b) => new Date(b.date) - new Date(a.date));
 }
 
 // ===============================
