@@ -82,6 +82,12 @@ function esPrime(from="",subject=""){
          s.includes("one-time")||s.includes("verificacion")||s.includes("iniciar sesion");
 }
 
+function esParamount(from="",subject=""){
+  const f=from.toLowerCase(); const s=subject.toLowerCase();
+  return f.includes("paramount")||f.includes("cbs.com")||f.includes("viacom")||
+         s.includes("paramount")||s.includes("paramount+");
+}
+
 function esHogar(subject="",text=""){
   const s=subject.toLowerCase(); const t=text.toLowerCase();
   return s.includes("hogar")||s.includes("household")||s.includes("extra member")||t.includes("netflix hogar");
@@ -190,6 +196,10 @@ function extraerLink(text="", html="") {
     // HBO Max / Max
     /https:\/\/[^\s"<>\]]*hbomax[^\s"<>\]]*(?:reset|password|account|verify)[^\s"<>\]]*/i,
     /https:\/\/[^\s"<>\]]*max\.com[^\s"<>\]]*(?:reset|password|account|verify|email)[^\s"<>\]]*/i,
+    // Paramount+
+    /https:\/\/[^\s"<>\]]*paramount[^\s"<>\]]*(?:reset|password|account|verify|login|signin)[^\s"<>\]]*/i,
+    /https:\/\/[^\s"<>\]]*cbsinteractive[^\s"<>\]]*(?:reset|password|account)[^\s"<>\]]*/i,
+    /https:\/\/[^\s"<>\]]*viacomcbs[^\s"<>\]]*(?:reset|password|account)[^\s"<>\]]*/i,
   ];
   for (const f of fuentes) {
     for (const p of pats) {
@@ -354,13 +364,14 @@ async function cmdLink(chatId, correo){
       const isN  = esNetflixReset(e.from, e.subject);
       const isD  = esDisney(e.from, e.subject);
       const isH  = esHBO(e.from, e.subject);
-      if(!isN && !isD && !isH) continue;
+      const isP  = esParamount(e.from, e.subject);
+      if(!isN && !isD && !isH && !isP) continue;
 
       const link = extraerLink(e.text, e.html);
       if(!link) continue;
 
-      const plat  = isN ? "NETFLIX" : isD ? "DISNEY+" : "HBO MAX";
-      const emoji = isN ? "🎬" : isD ? "🏰" : "🎞️";
+      const plat  = isN ? "NETFLIX" : isD ? "DISNEY+" : isP ? "PARAMOUNT+" : "HBO MAX";
+      const emoji = isN ? "🎬" : isD ? "🏰" : isP ? "💿" : "🎞️";
 
       return bot.sendMessage(chatId,
         `${emoji} *LINK RESET ${plat}*\n\n` +
