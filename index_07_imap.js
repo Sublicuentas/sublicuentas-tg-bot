@@ -21,7 +21,7 @@ function formatearFecha(date) {
   catch(_){ return String(date||""); }
 }
 
-function esNetflix(from="",subject=""){const f=from.toLowerCase();const s=subject.toLowerCase();return f.includes("netflix")||s.includes("netflix")||s.includes("verificaci")||s.includes("seguridad")||s.includes("actualiza");}
+function esNetflix(from="",subject=""){const f=from.toLowerCase();const s=subject.toLowerCase();return f.includes("netflix")||s.includes("netflix")||s.includes("verificaci")||s.includes("seguridad")||s.includes("confirmaci")||s.includes("actualiza");}
 function esDisney(from="",subject=""){const f=from.toLowerCase();const s=subject.toLowerCase();return f.includes("disney")||s.includes("disney");}
 function esHogar(subject="",text=""){const s=subject.toLowerCase();const t=text.toLowerCase();return s.includes("hogar")||s.includes("household")||s.includes("extra member")||t.includes("netflix hogar");}
 
@@ -208,15 +208,15 @@ async function cmdHogar(chatId,correo){
 }
 
 
-function extraerCodigoNetflix(text = "", subject = "") {
-  const s = String(subject || "").toLowerCase();
-  const t = String(text || "").toLowerCase();
+function extraerCodigoInteligente(text = "", subject = "") {
+  const t = (text || "").toLowerCase();
+  const s = (subject || "").toLowerCase();
   
-  // Buscar 6 dÃ­gitos (con o sin espacio en medio)
+  // Buscar 6 dÃ­gitos con espacio (ej. 123 456) o pegados (123456)
   const match6 = text.match(/\b(\d{3})\s?(\d{3})\b/) || subject.match(/\b(\d{3})\s?(\d{3})\b/);
   if (match6) return (match6[1] + match6[2]);
 
-  // Fallback a 4 dÃ­gitos para Hogar/Acceso
+  // Si no hay de 6, buscar el clÃ¡sico de 4 (Hogar/Acceso)
   const match4 = text.match(/\b\d{4}\b/);
   return match4 ? match4[0] : null;
 }
