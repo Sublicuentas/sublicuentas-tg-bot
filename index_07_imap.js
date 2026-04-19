@@ -41,16 +41,26 @@ function esNetflix(from="",subject=""){
 }
 
 // Netflix OTP/codigo: verificacion, seguridad, hogar — excluye resets
+// Netflix con código DIRECTO en el email (Disney-style, 6 digitos visibles)
 function esNetflixCodigo(from="",subject=""){
   if(!esNetflix(from,subject)) return false;
   const s=subject.toLowerCase();
-  // Excluir emails de reset de contrasena
   if(s.includes("restablecimiento")||s.includes("reset")||s.includes("password")||
      s.includes("contrase")||s.includes("cambio")||s.includes("actualiza")) return false;
-  // Solo si tiene palabras de codigo/verificacion, o viene del from de netflix sin asunto sospechoso
-  return s.includes("verificaci")||s.includes("seguridad")||s.includes("acceso")||
+  // Estos asuntos tienen código directo en el texto
+  return s.includes("verificaci")||s.includes("seguridad")||
          s.includes("confirmaci")||s.includes("hogar")||s.includes("household")||
-         s.includes("codigo")||s.includes("temporal")||s.includes("inicio de sesi");
+         s.includes("inicio de sesi");
+}
+
+// Netflix con link "Obtener código" — el código está detrás del link, no en el email
+function esNetflixLinkCodigo(from="",subject=""){
+  if(!esNetflix(from,subject)) return false;
+  const s=subject.toLowerCase();
+  if(s.includes("restablecimiento")||s.includes("reset")||s.includes("password")||
+     s.includes("contrase")||s.includes("cambio")||s.includes("actualiza")) return false;
+  return s.includes("acceso temporal")||s.includes("codigo de acceso")||
+         s.includes("código de acceso")||s.includes("temporal")||s.includes("codigo");
 }
 
 // Netflix reset de contrasena/correo -> para /link
@@ -315,17 +325,31 @@ async function cmdCode(chatId, correo){
     if(!emails.length) return bot.sendMessage(chatId,`📬 Sin emails recientes para *${escMD(correo)}*`,{parse_mode:"Markdown"});
 
     for(const e of emails){
-      const isN = esNetflixCodigo(e.from, e.subject);
-      const isD = esDisney(e.from, e.subject);
-      if(!isN && !isD) continue;
+      const isN      = esNetflixCodigo(e.from, e.subject);
+      const isNLink  = esNetflixLinkCodigo(e.from, e.subject);
+      const isD      = esDisney(e.from, e.subject);
+      if(!isN && !isNLink && !isD) continue;
 
-      let codigo = extraerCodigoInteligente(e.text, e.subject, e.html);
-      let linkWeb = null;
-
-      if(!codigo && isN) {
-        linkWeb = extraerLinkObtenerCodigo(e.html);
-        if(linkWeb) codigo = await scrapearCodigoWeb(linkWeb);
+      // Emails de "acceso temporal" de Netflix: el código está detrás de un link
+      // NO intentar extraer número — mandar el link directamente
+      if(isNLink && !isN) {
+        const linkWeb = extraerLinkObtenerCodigo(e.html);
+        if(linkWeb) {
+          return bot.sendMessage(chatId,
+            `🎬 *CÓDIGO NETFLIX — ACCESO TEMPORAL*\n\n` +
+            `📧 *Correo:* ${escMD(correo)}\n` +
+            `📨 *Asunto:* ${escMD(e.subject)}\n` +
+            `🕒 *Fecha:* ${escMD(formatearFecha(e.date))}\n\n` +
+            `⚠️ El código se genera al abrir el link. Toca el botón:`,
+            {parse_mode:"Markdown", reply_markup:{inline_keyboard:[[{text:"🔑 Obtener código Netflix", url:linkWeb}]]}}
+          );
+        }
+        // Si no hay link tampoco, ignorar este email y seguir buscando
+        continue;
       }
+
+      // Emails con código directo (verificación, seguridad, Disney)
+      const codigo = extraerCodigoInteligente(e.text, e.subject, e.html);
 
       if(codigo) {
         return bot.sendMessage(chatId,
@@ -337,18 +361,8 @@ async function cmdCode(chatId, correo){
           {parse_mode:"Markdown"}
         );
       }
-
-      if(linkWeb) {
-        return bot.sendMessage(chatId,
-          `🎬 *CÓDIGO NETFLIX (VIA WEB)*\n\n` +
-          `📧 *Correo:* ${escMD(correo)}\n` +
-          `⚠️ Toca el botón para ver el código:\n\n` +
-          `📨 *Asunto:* ${escMD(e.subject)}`,
-          {parse_mode:"Markdown", reply_markup:{inline_keyboard:[[{text:"🔎 Abrir Enlace Netflix", url:linkWeb}]]}}
-        );
-      }
     }
-    return bot.sendMessage(chatId,`⚠️ Sin código para *${escMD(correo)}*`,{parse_mode:"Markdown"});
+    return bot.sendMessage(chatId,`⚠️ Sin código reciente para *${escMD(correo)}*`,{parse_mode:"Markdown"});
 
   }catch(e){ logErr("cmdCode",e); return bot.sendMessage(chatId,`❌ Error: ${escMD(e?.message||"IMAP error")}`,{parse_mode:"Markdown"}); }
 }
