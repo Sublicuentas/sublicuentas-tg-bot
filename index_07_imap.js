@@ -77,19 +77,20 @@ function esDisney(from="",subject=""){
 }
 
 function esHBO(from="",subject=""){
+  // SOLO detectar por from o si el subject dice explicitamente "hbo" o "max"
+  // NO usar palabras genericas como "acceso", "verifica", "reset" — esas estan en todos los emails
   const f=from.toLowerCase(); const s=subject.toLowerCase();
   return f.includes("hbo")||f.includes("max.com")||f.includes("hbomax")||
-         s.includes("hbo")||s.includes("hbo max")||s.includes("max ")||
-         s.includes("actualiza")||s.includes("verifica")||s.includes("cambio")||
-         s.includes("update")||s.includes("reset")||s.includes("acceso");
+         s.includes("hbo max")||s.includes("hbomax")||
+         (s.includes("hbo") && !f.includes("netflix") && !f.includes("disney") && !f.includes("amazon"));
 }
 
 function esPrime(from="",subject=""){
+  // SOLO detectar por from de Amazon o palabras muy especificas de Prime
   const f=from.toLowerCase(); const s=subject.toLowerCase();
-  return f.includes("amazon")||f.includes("primevideo")||f.includes("prime")||
-         s.includes("amazon")||s.includes("prime video")||s.includes("primevideo")||
-         s.includes("amazon prime")||s.includes("código de")||s.includes("otp")||
-         s.includes("one-time")||s.includes("verificacion")||s.includes("iniciar sesion");
+  return f.includes("amazon")||f.includes("primevideo")||
+         s.includes("prime video")||s.includes("primevideo")||s.includes("amazon prime")||
+         (f.includes("prime") && !f.includes("paramount"));
 }
 
 function esParamount(from="",subject=""){
@@ -325,14 +326,22 @@ async function cmdCode(chatId, correo){
     if(!emails.length) return bot.sendMessage(chatId,`📬 Sin emails recientes para *${escMD(correo)}*`,{parse_mode:"Markdown"});
 
     for(const e of emails){
-      const isN      = esNetflixCodigo(e.from, e.subject);
-      const isNLink  = esNetflixLinkCodigo(e.from, e.subject);
-      const isD      = esDisney(e.from, e.subject);
-      if(!isN && !isNLink && !isD) continue;
+      const fromL    = e.from.toLowerCase();
+      // Prioridad fuerte: si el from dice netflix, nunca puede ser Disney ni HBO
+      const fromNetflix = fromL.includes("netflix");
+      const fromDisney  = !fromNetflix && (fromL.includes("disney") || fromL.includes("disneyplus"));
+      const isN      = fromNetflix || esNetflixCodigo(e.from, e.subject);
+      const isNLink  = fromNetflix || esNetflixLinkCodigo(e.from, e.subject);
+      const isD      = !fromNetflix && (fromDisney || esDisney(e.from, e.subject));
+      // Si from es netflix, forzar isN/isNLink y desactivar isD
+      const realIsN     = fromNetflix ? (isN || isNLink) : isN;
+      const realIsNLink = fromNetflix ? true : (isNLink && !isN);
+      const realIsD     = !fromNetflix && isD;
+      if(!realIsN && !realIsNLink && !realIsD) continue;
 
       // Emails de "acceso temporal" de Netflix: el código está detrás de un link
       // NO intentar extraer número — mandar el link directamente
-      if(isNLink && !isN) {
+      if(realIsNLink && !realIsN) {
         const linkWeb = extraerLinkObtenerCodigo(e.html);
         if(linkWeb) {
           return bot.sendMessage(chatId,
@@ -353,7 +362,7 @@ async function cmdCode(chatId, correo){
 
       if(codigo) {
         return bot.sendMessage(chatId,
-          `${isN?"🎬":"🏰"} *CÓDIGO ${isN?"NETFLIX":"DISNEY+"}*\n\n` +
+          `${realIsN?"🎬":"🏰"} *CÓDIGO ${realIsN?"NETFLIX":"DISNEY+"}*\n\n` +
           `📧 *Correo:* ${escMD(correo)}\n` +
           `🔑 *Código:* \`${codigo}\`\n` +
           `📨 *Asunto:* ${escMD(e.subject)}\n` +
@@ -384,8 +393,14 @@ async function cmdLink(chatId, correo){
       const link = extraerLink(e.text, e.html);
       if(!link) continue;
 
-      const plat  = isN ? "NETFLIX" : isD ? "DISNEY+" : isP ? "PARAMOUNT+" : "HBO MAX";
-      const emoji = isN ? "🎬" : isD ? "🏰" : isP ? "💿" : "🎞️";
+      // Prioridad: si el from incluye la plataforma, esa gana siempre
+      const fromL = e.from.toLowerCase();
+      const isReallyNetflix = isN || fromL.includes("netflix");
+      const isReallyDisney  = !isReallyNetflix && (isD || fromL.includes("disney"));
+      const isReallyPrime   = !isReallyNetflix && !isReallyDisney && (fromL.includes("amazon")||fromL.includes("prime"));
+      const isReallyParamount = !isReallyNetflix && !isReallyDisney && !isReallyPrime && (isP || fromL.includes("paramount"));
+      const plat  = isReallyNetflix ? "NETFLIX" : isReallyDisney ? "DISNEY+" : isReallyParamount ? "PARAMOUNT+" : "HBO MAX";
+      const emoji = isReallyNetflix ? "🎬" : isReallyDisney ? "🏰" : isReallyParamount ? "💿" : "🎞️";
 
       return bot.sendMessage(chatId,
         `${emoji} *LINK RESET ${plat}*\n\n` +
