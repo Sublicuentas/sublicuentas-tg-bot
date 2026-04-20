@@ -1,9 +1,9 @@
-/* ✅ SUBLICUENTAS TG BOT — PARTE 7/7 v12
+/* ✅ SUBLICUENTAS TG BOT — PARTE 7/7 v13
    IMAP — EXTRACTOR DE CÓDIGOS NETFLIX / DISNEY / HBO / PRIME VIDEO / UNIVERSAL
    ----------------------------------------------------------------
-   ✅ CAMBIOS v12 (Actualización Casandra):
-   - NUEVO: Soporte para Universal+ mediante el comando /universal
-   - NUEVO: Lógica de extracción alfanumérica (letras y números) exclusiva para Universal+
+   ✅ CAMBIOS v13 (Actualización Casandra):
+   - CORRECCIÓN: Se elimina el comando /universal para evitar choques con el menú de inventario.
+   - MEJORA: Se integra la extracción alfanumérica de Universal+ directamente dentro de /code.
 */
 
 const { ImapFlow } = require("imapflow");
@@ -100,10 +100,9 @@ function extraerCodigoInteligente(text = "", subject = "", html = "", plataforma
 
   // REGLA ESTRICTA: Universal+ es alfanumérico (letras y números) de 6 caracteres
   if (plataforma === "universal") {
-    // Busca exactamente 6 caracteres (letras y números) que no estén pegados a más texto
     const matchUni = fuente.match(/(?<![a-zA-Z0-9])([A-Za-z0-9]{6})(?![a-zA-Z0-9])/g);
     if (matchUni) {
-      return matchUni[0].toUpperCase(); // Lo devuelve siempre en mayúsculas por estética
+      return matchUni[0].toUpperCase();
     }
     return null; 
   }
@@ -257,7 +256,7 @@ async function buscarEmails(correo, limite=15) {
 // COMANDOS
 // ===============================
 
-/** /code — Netflix o Disney+ */
+/** /code — Netflix, Disney+, o Universal+ */
 async function cmdCode(chatId, correo){
   if(!correo) return bot.sendMessage(chatId,"⚠️ Uso: /code correo@dominio.com");
   try{
@@ -268,8 +267,9 @@ async function cmdCode(chatId, correo){
       const fromL = e.from.toLowerCase();
       const subjL = e.subject.toLowerCase();
       
-      const isNetflix = fromL.includes("netflix");
-      const isDisney  = !isNetflix && (fromL.includes("disney") || subjL.includes("disney"));
+      const isNetflix   = fromL.includes("netflix");
+      const isDisney    = !isNetflix && (fromL.includes("disney") || subjL.includes("disney"));
+      const isUniversal = !isNetflix && !isDisney && esUniversal(e.from, e.subject);
 
       if (isNetflix) {
         if (subjL.includes("acceso temporal") || subjL.includes("código de acceso") || subjL.includes("temporal")) {
@@ -300,6 +300,11 @@ async function cmdCode(chatId, correo){
         const codigo = extraerCodigoInteligente(e.text, e.subject, e.html, "disney");
         if (codigo) {
           return bot.sendMessage(chatId, `🏰 *CÓDIGO DISNEY+*\n\n📧 *Correo:* ${escMD(correo)}\n🔑 *Código:* \`${codigo}\`\n📨 *Asunto:* ${escMD(e.subject)}\n🕒 *Fecha:* ${escMD(formatearFecha(e.date))}`, {parse_mode:"Markdown"});
+        }
+      } else if (isUniversal) {
+        const codigo = extraerCodigoInteligente(e.text, e.subject, e.html, "universal");
+        if (codigo) {
+          return bot.sendMessage(chatId, `🌎 *CÓDIGO UNIVERSAL+*\n\n📧 *Correo:* ${escMD(correo)}\n🔑 *Código:* \`${codigo}\`\n📨 *Asunto:* ${escMD(e.subject)}\n🕒 *Fecha:* ${escMD(formatearFecha(e.date))}`, {parse_mode:"Markdown"});
         }
       }
     }
@@ -413,30 +418,6 @@ async function cmdPrime(chatId, correo){
   }catch(e){ logErr("cmdPrime",e); return bot.sendMessage(chatId,`❌ Error: ${escMD(e?.message||"IMAP error")}`,{parse_mode:"Markdown"}); }
 }
 
-/** /universal — Código de Universal+ (6 alfanuméricos) */
-async function cmdUniversal(chatId, correo){
-  if(!correo) return bot.sendMessage(chatId,"⚠️ Uso: /universal correo@dominio.com");
-  try{
-    const emails = await buscarEmails(correo);
-    if(!emails.length) return bot.sendMessage(chatId,`📬 Sin emails recientes para *${escMD(correo)}*`,{parse_mode:"Markdown"});
-
-    for(const e of emails){
-      if(!esUniversal(e.from, e.subject)) continue;
-      const codigo = extraerCodigoInteligente(e.text, e.subject, e.html, "universal");
-
-      if(codigo) return bot.sendMessage(chatId,
-        `🌎 *CÓDIGO UNIVERSAL+*\n\n` +
-        `📧 *Correo:* ${escMD(correo)}\n` +
-        `🔑 *Código:* \`${codigo}\`\n` +
-        `📨 *Asunto:* ${escMD(e.subject)}\n` +
-        `🕒 *Fecha:* ${escMD(formatearFecha(e.date))}`,
-        {parse_mode:"Markdown"}
-      );
-    }
-    return bot.sendMessage(chatId,`⚠️ Sin código de Universal+ para *${escMD(correo)}*`,{parse_mode:"Markdown"});
-  }catch(e){ logErr("cmdUniversal",e); return bot.sendMessage(chatId,`❌ Error: ${escMD(e?.message||"IMAP error")}`,{parse_mode:"Markdown"}); }
-}
-
 /** /inbox — Ver últimos emails del correo */
 async function cmdInbox(chatId, correo){
   if(!correo) return bot.sendMessage(chatId,"⚠️ Uso: /inbox correo@dominio.com");
@@ -459,10 +440,9 @@ if(!global.__SUBLICUENTAS_IMAP_READY__){
   bot.onText(/^\/link\s+(\S+)/i,       async(msg,m)=>{ if(await isAdmin(msg.from.id)) return cmdLink(msg.chat.id,  normalizarCorreo(m[1])); });
   bot.onText(/^\/hogar\s+(\S+)/i,      async(msg,m)=>{ if(await isAdmin(msg.from.id)) return cmdHogar(msg.chat.id, normalizarCorreo(m[1])); });
   bot.onText(/^\/prime\s+(\S+)/i,      async(msg,m)=>{ if(await isAdmin(msg.from.id)) return cmdPrime(msg.chat.id, normalizarCorreo(m[1])); });
-  bot.onText(/^\/universal\s+(\S+)/i,  async(msg,m)=>{ if(await isAdmin(msg.from.id)) return cmdUniversal(msg.chat.id, normalizarCorreo(m[1])); });
   bot.onText(/^\/inbox\s+(\S+)/i,      async(msg,m)=>{ if(await isAdmin(msg.from.id)) return cmdInbox(msg.chat.id, normalizarCorreo(m[1])); });
 
-  console.log("✅ Módulo IMAP cargado v12 — /code /link /hogar /prime /universal /inbox");
+  console.log("✅ Módulo IMAP cargado v13 — /code (incluye Universal) /link /hogar /prime /inbox");
 }
 
-module.exports = { cmdCode, cmdLink, cmdHogar, cmdPrime, cmdUniversal, cmdInbox };
+module.exports = { cmdCode, cmdLink, cmdHogar, cmdPrime, cmdInbox };
