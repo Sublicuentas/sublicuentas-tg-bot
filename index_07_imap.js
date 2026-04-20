@@ -1,10 +1,10 @@
-/* ✅ SUBLICUENTAS TG BOT — PARTE 7/7 v14
+/* ✅ SUBLICUENTAS TG BOT — PARTE 7/7 v15
    IMAP — EXTRACTOR DE CÓDIGOS NETFLIX / DISNEY / HBO / PRIME VIDEO / UNIVERSAL
    ----------------------------------------------------------------
-   ✅ CAMBIOS v14 (Actualización Casandra):
-   - FIX GRAVE: Universal+ extraía "TBXNET" de los enlaces ocultos.
-   - MEJORA: Se eliminan todas las URLs del texto antes de buscar el código de Universal.
-   - ESTRICTO: Universal+ ahora solo buscará combinaciones de 6 caracteres en MAYÚSCULAS.
+   ✅ CAMBIOS v15 (Actualización Casandra):
+   - FIX CRÍTICO: Universal+ atrapaba palabras de 6 letras como "CUENTA".
+   - MEJORA: Se fuerza a que el código de Universal+ tenga obligatoriamente letras Y números.
+   - MEJORA: Se añade una lista negra de palabras a ignorar.
 */
 
 const { ImapFlow } = require("imapflow");
@@ -99,16 +99,29 @@ function extraerCodigoInteligente(text = "", subject = "", html = "", plataforma
   const basuraAnios = new Set(["2024", "2025", "2026", "2027"]);
   const fuente = (subject + " " + text + " " + html.replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ");
 
-  // REGLA ESTRICTA: Universal+
+  // REGLA ESTRICTA Y BLINDADA: Universal+
   if (plataforma === "universal") {
-    // 1. Borramos todos los enlaces web para que no atrape dominios como tbxnet.com
+    // 1. Limpiamos enlaces web para matar cosas como idp-services.tbxnet.com
     const fuenteSinLinks = fuente.replace(/https?:\/\/[^\s]+/gi, " ");
     
-    // 2. Buscamos exactamente 6 caracteres (letras MAYÚSCULAS y números)
-    // Usamos [A-Z0-9] para forzar que sea mayúscula, evadiendo minúsculas de código HTML
+    // 2. Buscamos bloques de 6 letras (mayúsculas) o números
     const matchUni = fuenteSinLinks.match(/(?<![a-zA-Z0-9])([A-Z0-9]{6})(?![a-zA-Z0-9])/g);
+    
     if (matchUni) {
-      return matchUni[0];
+      // 3. Lista negra de palabras comunes de 6 letras que arruinan la lectura
+      const ignorar = new Set(["CUENTA", "CODIGO", "CORREO", "ACCESO", "TBXNET", "ACTIVA", "ONLINE", "EQUIPO", "PRUEBA"]);
+      
+      // 4. BÚSQUEDA PRIORITARIA: Buscar un código que tenga SÍ o SÍ letras y números (ej. HGB6SE)
+      for (const code of matchUni) {
+        if (!ignorar.has(code) && /[A-Z]/.test(code) && /[0-9]/.test(code)) {
+          return code;
+        }
+      }
+      
+      // 5. BÚSQUEDA SECUNDARIA: Si no hay alfanuméricos puros, tomar el primer bloque válido que no sea basura
+      for (const code of matchUni) {
+        if (!ignorar.has(code)) return code;
+      }
     }
     return null; 
   }
@@ -435,7 +448,7 @@ if(!global.__SUBLICUENTAS_IMAP_READY__){
   bot.onText(/^\/prime\s+(\S+)/i,      async(msg,m)=>{ if(await isAdmin(msg.from.id)) return cmdPrime(msg.chat.id, normalizarCorreo(m[1])); });
   bot.onText(/^\/inbox\s+(\S+)/i,      async(msg,m)=>{ if(await isAdmin(msg.from.id)) return cmdInbox(msg.chat.id, normalizarCorreo(m[1])); });
 
-  console.log("✅ Módulo IMAP cargado v14 — /code (Universal c/Filtro Mayús) /link /hogar /prime /inbox");
+  console.log("✅ Módulo IMAP cargado v15 — /code (Universal Alfanumérico Blindado) /link /hogar /prime /inbox");
 }
 
 module.exports = { cmdCode, cmdLink, cmdHogar, cmdPrime, cmdInbox };
