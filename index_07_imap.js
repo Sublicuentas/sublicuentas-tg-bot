@@ -1,9 +1,10 @@
-/* ✅ SUBLICUENTAS TG BOT — PARTE 7/7 v13
+/* ✅ SUBLICUENTAS TG BOT — PARTE 7/7 v14
    IMAP — EXTRACTOR DE CÓDIGOS NETFLIX / DISNEY / HBO / PRIME VIDEO / UNIVERSAL
    ----------------------------------------------------------------
-   ✅ CAMBIOS v13 (Actualización Casandra):
-   - CORRECCIÓN: Se elimina el comando /universal para evitar choques con el menú de inventario.
-   - MEJORA: Se integra la extracción alfanumérica de Universal+ directamente dentro de /code.
+   ✅ CAMBIOS v14 (Actualización Casandra):
+   - FIX GRAVE: Universal+ extraía "TBXNET" de los enlaces ocultos.
+   - MEJORA: Se eliminan todas las URLs del texto antes de buscar el código de Universal.
+   - ESTRICTO: Universal+ ahora solo buscará combinaciones de 6 caracteres en MAYÚSCULAS.
 */
 
 const { ImapFlow } = require("imapflow");
@@ -98,11 +99,16 @@ function extraerCodigoInteligente(text = "", subject = "", html = "", plataforma
   const basuraAnios = new Set(["2024", "2025", "2026", "2027"]);
   const fuente = (subject + " " + text + " " + html.replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ");
 
-  // REGLA ESTRICTA: Universal+ es alfanumérico (letras y números) de 6 caracteres
+  // REGLA ESTRICTA: Universal+
   if (plataforma === "universal") {
-    const matchUni = fuente.match(/(?<![a-zA-Z0-9])([A-Za-z0-9]{6})(?![a-zA-Z0-9])/g);
+    // 1. Borramos todos los enlaces web para que no atrape dominios como tbxnet.com
+    const fuenteSinLinks = fuente.replace(/https?:\/\/[^\s]+/gi, " ");
+    
+    // 2. Buscamos exactamente 6 caracteres (letras MAYÚSCULAS y números)
+    // Usamos [A-Z0-9] para forzar que sea mayúscula, evadiendo minúsculas de código HTML
+    const matchUni = fuenteSinLinks.match(/(?<![a-zA-Z0-9])([A-Z0-9]{6})(?![a-zA-Z0-9])/g);
     if (matchUni) {
-      return matchUni[0].toUpperCase();
+      return matchUni[0];
     }
     return null; 
   }
@@ -110,15 +116,11 @@ function extraerCodigoInteligente(text = "", subject = "", html = "", plataforma
   function esValido(c = "") {
     const s = c.replace(/\s/g, "");
     if (basuraAnios.has(s)) return null;
-    
-    // REGLA ESTRICTA: Disney solo 6 dígitos
     if (plataforma === "disney" && s.length !== 6) return null;
-    
     if (/^\d{4,6}$/.test(s)) return s;
     return null;
   }
 
-  // Disney: espacios entre dígitos
   if (plataforma === "disney") {
     const disneyEsp6 = fuente.match(/\b(\d)\s(\d)\s(\d)\s(\d)\s(\d)\s(\d)\b/g);
     if (disneyEsp6) {
@@ -126,13 +128,11 @@ function extraerCodigoInteligente(text = "", subject = "", html = "", plataforma
     }
   }
 
-  // Búsqueda de 6 dígitos numéricos
   const match6 = fuente.match(/(?<!\d)(\d{6})(?!\d)/g);
   if (match6) {
     for (const c of match6) { const v = esValido(c); if (v) return v; }
   }
 
-  // Búsqueda de 4 dígitos numéricos (Ignorado automáticamente si es Disney)
   const match4 = fuente.match(/(?<!\d)(\d{4})(?!\d)/g);
   if (match4) {
     for (const c of match4) { const v = esValido(c); if (v) return v; }
@@ -145,22 +145,17 @@ function extraerCodigoInteligente(text = "", subject = "", html = "", plataforma
 function extraerLink(text="", html="") {
   const fuentes = [html, text].filter(Boolean);
   const pats = [
-    // Netflix password/reset
     /https:\/\/www\.netflix\.com\/password[^\s"<>\]&]+(?:&amp;|&)[^\s"<>\]]*/i,
     /https:\/\/www\.netflix\.com\/password[^\s"<>\]]+/i,
     /https:\/\/www\.netflix\.com\/[^\s"<>\]]*reset[^\s"<>\]]*/i,
     /https:\/\/[^\s"<>\]]*netflix[^\s"<>\]]*password[^\s"<>\]]*/i,
-    // Disney
     /https:\/\/[^\s"<>\]]*disneyplus[^\s"<>\]]*(?:reset|password|account)[^\s"<>\]]*/i,
     /https:\/\/[^\s"<>\]]*disney[^\s"<>\]]*account[^\s"<>\]]*/i,
-    // HBO Max / Max
     /https:\/\/[^\s"<>\]]*hbomax[^\s"<>\]]*(?:reset|password|account|verify)[^\s"<>\]]*/i,
     /https:\/\/[^\s"<>\]]*max\.com[^\s"<>\]]*(?:reset|password|account|verify|email)[^\s"<>\]]*/i,
-    // Paramount+
     /https:\/\/[^\s"<>\]]*paramount[^\s"<>\]]*(?:reset|password|account|verify|login|signin)[^\s"<>\]]*/i,
     /https:\/\/[^\s"<>\]]*cbsinteractive[^\s"<>\]]*(?:reset|password|account)[^\s"<>\]]*/i,
     /https:\/\/[^\s"<>\]]*viacomcbs[^\s"<>\]]*(?:reset|password|account)[^\s"<>\]]*/i,
-    // Universal+
     /https:\/\/[^\s"<>\]]*universal[^\s"<>\]]*(?:reset|password|account|verify)[^\s"<>\]]*/i,
   ];
   for (const f of fuentes) {
@@ -176,7 +171,6 @@ function extraerLink(text="", html="") {
   return null;
 }
 
-// Link especial de Netflix para obtener código vía web
 function extraerLinkObtenerCodigo(html="") {
   const pat = /https:\/\/[^"'>]+netflix\.com[^"'>]*(?:travel|verify|temporary|update|account\/travel)[^"'>]*/i;
   const m = html.match(pat);
@@ -184,7 +178,6 @@ function extraerLinkObtenerCodigo(html="") {
   return null;
 }
 
-// Scraper estricto para enlace temporal de Netflix
 async function scrapearCodigoWeb(url) {
   try {
     if(typeof fetch !== "undefined") {
@@ -442,7 +435,7 @@ if(!global.__SUBLICUENTAS_IMAP_READY__){
   bot.onText(/^\/prime\s+(\S+)/i,      async(msg,m)=>{ if(await isAdmin(msg.from.id)) return cmdPrime(msg.chat.id, normalizarCorreo(m[1])); });
   bot.onText(/^\/inbox\s+(\S+)/i,      async(msg,m)=>{ if(await isAdmin(msg.from.id)) return cmdInbox(msg.chat.id, normalizarCorreo(m[1])); });
 
-  console.log("✅ Módulo IMAP cargado v13 — /code (incluye Universal) /link /hogar /prime /inbox");
+  console.log("✅ Módulo IMAP cargado v14 — /code (Universal c/Filtro Mayús) /link /hogar /prime /inbox");
 }
 
 module.exports = { cmdCode, cmdLink, cmdHogar, cmdPrime, cmdInbox };
