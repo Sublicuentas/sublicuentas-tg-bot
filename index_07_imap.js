@@ -1,13 +1,11 @@
-/* ✅ SUBLICUENTAS TG BOT — PARTE 7/7 v10
+/* ✅ SUBLICUENTAS TG BOT — PARTE 7/7 v11
    IMAP — EXTRACTOR DE CÓDIGOS NETFLIX / DISNEY / HBO / PRIME VIDEO
    ----------------------------------------------------------------
-   ✅ CAMBIOS v10:
-   - FIX Disney: ahora busca también en HTML (el código venía en HTML, no en text)
-   - FIX Disney: regex específico para extraer el código del bloque HTML
-   - NUEVO: esHBO() — detecta emails de HBO Max / Max
-   - NUEVO: cmdLink ahora también saca link de reset de HBO (cambio de correo)
-   - NUEVO: esPrime() — detecta emails de Amazon Prime Video
-   - NUEVO: /prime correo — extrae código OTP de 6 dígitos de Prime Video
+   ✅ CAMBIOS v11 (Actualización Casandra):
+   - ESTRICTO: Disney bloqueado para aceptar exclusivamente 6 dígitos.
+   - ESTRICTO: Netflix Temporal extrae exactamente 4 dígitos haciendo web scraping al enlace.
+   - NUEVO: Redirección automática de correos Netflix Hogar detectados en el comando /code.
+   - MEJORA: Ignora falsos positivos de 4 dígitos (como horas o IPs) en correos de Netflix temporal.
 */
 
 const { ImapFlow } = require("imapflow");
@@ -34,36 +32,21 @@ function formatearFecha(date) {
 // ===============================
 // DETECTORES DE PLATAFORMA
 // ===============================
-// Netflix en general
 function esNetflix(from="",subject=""){
   const f=from.toLowerCase(); const s=subject.toLowerCase();
   return f.includes("netflix") || s.includes("netflix");
 }
 
-// Netflix OTP/codigo: verificacion, seguridad, hogar — excluye resets
-// Netflix con código DIRECTO en el email (Disney-style, 6 digitos visibles)
 function esNetflixCodigo(from="",subject=""){
   if(!esNetflix(from,subject)) return false;
   const s=subject.toLowerCase();
   if(s.includes("restablecimiento")||s.includes("reset")||s.includes("password")||
      s.includes("contrase")||s.includes("cambio")||s.includes("actualiza")) return false;
-  // Estos asuntos tienen código directo en el texto
   return s.includes("verificaci")||s.includes("seguridad")||
          s.includes("confirmaci")||s.includes("hogar")||s.includes("household")||
          s.includes("inicio de sesi");
 }
 
-// Netflix con link "Obtener código" — el código está detrás del link, no en el email
-function esNetflixLinkCodigo(from="",subject=""){
-  if(!esNetflix(from,subject)) return false;
-  const s=subject.toLowerCase();
-  if(s.includes("restablecimiento")||s.includes("reset")||s.includes("password")||
-     s.includes("contrase")||s.includes("cambio")||s.includes("actualiza")) return false;
-  return s.includes("acceso temporal")||s.includes("codigo de acceso")||
-         s.includes("código de acceso")||s.includes("temporal")||s.includes("codigo");
-}
-
-// Netflix reset de contrasena/correo -> para /link
 function esNetflixReset(from="",subject=""){
   if(!esNetflix(from,subject)) return false;
   const s=subject.toLowerCase();
@@ -77,8 +60,6 @@ function esDisney(from="",subject=""){
 }
 
 function esHBO(from="",subject=""){
-  // SOLO detectar por from o si el subject dice explicitamente "hbo" o "max"
-  // NO usar palabras genericas como "acceso", "verifica", "reset" — esas estan en todos los emails
   const f=from.toLowerCase(); const s=subject.toLowerCase();
   return f.includes("hbo")||f.includes("max.com")||f.includes("hbomax")||
          s.includes("hbo max")||s.includes("hbomax")||
@@ -86,7 +67,6 @@ function esHBO(from="",subject=""){
 }
 
 function esPrime(from="",subject=""){
-  // SOLO detectar por from de Amazon o palabras muy especificas de Prime
   const f=from.toLowerCase(); const s=subject.toLowerCase();
   return f.includes("amazon")||f.includes("primevideo")||
          s.includes("prime video")||s.includes("primevideo")||s.includes("amazon prime")||
@@ -109,83 +89,42 @@ function esHogar(subject="",text=""){
 // ===============================
 
 /**
- * Extrae código numérico de 6 (o 4) dígitos del texto/asunto.
- * Para Disney busca también en HTML directamente.
+ * Extrae código numérico. Validaciones estrictas por plataforma.
  */
-function extraerCodigoInteligente(text = "", subject = "", html = "") {
+function extraerCodigoInteligente(text = "", subject = "", html = "", plataforma = "otro") {
   const basuraAnios = new Set(["2024", "2025", "2026", "2027"]);
 
-  // Limpia un candidato y valida
   function esValido(c = "") {
     const s = c.replace(/\s/g, "");
-    return /^\d{4,6}$/.test(s) && !basuraAnios.has(s) ? s : null;
+    if (basuraAnios.has(s)) return null;
+    
+    // REGLA ESTRICTA: Disney solo 6 dígitos
+    if (plataforma === "disney" && s.length !== 6) return null;
+    
+    if (/^\d{4,6}$/.test(s)) return s;
+    return null;
   }
 
-  // ── 1. Disney: dígitos con un espacio entre cada uno (0 5 6 6 6 5) ──
-  // Patrón: exactamente 6 dígitos separados por un espacio cada uno
-  const disneyEsp6 = (subject + " " + text + " " + html.replace(/<[^>]+>/g, " "))
-    .match(/\b(\d)\s(\d)\s(\d)\s(\d)\s(\d)\s(\d)\b/g);
-  if (disneyEsp6) {
-    for (const m of disneyEsp6) {
-      const v = esValido(m.replace(/\s/g, ""));
-      if (v) return v;
+  const fuente = (subject + " " + text + " " + html.replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ");
+
+  // Disney: espacios entre dígitos
+  if (plataforma === "disney") {
+    const disneyEsp6 = fuente.match(/\b(\d)\s(\d)\s(\d)\s(\d)\s(\d)\s(\d)\b/g);
+    if (disneyEsp6) {
+      for (const m of disneyEsp6) { const v = esValido(m); if (v) return v; }
     }
   }
 
-  // ── 2. Búsqueda en texto plano + asunto ──────────────────────────────
-  const fuente = (subject + " " + text).replace(/\s+/g, " ");
-
-  // 6 dígitos juntos (con o sin leading zero — usar \d{6} sin \b al inicio)
+  // Búsqueda de 6 dígitos
   const match6 = fuente.match(/(?<!\d)(\d{6})(?!\d)/g);
   if (match6) {
     for (const c of match6) { const v = esValido(c); if (v) return v; }
   }
 
-  // 6 dígitos con espacio al medio tipo Netflix (123 456)
-  const match6Mid = fuente.match(/(?<!\d)(\d{3})\s(\d{3})(?!\d)/g);
-  if (match6Mid) {
-    for (const m of match6Mid) { const v = esValido(m); if (v) return v; }
-  }
-
-  // 4 dígitos
+  // Búsqueda de 4 dígitos (Ignorado automáticamente si es Disney por la validación de esValido)
   const match4 = fuente.match(/(?<!\d)(\d{4})(?!\d)/g);
   if (match4) {
     for (const c of match4) { const v = esValido(c); if (v) return v; }
-  }
-
-  // ── 3. Búsqueda en HTML (Disney, Prime y otros) ──────────────────────
-  if (html) {
-    // Quitar tags para buscar en texto visible del HTML
-    const htmlTexto = html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
-
-    // Disney con espacios entre dígitos en texto del HTML
-    const htmlEsp6 = htmlTexto.match(/\b(\d)\s(\d)\s(\d)\s(\d)\s(\d)\s(\d)\b/g);
-    if (htmlEsp6) {
-      for (const m of htmlEsp6) { const v = esValido(m); if (v) return v; }
-    }
-
-    // 6 dígitos directos en texto HTML
-    const htmlMatch6 = htmlTexto.match(/(?<!\d)(\d{6})(?!\d)/g);
-    if (htmlMatch6) {
-      for (const c of htmlMatch6) { const v = esValido(c); if (v) return v; }
-    }
-
-    // 6 dígitos entre tags HTML (>056665<)
-    const tagMatch6 = html.replace(/\s+/g, " ").match(/>\s*(\d[\s\d]{4,10}\d)\s*</g);
-    if (tagMatch6) {
-      for (const bloque of tagMatch6) {
-        const num = bloque.replace(/[^\d]/g, "");
-        if (num.length === 6 && !basuraAnios.has(num)) return num;
-        if (num.length === 4 && !basuraAnios.has(num)) return num; // fallback 4
-      }
-    }
-
-    // font-size grande (código resaltado)
-    const fontMatch = html.replace(/\s+/g, " ").match(/font-size\s*:\s*\d+px[^>]*>([\d\s]{6,13})</i);
-    if (fontMatch && fontMatch[1]) {
-      const v = esValido(fontMatch[1]);
-      if (v) return v;
-    }
   }
 
   return null;
@@ -193,7 +132,6 @@ function extraerCodigoInteligente(text = "", subject = "", html = "") {
 
 // Links de reset de contraseña/correo
 function extraerLink(text="", html="") {
-  // Buscar primero en HTML (tiene los links reales), luego en text
   const fuentes = [html, text].filter(Boolean);
   const pats = [
     // Netflix password/reset
@@ -216,9 +154,7 @@ function extraerLink(text="", html="") {
     for (const p of pats) {
       const m = f.match(p);
       if (m?.[0]) {
-        // Decodificar &amp; y limpiar comillas/espacios que puedan haber quedado
         let url = m[0].replace(/&amp;/g,"&").replace(/["\s>]+$/,"").trim();
-        // Decodificar %XX si es necesario (URLs que vienen encoded en el HTML)
         try { url = decodeURIComponent(url.replace(/\+/g," ")); } catch(_) {}
         return url;
       }
@@ -235,6 +171,7 @@ function extraerLinkObtenerCodigo(html="") {
   return null;
 }
 
+// Scraper estricto para enlace temporal de Netflix
 async function scrapearCodigoWeb(url) {
   try {
     if(typeof fetch !== "undefined") {
@@ -242,7 +179,8 @@ async function scrapearCodigoWeb(url) {
         headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" }
       });
       const html = await res.text();
-      const m1 = html.match(/>\s*([0-9]{4,6})\s*</);
+      // Busca exactamente 4 dígitos rodeados de espacios/etiquetas en la web temporal
+      const m1 = html.match(/>\s*([0-9]{4})\s*</);
       if (m1 && m1[1]) return m1[1];
     }
   } catch(e) {}
@@ -253,10 +191,6 @@ async function scrapearCodigoWeb(url) {
 // LECTURA IMAP
 // ===============================
 async function buscarEmails(correo, limite=15) {
-  // Todos los emails llegan al inbox del hosting (admin@sublicuentas.com).
-  // No filtramos por to: porque el destinatario es el hosting, no el cliente.
-  // En cambio: traemos los ultimos N emails recientes y filtramos los que
-  // mencionan el correo del cliente en el body, html, subject o headers.
   const correoBuscar = String(correo||"").trim().toLowerCase();
 
   const client = new ImapFlow({
@@ -269,19 +203,17 @@ async function buscarEmails(correo, limite=15) {
   try {
     const lock = await client.getMailboxLock("INBOX");
     try {
-      const desde=new Date(); desde.setDate(desde.getDate()-2); // ultimos 2 dias
-      // Intentar buscar por body text (mas preciso). Si falla, traer todos recientes.
+      const desde=new Date(); desde.setDate(desde.getDate()-2);
       let uids = [];
       try {
         uids = await client.search({body: correoBuscar, since: desde});
       } catch(_) {}
-      // Fallback: si no encontro nada por body, buscar todos los recientes
+      
       if(!uids || !uids.length) {
         uids = await client.search({since: desde});
       }
       if(!uids || !uids.length) return [];
 
-      // Tomar los ultimos (mas recientes)
       const ids = uids.slice(-Math.min(uids.length, 50));
 
       for await(const msg of client.fetch(ids, {source:true})){
@@ -293,7 +225,6 @@ async function buscarEmails(correo, limite=15) {
           const toAddr   = (p.to?.text||"").toLowerCase();
           const allText  = bodyText + " " + bodyHtml + " " + subj + " " + toAddr;
 
-          // Solo incluir si menciona el correo del cliente en algun campo
           if(!allText.includes(correoBuscar)) continue;
 
           emails.push({
@@ -310,7 +241,6 @@ async function buscarEmails(correo, limite=15) {
     } finally { lock.release(); }
   } finally { await client.logout(); }
 
-  // Ordenar de mas reciente a mas antiguo
   return emails.sort((a,b) => new Date(b.date) - new Date(a.date));
 }
 
@@ -326,49 +256,46 @@ async function cmdCode(chatId, correo){
     if(!emails.length) return bot.sendMessage(chatId,`📬 Sin emails recientes para *${escMD(correo)}*`,{parse_mode:"Markdown"});
 
     for(const e of emails){
-      const fromL    = e.from.toLowerCase();
-      // Prioridad fuerte: si el from dice netflix, nunca puede ser Disney ni HBO
-      const fromNetflix = fromL.includes("netflix");
-      const fromDisney  = !fromNetflix && (fromL.includes("disney") || fromL.includes("disneyplus"));
-      const isN      = fromNetflix || esNetflixCodigo(e.from, e.subject);
-      const isNLink  = fromNetflix || esNetflixLinkCodigo(e.from, e.subject);
-      const isD      = !fromNetflix && (fromDisney || esDisney(e.from, e.subject));
-      // Si from es netflix, forzar isN/isNLink y desactivar isD
-      const realIsN     = fromNetflix ? (isN || isNLink) : isN;
-      const realIsNLink = fromNetflix ? true : (isNLink && !isN);
-      const realIsD     = !fromNetflix && isD;
-      if(!realIsN && !realIsNLink && !realIsD) continue;
+      const fromL = e.from.toLowerCase();
+      const subjL = e.subject.toLowerCase();
+      
+      const isNetflix = fromL.includes("netflix");
+      const isDisney  = !isNetflix && (fromL.includes("disney") || subjL.includes("disney"));
 
-      // Emails de "acceso temporal" de Netflix: el código está detrás de un link
-      // NO intentar extraer número — mandar el link directamente
-      if(realIsNLink && !realIsN) {
-        const linkWeb = extraerLinkObtenerCodigo(e.html);
-        if(linkWeb) {
-          return bot.sendMessage(chatId,
-            `🎬 *CÓDIGO NETFLIX — ACCESO TEMPORAL*\n\n` +
-            `📧 *Correo:* ${escMD(correo)}\n` +
-            `📨 *Asunto:* ${escMD(e.subject)}\n` +
-            `🕒 *Fecha:* ${escMD(formatearFecha(e.date))}\n\n` +
-            `⚠️ El código se genera al abrir el link. Toca el botón:`,
-            {parse_mode:"Markdown", reply_markup:{inline_keyboard:[[{text:"🔑 Obtener código Netflix", url:linkWeb}]]}}
-          );
+      if (isNetflix) {
+        // REGLA: Netflix Temporal (Link -> 4 dígitos)
+        if (subjL.includes("acceso temporal") || subjL.includes("código de acceso") || subjL.includes("temporal")) {
+          const linkWeb = extraerLinkObtenerCodigo(e.html);
+          if (linkWeb) {
+            const codigoWeb = await scrapearCodigoWeb(linkWeb);
+            if (codigoWeb) {
+              return bot.sendMessage(chatId, `🎬 *CÓDIGO NETFLIX TEMPORAL*\n\n📧 *Correo:* ${escMD(correo)}\n🔑 *Código:* \`${codigoWeb}\`\n🕒 *Fecha:* ${escMD(formatearFecha(e.date))}`, {parse_mode:"Markdown"});
+            } else {
+              return bot.sendMessage(chatId, `🎬 *CÓDIGO NETFLIX TEMPORAL*\n\n📧 *Correo:* ${escMD(correo)}\n⚠️ *El código está dentro del enlace:*`, {parse_mode:"Markdown", reply_markup:{inline_keyboard:[[{text:"🔑 Ver código temporal", url:linkWeb}]]}});
+            }
+          }
+          continue; // Si es temporal pero no hay link, salta al siguiente correo
         }
-        // Si no hay link tampoco, ignorar este email y seguir buscando
-        continue;
-      }
 
-      // Emails con código directo (verificación, seguridad, Disney)
-      const codigo = extraerCodigoInteligente(e.text, e.subject, e.html);
+        // REGLA: Netflix Hogar (Link de confirmación)
+        if (subjL.includes("hogar") || subjL.includes("household") || subjL.includes("extra member")) {
+           return bot.sendMessage(chatId, `🏠 *NETFLIX HOGAR*\n\n📧 *Correo:* ${escMD(correo)}\n⚠️ Este es un correo de Hogar. Use el comando /hogar o revise los enlaces de reset.`, {parse_mode:"Markdown"});
+        }
 
-      if(codigo) {
-        return bot.sendMessage(chatId,
-          `${realIsN?"🎬":"🏰"} *CÓDIGO ${realIsN?"NETFLIX":"DISNEY+"}*\n\n` +
-          `📧 *Correo:* ${escMD(correo)}\n` +
-          `🔑 *Código:* \`${codigo}\`\n` +
-          `📨 *Asunto:* ${escMD(e.subject)}\n` +
-          `🕒 *Fecha:* ${escMD(formatearFecha(e.date))}`,
-          {parse_mode:"Markdown"}
-        );
+        // REGLA: Netflix Inicio (4 dígitos) o Confirmación (6 dígitos) directo en correo
+        if (subjL.includes("inicio de sesi") || subjL.includes("verificaci") || subjL.includes("confirmaci") || subjL.includes("seguridad")) {
+          const codigo = extraerCodigoInteligente(e.text, e.subject, e.html, "netflix");
+          if (codigo) {
+            return bot.sendMessage(chatId, `🎬 *CÓDIGO NETFLIX*\n\n📧 *Correo:* ${escMD(correo)}\n🔑 *Código:* \`${codigo}\`\n📨 *Asunto:* ${escMD(e.subject)}\n🕒 *Fecha:* ${escMD(formatearFecha(e.date))}`, {parse_mode:"Markdown"});
+          }
+        }
+        
+      } else if (isDisney) {
+        // REGLA: Disney siempre 6 dígitos
+        const codigo = extraerCodigoInteligente(e.text, e.subject, e.html, "disney");
+        if (codigo) {
+          return bot.sendMessage(chatId, `🏰 *CÓDIGO DISNEY+*\n\n📧 *Correo:* ${escMD(correo)}\n🔑 *Código:* \`${codigo}\`\n📨 *Asunto:* ${escMD(e.subject)}\n🕒 *Fecha:* ${escMD(formatearFecha(e.date))}`, {parse_mode:"Markdown"});
+        }
       }
     }
     return bot.sendMessage(chatId,`⚠️ Sin código reciente para *${escMD(correo)}*`,{parse_mode:"Markdown"});
@@ -393,7 +320,6 @@ async function cmdLink(chatId, correo){
       const link = extraerLink(e.text, e.html);
       if(!link) continue;
 
-      // Prioridad: si el from incluye la plataforma, esa gana siempre
       const fromL = e.from.toLowerCase();
       const isReallyNetflix = isN || fromL.includes("netflix");
       const isReallyDisney  = !isReallyNetflix && (isD || fromL.includes("disney"));
@@ -427,7 +353,7 @@ async function cmdHogar(chatId, correo){
       if(!esNetflixCodigo(e.from,e.subject) && !esNetflixReset(e.from,e.subject)) continue;
       if(!esHogar(e.subject,e.text)) continue;
 
-      let codigo = extraerCodigoInteligente(e.text, e.subject, e.html);
+      let codigo = extraerCodigoInteligente(e.text, e.subject, e.html, "netflix");
       let linkWeb = null;
 
       if(!codigo) {
@@ -465,7 +391,7 @@ async function cmdPrime(chatId, correo){
     for(const e of emails){
       if(!esPrime(e.from, e.subject)) continue;
 
-      const codigo = extraerCodigoInteligente(e.text, e.subject, e.html);
+      const codigo = extraerCodigoInteligente(e.text, e.subject, e.html, "otro");
 
       if(codigo) return bot.sendMessage(chatId,
         `🎥 *CÓDIGO PRIME VIDEO*\n\n` +
@@ -505,7 +431,7 @@ if(!global.__SUBLICUENTAS_IMAP_READY__){
   bot.onText(/^\/prime\s+(\S+)/i,  async(msg,m)=>{ if(await isAdmin(msg.from.id)) return cmdPrime(msg.chat.id, normalizarCorreo(m[1])); });
   bot.onText(/^\/inbox\s+(\S+)/i,  async(msg,m)=>{ if(await isAdmin(msg.from.id)) return cmdInbox(msg.chat.id, normalizarCorreo(m[1])); });
 
-  console.log("✅ Módulo IMAP cargado v10 — /code /link /hogar /prime /inbox");
+  console.log("✅ Módulo IMAP cargado v11 — /code /link /hogar /prime /inbox");
 }
 
 module.exports = { cmdCode, cmdLink, cmdHogar, cmdPrime, cmdInbox };
