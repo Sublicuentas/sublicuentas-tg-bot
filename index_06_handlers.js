@@ -1,3 +1,7 @@
+index_06_handlers.js — búsqueda directa corregida
+Copie todo el código y reemplácelo en GitHub como index_06_handlers.js
+
+Copiar código completo
 /* ✅ SUBLICUENTAS TG BOT — PARTE 6/6 FINAL OPTIMIZADA
    HANDLERS / COMANDOS / CALLBACKS / MESSAGE / AUTOTXT / HARDEN / HTTP
    -------------------------------------------------------------------
@@ -162,6 +166,50 @@ function escapeRegex(txt = "") {
 
 function limpiarComandoTexto(texto = "") {
   return String(texto || "").trim().replace(/^\/+/, "").toLowerCase();
+}
+
+// ===============================
+// ✅ BÚSQUEDA DIRECTA POR COMANDO
+// Permite buscar sin abrir menú primero:
+//   /correo@dominio.com
+//   /99999999
+//   /Nombre Cliente
+//   /buscar Nombre Cliente
+// Bloquea comandos reales del bot para no confundirlos con búsqueda.
+// ===============================
+function getSlashSearchReservedCommandsLocal() {
+  return new Set([
+    "start", "menu", "stock", "buscar", "cliente", "renovaciones", "txt",
+    "clientes_txt", "vendedores_txt_split", "reindex_clientes", "fix_duplicados",
+    "add", "del", "editclave", "adminadd", "admindel", "adminlist",
+    "addvendedor", "delvendedor", "id", "miid", "vincular_vendedor",
+    "sincronizar_todo", "addcorreo", "finanzas", "resumen_fecha", "bancos_mes",
+    "top_plataformas_mes", "cierre_caja", "cierre_caja_rango", "excel_finanzas",
+    "editar_movimiento", "dashboard", "code", "link", "hogar", ...PLATFORM_KEYS,
+  ]);
+}
+
+function extraerBusquedaDirectaSlash(texto = "") {
+  const raw = String(texto || "").trim();
+  if (!raw.startsWith("/")) return "";
+
+  const sinSlash = raw.replace(/^\/+/, "").trim();
+  if (!sinSlash) return "";
+
+  const parts = sinSlash.split(/\s+/).filter(Boolean);
+  const firstRaw = String(parts[0] || "").trim();
+  const first = firstRaw.toLowerCase().replace(/@\w+$/i, "");
+  const rest = String(sinSlash.slice(firstRaw.length) || "").trim();
+
+  // /buscar algo => búsqueda directa tradicional
+  if (first === "buscar") return rest;
+
+  // Si es comando real del bot, NO se trata como búsqueda.
+  if (getSlashSearchReservedCommandsLocal().has(first)) return "";
+
+  // Cualquier comando no reservado se toma como búsqueda completa:
+  // /correo, /numero, /nombre apellido
+  return sinSlash;
 }
 
 function parseFechaFlexible(raw = "") {
@@ -871,7 +919,7 @@ async function resolverBusquedaAdmin(chatId, query = "") {
         plat: normalizarPlataforma(invHits[0].plataforma),
         correo: q,
       });
-      return enviarSubmenuInventario(chatId, hits[0].plataforma, q);
+      return enviarSubmenuInventario(chatId, invHits[0].plataforma, q);
     }
 
     if (invHits.length > 1) {
@@ -2219,7 +2267,7 @@ bot.on("callback_query", async (q) => {
       if (data.startsWith("fin:edit:fecha:")) { pending.set(String(chatId), { mode: "finEditFecha", id: data.split(":")[3] }); return bot.sendMessage(chatId, "📅 Escriba la nueva fecha en formato dd/mm/yyyy:"); }
 
       if (data === "menu:buscar") {
-        return upsertPanel(chatId, "🔎 *BUSCAR*\n\nUse:\n• /buscar NOMBRE\n• /buscar TELEFONO\n\nTambién puede escribir directamente el nombre, teléfono o correo.", [[{ text: "🏠 Inicio", callback_data: "go:inicio" }]]);
+        return upsertPanel(chatId, "🔎 *BUSCAR*\n\nUse:\n• /correo@dominio.com\n• /99999999\n• /Nombre Cliente\n• /buscar NOMBRE\n\nTambién puede escribir directamente el nombre, teléfono o correo.", [[{ text: "🏠 Inicio", callback_data: "go:inicio" }]]);
       }
 
       if (data === "inv:general") return mostrarStockGeneral(chatId);
@@ -3064,6 +3112,16 @@ bot.on("message", async (msg) => {
     const adminOk = await safeIsAdminLocal(userId);
     const vendOk = await safeIsVendedorLocal(userId);
 
+    // ✅ BÚSQUEDA DIRECTA SIN MENÚ:
+    // Si el admin escribe /correo, /telefono o /nombre, se busca de una vez.
+    // También cancela cualquier estado pendiente/wizard para que no obligue a escribir "menu" primero.
+    const busquedaDirectaSlash = adminOk ? extraerBusquedaDirectaSlash(text) : "";
+    if (busquedaDirectaSlash) {
+      try { pending.delete(String(chatId)); } catch (_) {}
+      try { wizard.delete(String(chatId)); } catch (_) {}
+      return resolverBusquedaAdmin(chatId, busquedaDirectaSlash);
+    }
+
     // Si hay wizard activo y mandan un comando que no sea menu/start, avisar
     if (wizard.has(String(chatId)) && text.startsWith("/")) {
       const cmdWizard = limpiarComandoTexto(text).split(" ")[0];
@@ -3759,4 +3817,4 @@ if (!global.__SUBLICUENTAS_HTTP_SERVER__) {
       res.end("OK");
     })
     .listen(PORT, () => { console.log("🌐 HTTP KEEPALIVE activo en puerto", PORT); });
-}
+     }
