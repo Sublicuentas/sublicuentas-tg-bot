@@ -1,3 +1,4 @@
+index_04_inventario_correos.js COMPLETO CORREGIDO
 /* ✅ SUBLICUENTAS TG BOT — PARTE 4/6 CORREGIDA Y COMPATIBLE
    INVENTARIO / CUENTAS / PANEL POR CORREO-USUARIO
    -----------------------------------------------
@@ -525,6 +526,10 @@ async function mostrarPanelCorreo(chatId, plataforma = "", acceso = "") {
 
   kb.push([
     { text: "✏️ Editar clave", callback_data: `mail_edit_clave|${plat}|${encodeURIComponent(ident)}` },
+    { text: "✉️ Editar correo", callback_data: `mail_edit_correo|${plat}|${encodeURIComponent(ident)}` },
+  ]);
+
+  kb.push([
     { text: "🗑️ Borrar cuenta", callback_data: `mail_delete|${plat}|${encodeURIComponent(ident)}` },
   ]);
 
