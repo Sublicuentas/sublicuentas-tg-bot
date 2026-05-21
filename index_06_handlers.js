@@ -1,4 +1,3 @@
-index_06_handlers.js COMPLETO CORREGIDO
 /* ✅ SUBLICUENTAS TG BOT — PARTE 6/6 FINAL OPTIMIZADA
    HANDLERS / COMANDOS / CALLBACKS / MESSAGE / AUTOTXT / HARDEN / HTTP
    -------------------------------------------------------------------
@@ -810,7 +809,7 @@ async function resolverBusquedaAdmin(chatId, query = "") {
         plat: normalizarPlataforma(hits[0].plataforma),
         correo: q,
       });
-      return enviarSubmenuInventario(chatId, invHits[0].plataforma, q);
+      return enviarSubmenuInventario(chatId, hits[0].plataforma, q);
     }
 
     if (hits.length > 1) {
@@ -872,7 +871,7 @@ async function resolverBusquedaAdmin(chatId, query = "") {
         plat: normalizarPlataforma(invHits[0].plataforma),
         correo: q,
       });
-      return enviarSubmenuInventario(chatId, invHits[0].plataforma, q);
+      return enviarSubmenuInventario(chatId, hits[0].plataforma, q);
     }
 
     if (invHits.length > 1) {
@@ -2443,21 +2442,6 @@ bot.on("callback_query", async (q) => {
         return bot.sendMessage(chatId, `✏️ *Editar clave de la cuenta*\n\n${identIcon(plataforma)} *${escMD(getIdentLabelLocal(plataforma))}:* ${escMD(acceso)}\n🔑 *Clave actual:* ${escMD(claveActual)}\n\nEscriba la nueva clave:`, { parse_mode: "Markdown" });
       }
 
-      if (data.startsWith("mail_edit_correo|")) {
-        const [, plataforma, accesoEnc] = data.split("|");
-        const acceso = decodeURIComponent(accesoEnc || "");
-        const found = await buscarCorreoInventarioPorPlatCorreo(plataforma, acceso);
-        if (!found) return bot.sendMessage(chatId, "❌ La cuenta no existe.");
-        const platNorm = normalizarPlataforma(plataforma);
-        const label = getIdentLabelLocal(platNorm);
-        pending.set(String(chatId), {
-          mode: "mailEditCorreoCuenta",
-          plataforma: platNorm,
-          correo: normalizeIdentByPlatformLocal(platNorm, acceso),
-        });
-        return bot.sendMessage(chatId, `✉️ *Editar ${escMD(label.toLowerCase())} de la cuenta*\n\n📌 *Plataforma:* ${escMD(platNorm.toUpperCase())}\n${identIcon(platNorm)} *${escMD(label)} actual:* ${escMD(acceso)}\n\nEscriba el nuevo ${escMD(label.toLowerCase())}:`, { parse_mode: "Markdown" });
-      }
-
       if (data.startsWith("mail_delete|")) {
         const [, plataforma, accesoEnc] = data.split("|");
         const acceso = decodeURIComponent(accesoEnc || "");
@@ -3456,36 +3440,6 @@ bot.on("message", async (msg) => {
         return mostrarPanelCorreo(chatId, p.plataforma, p.correo);
       }
 
-      if (p.mode === "mailEditCorreoCuenta") {
-        const platNorm = normalizarPlataforma(p.plataforma || "");
-        const label = getIdentLabelLocal(platNorm);
-        const nuevoAcceso = normalizeIdentByPlatformLocal(platNorm, t);
-
-        if (!validateIdentByPlatformLocal(platNorm, nuevoAcceso)) {
-          return bot.sendMessage(chatId, `⚠️ ${label} inválido.`);
-        }
-
-        const found = await buscarCorreoInventarioPorPlatCorreo(platNorm, p.correo);
-        if (!found) return bot.sendMessage(chatId, "❌ La cuenta no existe.");
-
-        const payload = {
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        };
-
-        if (getIdentLabelLocal(platNorm) === "Usuario") {
-          payload.usuario = nuevoAcceso;
-          payload.ident = nuevoAcceso;
-        } else {
-          payload.correo = nuevoAcceso;
-          payload.ident = nuevoAcceso;
-        }
-
-        pending.delete(String(chatId));
-        await found.ref.set(payload, { merge: true });
-        await bot.sendMessage(chatId, `✅ ${label} actualizado correctamente.`);
-        return mostrarPanelCorreo(chatId, platNorm, nuevoAcceso);
-      }
-
       if (p.mode === "invSumarQty") {
         const qty = Number(t);
         if (!Number.isFinite(qty) || qty <= 0) return bot.sendMessage(chatId, "⚠️ Cantidad inválida. Escriba un número (ej: 1)");
@@ -3805,4 +3759,4 @@ if (!global.__SUBLICUENTAS_HTTP_SERVER__) {
       res.end("OK");
     })
     .listen(PORT, () => { console.log("🌐 HTTP KEEPALIVE activo en puerto", PORT); });
-                                        }
+}
