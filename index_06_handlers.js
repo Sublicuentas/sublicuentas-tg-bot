@@ -470,9 +470,16 @@ function resetChatStateFull(chatId) {
   try { panelMsgId?.delete?.(String(chatId)); } catch (_) {}
 }
 
+function clearFlowStateKeepPanel(chatId) {
+  try { pending?.delete?.(String(chatId)); } catch (_) {}
+  try { wizard?.delete?.(String(chatId)); } catch (_) {}
+  // Modo app: no borrar panelMsgId para que el menú edite la misma pantalla.
+}
+
+
 async function sendBottomMainMenu(chatId, userId) {
   try {
-    resetChatStateFull(chatId);
+    clearFlowStateKeepPanel(chatId);
 
     if (await safeIsAdminLocal(userId)) {
       const texto = "📊 *CENTRO DE OPERACIONES*\n\nSublicuentas — Conectamos su entretenimiento\n\nSeleccione una opción:";
@@ -801,7 +808,7 @@ function isNavigationTextLocal(text = "") {
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "");
 
-  return [
+  return new Set([
     "menu",
     "menú",
     "/menu",
@@ -810,9 +817,11 @@ function isNavigationTextLocal(text = "") {
     "start",
     "/start",
     "volver",
+    "atras",
+    "atrás",
     "cancelar",
     "cancel",
-  ].includes(s);
+  ]).has(s);
 }
 
 async function resolverBusquedaAdmin(chatId, query = "") {
@@ -1844,7 +1853,7 @@ bot.onText(/^\/start(?:@\w+)?$/i, async (msg) => {
   if (!hasRuntimeLock()) return;
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-  resetChatStateFull(chatId);
+  clearFlowStateKeepPanel(chatId);
   return sendBottomMainMenu(chatId, userId);
 });
 
@@ -1852,7 +1861,7 @@ bot.onText(/^\/menu(?:@\w+)?$/i, async (msg) => {
   if (!hasRuntimeLock()) return;
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-  resetChatStateFull(chatId);
+  clearFlowStateKeepPanel(chatId);
   return sendBottomMainMenu(chatId, userId);
 });
 
@@ -1873,11 +1882,10 @@ COMANDOS_SIN_SLASH.forEach(({ texto, accion, soloAdmin }) => {
     const chatId = msg.chat.id; const userId = msg.from.id;
     if (!(await userHasAccessFromMessage(msg))) return;
 
-    // ✅ CORRECCIÓN MÁGICA: Forzar mensaje nuevo abajo al escribir texto
-    try { panelMsgId.delete(String(chatId)); } catch (e) {}
+    // Modo app: mantener el panel anclado, no crear mensaje nuevo.
     if (soloAdmin && !(await safeIsAdminLocal(userId))) return;
-    // ✅ Limpiar pending y wizard al escribir cualquier comando de menú
-    resetChatStateFull(chatId);
+    // Modo app: limpiar flujos, pero mantener el panel principal.
+    clearFlowStateKeepPanel(chatId);
     return accion(chatId, userId);
   });
 });
@@ -3102,13 +3110,17 @@ bot.on("message", async (msg) => {
   const chatId = msg.chat?.id;
   const userId = msg.from?.id;
   const text = String(msg.text || "");
+  const textClean = String(text || "").trim();
   if (!chatId) return;
+
+  // Modo app: los textos de navegación los atienden los atajos bot.onText.
+  // Aquí se detienen para que NO disparen búsqueda ni "Sin resultados".
+  if (isNavigationTextLocal(textClean)) return;
 
   try {
     if (!(await userHasAccessFromMessage(msg))) return;
 
-    // ✅ CORRECCIÓN MÁGICA: Forzar mensaje nuevo abajo al escribir texto
-    try { panelMsgId.delete(String(chatId)); } catch (e) {}
+    // Modo app: mantener el panel anclado, no crear mensaje nuevo.
 
     const adminOk = await safeIsAdminLocal(userId);
     const vendOk = await safeIsVendedorLocal(userId);
@@ -3855,4 +3867,4 @@ if (!global.__SUBLICUENTAS_HTTP_SERVER__) {
       res.end("OK");
     })
     .listen(PORT, () => { console.log("🌐 HTTP KEEPALIVE activo en puerto", PORT); });
-                 }
+}
