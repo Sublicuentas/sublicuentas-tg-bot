@@ -501,22 +501,19 @@ async function mostrarPanelCorreo(chatId, plataforma = "", acceso = "") {
   const clave = String(data.clave || "Sin clave");
   const { capacidad, ocupados, disponibles, estado } = formatCuentaResumen(data, plat);
 
-  // ✅ Se eliminó la línea "🔐 Tipo:" — era innecesaria y quitaba espacio
-  let txt = `📦 *PANEL DE CUENTA*\n\n`;
-  txt += `📌 *Plataforma:* ${escMD(humanPlatSafe(plat))}\n`;
-  txt += `${getIdentIcon(plat)} *${escMD(getIdentLabel(plat))}:* ${escMD(ident)}\n`;
-  txt += `🔑 *Clave:* ${escMD(clave)}\n`;
-  txt += `👥 *Ocupados:* ${ocupados}/${capacidad}\n`;
-  txt += `✅ *Disponibles:* ${disponibles}\n`;
-  txt += `📊 *Estado:* ${escMD(estado)}\n`;
+  // ✅ Panel compacto para que ocupe menos pantalla
+  let txt = `📦 *${escMD(humanPlatSafe(plat))}*\n`;
+  txt += `${getIdentIcon(plat)} ${escMD(ident)}\n`;
+  txt += `🔑 ${escMD(clave)}\n`;
+  txt += `👥 ${ocupados}/${capacidad} · ✅ ${disponibles}\n`;
+  txt += `${escMD(estado)}`;
 
   if (isNetflixPlatform(plat) && boolHasCodes(data)) {
-    txt += `\n💡 Esta cuenta tiene datos/códigos de Netflix disponibles.`;
+    txt += `\n\n💡 Tiene datos/códigos de Netflix disponibles.`;
   }
 
   const kb = [
-    [{ text: "👥 Menú clientes", callback_data: `mail_menu_clientes|${plat}|${encodeURIComponent(ident)}` }],
-    [{ text: "👥 Ver clientes", callback_data: `mail_ver_clientes|${plat}|${encodeURIComponent(ident)}` }],
+    [{ text: "👥 Clientes", callback_data: `mail_menu_clientes|${plat}|${encodeURIComponent(ident)}` }],
   ];
 
   if (isNetflixPlatform(plat) && boolHasCodes(data)) {
