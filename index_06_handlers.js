@@ -793,9 +793,32 @@ async function buscarClientesFallbackLocal(query = "") {
 // ===============================
 // ✅ FIX: resolverBusquedaAdmin sin return prematuro
 // ===============================
+
+function isNavigationTextLocal(text = "") {
+  const s = String(text || "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+
+  return [
+    "menu",
+    "menú",
+    "/menu",
+    "inicio",
+    "/inicio",
+    "start",
+    "/start",
+    "volver",
+    "cancelar",
+    "cancel",
+  ].includes(s);
+}
+
 async function resolverBusquedaAdmin(chatId, query = "") {
   const q = String(query || "").trim().replace(/^\/+/, "").trim();
   if (!q) return bot.sendMessage(chatId, "⚠️ Escriba algo para buscar.");
+  if (isNavigationTextLocal(q)) return;
 
   const qDigits = onlyDigits(q);
   const qNorm = normalizeLooseText(q);
@@ -3832,4 +3855,4 @@ if (!global.__SUBLICUENTAS_HTTP_SERVER__) {
       res.end("OK");
     })
     .listen(PORT, () => { console.log("🌐 HTTP KEEPALIVE activo en puerto", PORT); });
-          }
+                 }
