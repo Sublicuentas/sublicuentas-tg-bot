@@ -475,10 +475,19 @@ async function sendBottomMainMenu(chatId, userId) {
     resetChatStateFull(chatId);
 
     if (await safeIsAdminLocal(userId)) {
-      return upsertPanel(chatId, "📌 *MENÚ PRINCIPAL*\n\nSeleccione una opción:", [
-        [{ text: "📦 Inventario",     callback_data: "menu:inventario" }, { text: "👥 Clientes / CRM", callback_data: "menu:clientes" }],
-        [{ text: "💰 Finanzas",       callback_data: "menu:pagos" },      { text: "🚨 Alertas",        callback_data: "menu:alertas" }],
-        [{ text: "📊 Dashboard",      callback_data: "menu:dashboard" }],
+      const texto = "📊 *CENTRO DE OPERACIONES*\n\nSublicuentas — Conectamos su entretenimiento\n\nSeleccione una opción:";
+      return upsertPanel(chatId, texto, [
+        [
+          { text: "🎯 Control cuentas", callback_data: "menu:inventario" },
+          { text: "👥 Clientes", callback_data: "menu:clientes" },
+        ],
+        [
+          { text: "💰 Control financiero", callback_data: "menu:pagos" },
+          { text: "🚨 Riesgos", callback_data: "menu:alertas" },
+        ],
+        [
+          { text: "📊 Análisis", callback_data: "menu:dashboard" },
+        ],
       ], "Markdown");
     } else if (await safeIsVendedorLocal(userId)) {
       return upsertPanel(chatId, "👤 *MENÚ VENDEDOR*\n\nSeleccione una opción:", [
@@ -2447,8 +2456,16 @@ bot.on("callback_query", async (q) => {
         const acceso = decodeURIComponent(accesoEnc || "");
         const found = await buscarCorreoInventarioPorPlatCorreo(plataforma, acceso);
         if (!found) return bot.sendMessage(chatId, "❌ La cuenta no existe.");
-        pending.set(String(chatId), { mode: "mailEditCorreoCuenta", plataforma: normalizarPlataforma(plataforma), correo: normalizeIdentByPlatformLocal(plataforma, acceso) });
-        return bot.sendMessage(chatId, `✉️ *Editar correo de la cuenta*\n\n${identIcon(plataforma)} *${escMD(getIdentLabelLocal(plataforma))} actual:* ${escMD(acceso)}\n\nEscriba el nuevo correo:`, { parse_mode: "Markdown" });
+        pending.set(String(chatId), {
+          mode: "mailEditCorreoCuenta",
+          plataforma: normalizarPlataforma(plataforma),
+          correo: normalizeIdentByPlatformLocal(plataforma, acceso),
+        });
+        return bot.sendMessage(
+          chatId,
+          `✉️ *Editar correo de la cuenta*\n\n${identIcon(plataforma)} *${escMD(getIdentLabelLocal(plataforma))}:* ${escMD(acceso)}\n\nEscriba el nuevo correo:`,
+          { parse_mode: "Markdown" }
+        );
       }
 
       if (data.startsWith("mail_delete|")) {
@@ -3117,6 +3134,24 @@ bot.on("message", async (msg) => {
       return;
     }
 
+    // ── Búsqueda directa sin / desde cualquier panel ──
+    // Permite buscar correo, nombre o teléfono sin escribir "menu".
+    // Solo se bloquea si hay un flujo que realmente está esperando respuesta.
+    if (adminOk && !text.startsWith("/")) {
+      const tSearch = String(text || "").trim();
+      const pSearch = pending.get(String(chatId));
+      const pendingMode = String(pSearch?.mode || "");
+      const pendingBloqueaBusqueda = !!(pSearch && !["invSubmenuCtx"].includes(pendingMode));
+      const pareceBusqueda =
+        isEmailLike(tSearch) ||
+        onlyDigits(tSearch).length >= 7 ||
+        normalizeLooseText(tSearch).length >= 2;
+
+      if (pareceBusqueda && !wizard.has(String(chatId)) && !pendingBloqueaBusqueda) {
+        return resolverBusquedaAdmin(chatId, tSearch);
+      }
+    }
+
     // ── Flujo wizard (texto libre, admin) ──
     if (wizard.has(String(chatId))) {
       if (!adminOk) return;
@@ -3129,16 +3164,6 @@ bot.on("message", async (msg) => {
 
       const p = pending.get(String(chatId));
       const t = String(text || "").trim();
-
-      // ✅ BÚSQUEDA GLOBAL SIN /:
-      // Si solo hay un panel de inventario abierto, permitir buscar correo/nombre/teléfono
-      // sin tener que escribir "menu" primero. No interfiere con formularios de edición/registro.
-      if (p?.mode === "invSubmenuCtx" && t && !t.startsWith("/")) {
-        const qDigitsSearch = onlyDigits(t);
-        const qNormSearch = normalizeLooseText(t);
-        const looksLikeSearch = isEmailLike(t) || qDigitsSearch.length >= 7 || qNormSearch.length >= 2;
-        if (looksLikeSearch) return resolverBusquedaAdmin(chatId, t);
-      }
 
       if (p.mode === "finEliminarFechaAsk") {
         const fecha = parseFechaFlexible(t);
@@ -3460,42 +3485,32 @@ bot.on("message", async (msg) => {
       }
 
       if (p.mode === "mailEditCorreoCuenta") {
-        if (!validateIdentByPlatformLocal(p.plataforma, t)) return bot.sendMessage(chatId, `⚠️ ${getIdentLabelLocal(p.plataforma)} inválido.`);
-        const nuevoAcceso = normalizeIdentByPlatformLocal(p.plataforma, t);
-        const oldAcceso = normalizeIdentByPlatformLocal(p.plataforma, p.correo);
-        const plat = normalizarPlataforma(p.plataforma);
+        if (!isEmailLike(t)) return bot.sendMessage(chatId, "⚠️ Correo inválido. Escriba un correo válido.");
         pending.delete(String(chatId));
 
-        const found = await buscarCorreoInventarioPorPlatCorreo(plat, oldAcceso);
+        const found = await buscarCorreoInventarioPorPlatCorreo(p.plataforma, p.correo);
         if (!found) return bot.sendMessage(chatId, "❌ La cuenta no existe.");
 
-        const existing = await buscarCorreoInventarioPorPlatCorreo(plat, nuevoAcceso);
-        if (existing && String(existing.id || "") !== String(found.id || "")) {
-          return bot.sendMessage(chatId, "⚠️ Ya existe una cuenta con ese correo/usuario en esta plataforma.");
+        const nuevoCorreo = normalizeIdentByPlatformLocal(p.plataforma, t);
+        const nuevaRef = db.collection("inventario").doc(docIdInventarioLocal(nuevoCorreo, p.plataforma));
+        const nuevaDoc = await nuevaRef.get();
+
+        if (nuevaDoc.exists && nuevaRef.id !== found.ref.id) {
+          return bot.sendMessage(chatId, "⚠️ Ya existe una cuenta con ese correo en esta plataforma.");
         }
 
-        const dataUpdate = {
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        };
-        if (["oleadatv1", "oleadatv3", "iptv1", "iptv3", "iptv4"].includes(plat)) {
-          dataUpdate.usuario = nuevoAcceso;
-          dataUpdate.ident = nuevoAcceso;
-        } else {
-          dataUpdate.correo = nuevoAcceso;
-          dataUpdate.ident = nuevoAcceso;
-        }
+        const dataCuenta = { ...(found.data || {}) };
+        dataCuenta.correo = nuevoCorreo;
+        dataCuenta.ident = nuevoCorreo;
+        dataCuenta.updatedAt = admin.firestore.FieldValue.serverTimestamp();
 
-        const newDocId = docIdInventarioLocal(nuevoAcceso, plat);
-        if (String(found.id || "") === newDocId) {
-          await found.ref.set(dataUpdate, { merge: true });
-        } else {
-          const fullData = { ...(found.data || {}), ...dataUpdate, plataforma: plat };
-          await db.collection("inventario").doc(newDocId).set(fullData, { merge: true });
+        await nuevaRef.set(dataCuenta, { merge: true });
+        if (nuevaRef.id !== found.ref.id) {
           await found.ref.delete();
         }
 
-        await bot.sendMessage(chatId, "✅ Correo/usuario actualizado correctamente.");
-        return mostrarPanelCorreo(chatId, plat, nuevoAcceso);
+        await bot.sendMessage(chatId, "✅ Correo de la cuenta actualizado.");
+        return mostrarPanelCorreo(chatId, p.plataforma, nuevoCorreo);
       }
 
       if (p.mode === "invSumarQty") {
@@ -3817,4 +3832,4 @@ if (!global.__SUBLICUENTAS_HTTP_SERVER__) {
       res.end("OK");
     })
     .listen(PORT, () => { console.log("🌐 HTTP KEEPALIVE activo en puerto", PORT); });
-     }
+          }
