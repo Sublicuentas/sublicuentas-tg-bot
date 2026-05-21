@@ -525,9 +525,7 @@ async function mostrarPanelCorreo(chatId, plataforma = "", acceso = "") {
     { text: "✉️ Editar correo", callback_data: `mail_edit_correo|${plat}|${encodeURIComponent(ident)}` },
   ]);
 
-  kb.push([
-    { text: "🗑️ Borrar cuenta", callback_data: `mail_delete|${plat}|${encodeURIComponent(ident)}` },
-  ]);
+  kb.push([{ text: "🗑️ Borrar cuenta", callback_data: `mail_delete|${plat}|${encodeURIComponent(ident)}` }]);
 
   kb.push([
     { text: "⬅️ Volver plataforma", callback_data: `inv:${plat}:0` },
@@ -572,7 +570,7 @@ async function mostrarMenuClientesCorreo(chatId, plataforma = "", acceso = "") {
         { text: "👥 Ver clientes", callback_data: `mail_ver_clientes|${plat}|${encodeURIComponent(ident)}` },
       ],
       [
-        { text: "⬅️ Volver cuenta", callback_data: `mail_panel|${plat}|${encodeURIComponent(ident)}` },
+        { text: "⬅️ Cuenta", callback_data: `mail_panel|${plat}|${encodeURIComponent(ident)}` },
         { text: "🏠 Inicio", callback_data: "go:inicio" },
       ],
     ]
@@ -606,7 +604,7 @@ async function responderMenuCodigosNetflix(chatId, plataforma = "", acceso = "")
       { text: "📌 PIN / perfil", callback_data: `nf_code|pin|${encodeURIComponent(ident)}` },
     ],
     [
-      { text: "⬅️ Volver cuenta", callback_data: `mail_panel|${plat}|${encodeURIComponent(ident)}` },
+      { text: "⬅️ Cuenta", callback_data: `mail_panel|${plat}|${encodeURIComponent(ident)}` },
       { text: "🏠 Inicio", callback_data: "go:inicio" },
     ],
   ];
