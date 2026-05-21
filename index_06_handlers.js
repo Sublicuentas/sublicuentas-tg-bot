@@ -152,6 +152,28 @@ const {
 // ===============================
 // HELPERS LOCALES / FALLBACKS
 // ===============================
+
+function getNorenConfirmMap() {
+  if (!global.__SUBLICUENTAS_NOREN_CONFIRM__) {
+    global.__SUBLICUENTAS_NOREN_CONFIRM__ = new Map();
+  }
+  return global.__SUBLICUENTAS_NOREN_CONFIRM__;
+}
+
+function makeShortToken(prefix = "nr") {
+  return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function purgeNorenConfirmMap() {
+  try {
+    const map = getNorenConfirmMap();
+    const now = Date.now();
+    for (const [k, v] of map.entries()) {
+      if (!v?.createdAt || now - Number(v.createdAt) > 30 * 60 * 1000) map.delete(k);
+    }
+  } catch (_) {}
+}
+
 function hasRuntimeLock() {
   return CORE_STATE?.HAS_RUNTIME_LOCK === true || CORE_STATE?.runtimeLock === true;
 }
@@ -1884,8 +1906,12 @@ COMANDOS_SIN_SLASH.forEach(({ texto, accion, soloAdmin }) => {
 
     // Modo app: mantener el panel anclado, no crear mensaje nuevo.
     if (soloAdmin && !(await safeIsAdminLocal(userId))) return;
-    // Modo app: limpiar flujos, pero mantener el panel principal.
-    clearFlowStateKeepPanel(chatId);
+    // Si el usuario escribe MENU/INICIO, crear/actualizar el panel visible abajo.
+    if (String(texto || "").toLowerCase() === "menu" || String(texto || "").toLowerCase() === "inicio") {
+      resetChatStateFull(chatId);
+    } else {
+      clearFlowStateKeepPanel(chatId);
+    }
     return accion(chatId, userId);
   });
 });
@@ -2814,15 +2840,34 @@ bot.on("callback_query", async (q) => {
       // ✅ NO RENOVÓ — pedir confirmación antes de eliminar
       if (data.startsWith("cli:ren:noren:ask:")) {
         // Formato: cli:ren:noren:ask:CLIENTID:IDX
-        // clientId puede contener caracteres varios — tomamos todo excepto el último segmento
-        const raw = data.slice("cli:ren:noren:ask:".length); // "CLIENTID:IDX"
+        const raw = data.slice("cli:ren:noren:ask:".length);
         const lastColon = raw.lastIndexOf(":");
         const clientId = raw.slice(0, lastColon);
         const idx = Number(raw.slice(lastColon + 1));
+
         const c = await getCliente(clientId);
         if (!c) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
+
         const servicios = Array.isArray(c.servicios) ? c.servicios : [];
+        if (idx < 0 || idx >= servicios.length) {
+          return upsertPanel(chatId, "⚠️ Ese servicio ya no existe o fue modificado. Abra de nuevo las renovaciones.", [
+            [{ text: "⬅️ Volver renovaciones", callback_data: `cli:ren:list:${clientId}` }],
+            [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
+          ]);
+        }
+
         const s = servicios[idx] || {};
+        purgeNorenConfirmMap();
+        const token = makeShortToken("nr");
+        getNorenConfirmMap().set(token, {
+          clientId,
+          idx,
+          plataforma: normalizarPlataforma(s.plataforma || ""),
+          correo: String(s.correo || ""),
+          pin: String(s.pin || ""),
+          createdAt: Date.now(),
+        });
+
         return upsertPanel(chatId,
           `❌ *NO RENOVÓ — CONFIRMAR ELIMINACIÓN*\n\n` +
           `👤 *${escMD(c.nombrePerfil || "Cliente")}*\n` +
@@ -2830,19 +2875,86 @@ bot.on("callback_query", async (q) => {
           `${identIcon(s.plataforma || "")} ${escMD(s.correo || "-")}\n\n` +
           `_El servicio se eliminará y el slot en inventario quedará libre._\n\n¿Confirmar?`,
           [
-            [{ text: "✅ Sí, eliminar", callback_data: `cli:ren:noren:ok:${clientId}:${idx}` }],
-            [{ text: "⬅️ Cancelar",    callback_data: `cli:ren:one:${clientId}:${idx}` }],
+            [{ text: "✅ Sí, eliminar", callback_data: `cli:noren:ok:${token}` }],
+            [{ text: "⬅️ Cancelar",    callback_data: `cli:noren:cancel:${token}` }],
           ]
         );
       }
 
-      // ✅ NO RENOVÓ — ejecutar eliminación
+      // ✅ NO RENOVÓ — cancelar eliminación tokenizada
+      if (data.startsWith("cli:noren:cancel:")) {
+        const token = data.slice("cli:noren:cancel:".length);
+        const ctx = getNorenConfirmMap().get(token);
+        getNorenConfirmMap().delete(token);
+        if (ctx?.clientId && Number.isFinite(Number(ctx.idx))) {
+          return menuRenovacionServicio(chatId, ctx.clientId, Number(ctx.idx));
+        }
+        return sendBottomMainMenu(chatId, userId);
+      }
+
+      // ✅ NO RENOVÓ — ejecutar eliminación tokenizada y estable
+      if (data.startsWith("cli:noren:ok:")) {
+        const token = data.slice("cli:noren:ok:".length);
+        const ctx = getNorenConfirmMap().get(token);
+        getNorenConfirmMap().delete(token);
+
+        if (!ctx?.clientId) {
+          return bot.sendMessage(chatId, "⚠️ Confirmación expirada. Abra de nuevo la renovación y vuelva a intentar.");
+        }
+
+        try {
+          const c = await getCliente(ctx.clientId);
+          if (!c) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
+
+          const servicios = Array.isArray(c.servicios) ? c.servicios : [];
+          let idxSeguro = Number(ctx.idx);
+
+          const coincide = (s = {}) =>
+            normalizarPlataforma(s.plataforma || "") === normalizarPlataforma(ctx.plataforma || "") &&
+            String(s.correo || "") === String(ctx.correo || "") &&
+            String(s.pin || "") === String(ctx.pin || "");
+
+          if (!(idxSeguro >= 0 && idxSeguro < servicios.length && coincide(servicios[idxSeguro]))) {
+            idxSeguro = servicios.findIndex(coincide);
+          }
+
+          if (idxSeguro < 0) {
+            return upsertPanel(chatId, "⚠️ Ese servicio ya no existe o cambió. No se eliminó nada.", [
+              [{ text: "⬅️ Volver servicios", callback_data: `cli:ren:list:${ctx.clientId}` }],
+              [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
+            ]);
+          }
+
+          const result = await eliminarServicioTx(ctx.clientId, idxSeguro);
+          await bot.sendMessage(chatId,
+            `✅ *Servicio eliminado correctamente*\n\n` +
+            `📦 ${escMD(humanPlatAlertLocal(result.eliminado?.plataforma || "-"))} — ${escMD(result.eliminado?.correo || "-")}\n` +
+            `_Slot liberado en inventario._`,
+            { parse_mode: "Markdown" }
+          );
+          return enviarFichaCliente(chatId, ctx.clientId);
+        } catch (e) {
+          logErr("cli:noren:ok", e);
+          return bot.sendMessage(chatId, `⚠️ Error al eliminar: ${e.message}`);
+        }
+      }
+
+      // ✅ NO RENOVÓ — ejecutar eliminación (compatibilidad con botones antiguos)
       if (data.startsWith("cli:ren:noren:ok:")) {
         const raw = data.slice("cli:ren:noren:ok:".length);
         const lastColon = raw.lastIndexOf(":");
         const clientId = raw.slice(0, lastColon);
         const idx = Number(raw.slice(lastColon + 1));
         try {
+          const c = await getCliente(clientId);
+          const servicios = Array.isArray(c?.servicios) ? c.servicios : [];
+          if (!(idx >= 0 && idx < servicios.length)) {
+            return upsertPanel(chatId, "⚠️ Ese servicio ya no existe o fue modificado. Abra de nuevo las renovaciones.", [
+              [{ text: "⬅️ Volver renovaciones", callback_data: `cli:ren:list:${clientId}` }],
+              [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
+            ]);
+          }
+
           const result = await eliminarServicioTx(clientId, idx);
           await bot.sendMessage(chatId,
             `✅ *Servicio eliminado correctamente*\n\n` +
@@ -3113,9 +3225,12 @@ bot.on("message", async (msg) => {
   const textClean = String(text || "").trim();
   if (!chatId) return;
 
-  // Modo app: los textos de navegación los atienden los atajos bot.onText.
-  // Aquí se detienen para que NO disparen búsqueda ni "Sin resultados".
-  if (isNavigationTextLocal(textClean)) return;
+  // Navegación escrita: mostrar menú de una vez y NO disparar búsqueda.
+  if (isNavigationTextLocal(textClean)) {
+    if (!(await userHasAccessFromMessage(msg))) return;
+    try { panelMsgId?.delete?.(String(chatId)); } catch (_) {}
+    return sendBottomMainMenu(chatId, userId);
+  }
 
   try {
     if (!(await userHasAccessFromMessage(msg))) return;
@@ -3867,4 +3982,4 @@ if (!global.__SUBLICUENTAS_HTTP_SERVER__) {
       res.end("OK");
     })
     .listen(PORT, () => { console.log("🌐 HTTP KEEPALIVE activo en puerto", PORT); });
-}
+                      }
