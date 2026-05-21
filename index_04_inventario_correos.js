@@ -1,4 +1,3 @@
-index_04_inventario_correos.js COMPLETO CORREGIDO
 /* ✅ SUBLICUENTAS TG BOT — PARTE 4/6 CORREGIDA Y COMPATIBLE
    INVENTARIO / CUENTAS / PANEL POR CORREO-USUARIO
    -----------------------------------------------
