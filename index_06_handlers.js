@@ -152,28 +152,6 @@ const {
 // ===============================
 // HELPERS LOCALES / FALLBACKS
 // ===============================
-
-function getNorenConfirmMap() {
-  if (!global.__SUBLICUENTAS_NOREN_CONFIRM__) {
-    global.__SUBLICUENTAS_NOREN_CONFIRM__ = new Map();
-  }
-  return global.__SUBLICUENTAS_NOREN_CONFIRM__;
-}
-
-function makeShortToken(prefix = "nr") {
-  return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-}
-
-function purgeNorenConfirmMap() {
-  try {
-    const map = getNorenConfirmMap();
-    const now = Date.now();
-    for (const [k, v] of map.entries()) {
-      if (!v?.createdAt || now - Number(v.createdAt) > 30 * 60 * 1000) map.delete(k);
-    }
-  } catch (_) {}
-}
-
 function hasRuntimeLock() {
   return CORE_STATE?.HAS_RUNTIME_LOCK === true || CORE_STATE?.runtimeLock === true;
 }
@@ -497,6 +475,11 @@ function clearFlowStateKeepPanel(chatId) {
   try { wizard?.delete?.(String(chatId)); } catch (_) {}
   // Modo app: no borrar panelMsgId para que el menú edite la misma pantalla.
 }
+
+function forceNextPanelAtBottom(chatId) {
+  try { panelMsgId?.delete?.(String(chatId)); } catch (_) {}
+}
+
 
 
 async function sendBottomMainMenu(chatId, userId) {
@@ -1906,12 +1889,8 @@ COMANDOS_SIN_SLASH.forEach(({ texto, accion, soloAdmin }) => {
 
     // Modo app: mantener el panel anclado, no crear mensaje nuevo.
     if (soloAdmin && !(await safeIsAdminLocal(userId))) return;
-    // Si el usuario escribe MENU/INICIO, crear/actualizar el panel visible abajo.
-    if (String(texto || "").toLowerCase() === "menu" || String(texto || "").toLowerCase() === "inicio") {
-      resetChatStateFull(chatId);
-    } else {
-      clearFlowStateKeepPanel(chatId);
-    }
+    // Modo app: limpiar flujos, pero mantener el panel principal.
+    clearFlowStateKeepPanel(chatId);
     return accion(chatId, userId);
   });
 });
@@ -2332,6 +2311,7 @@ bot.on("callback_query", async (q) => {
         const [, , , plat, accesoEnc] = data.split(":");
         const acceso = decodeURIComponent(accesoEnc || "");
         pending.delete(String(chatId));
+      forceNextPanelAtBottom(chatId);
         pending.set(String(chatId), { mode: "invSubmenuCtx", plat: normalizarPlataforma(plat), correo: normalizeIdentByPlatformLocal(plat, acceso) });
         return enviarSubmenuInventario(chatId, plat, acceso);
       }
@@ -2353,6 +2333,7 @@ bot.on("callback_query", async (q) => {
         if (!doc.exists) return bot.sendMessage(chatId, "⚠️ No existe esa cuenta en inventario.");
         await ref.delete();
         pending.delete(String(chatId));
+      forceNextPanelAtBottom(chatId);
         return enviarInventarioPlataforma(chatId, plat, 0);
       }
 
@@ -2840,34 +2821,15 @@ bot.on("callback_query", async (q) => {
       // ✅ NO RENOVÓ — pedir confirmación antes de eliminar
       if (data.startsWith("cli:ren:noren:ask:")) {
         // Formato: cli:ren:noren:ask:CLIENTID:IDX
-        const raw = data.slice("cli:ren:noren:ask:".length);
+        // clientId puede contener caracteres varios — tomamos todo excepto el último segmento
+        const raw = data.slice("cli:ren:noren:ask:".length); // "CLIENTID:IDX"
         const lastColon = raw.lastIndexOf(":");
         const clientId = raw.slice(0, lastColon);
         const idx = Number(raw.slice(lastColon + 1));
-
         const c = await getCliente(clientId);
         if (!c) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
-
         const servicios = Array.isArray(c.servicios) ? c.servicios : [];
-        if (idx < 0 || idx >= servicios.length) {
-          return upsertPanel(chatId, "⚠️ Ese servicio ya no existe o fue modificado. Abra de nuevo las renovaciones.", [
-            [{ text: "⬅️ Volver renovaciones", callback_data: `cli:ren:list:${clientId}` }],
-            [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
-          ]);
-        }
-
         const s = servicios[idx] || {};
-        purgeNorenConfirmMap();
-        const token = makeShortToken("nr");
-        getNorenConfirmMap().set(token, {
-          clientId,
-          idx,
-          plataforma: normalizarPlataforma(s.plataforma || ""),
-          correo: String(s.correo || ""),
-          pin: String(s.pin || ""),
-          createdAt: Date.now(),
-        });
-
         return upsertPanel(chatId,
           `❌ *NO RENOVÓ — CONFIRMAR ELIMINACIÓN*\n\n` +
           `👤 *${escMD(c.nombrePerfil || "Cliente")}*\n` +
@@ -2875,86 +2837,19 @@ bot.on("callback_query", async (q) => {
           `${identIcon(s.plataforma || "")} ${escMD(s.correo || "-")}\n\n` +
           `_El servicio se eliminará y el slot en inventario quedará libre._\n\n¿Confirmar?`,
           [
-            [{ text: "✅ Sí, eliminar", callback_data: `cli:noren:ok:${token}` }],
-            [{ text: "⬅️ Cancelar",    callback_data: `cli:noren:cancel:${token}` }],
+            [{ text: "✅ Sí, eliminar", callback_data: `cli:ren:noren:ok:${clientId}:${idx}` }],
+            [{ text: "⬅️ Cancelar",    callback_data: `cli:ren:one:${clientId}:${idx}` }],
           ]
         );
       }
 
-      // ✅ NO RENOVÓ — cancelar eliminación tokenizada
-      if (data.startsWith("cli:noren:cancel:")) {
-        const token = data.slice("cli:noren:cancel:".length);
-        const ctx = getNorenConfirmMap().get(token);
-        getNorenConfirmMap().delete(token);
-        if (ctx?.clientId && Number.isFinite(Number(ctx.idx))) {
-          return menuRenovacionServicio(chatId, ctx.clientId, Number(ctx.idx));
-        }
-        return sendBottomMainMenu(chatId, userId);
-      }
-
-      // ✅ NO RENOVÓ — ejecutar eliminación tokenizada y estable
-      if (data.startsWith("cli:noren:ok:")) {
-        const token = data.slice("cli:noren:ok:".length);
-        const ctx = getNorenConfirmMap().get(token);
-        getNorenConfirmMap().delete(token);
-
-        if (!ctx?.clientId) {
-          return bot.sendMessage(chatId, "⚠️ Confirmación expirada. Abra de nuevo la renovación y vuelva a intentar.");
-        }
-
-        try {
-          const c = await getCliente(ctx.clientId);
-          if (!c) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
-
-          const servicios = Array.isArray(c.servicios) ? c.servicios : [];
-          let idxSeguro = Number(ctx.idx);
-
-          const coincide = (s = {}) =>
-            normalizarPlataforma(s.plataforma || "") === normalizarPlataforma(ctx.plataforma || "") &&
-            String(s.correo || "") === String(ctx.correo || "") &&
-            String(s.pin || "") === String(ctx.pin || "");
-
-          if (!(idxSeguro >= 0 && idxSeguro < servicios.length && coincide(servicios[idxSeguro]))) {
-            idxSeguro = servicios.findIndex(coincide);
-          }
-
-          if (idxSeguro < 0) {
-            return upsertPanel(chatId, "⚠️ Ese servicio ya no existe o cambió. No se eliminó nada.", [
-              [{ text: "⬅️ Volver servicios", callback_data: `cli:ren:list:${ctx.clientId}` }],
-              [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
-            ]);
-          }
-
-          const result = await eliminarServicioTx(ctx.clientId, idxSeguro);
-          await bot.sendMessage(chatId,
-            `✅ *Servicio eliminado correctamente*\n\n` +
-            `📦 ${escMD(humanPlatAlertLocal(result.eliminado?.plataforma || "-"))} — ${escMD(result.eliminado?.correo || "-")}\n` +
-            `_Slot liberado en inventario._`,
-            { parse_mode: "Markdown" }
-          );
-          return enviarFichaCliente(chatId, ctx.clientId);
-        } catch (e) {
-          logErr("cli:noren:ok", e);
-          return bot.sendMessage(chatId, `⚠️ Error al eliminar: ${e.message}`);
-        }
-      }
-
-      // ✅ NO RENOVÓ — ejecutar eliminación (compatibilidad con botones antiguos)
+      // ✅ NO RENOVÓ — ejecutar eliminación
       if (data.startsWith("cli:ren:noren:ok:")) {
         const raw = data.slice("cli:ren:noren:ok:".length);
         const lastColon = raw.lastIndexOf(":");
         const clientId = raw.slice(0, lastColon);
         const idx = Number(raw.slice(lastColon + 1));
         try {
-          const c = await getCliente(clientId);
-          const servicios = Array.isArray(c?.servicios) ? c.servicios : [];
-          if (!(idx >= 0 && idx < servicios.length)) {
-            return upsertPanel(chatId, "⚠️ Ese servicio ya no existe o fue modificado. Abra de nuevo las renovaciones.", [
-              [{ text: "⬅️ Volver renovaciones", callback_data: `cli:ren:list:${clientId}` }],
-              [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
-            ]);
-          }
-
           const result = await eliminarServicioTx(clientId, idx);
           await bot.sendMessage(chatId,
             `✅ *Servicio eliminado correctamente*\n\n` +
@@ -3134,6 +3029,7 @@ bot.on("callback_query", async (q) => {
         const { cacheInvalidatePrefix: cIP } = require("./index_01_core");
         cIP(`clientes:doc:${clientId}`);
         pending.delete(String(chatId));
+      forceNextPanelAtBottom(chatId);
 
         let msg = `✅ *Baja masiva completada*\n\n`;
         msg += `*Eliminados (${eliminados.length}):*\n`;
@@ -3225,10 +3121,10 @@ bot.on("message", async (msg) => {
   const textClean = String(text || "").trim();
   if (!chatId) return;
 
-  // Navegación escrita: mostrar menú de una vez y NO disparar búsqueda.
+  // Modo app: los textos de navegación los atienden los atajos bot.onText.
+  // Aquí se detienen para que NO disparen búsqueda ni "Sin resultados".
   if (isNavigationTextLocal(textClean)) {
-    if (!(await userHasAccessFromMessage(msg))) return;
-    try { panelMsgId?.delete?.(String(chatId)); } catch (_) {}
+    clearFlowStateKeepPanel(chatId);
     return sendBottomMainMenu(chatId, userId);
   }
 
@@ -3322,6 +3218,7 @@ bot.on("message", async (msg) => {
         const listFecha = await getMovimientosPorFecha(fecha, userId, isSuper);
         const list = (Array.isArray(listFecha) ? listFecha : []).filter((x) => String(x.tipo || "").toLowerCase() === String(p.tipo || "").toLowerCase());
         pending.delete(String(chatId));
+      forceNextPanelAtBottom(chatId);
         if (!list.length) {
           return upsertPanel(chatId, `⚠️ No encontré *${p.tipo === "egreso" ? "egresos" : "ingresos"}* en la fecha *${escMD(fecha)}*.`, [
             [{ text: p.tipo === "egreso" ? "➖ Buscar otra fecha" : "➕ Buscar otra fecha", callback_data: p.tipo === "egreso" ? "fin:menu:eliminar:egreso" : "fin:menu:eliminar:ingreso" }],
@@ -3361,6 +3258,7 @@ bot.on("message", async (msg) => {
         const vf = validarFechaFinanzas(fecha);
         if (!vf.ok) return bot.sendMessage(chatId, vf.msg, { parse_mode: "Markdown" });
         pending.delete(String(chatId));
+      forceNextPanelAtBottom(chatId);
         const ok = await registrarIngresoTx({ monto: p.monto, banco: p.banco, plataforma: p.plataforma, detalle: p.detalle || "", fecha, userId, userName: msg.from?.first_name || "" });
         return bot.sendMessage(chatId, `✅ *Ingreso registrado*\n\n💰 Monto: ${moneyLps(ok.monto)}\n🏦 Banco: ${escMD(ok.banco)}\n📦 Plataforma(s): ${escMD(ok.plataforma || "-")}\n📝 Detalle: ${escMD(ok.detalle || "-")}\n📅 Fecha: ${escMD(ok.fecha)}\n🆔 ID: \`${ok.id}\``, {
           parse_mode: "Markdown",
@@ -3387,6 +3285,7 @@ bot.on("message", async (msg) => {
         const vf2 = validarFechaFinanzas(fecha);
         if (!vf2.ok) return bot.sendMessage(chatId, vf2.msg, { parse_mode: "Markdown" });
         pending.delete(String(chatId));
+      forceNextPanelAtBottom(chatId);
         const ok = await registrarEgresoTx({ monto: p.monto, banco: p.banco, motivo: p.motivo, detalle: p.detalle || "", fecha, userId, userName: msg.from?.first_name || "" });
         return bot.sendMessage(chatId, `✅ *Egreso registrado*\n\n💸 Monto: ${moneyLps(ok.monto)}\n🏦 Banco: ${escMD(ok.banco || "-")}\n🧾 Motivo: ${escMD(ok.motivo)}\n📝 Detalle: ${escMD(ok.detalle || "-")}\n📅 Fecha: ${escMD(ok.fecha)}\n🆔 ID: \`${ok.id}\``, {
           parse_mode: "Markdown",
@@ -3398,6 +3297,7 @@ bot.on("message", async (msg) => {
         const fecha = parseFechaFlexible(t);
         if (!fecha) return bot.sendMessage(chatId, "⚠️ Fecha inválida. Use dd/mm/yyyy o escriba hoy.");
         pending.delete(String(chatId));
+      forceNextPanelAtBottom(chatId);
         const list = await getMovimientosPorFecha(fecha, userId, await safeIsSuperAdminLocal(userId));
         return bot.sendMessage(chatId, resumenFinanzasTextoPorFecha(fecha, list), { parse_mode: "Markdown" });
       }
@@ -3413,6 +3313,7 @@ bot.on("message", async (msg) => {
         const fechaFin = parseFechaFlexible(t);
         if (!fechaFin) return bot.sendMessage(chatId, "⚠️ Fecha inválida. Use dd/mm/yyyy");
         pending.delete(String(chatId));
+      forceNextPanelAtBottom(chatId);
         const list = await getMovimientosPorRango(p.fechaInicio, fechaFin, userId, await safeIsSuperAdminLocal(userId));
         return bot.sendMessage(chatId, resumenFinanzasTextoPorRango(p.fechaInicio, fechaFin, list), { parse_mode: "Markdown" });
       }
@@ -3421,6 +3322,7 @@ bot.on("message", async (msg) => {
         const fecha = parseFechaFlexible(t);
         if (!fecha) return bot.sendMessage(chatId, "⚠️ Fecha inválida. Use dd/mm/yyyy o escriba hoy.");
         pending.delete(String(chatId));
+      forceNextPanelAtBottom(chatId);
         const list = await getMovimientosPorFecha(fecha, userId, await safeIsSuperAdminLocal(userId));
         return bot.sendMessage(chatId, resumenBancosFechaTexto(fecha, list), { parse_mode: "Markdown" });
       }
@@ -3436,6 +3338,7 @@ bot.on("message", async (msg) => {
         const fechaFin = parseFechaFlexible(t);
         if (!fechaFin) return bot.sendMessage(chatId, "⚠️ Fecha inválida. Use dd/mm/yyyy");
         pending.delete(String(chatId));
+      forceNextPanelAtBottom(chatId);
         const list = await getMovimientosPorRango(p.fechaInicio, fechaFin, userId, await safeIsSuperAdminLocal(userId));
         return bot.sendMessage(chatId, resumenBancosRangoTexto(p.fechaInicio, fechaFin, list), { parse_mode: "Markdown" });
       }
@@ -3457,6 +3360,7 @@ bot.on("message", async (msg) => {
         const fechaFin = parseFechaFlexible(t);
         if (!fechaFin) return bot.sendMessage(chatId, "⚠️ Fecha inválida. Use dd/mm/yyyy");
         pending.delete(String(chatId));
+      forceNextPanelAtBottom(chatId);
         const list = await getMovimientosPorRango(p.fechaInicio, fechaFin, userId, await safeIsSuperAdminLocal(userId));
         return bot.sendMessage(chatId, detalleBancoRangoTexto(p.banco, p.fechaInicio, fechaFin, list), { parse_mode: "Markdown" });
       }
@@ -3472,6 +3376,7 @@ bot.on("message", async (msg) => {
         const fechaFin = parseFechaFlexible(t);
         if (!fechaFin) return bot.sendMessage(chatId, "⚠️ Fecha inválida. Use dd/mm/yyyy");
         pending.delete(String(chatId));
+      forceNextPanelAtBottom(chatId);
         const list = await getMovimientosPorRango(p.fechaInicio, fechaFin, userId, await safeIsSuperAdminLocal(userId));
         return bot.sendMessage(chatId, resumenTopPlataformasRangoTexto(p.fechaInicio, fechaFin, list), { parse_mode: "Markdown" });
       }
@@ -3487,6 +3392,7 @@ bot.on("message", async (msg) => {
         const fechaFin = parseFechaFlexible(t);
         if (!fechaFin) return bot.sendMessage(chatId, "⚠️ Fecha inválida. Use dd/mm/yyyy");
         pending.delete(String(chatId));
+      forceNextPanelAtBottom(chatId);
         const list = await getMovimientosPorRango(p.fechaInicio, fechaFin, userId, await safeIsSuperAdminLocal(userId));
         return bot.sendMessage(chatId, resumenTopCombosRangoTexto(p.fechaInicio, fechaFin, list), { parse_mode: "Markdown" });
       }
@@ -3495,6 +3401,7 @@ bot.on("message", async (msg) => {
         const key = parseMonthInputToKey(t);
         if (!key) return bot.sendMessage(chatId, "⚠️ Mes inválido. Use mm/yyyy");
         pending.delete(String(chatId));
+      forceNextPanelAtBottom(chatId);
         const list = await getMovimientosPorMes(key, userId, await safeIsSuperAdminLocal(userId));
         return bot.sendMessage(chatId, resumenBancosMesTexto(key, list), { parse_mode: "Markdown" });
       }
@@ -3503,6 +3410,7 @@ bot.on("message", async (msg) => {
         const key = parseMonthInputToKey(t);
         if (!key) return bot.sendMessage(chatId, "⚠️ Mes inválido. Use mm/yyyy");
         pending.delete(String(chatId));
+      forceNextPanelAtBottom(chatId);
         const list = await getMovimientosPorMes(key, userId, await safeIsSuperAdminLocal(userId));
         return bot.sendMessage(chatId, resumenTopPlataformasTexto(key, list), { parse_mode: "Markdown" });
       }
@@ -3511,6 +3419,7 @@ bot.on("message", async (msg) => {
         const fecha = parseFechaFlexible(t);
         if (!fecha) return bot.sendMessage(chatId, "⚠️ Fecha inválida. Use dd/mm/yyyy o escriba hoy.");
         pending.delete(String(chatId));
+      forceNextPanelAtBottom(chatId);
         const list = await getMovimientosPorFecha(fecha, userId, await safeIsSuperAdminLocal(userId));
         return bot.sendMessage(chatId, cierreCajaTexto(fecha, list), { parse_mode: "Markdown" });
       }
@@ -3526,6 +3435,7 @@ bot.on("message", async (msg) => {
         const fechaFin = parseFechaFlexible(t);
         if (!fechaFin) return bot.sendMessage(chatId, "⚠️ Fecha inválida. Use dd/mm/yyyy");
         pending.delete(String(chatId));
+      forceNextPanelAtBottom(chatId);
         const list = await getMovimientosPorRango(p.fechaInicio, fechaFin, userId, await safeIsSuperAdminLocal(userId));
         return bot.sendMessage(chatId, cierreCajaTextoRango(p.fechaInicio, fechaFin, list), { parse_mode: "Markdown" });
       }
@@ -3539,6 +3449,7 @@ bot.on("message", async (msg) => {
       if (p.mode === "finExcelRangoFin") {
         if (!isFechaDMY(t)) return bot.sendMessage(chatId, "⚠️ Fecha inválida. Use dd/mm/yyyy");
         pending.delete(String(chatId));
+      forceNextPanelAtBottom(chatId);
         return exportarFinanzasRangoExcel(chatId, p.fechaInicio, t, userId, await safeIsSuperAdminLocal(userId));
       }
 
@@ -3546,6 +3457,7 @@ bot.on("message", async (msg) => {
         const monto = parseMontoNumber(t);
         if (!Number.isFinite(monto) || monto <= 0) return bot.sendMessage(chatId, "⚠️ Monto inválido.");
         pending.delete(String(chatId));
+      forceNextPanelAtBottom(chatId);
         await db.collection(FINANZAS_COLLECTION).doc(String(p.id)).set({ monto: Number(monto), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
         return bot.sendMessage(chatId, "✅ Monto actualizado correctamente.");
       }
@@ -3553,6 +3465,7 @@ bot.on("message", async (msg) => {
       if (p.mode === "finEditBanco") {
         if (!t) return bot.sendMessage(chatId, "⚠️ Escriba el banco.");
         pending.delete(String(chatId));
+      forceNextPanelAtBottom(chatId);
         await db.collection(FINANZAS_COLLECTION).doc(String(p.id)).set({ banco: t, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
         return bot.sendMessage(chatId, "✅ Banco actualizado correctamente.");
       }
@@ -3560,6 +3473,7 @@ bot.on("message", async (msg) => {
       if (p.mode === "finEditMotivo") {
         if (!t) return bot.sendMessage(chatId, "⚠️ Escriba el motivo.");
         pending.delete(String(chatId));
+      forceNextPanelAtBottom(chatId);
         await db.collection(FINANZAS_COLLECTION).doc(String(p.id)).set({ motivo: t, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
         return bot.sendMessage(chatId, "✅ Motivo actualizado correctamente.");
       }
@@ -3567,6 +3481,7 @@ bot.on("message", async (msg) => {
       if (p.mode === "finEditPlataforma") {
         if (!t) return bot.sendMessage(chatId, "⚠️ Escriba la plataforma.");
         pending.delete(String(chatId));
+      forceNextPanelAtBottom(chatId);
         await db.collection(FINANZAS_COLLECTION).doc(String(p.id)).set({ plataforma: t, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
         return bot.sendMessage(chatId, "✅ Plataforma actualizada correctamente.");
       }
@@ -3574,6 +3489,7 @@ bot.on("message", async (msg) => {
       if (p.mode === "finEditDetalle") {
         if (!t) return bot.sendMessage(chatId, "⚠️ Escriba el detalle.");
         pending.delete(String(chatId));
+      forceNextPanelAtBottom(chatId);
         await db.collection(FINANZAS_COLLECTION).doc(String(p.id)).set({ detalle: t, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
         return bot.sendMessage(chatId, "✅ Detalle actualizado correctamente.");
       }
@@ -3581,6 +3497,7 @@ bot.on("message", async (msg) => {
       if (p.mode === "finEditFecha") {
         if (!isFechaDMY(t)) return bot.sendMessage(chatId, "⚠️ Fecha inválida. Use dd/mm/yyyy");
         pending.delete(String(chatId));
+      forceNextPanelAtBottom(chatId);
         await db.collection(FINANZAS_COLLECTION).doc(String(p.id)).set({ fecha: t, fechaTS: parseDMYtoTS(t), mesKey: getMonthKeyFromDMY(t), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
         return bot.sendMessage(chatId, "✅ Fecha actualizada correctamente.");
       }
@@ -3594,6 +3511,7 @@ bot.on("message", async (msg) => {
       if (p.mode === "mailAddClientePin") {
         if (!t) return bot.sendMessage(chatId, "⚠️ Escriba el PIN.");
         pending.delete(String(chatId));
+      forceNextPanelAtBottom(chatId);
         const found = await buscarCorreoInventarioPorPlatCorreo(p.plataforma, p.correo);
         if (!found) return bot.sendMessage(chatId, "❌ La cuenta no existe.");
         const ref = found.ref;
@@ -3613,6 +3531,7 @@ bot.on("message", async (msg) => {
       if (p.mode === "mailEditPin") {
         if (!t) return bot.sendMessage(chatId, "⚠️ Escriba el nuevo PIN.");
         pending.delete(String(chatId));
+      forceNextPanelAtBottom(chatId);
         const found = await buscarCorreoInventarioPorPlatCorreo(p.plataforma, p.correo);
         if (!found) return bot.sendMessage(chatId, "❌ La cuenta no existe.");
         const ref = found.ref;
@@ -3627,6 +3546,7 @@ bot.on("message", async (msg) => {
       if (p.mode === "mailEditClaveCorreo") {
         if (!t) return bot.sendMessage(chatId, "⚠️ Escriba la nueva clave.");
         pending.delete(String(chatId));
+      forceNextPanelAtBottom(chatId);
         const found = await buscarCorreoInventarioPorPlatCorreo(p.plataforma, p.correo);
         if (!found) return bot.sendMessage(chatId, "❌ La cuenta no existe.");
         await found.ref.set({ clave: t, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
@@ -3637,6 +3557,7 @@ bot.on("message", async (msg) => {
       if (p.mode === "mailEditCorreoCuenta") {
         if (!isEmailLike(t)) return bot.sendMessage(chatId, "⚠️ Correo inválido. Escriba un correo válido.");
         pending.delete(String(chatId));
+      forceNextPanelAtBottom(chatId);
 
         const found = await buscarCorreoInventarioPorPlatCorreo(p.plataforma, p.correo);
         if (!found) return bot.sendMessage(chatId, "❌ La cuenta no existe.");
@@ -3667,6 +3588,7 @@ bot.on("message", async (msg) => {
         const qty = Number(t);
         if (!Number.isFinite(qty) || qty <= 0) return bot.sendMessage(chatId, "⚠️ Cantidad inválida. Escriba un número (ej: 1)");
         pending.delete(String(chatId));
+      forceNextPanelAtBottom(chatId);
         const acceso = normalizeIdentByPlatformLocal(p.plat, p.correo);
         const plat = normalizarPlataforma(p.plat);
         const ref = db.collection("inventario").doc(docIdInventarioLocal(acceso, plat));
@@ -3687,6 +3609,7 @@ bot.on("message", async (msg) => {
         const qty = Number(t);
         if (!Number.isFinite(qty) || qty <= 0) return bot.sendMessage(chatId, "⚠️ Cantidad inválida. Escriba un número (ej: 1)");
         pending.delete(String(chatId));
+      forceNextPanelAtBottom(chatId);
         const acceso = normalizeIdentByPlatformLocal(p.plat, p.correo);
         const plat = normalizarPlataforma(p.plat);
         const ref = db.collection("inventario").doc(docIdInventarioLocal(acceso, plat));
@@ -3708,6 +3631,7 @@ bot.on("message", async (msg) => {
       if (p.mode === "invEditClave") {
         if (!t) return bot.sendMessage(chatId, "⚠️ Clave vacía.");
         pending.delete(String(chatId));
+      forceNextPanelAtBottom(chatId);
         const acceso = normalizeIdentByPlatformLocal(p.plat, p.correo);
         const plat = normalizarPlataforma(p.plat);
         const ref = db.collection("inventario").doc(docIdInventarioLocal(acceso, plat));
@@ -3744,6 +3668,7 @@ bot.on("message", async (msg) => {
         }
 
         pending.delete(String(chatId));
+      forceNextPanelAtBottom(chatId);
         const ref = db.collection("clientes").doc(String(p.clientId));
         const doc = await ref.get();
         if (!doc.exists) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
@@ -3762,6 +3687,7 @@ bot.on("message", async (msg) => {
         const dup = await clienteDuplicado(t, actual.telefono || "", p.clientId);
         if (dup) return bot.sendMessage(chatId, "⚠️ Ya existe otro cliente con ese mismo nombre y teléfono.");
         pending.delete(String(chatId));
+      forceNextPanelAtBottom(chatId);
         const ref = db.collection("clientes").doc(String(p.clientId));
         await ref.set({ nombrePerfil: t, nombre_norm: String(t || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().replace(/\s+/g, " "), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
         return menuEditarCliente(chatId, p.clientId);
@@ -3773,6 +3699,7 @@ bot.on("message", async (msg) => {
         const dup = await clienteDuplicado(actual.nombrePerfil || "", t, p.clientId);
         if (dup) return bot.sendMessage(chatId, "⚠️ Ya existe otro cliente con ese mismo nombre y teléfono.");
         pending.delete(String(chatId));
+      forceNextPanelAtBottom(chatId);
         const ref = db.collection("clientes").doc(String(p.clientId));
         await ref.set({ telefono: t, telefono_norm: onlyDigits(t), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
         return menuEditarCliente(chatId, p.clientId);
@@ -3780,6 +3707,7 @@ bot.on("message", async (msg) => {
 
       if (p.mode === "cliEditVendedor") {
         pending.delete(String(chatId));
+      forceNextPanelAtBottom(chatId);
         const ref = db.collection("clientes").doc(String(p.clientId));
         await ref.set({ vendedor: t, vendedor_norm: String(t || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().replace(/\s+/g, " "), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
         return menuEditarCliente(chatId, p.clientId);
@@ -3812,6 +3740,7 @@ bot.on("message", async (msg) => {
       if (p.mode === "cliAddServFecha") {
         if (!isFechaDMY(t)) return bot.sendMessage(chatId, "⚠️ Formato inválido. Use dd/mm/yyyy:");
         pending.delete(String(chatId));
+      forceNextPanelAtBottom(chatId);
         try {
           await addServicioTx(String(p.clientId), { plataforma: p.plat, correo: p.mail, pin: p.pin, precio: p.precio, fechaRenovacion: t });
         } catch (e) {
@@ -3824,12 +3753,14 @@ bot.on("message", async (msg) => {
         const label = getIdentLabelLocal(p.plat || "");
         if (!validateIdentByPlatformLocal(p.plat || "", t)) return bot.sendMessage(chatId, `⚠️ ${label} inválido.`);
         pending.delete(String(chatId));
+      forceNextPanelAtBottom(chatId);
         try { await patchServicio(p.clientId, p.idx, { correo: normalizeIdentByPlatformLocal(p.plat || "", t) }); } catch (e) { return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo actualizar el servicio."}`); }
         return menuServicio(chatId, p.clientId, p.idx);
       }
 
       if (p.mode === "cliServEditPin") {
         pending.delete(String(chatId));
+      forceNextPanelAtBottom(chatId);
         try { await patchServicio(p.clientId, p.idx, { pin: t }); } catch (e) { return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo actualizar el servicio."}`); }
         return menuServicio(chatId, p.clientId, p.idx);
       }
@@ -3838,6 +3769,7 @@ bot.on("message", async (msg) => {
         const n = Number(t);
         if (!Number.isFinite(n) || n <= 0) return bot.sendMessage(chatId, "⚠️ Precio inválido.");
         pending.delete(String(chatId));
+      forceNextPanelAtBottom(chatId);
         try { await patchServicio(p.clientId, p.idx, { precio: n }); } catch (e) { return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo actualizar el servicio."}`); }
         return menuServicio(chatId, p.clientId, p.idx);
       }
@@ -3845,6 +3777,7 @@ bot.on("message", async (msg) => {
       if (p.mode === "cliServEditFecha") {
         if (!isFechaDMY(t)) return bot.sendMessage(chatId, "⚠️ Formato inválido. Use dd/mm/yyyy");
         pending.delete(String(chatId));
+      forceNextPanelAtBottom(chatId);
         try { await patchServicio(p.clientId, p.idx, { fechaRenovacion: t }); } catch (e) { return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo actualizar el servicio."}`); }
         return menuServicio(chatId, p.clientId, p.idx);
       }
@@ -3982,4 +3915,4 @@ if (!global.__SUBLICUENTAS_HTTP_SERVER__) {
       res.end("OK");
     })
     .listen(PORT, () => { console.log("🌐 HTTP KEEPALIVE activo en puerto", PORT); });
-                      }
+}
