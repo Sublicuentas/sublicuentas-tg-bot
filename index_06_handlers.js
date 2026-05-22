@@ -826,6 +826,21 @@ function isNavigationTextLocal(text = "") {
     "atrás",
     "cancelar",
     "cancel",
+
+    // etiquetas del menú principal: no deben disparar búsqueda
+    "alertas",
+    "riesgos",
+    "clientes",
+    "cliente",
+    "clientes crm",
+    "crm",
+    "finanzas",
+    "control financiero",
+    "inventario",
+    "control cuentas",
+    "dashboard",
+    "analisis",
+    "análisis",
   ]).has(s);
 }
 
@@ -3792,6 +3807,8 @@ bot.on("message", async (msg) => {
         // ✅ Ignorar comandos de menú — ya los maneja bot.onText
         const IGNORAR = new Set(["menu","inicio","inventario","finanzas","clientes","alertas","dashboard"]);
         if (IGNORAR.has(t.toLowerCase())) return;
+        forceNextPanelAtBottom(chatId);
+
         return resolverBusquedaAdmin(chatId, t);
       }
     }
@@ -3915,4 +3932,4 @@ if (!global.__SUBLICUENTAS_HTTP_SERVER__) {
       res.end("OK");
     })
     .listen(PORT, () => { console.log("🌐 HTTP KEEPALIVE activo en puerto", PORT); });
-     }
+             }
