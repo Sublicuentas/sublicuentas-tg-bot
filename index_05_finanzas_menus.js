@@ -359,11 +359,12 @@ async function deleteFinanceDocAny(docId) {
 // MENÚS PRINCIPALES
 // ===============================
 async function menuPrincipal(chatId) {
+  // ✅ Redirige a Centro de Operaciones — menuPrincipal ya no se usa directamente
   return upsertPanel(chatId,
-    "📌 *MENÚ PRINCIPAL*\n\nSeleccione una opción:", [
-    [{ text: "📦 Inventario", callback_data: "menu:inventario" }, { text: "👥 Clientes / CRM", callback_data: "menu:clientes" }],
-    [{ text: "💰 Finanzas", callback_data: "menu:pagos" }, { text: "🚨 Alertas", callback_data: "menu:alertas" }],
-    [{ text: "📊 Dashboard", callback_data: "menu:dashboard" }],
+    "📊 *CENTRO DE OPERACIONES*\n\nSublicuentas — Conectamos su entretenimiento\n\nSeleccione una opción:", [
+    [{ text: "🎯 Control cuentas", callback_data: "menu:inventario" }, { text: "👥 Clientes", callback_data: "menu:clientes" }],
+    [{ text: "💰 Control financiero", callback_data: "menu:pagos" }, { text: "🚨 Riesgos", callback_data: "menu:alertas" }],
+    [{ text: "📊 Análisis", callback_data: "menu:dashboard" }, { text: "👤 Revendedores", callback_data: "menu:revendedores" }],
   ]);
 }
 
@@ -373,6 +374,8 @@ async function menuVendedor(chatId) {
     [{ text: "📅 Mis renovaciones hoy", callback_data: "ren:mis:hoy" }, { text: "⏳ Próximos 3 días", callback_data: "ren:mis:prox3" }],
     [{ text: "📄 TXT renovaciones", callback_data: "txt:mis" }, { text: "👥 Mis clientes", callback_data: "vend:clientes" }],
     [{ text: "🧾 TXT mis clientes", callback_data: "vend:clientes:txt" }, { text: "💰 Mi resumen del mes", callback_data: "vend:resumen" }],
+    [{ text: "🔴 Mis vencidos", callback_data: "vend:vencidos" }, { text: "💲 Lista de precios", callback_data: "vend:precios" }],
+    [{ text: "🔍 Buscar cliente", callback_data: "vend:buscar" }],
   ]);
 }
 
