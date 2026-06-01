@@ -463,6 +463,18 @@ function normalizeInlineKeyboard(keyboard = []) {
     .filter((row) => row.length);
 }
 
+// ✅ FIX PANEL DUPLICADO: mapa separado para IDs a eliminar físicamente
+const panelMsgToDelete = global.__SUBLICUENTAS_PANEL_MSG_DELETE__ =
+  global.__SUBLICUENTAS_PANEL_MSG_DELETE__ || new Map();
+
+// Marca el panel actual para ser eliminado en el próximo upsertPanel
+function markPanelForDeletion(chatId) {
+  const chatKey = String(chatId);
+  const msgId = panelMsgId.get(chatKey);
+  if (msgId) panelMsgToDelete.set(chatKey, msgId);
+  panelMsgId.delete(chatKey);
+}
+
 async function upsertPanel(chatId, text, inlineKeyboard = [], parseMode = "Markdown") {
   const chatKey = String(chatId);
   const keyboard = normalizeInlineKeyboard(inlineKeyboard);
@@ -483,7 +495,18 @@ async function upsertPanel(chatId, text, inlineKeyboard = [], parseMode = "Markd
         msg.includes("message can't be edited") ||
         msg.includes("MESSAGE_NOT_MODIFIED");
       if (!ignorable) logErr("upsertPanel.edit", e);
+      // Si no se pudo editar, marcar para borrar y mandar nuevo
+      panelMsgToDelete.set(chatKey, knownMsgId);
+      panelMsgId.delete(chatKey);
     }
+  }
+
+  // ✅ FIX: Si hay un panel anterior marcado para borrar, eliminarlo físicamente
+  // antes de mandar el nuevo — evita que queden dos paneles en pantalla
+  const toDelete = panelMsgToDelete.get(chatKey);
+  if (toDelete) {
+    panelMsgToDelete.delete(chatKey);
+    try { await bot.deleteMessage(chatId, toDelete); } catch (_) {}
   }
 
   try {
@@ -538,7 +561,7 @@ module.exports = {
   invalidarCacheAdmins, invalidarCacheRevendedores,
 
   // panel helpers
-  bindPanelFromCallback, upsertPanel, sendCommandAnchoredPanel,
+  bindPanelFromCallback, upsertPanel, sendCommandAnchoredPanel, markPanelForDeletion,
 
   // text helpers
   escMD, normTxt, limpiarQuery, onlyDigits, isEmailLike,
