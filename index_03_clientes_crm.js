@@ -619,25 +619,6 @@ async function enviarFichaCliente(chatId, clientId) {
   ]);
 }
 
-// ✅ Ficha desde alertas o modo masivo — botón Volver regresa al panel origen
-async function enviarFichaClienteDesdeAlerta(chatId, clientId, tipo = "vencidos", page = 0) {
-  const c = await getCliente(clientId);
-  if (!c) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
-
-  const volverCb    = tipo === "masivo" ? `masivo:back:${page}` : `alert:pg:${tipo}:${page}`;
-  const volverLabel = tipo === "masivo" ? "⬅️ Volver masivo"   : "⬅️ Volver lista";
-
-  return upsertPanel(chatId, renderFichaClienteMarkdown(c), [
-    [{ text: "✏️ Editar cliente",          callback_data: `cli:edit:menu:${c.id}` }],
-    [{ text: "🧩 Editar servicios",        callback_data: `cli:serv:list:${c.id}` }],
-    [{ text: "🔄 Gestionar renovaciones",  callback_data: `cli:ren:list:${c.id}` }],
-    [{ text: "➕ Agregar servicio",        callback_data: `cli:serv:add:${c.id}` }],
-    [{ text: "📜 Historial TXT", callback_data: `cli:txt:hist:${c.id}` }, { text: "📄 TXT Cliente", callback_data: `cli:txt:one:${c.id}` }],
-    [{ text: "🗑️ Borrar cliente",         callback_data: `cli:del:ask:${c.id}` }],
-    [{ text: volverLabel, callback_data: volverCb }, { text: "🏠 Inicio", callback_data: "go:inicio" }],
-  ]);
-}
-
 async function enviarListaResultadosClientes(chatId, rows = []) {
   const items = dedupeClientes(rows);
   if (!items.length) return bot.sendMessage(chatId, "⚠️ Sin resultados.");
@@ -1260,7 +1241,7 @@ async function enviarMisClientesTXT(chatId, vendedorNombre = "") {
 module.exports = {
   humanPlataforma, serviciosConIndiceOriginal, dedupeClientes, clienteDuplicado,
   getCliente, buscarPorTelefonoTodos, buscarClienteRobusto,
-  enviarFichaCliente, enviarFichaClienteDesdeAlerta, enviarListaResultadosClientes, menuEditarCliente,
+  enviarFichaCliente, enviarListaResultadosClientes, menuEditarCliente,
   menuListaServicios, menuServicio,
   patchServicio, addServicioTx, eliminarServicioTx, removeServicioDeInventario,
   menuListaRenovacion, menuRenovacionServicio, enviarPanelRenovacionesConAcciones,
