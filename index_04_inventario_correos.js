@@ -525,7 +525,6 @@ async function mostrarPanelCorreo(chatId, plataforma = "", acceso = "") {
     { text: "âœï¸ Editar clave", callback_data: `mail_edit_clave|${plat}|${encodeURIComponent(ident)}` },
     { text: "âœ‰ï¸ Editar correo", callback_data: `mail_edit_correo|${plat}|${encodeURIComponent(ident)}` },
   ]);
-  kb.push([{ text: "ðŸ‘¥ Editar perfiles", callback_data: `mail_edit_perfiles|${plat}|${encodeURIComponent(ident)}` }]);
 
   kb.push([{ text: "ðŸ—‘ï¸ Borrar cuenta", callback_data: `mail_delete|${plat}|${encodeURIComponent(ident)}` }]);
 
