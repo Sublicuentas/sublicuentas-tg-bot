@@ -65,7 +65,7 @@ const {
   dedupeClientes,
   buscarPorTelefonoTodos,
   buscarClienteRobusto,
-  enviarFichaCliente, enviarFichaClienteDesdeAlerta,
+  enviarFichaCliente,
   enviarListaResultadosClientes,
   reporteClientesTXTGeneral,
   reporteClientesSplitPorVendedorTXT,
@@ -500,12 +500,16 @@ async function sendBottomMainMenu(chatId, userId) {
         [
           { text: "📊 Análisis", callback_data: "menu:dashboard" },
         ],
+        [
+          { text: "👤 Revendedores", callback_data: "menu:revendedores" },
+        ],
       ], "Markdown");
     } else if (await safeIsVendedorLocal(userId)) {
       return upsertPanel(chatId, "👤 *MENÚ VENDEDOR*\n\nSeleccione una opción:", [
         [{ text: "📅 Mis renovaciones hoy",  callback_data: "ren:mis:hoy" },      { text: "⏳ Próximos 3 días",      callback_data: "ren:mis:prox3" }],
         [{ text: "📄 TXT renovaciones",      callback_data: "txt:mis" },           { text: "👥 Mis clientes",         callback_data: "vend:clientes" }],
         [{ text: "🧾 TXT mis clientes",      callback_data: "vend:clientes:txt" }, { text: "💰 Mi resumen del mes",   callback_data: "vend:resumen" }],
+        [{ text: "🔴 Mis vencidos",          callback_data: "vend:vencidos" },     { text: "💲 Lista de precios",     callback_data: "vend:precios" }],
       ], "Markdown");
     } else {
       return bot.sendMessage(chatId, "⛔ Acceso denegado");
@@ -1080,6 +1084,39 @@ async function listarRevendedores(chatId) {
   return bot.sendMessage(chatId, t, { parse_mode: "Markdown" });
 }
 
+// ✅ PANEL GESTIÓN REVENDEDORES — botones para agregar/eliminar
+async function menuGestionRevendedores(chatId) {
+  const snap = await db.collection("revendedores").get();
+  const all = snap.docs.map(d => ({ id: d.id, ...(d.data() || {}) }));
+  all.sort((a, b) => String(a.nombre || "").localeCompare(String(b.nombre || ""), "es", { sensitivity: "base" }));
+
+  let txt = "👤 *GESTIÓN REVENDEDORES*\n\n";
+  if (!all.length) {
+    txt += "_No hay revendedores registrados._";
+  } else {
+    all.forEach((x, i) => {
+      txt += `*${i + 1}.* ${escMD(x.nombre || x.id)} — ${x.activo ? "✅" : "⛔"}`;
+      txt += x.telegramId ? ` | 🆔 ${escMD(String(x.telegramId))}` : " | sin ID";
+      txt += "\n";
+    });
+  }
+
+  const kb = [];
+  // Botón por cada revendedor para eliminar
+  if (all.length) {
+    all.forEach(x => {
+      kb.push([{
+        text: `🗑️ Eliminar ${(x.nombre || x.id).slice(0, 20)}`,
+        callback_data: `rev:del:ask:${x.id}`,
+      }]);
+    });
+  }
+  kb.push([{ text: "➕ Agregar revendedor", callback_data: "rev:add:start" }]);
+  kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
+
+  return upsertPanel(chatId, txt, kb);
+}
+
 function humanPlatAlertLocal(key = "") {
   const k = normalizarPlataforma(key);
   const map = {
@@ -1226,30 +1263,14 @@ function renderAlertaClientesMarkdown(rows = [], titulo = "", emptyText = "Sin r
 }
 
 // ✅ Construye los botones de navegación para alertas paginadas
-function buildAlertNavKeyboard(tipo = "", page = 0, totalRows = 0, rows = []) {
+function buildAlertNavKeyboard(tipo = "", page = 0, totalRows = 0) {
   const totalPages = Math.max(1, Math.ceil(totalRows / ALERT_PAGE_SIZE));
-  const safePage = Math.max(0, Math.min(Number(page || 0), totalPages - 1));
-  const start = safePage * ALERT_PAGE_SIZE;
-  const slice = Array.isArray(rows) ? rows.slice(start, start + ALERT_PAGE_SIZE) : [];
+  const nav = [];
+
+  if (page > 0) nav.push({ text: "⬅️ Anterior", callback_data: `alert:pg:${tipo}:${page - 1}` });
+  if (page < totalPages - 1) nav.push({ text: "Siguiente ➡️", callback_data: `alert:pg:${tipo}:${page + 1}` });
 
   const kb = [];
-
-  // ✅ Botones de clientes: cada uno abre la ficha sin cerrar la lista
-  // Usan alert:cli:back:tipo:page para poder volver a la misma página
-  if (slice.length > 0) {
-    slice.forEach((x, i) => {
-      const numGlobal = start + i + 1;
-      const label = `${numGlobal}) ${(x.nombrePerfil || "Sin nombre").slice(0, 25)} • ${x.plataforma || ""}`;
-      kb.push([{
-        text: label,
-        callback_data: `alert:cli:${x.clientId}:${tipo}:${safePage}`,
-      }]);
-    });
-  }
-
-  const nav = [];
-  if (safePage > 0) nav.push({ text: "⬅️ Anterior", callback_data: `alert:pg:${tipo}:${safePage - 1}` });
-  if (safePage < totalPages - 1) nav.push({ text: "Siguiente ➡️", callback_data: `alert:pg:${tipo}:${safePage + 1}` });
   if (nav.length) kb.push(nav);
   kb.push([{ text: "⬅️ Volver alertas", callback_data: "menu:alertas" }]);
   kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
@@ -1419,7 +1440,7 @@ async function mostrarPanelAlertaSeguro(chatId, tipo = "", page = 0) {
       return upsertPanel(
         chatId,
         renderAlertaClientesMarkdown(rows, "🔴 *CLIENTES VENCIDOS*", "Sin clientes vencidos.", safePage),
-        buildAlertNavKeyboard("vencidos", safePage, rows.length, rows)
+        buildAlertNavKeyboard("vencidos", safePage, rows.length)
       );
     }
 
@@ -1428,7 +1449,7 @@ async function mostrarPanelAlertaSeguro(chatId, tipo = "", page = 0) {
       return upsertPanel(
         chatId,
         renderAlertaClientesMarkdown(rows, "🟠 *VENCEN HOY*", "Sin renovaciones para hoy.", safePage),
-        buildAlertNavKeyboard("hoy", safePage, rows.length, rows)
+        buildAlertNavKeyboard("hoy", safePage, rows.length)
       );
     }
 
@@ -1438,7 +1459,7 @@ async function mostrarPanelAlertaSeguro(chatId, tipo = "", page = 0) {
       return upsertPanel(
         chatId,
         renderAlertaClientesMarkdown(rows, `⏳ *VENCEN EN 3 DÍAS (${escMD(fecha3)})*`, "Sin renovaciones en 3 días.", safePage),
-        buildAlertNavKeyboard("3dias", safePage, rows.length, rows)
+        buildAlertNavKeyboard("3dias", safePage, rows.length)
       );
     }
 
@@ -1447,7 +1468,7 @@ async function mostrarPanelAlertaSeguro(chatId, tipo = "", page = 0) {
       return upsertPanel(
         chatId,
         renderInventarioCriticoMarkdown(rows, safePage),
-        buildAlertNavKeyboard("inventario", safePage, rows.length, rows)
+        buildAlertNavKeyboard("inventario", safePage, rows.length)
       );
     }
 
@@ -2048,7 +2069,7 @@ bot.on("callback_query", async (q) => {
 
     const vendedorOnlyAllowed = new Set([
       "ren:mis:hoy", "ren:mis:prox3", "txt:mis", "vend:clientes",
-      "vend:clientes:txt", "vend:resumen", "go:inicio",
+      "vend:clientes:txt", "vend:resumen", "vend:vencidos", "vend:precios", "go:inicio",
     ]);
 
     if (!adminOk && !vendedorOnlyAllowed.has(data)) {
@@ -2070,6 +2091,7 @@ bot.on("callback_query", async (q) => {
       if (data === "menu:pagos") return menuPagos(chatId);
       if (data === "menu:alertas") return menuAlertas(chatId);
       if (data === "menu:renovaciones") return menuRenovaciones(chatId, userId);
+      if (data === "menu:revendedores") return menuGestionRevendedores(chatId);
 
       // ✅ FIX ALERTAS: usar startsWith para tolerar el sufijo :0 de paginación
       // Formato: alert:vencidos:0 o alert:pg:vencidos:2 (navegación)
@@ -2079,18 +2101,6 @@ bot.on("callback_query", async (q) => {
         const tipo = parts[2] || "";
         const pg = Number(parts[3] || 0);
         return mostrarPanelAlertaSeguro(chatId, tipo, pg);
-      }
-
-      // ✅ Cliente tocado desde lista de alertas — abre ficha y vuelve a la misma lista
-      if (data.startsWith("alert:cli:")) {
-        const parts = data.split(":");
-        // formato: alert:cli:clientId:tipo:page
-        const clientId = parts[2];
-        const tipoBack = parts[3] || "vencidos";
-        const pageBack = Number(parts[4] || 0);
-        // Guardar en pending para que el botón "Volver" de la ficha regrese a la lista
-        pending.set(String(chatId), { mode: "alertBackCtx", tipo: tipoBack, page: pageBack });
-        return enviarFichaClienteDesdeAlerta(chatId, clientId, tipoBack, pageBack);
       }
 
       if (data.startsWith("alert:vencidos") || data.startsWith("alertas:vencidos")) {
@@ -2311,34 +2321,6 @@ bot.on("callback_query", async (q) => {
       }
 
       if (data === "inv:general") return mostrarStockGeneral(chatId);
-
-      // ✅ NUEVA CUENTA — paso 1: seleccionó plataforma, pedir correo
-      if (data.startsWith("inv:new:plat:")) {
-        const plat = data.split(":")[3];
-        pending.set(String(chatId), { mode: "invNewCorreo", plat: normalizarPlataforma(plat) });
-        return upsertPanel(chatId,
-          `➕ *NUEVA CUENTA*\n📌 *Plataforma:* ${String(plat).toUpperCase()}\n\nEscriba el *correo* de la cuenta:`,
-          [[{ text: "❌ Cancelar", callback_data: `inv:${normalizarPlataforma(plat)}:0` }]]
-        );
-      }
-
-      // ✅ EDITAR PERFILES (capacidad) de una cuenta
-      if (data.startsWith("mail_edit_perfiles|")) {
-        const [, plataforma, accesoEnc] = data.split("|");
-        const acceso = decodeURIComponent(accesoEnc || "");
-        const found = await buscarCorreoInventarioPorPlatCorreo(plataforma, acceso);
-        if (!found) return bot.sendMessage(chatId, "❌ La cuenta no existe.");
-        const capActual = found.data?.capacidad || 0;
-        pending.set(String(chatId), {
-          mode: "invEditPerfiles",
-          plataforma: normalizarPlataforma(plataforma),
-          correo: normalizeIdentByPlatformLocal(plataforma, acceso),
-        });
-        return bot.sendMessage(chatId,
-          `👥 *Editar cantidad de perfiles*\n\n${identIcon(plataforma)} *${escMD(getIdentLabelLocal(plataforma))}:* ${escMD(acceso)}\n👥 *Perfiles actuales:* ${capActual}\n\nEscriba la nueva cantidad de perfiles:`,
-          { parse_mode: "Markdown" }
-        );
-      }
 
       if (data.startsWith("invf:")) {
         const [, plat, filtro, pageStr] = data.split(":");
@@ -2670,40 +2652,6 @@ bot.on("callback_query", async (q) => {
         const clientId = data.split(":")[3];
         pending.set(String(chatId), { mode: "cliEditVendedor", clientId });
         return upsertPanel(chatId, "🧑‍💼 *Editar vendedor*\nEscriba el nuevo vendedor:", [[{ text: "⬅️ Cancelar", callback_data: `cli:edit:menu:${clientId}` }]]);
-      }
-
-      // ✅ BORRAR CLIENTE — pide confirmación
-      if (data.startsWith("cli:del:ask:")) {
-        const clientId = data.split(":")[3];
-        const c = await getCliente(clientId);
-        const nombre = c?.nombrePerfil || "este cliente";
-        return upsertPanel(chatId,
-          `🗑️ *BORRAR CLIENTE*\n\n` +
-          `👤 *${escMD(nombre)}*\n\n` +
-          `⚠️ Se eliminará el cliente y *todo su historial*. Esta acción no se puede deshacer.\n\n` +
-          `¿Confirma que desea borrar a *${escMD(nombre)}*?`,
-          [
-            [{ text: "✅ Sí, borrar definitivamente", callback_data: `cli:del:ok:${clientId}` }],
-            [{ text: "❌ Cancelar", callback_data: `cli:view:${clientId}` }],
-          ]
-        );
-      }
-
-      // ✅ BORRAR CLIENTE — ejecutar
-      if (data.startsWith("cli:del:ok:")) {
-        const clientId = data.split(":")[3];
-        const c = await getCliente(clientId);
-        const nombre = c?.nombrePerfil || "Cliente";
-        // Borrar documento principal + historial
-        const batch = db.batch();
-        batch.delete(db.collection("clientes").doc(clientId));
-        const histSnap = await db.collection("historial_clientes").where("clientId", "==", clientId).get();
-        histSnap.forEach(d => batch.delete(d.ref));
-        await batch.commit();
-        const { cacheInvalidatePrefix: _cIP } = require("./index_01_core");
-        _cIP(`clientes:doc:${clientId}`);
-        forceNextPanelAtBottom(chatId);
-        return bot.sendMessage(chatId, `✅ Cliente *${escMD(nombre)}* eliminado correctamente.`, { parse_mode: "Markdown" });
       }
 
       if (data.startsWith("cli:serv:list:")) return menuListaServicios(chatId, data.split(":")[3]);
@@ -3169,14 +3117,52 @@ bot.on("callback_query", async (q) => {
       if (!vendOk) return bot.sendMessage(chatId, "⚠️ No está vinculado a un vendedor.");
       const fecha = hoyDMY();
       const list = await obtenerRenovacionesPorFecha(fecha, vend.nombre);
-      return bot.sendMessage(chatId, renovacionesTexto(list, fecha, vend.nombre), { parse_mode: "Markdown" });
+      if (!list.length) return upsertPanel(chatId,
+        `📅 *RENOVACIONES HOY — ${escMD(fecha)}*\n👤 ${escMD(vend.nombre)}\n\n_Sin renovaciones para hoy._`,
+        [[{ text: "🏠 Inicio", callback_data: "go:inicio" }]]
+      );
+      // Encabezado con total
+      let total = 0;
+      list.forEach(x => { total += Number(x.precio || 0); });
+      let txt = `📅 *RENOVACIONES HOY — ${escMD(fecha)}*\n`;
+      txt += `👤 *${escMD(vend.nombre)}*\n`;
+      txt += `👥 *${list.length}* cliente(s) · 💰 *${escMD(total.toFixed(2))} Lps*\n\n`;
+      list.forEach((x, i) => {
+        txt += `*${i + 1}.* ${iconPlataforma(x.plataforma || "")} ${escMD(x.nombrePerfil || "Sin nombre")}\n`;
+        txt += `   📱 ${escMD(x.telefono || "-")} · 💰 ${escMD(Number(x.precio || 0).toFixed(2))} Lps\n`;
+      });
+      // Botones: uno por cliente para abrir ficha
+      const kb = list.slice(0, 20).map((x, i) => [{
+        text: `${i + 1}) ${(x.nombrePerfil || "Sin nombre").slice(0, 22)} • ${humanPlataforma(x.plataforma || "")}`,
+        callback_data: `cli:view:${x.clientId || x.id || ""}`,
+      }]);
+      kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
+      return upsertPanel(chatId, txt, kb);
     }
 
     if (data === "ren:mis:prox3") {
       if (!vendOk) return bot.sendMessage(chatId, "⚠️ No está vinculado a un vendedor.");
       const fecha = addDaysDMY(hoyDMY(), 3);
       const list = await obtenerRenovacionesPorFecha(fecha, vend.nombre);
-      return bot.sendMessage(chatId, renovacionesTexto(list, fecha, vend.nombre), { parse_mode: "Markdown" });
+      if (!list.length) return upsertPanel(chatId,
+        `⏳ *RENOVACIONES EN 3 DÍAS — ${escMD(fecha)}*\n👤 ${escMD(vend.nombre)}\n\n_Sin renovaciones para esa fecha._`,
+        [[{ text: "🏠 Inicio", callback_data: "go:inicio" }]]
+      );
+      let total = 0;
+      list.forEach(x => { total += Number(x.precio || 0); });
+      let txt = `⏳ *RENOVACIONES EN 3 DÍAS — ${escMD(fecha)}*\n`;
+      txt += `👤 *${escMD(vend.nombre)}*\n`;
+      txt += `👥 *${list.length}* cliente(s) · 💰 *${escMD(total.toFixed(2))} Lps*\n\n`;
+      list.forEach((x, i) => {
+        txt += `*${i + 1}.* ${iconPlataforma(x.plataforma || "")} ${escMD(x.nombrePerfil || "Sin nombre")}\n`;
+        txt += `   📱 ${escMD(x.telefono || "-")} · 💰 ${escMD(Number(x.precio || 0).toFixed(2))} Lps\n`;
+      });
+      const kb = list.slice(0, 20).map((x, i) => [{
+        text: `${i + 1}) ${(x.nombrePerfil || "Sin nombre").slice(0, 22)} • ${humanPlataforma(x.plataforma || "")}`,
+        callback_data: `cli:view:${x.clientId || x.id || ""}`,
+      }]);
+      kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
+      return upsertPanel(chatId, txt, kb);
     }
 
     if (data === "txt:mis") {
@@ -3204,6 +3190,90 @@ bot.on("callback_query", async (q) => {
     }
 
     if (data === "rev:lista") return listarRevendedores(chatId);
+
+    // ✅ GESTIÓN REVENDEDORES — agregar: paso 1 pedir nombre
+    if (data === "rev:add:start") {
+      pending.set(String(chatId), { mode: "revAddNombre" });
+      return upsertPanel(chatId,
+        "➕ *AGREGAR REVENDEDOR*\n\nEscriba el *nombre* del revendedor:",
+        [[{ text: "❌ Cancelar", callback_data: "menu:revendedores" }]]
+      );
+    }
+
+    // ✅ GESTIÓN REVENDEDORES — confirmar eliminar
+    if (data.startsWith("rev:del:ask:")) {
+      const docId = data.split(":")[3];
+      const snap2 = await db.collection("revendedores").doc(docId).get();
+      const nombre = snap2.exists ? (snap2.data()?.nombre || docId) : docId;
+      return upsertPanel(chatId,
+        `🗑️ *ELIMINAR REVENDEDOR*\n\n👤 *${escMD(nombre)}*\n\n¿Confirma eliminación?`,
+        [
+          [{ text: "✅ Sí, eliminar", callback_data: `rev:del:ok:${docId}` }],
+          [{ text: "❌ Cancelar", callback_data: "menu:revendedores" }],
+        ]
+      );
+    }
+
+    // ✅ GESTIÓN REVENDEDORES — ejecutar eliminar
+    if (data.startsWith("rev:del:ok:")) {
+      const docId = data.split(":")[3];
+      const snap2 = await db.collection("revendedores").doc(docId).get();
+      const nombre = snap2.exists ? (snap2.data()?.nombre || docId) : docId;
+      await db.collection("revendedores").doc(docId).delete();
+      invalidarCacheRevendedores();
+      forceNextPanelAtBottom(chatId);
+      await bot.sendMessage(chatId, `✅ Revendedor *${escMD(nombre)}* eliminado.`, { parse_mode: "Markdown" });
+      return menuGestionRevendedores(chatId);
+    }
+
+    // ✅ VEND: Mis vencidos
+    if (data === "vend:vencidos") {
+      if (!vendOk) return bot.sendMessage(chatId, "⚠️ No está vinculado a un vendedor.");
+      const rows = await getAlertaClientesLocal("vencidos");
+      const misVencidos = rows.filter(x =>
+        normVendorText(x.vendedor || "") === normVendorText(vend.nombre || "")
+      );
+      if (!misVencidos.length) return upsertPanel(chatId,
+        `🔴 *MIS VENCIDOS*\n👤 ${escMD(vend.nombre)}\n\n✅ _No tiene clientes vencidos._`,
+        [[{ text: "🏠 Inicio", callback_data: "go:inicio" }]]
+      );
+      let txt = `🔴 *MIS VENCIDOS*\n👤 *${escMD(vend.nombre)}*\n*Total: ${misVencidos.length}*\n\n`;
+      misVencidos.forEach((x, i) => {
+        txt += `*${i + 1}.* ${escMD(x.nombrePerfil || "Sin nombre")}\n`;
+        txt += `   📦 ${escMD(humanPlatAlertLocal(x.plataforma || ""))} · 📅 ${escMD(x.fechaRenovacion || "-")} · ⏰ ${x.atrasoDias}d\n`;
+      });
+      const kb = misVencidos.slice(0, 20).map((x, i) => [{
+        text: `${i + 1}) ${(x.nombrePerfil || "Sin nombre").slice(0, 24)} • ${x.atrasoDias}d`,
+        callback_data: `cli:view:${x.clientId}`,
+      }]);
+      kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
+      return upsertPanel(chatId, txt, kb);
+    }
+
+    // ✅ VEND: Lista de precios revendedor
+    if (data === "vend:precios") {
+      const PRECIOS_REVENDEDOR = [
+        { plat: "Netflix",      precio: "L. 270" },
+        { plat: "Disney+",      precio: "L. 120" },
+        { plat: "HBO Max",      precio: "L. 130" },
+        { plat: "Prime Video",  precio: "L. 90"  },
+        { plat: "Paramount+",   precio: "L. 90"  },
+        { plat: "Crunchyroll",  precio: "L. 90"  },
+        { plat: "Apple TV",     precio: "L. 90"  },
+        { plat: "Spotify",      precio: "L. 90"  },
+        { plat: "YouTube",      precio: "L. 90"  },
+        { plat: "Canva",        precio: "L. 90"  },
+        { plat: "ChatGPT",      precio: "L. 160" },
+        { plat: "Gemini",       precio: "L. 90"  },
+        { plat: "IPTV",         precio: "L. 150" },
+      ];
+      let txt = "💲 *LISTA DE PRECIOS — REVENDEDOR*\n\n";
+      PRECIOS_REVENDEDOR.forEach(p => {
+        txt += `• ${escMD(p.plat)}: *${escMD(p.precio)}*\n`;
+      });
+      txt += "\n_Precios por perfil mensual._";
+      return upsertPanel(chatId, txt, [[{ text: "🏠 Inicio", callback_data: "go:inicio" }]]);
+    }
 
     return bot.sendMessage(chatId, "⚠️ Acción no reconocida.");
   } catch (err) {
@@ -3689,84 +3759,39 @@ bot.on("message", async (msg) => {
         return mostrarPanelCorreo(chatId, p.plataforma, nuevoCorreo);
       }
 
-      // ✅ NUEVA CUENTA — paso 2: recibió correo, pedir clave
-      if (p.mode === "invNewCorreo") {
-        if (!t) return bot.sendMessage(chatId, "⚠️ Escriba el correo.");
-        const correoNorm = normalizeIdentByPlatformLocal(p.plat, t);
-        // Verificar que no exista ya
-        const ref = db.collection("inventario").doc(docIdInventarioLocal(correoNorm, p.plat));
-        const doc = await ref.get();
-        if (doc.exists) return bot.sendMessage(chatId, `⚠️ Ya existe una cuenta con ese correo para *${p.plat.toUpperCase()}*.`, { parse_mode: "Markdown" });
-        pending.set(String(chatId), { mode: "invNewClave", plat: p.plat, correo: correoNorm });
-        return bot.sendMessage(chatId,
-          `➕ *NUEVA CUENTA*\n📌 *Plataforma:* ${p.plat.toUpperCase()}\n${identIcon(p.plat)} *${escMD(getIdentLabelLocal(p.plat))}:* ${escMD(correoNorm)}\n\nEscriba la *clave* de la cuenta:`,
-          { parse_mode: "Markdown" }
+      // ✅ AGREGAR REVENDEDOR — paso 1: nombre recibido, pedir ID Telegram
+      if (p.mode === "revAddNombre") {
+        if (!t) return bot.sendMessage(chatId, "⚠️ Escriba el nombre.");
+        pending.set(String(chatId), { mode: "revAddTelegramId", nombre: t.trim() });
+        return upsertPanel(chatId,
+          `➕ *AGREGAR REVENDEDOR*\n\n👤 *Nombre:* ${escMD(t.trim())}\n\nEscriba el *ID de Telegram* del revendedor\n_(número, ej: 123456789)_:`,
+          [[{ text: "❌ Cancelar", callback_data: "menu:revendedores" }]]
         );
       }
 
-      // ✅ NUEVA CUENTA — paso 3: recibió clave, pedir cantidad de perfiles
-      if (p.mode === "invNewClave") {
-        if (!t) return bot.sendMessage(chatId, "⚠️ Escriba la clave.");
-        pending.set(String(chatId), { mode: "invNewPerfiles", plat: p.plat, correo: p.correo, clave: t });
-        return bot.sendMessage(chatId,
-          `➕ *NUEVA CUENTA*\n📌 *Plataforma:* ${p.plat.toUpperCase()}\n${identIcon(p.plat)} *${escMD(getIdentLabelLocal(p.plat))}:* ${escMD(p.correo)}\n🔑 *Clave:* ${escMD(t)}\n\nEscriba la *cantidad de perfiles* (ej: 4 o 6):`,
-          { parse_mode: "Markdown" }
-        );
-      }
-
-      // ✅ NUEVA CUENTA — paso 4: recibió perfiles, guardar en Firestore
-      if (p.mode === "invNewPerfiles") {
-        const qty = Number(t);
-        if (!Number.isFinite(qty) || qty <= 0 || qty > 20) return bot.sendMessage(chatId, "⚠️ Cantidad inválida. Escriba un número entre 1 y 20.");
+      // ✅ AGREGAR REVENDEDOR — paso 2: ID Telegram recibido, guardar
+      if (p.mode === "revAddTelegramId") {
+        const telegramId = t.trim().replace(/[^0-9]/g, "");
+        if (!telegramId || telegramId.length < 5) return bot.sendMessage(chatId, "⚠️ ID inválido. Debe ser un número (ej: 123456789).");
         pending.delete(String(chatId));
         forceNextPanelAtBottom(chatId);
-        const correoNorm = normalizeIdentByPlatformLocal(p.plat, p.correo);
-        const ref = db.collection("inventario").doc(docIdInventarioLocal(correoNorm, p.plat));
-        await ref.set({
-          plataforma: p.plat,
-          correo: correoNorm,
-          ident: correoNorm,
-          clave: p.clave,
-          capacidad: qty,
-          ocupados: 0,
-          disponibles: qty,
-          disp: qty,
-          estado: "activa",
-          clientes: [],
+        const nombre = p.nombre || "Sin nombre";
+        const docId = String(nombre).toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").trim().replace(/\s+/g, " ");
+        await db.collection("revendedores").doc(docId).set({
+          nombre,
+          nombre_norm: docId,
+          telegramId: String(telegramId),
+          activo: true,
+          autoLastSent: "",
           createdAt: admin.firestore.FieldValue.serverTimestamp(),
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        });
-        await bot.sendMessage(chatId, `✅ Cuenta creada correctamente.`);
-        pending.set(String(chatId), { mode: "invSubmenuCtx", plat: p.plat, correo: correoNorm });
-        return enviarSubmenuInventario(chatId, p.plat, correoNorm);
-      }
-
-      // ✅ EDITAR PERFILES — recibir nueva cantidad
-      if (p.mode === "invEditPerfiles") {
-        const qty = Number(t);
-        if (!Number.isFinite(qty) || qty <= 0 || qty > 20) return bot.sendMessage(chatId, "⚠️ Cantidad inválida. Escriba un número entre 1 y 20.");
-        pending.delete(String(chatId));
-        forceNextPanelAtBottom(chatId);
-        const acceso = normalizeIdentByPlatformLocal(p.plataforma, p.correo);
-        const plat = normalizarPlataforma(p.plataforma);
-        const ref = db.collection("inventario").doc(docIdInventarioLocal(acceso, plat));
-        const doc = await ref.get();
-        if (!doc.exists) return bot.sendMessage(chatId, "⚠️ La cuenta no existe.");
-        const d = doc.data() || {};
-        const clientes = Array.isArray(d.clientes) ? d.clientes : [];
-        const ocupados = clientes.length;
-        const disponibles = Math.max(0, qty - ocupados);
-        await ref.set({
-          capacidad: qty,
-          ocupados,
-          disponibles,
-          disp: disponibles,
-          estado: disponibles === 0 ? "llena" : "activa",
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         }, { merge: true });
-        await bot.sendMessage(chatId, `✅ Perfiles actualizados: ${qty} total, ${disponibles} disponibles.`);
-        pending.set(String(chatId), { mode: "invSubmenuCtx", plat, correo: acceso });
-        return enviarSubmenuInventario(chatId, plat, acceso);
+        invalidarCacheRevendedores();
+        await bot.sendMessage(chatId,
+          `✅ Revendedor agregado:\n\n👤 *${escMD(nombre)}*\n🆔 *${escMD(telegramId)}*`,
+          { parse_mode: "Markdown" }
+        );
+        return menuGestionRevendedores(chatId);
       }
 
       if (p.mode === "invSumarQty") {
