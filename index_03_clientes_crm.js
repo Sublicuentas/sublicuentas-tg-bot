@@ -619,6 +619,34 @@ async function enviarFichaCliente(chatId, clientId) {
   ]);
 }
 
+// ✅ Ficha resumida para revendedores — solo info relevante, sin edición
+async function enviarFichaClienteVendedor(chatId, clientId, backCb = "vend:clientes") {
+  const c = await getCliente(clientId);
+  if (!c) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
+
+  const servicios = Array.isArray(c.servicios) ? c.servicios : [];
+  let txt = `👤 *${escMD(c.nombrePerfil || "Sin nombre")}*\n`;
+  txt += `📱 ${escMD(c.telefono || "-")}\n`;
+  txt += `🧾 ${escMD(c.vendedor || "-")}\n\n`;
+
+  if (!servicios.length) {
+    txt += "_Sin servicios._";
+  } else {
+    servicios.forEach((s, i) => {
+      const est = getEstadoServicio(s.fechaRenovacion || "");
+      txt += `*${i + 1}.* ${iconPlataforma(s.plataforma || "")} *${escMD(humanPlataforma(s.plataforma || ""))}*\n`;
+      txt += `   ${getIdentLabelLocal(s.plataforma || "") === "Usuario" ? "👤" : "📧"} ${escMD(s.correo || "-")}\n`;
+      txt += `   🔑 ${escMD(s.pin || "-")}\n`;
+      txt += `   💰 ${escMD(Number(s.precio || 0).toFixed(2))} Lps\n`;
+      txt += `   📅 ${escMD(s.fechaRenovacion || "-")} ${est.emoji}\n\n`;
+    });
+  }
+
+  return upsertPanel(chatId, txt, [
+    [{ text: "⬅️ Volver", callback_data: backCb }, { text: "🏠 Inicio", callback_data: "go:inicio" }],
+  ]);
+}
+
 async function enviarListaResultadosClientes(chatId, rows = []) {
   const items = dedupeClientes(rows);
   if (!items.length) return bot.sendMessage(chatId, "⚠️ Sin resultados.");
@@ -1239,9 +1267,9 @@ async function enviarMisClientesTXT(chatId, vendedorNombre = "") {
 }
 
 module.exports = {
-  humanPlataforma, serviciosConIndiceOriginal, dedupeClientes, clienteDuplicado,
+  humanPlataforma, renderFichaClienteMarkdown, serviciosConIndiceOriginal, dedupeClientes, clienteDuplicado,
   getCliente, buscarPorTelefonoTodos, buscarClienteRobusto,
-  enviarFichaCliente, enviarListaResultadosClientes, menuEditarCliente,
+  enviarFichaCliente, enviarFichaClienteVendedor, enviarListaResultadosClientes, menuEditarCliente,
   menuListaServicios, menuServicio,
   patchServicio, addServicioTx, eliminarServicioTx, removeServicioDeInventario,
   menuListaRenovacion, menuRenovacionServicio, enviarPanelRenovacionesConAcciones,
