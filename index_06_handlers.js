@@ -482,8 +482,11 @@ function forceNextPanelAtBottom(chatId) {
 
 
 
-async function sendBottomMainMenu(chatId, userId) {
+async function sendBottomMainMenu(chatId, userId, fromText = false) {
   try {
+    // ✅ FIX: si viene de texto libre, forzar panel nuevo al fondo
+    // para evitar que intente editar un panel viejo y queden 2 paneles
+    if (fromText) forceNextPanelAtBottom(chatId);
     clearFlowStateKeepPanel(chatId);
 
     if (await safeIsAdminLocal(userId)) {
@@ -500,16 +503,12 @@ async function sendBottomMainMenu(chatId, userId) {
         [
           { text: "📊 Análisis", callback_data: "menu:dashboard" },
         ],
-        [
-          { text: "👤 Revendedores", callback_data: "menu:revendedores" },
-        ],
       ], "Markdown");
     } else if (await safeIsVendedorLocal(userId)) {
       return upsertPanel(chatId, "👤 *MENÚ VENDEDOR*\n\nSeleccione una opción:", [
         [{ text: "📅 Mis renovaciones hoy",  callback_data: "ren:mis:hoy" },      { text: "⏳ Próximos 3 días",      callback_data: "ren:mis:prox3" }],
         [{ text: "📄 TXT renovaciones",      callback_data: "txt:mis" },           { text: "👥 Mis clientes",         callback_data: "vend:clientes" }],
         [{ text: "🧾 TXT mis clientes",      callback_data: "vend:clientes:txt" }, { text: "💰 Mi resumen del mes",   callback_data: "vend:resumen" }],
-        [{ text: "🔴 Mis vencidos",          callback_data: "vend:vencidos" },     { text: "💲 Lista de precios",     callback_data: "vend:precios" }],
       ], "Markdown");
     } else {
       return bot.sendMessage(chatId, "⛔ Acceso denegado");
@@ -1082,39 +1081,6 @@ async function listarRevendedores(chatId) {
   }
 
   return bot.sendMessage(chatId, t, { parse_mode: "Markdown" });
-}
-
-// ✅ PANEL GESTIÓN REVENDEDORES — botones para agregar/eliminar
-async function menuGestionRevendedores(chatId) {
-  const snap = await db.collection("revendedores").get();
-  const all = snap.docs.map(d => ({ id: d.id, ...(d.data() || {}) }));
-  all.sort((a, b) => String(a.nombre || "").localeCompare(String(b.nombre || ""), "es", { sensitivity: "base" }));
-
-  let txt = "👤 *GESTIÓN REVENDEDORES*\n\n";
-  if (!all.length) {
-    txt += "_No hay revendedores registrados._";
-  } else {
-    all.forEach((x, i) => {
-      txt += `*${i + 1}.* ${escMD(x.nombre || x.id)} — ${x.activo ? "✅" : "⛔"}`;
-      txt += x.telegramId ? ` | 🆔 ${escMD(String(x.telegramId))}` : " | sin ID";
-      txt += "\n";
-    });
-  }
-
-  const kb = [];
-  // Botón por cada revendedor para eliminar
-  if (all.length) {
-    all.forEach(x => {
-      kb.push([{
-        text: `🗑️ Eliminar ${(x.nombre || x.id).slice(0, 20)}`,
-        callback_data: `rev:del:ask:${x.id}`,
-      }]);
-    });
-  }
-  kb.push([{ text: "➕ Agregar revendedor", callback_data: "rev:add:start" }]);
-  kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
-
-  return upsertPanel(chatId, txt, kb);
 }
 
 function humanPlatAlertLocal(key = "") {
@@ -1910,22 +1876,20 @@ bot.onText(/^\/start(?:@\w+)?$/i, async (msg) => {
   if (!hasRuntimeLock()) return;
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-  clearFlowStateKeepPanel(chatId);
-  return sendBottomMainMenu(chatId, userId);
+  return sendBottomMainMenu(chatId, userId, true);
 });
 
 bot.onText(/^\/menu(?:@\w+)?$/i, async (msg) => {
   if (!hasRuntimeLock()) return;
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-  clearFlowStateKeepPanel(chatId);
-  return sendBottomMainMenu(chatId, userId);
+  return sendBottomMainMenu(chatId, userId, true);
 });
 
 // ✅ ATajos DE TEXTO SIN SLASH
 const COMANDOS_SIN_SLASH = [
-  { texto: "menu",       accion: (chatId, userId) => sendBottomMainMenu(chatId, userId), soloAdmin: false },
-  { texto: "inicio",     accion: (chatId, userId) => sendBottomMainMenu(chatId, userId), soloAdmin: false },
+  { texto: "menu",       accion: (chatId, userId) => sendBottomMainMenu(chatId, userId, true), soloAdmin: false },
+  { texto: "inicio",     accion: (chatId, userId) => sendBottomMainMenu(chatId, userId, true), soloAdmin: false },
   { texto: "inventario", accion: (chatId) => menuInventario(chatId), soloAdmin: true },
   { texto: "finanzas",   accion: (chatId) => menuPagos(chatId), soloAdmin: true },
   { texto: "clientes",   accion: (chatId) => menuClientes(chatId), soloAdmin: true },
@@ -2069,7 +2033,7 @@ bot.on("callback_query", async (q) => {
 
     const vendedorOnlyAllowed = new Set([
       "ren:mis:hoy", "ren:mis:prox3", "txt:mis", "vend:clientes",
-      "vend:clientes:txt", "vend:resumen", "vend:vencidos", "vend:precios", "go:inicio",
+      "vend:clientes:txt", "vend:resumen", "go:inicio",
     ]);
 
     if (!adminOk && !vendedorOnlyAllowed.has(data)) {
@@ -2091,7 +2055,6 @@ bot.on("callback_query", async (q) => {
       if (data === "menu:pagos") return menuPagos(chatId);
       if (data === "menu:alertas") return menuAlertas(chatId);
       if (data === "menu:renovaciones") return menuRenovaciones(chatId, userId);
-      if (data === "menu:revendedores") return menuGestionRevendedores(chatId);
 
       // ✅ FIX ALERTAS: usar startsWith para tolerar el sufijo :0 de paginación
       // Formato: alert:vencidos:0 o alert:pg:vencidos:2 (navegación)
@@ -2321,6 +2284,16 @@ bot.on("callback_query", async (q) => {
       }
 
       if (data === "inv:general") return mostrarStockGeneral(chatId);
+
+      // ✅ NUEVA CUENTA — paso 1: pedir correo
+      if (data.startsWith("inv:new:plat:")) {
+        const plat = normalizarPlataforma(data.split(":")[3]);
+        pending.set(String(chatId), { mode: "invNewCorreo", plat });
+        return upsertPanel(chatId,
+          `➕ *NUEVA CUENTA*\n📌 *Plataforma:* ${String(plat).toUpperCase()}\n\nEscriba el *correo* de la cuenta:`,
+          [[{ text: "❌ Cancelar", callback_data: `inv:${plat}:0` }]]
+        );
+      }
 
       if (data.startsWith("invf:")) {
         const [, plat, filtro, pageStr] = data.split(":");
@@ -3117,52 +3090,14 @@ bot.on("callback_query", async (q) => {
       if (!vendOk) return bot.sendMessage(chatId, "⚠️ No está vinculado a un vendedor.");
       const fecha = hoyDMY();
       const list = await obtenerRenovacionesPorFecha(fecha, vend.nombre);
-      if (!list.length) return upsertPanel(chatId,
-        `📅 *RENOVACIONES HOY — ${escMD(fecha)}*\n👤 ${escMD(vend.nombre)}\n\n_Sin renovaciones para hoy._`,
-        [[{ text: "🏠 Inicio", callback_data: "go:inicio" }]]
-      );
-      // Encabezado con total
-      let total = 0;
-      list.forEach(x => { total += Number(x.precio || 0); });
-      let txt = `📅 *RENOVACIONES HOY — ${escMD(fecha)}*\n`;
-      txt += `👤 *${escMD(vend.nombre)}*\n`;
-      txt += `👥 *${list.length}* cliente(s) · 💰 *${escMD(total.toFixed(2))} Lps*\n\n`;
-      list.forEach((x, i) => {
-        txt += `*${i + 1}.* ${iconPlataforma(x.plataforma || "")} ${escMD(x.nombrePerfil || "Sin nombre")}\n`;
-        txt += `   📱 ${escMD(x.telefono || "-")} · 💰 ${escMD(Number(x.precio || 0).toFixed(2))} Lps\n`;
-      });
-      // Botones: uno por cliente para abrir ficha
-      const kb = list.slice(0, 20).map((x, i) => [{
-        text: `${i + 1}) ${(x.nombrePerfil || "Sin nombre").slice(0, 22)} • ${humanPlataforma(x.plataforma || "")}`,
-        callback_data: `cli:view:${x.clientId || x.id || ""}`,
-      }]);
-      kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
-      return upsertPanel(chatId, txt, kb);
+      return bot.sendMessage(chatId, renovacionesTexto(list, fecha, vend.nombre), { parse_mode: "Markdown" });
     }
 
     if (data === "ren:mis:prox3") {
       if (!vendOk) return bot.sendMessage(chatId, "⚠️ No está vinculado a un vendedor.");
       const fecha = addDaysDMY(hoyDMY(), 3);
       const list = await obtenerRenovacionesPorFecha(fecha, vend.nombre);
-      if (!list.length) return upsertPanel(chatId,
-        `⏳ *RENOVACIONES EN 3 DÍAS — ${escMD(fecha)}*\n👤 ${escMD(vend.nombre)}\n\n_Sin renovaciones para esa fecha._`,
-        [[{ text: "🏠 Inicio", callback_data: "go:inicio" }]]
-      );
-      let total = 0;
-      list.forEach(x => { total += Number(x.precio || 0); });
-      let txt = `⏳ *RENOVACIONES EN 3 DÍAS — ${escMD(fecha)}*\n`;
-      txt += `👤 *${escMD(vend.nombre)}*\n`;
-      txt += `👥 *${list.length}* cliente(s) · 💰 *${escMD(total.toFixed(2))} Lps*\n\n`;
-      list.forEach((x, i) => {
-        txt += `*${i + 1}.* ${iconPlataforma(x.plataforma || "")} ${escMD(x.nombrePerfil || "Sin nombre")}\n`;
-        txt += `   📱 ${escMD(x.telefono || "-")} · 💰 ${escMD(Number(x.precio || 0).toFixed(2))} Lps\n`;
-      });
-      const kb = list.slice(0, 20).map((x, i) => [{
-        text: `${i + 1}) ${(x.nombrePerfil || "Sin nombre").slice(0, 22)} • ${humanPlataforma(x.plataforma || "")}`,
-        callback_data: `cli:view:${x.clientId || x.id || ""}`,
-      }]);
-      kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
-      return upsertPanel(chatId, txt, kb);
+      return bot.sendMessage(chatId, renovacionesTexto(list, fecha, vend.nombre), { parse_mode: "Markdown" });
     }
 
     if (data === "txt:mis") {
@@ -3191,90 +3126,6 @@ bot.on("callback_query", async (q) => {
 
     if (data === "rev:lista") return listarRevendedores(chatId);
 
-    // ✅ GESTIÓN REVENDEDORES — agregar: paso 1 pedir nombre
-    if (data === "rev:add:start") {
-      pending.set(String(chatId), { mode: "revAddNombre" });
-      return upsertPanel(chatId,
-        "➕ *AGREGAR REVENDEDOR*\n\nEscriba el *nombre* del revendedor:",
-        [[{ text: "❌ Cancelar", callback_data: "menu:revendedores" }]]
-      );
-    }
-
-    // ✅ GESTIÓN REVENDEDORES — confirmar eliminar
-    if (data.startsWith("rev:del:ask:")) {
-      const docId = data.split(":")[3];
-      const snap2 = await db.collection("revendedores").doc(docId).get();
-      const nombre = snap2.exists ? (snap2.data()?.nombre || docId) : docId;
-      return upsertPanel(chatId,
-        `🗑️ *ELIMINAR REVENDEDOR*\n\n👤 *${escMD(nombre)}*\n\n¿Confirma eliminación?`,
-        [
-          [{ text: "✅ Sí, eliminar", callback_data: `rev:del:ok:${docId}` }],
-          [{ text: "❌ Cancelar", callback_data: "menu:revendedores" }],
-        ]
-      );
-    }
-
-    // ✅ GESTIÓN REVENDEDORES — ejecutar eliminar
-    if (data.startsWith("rev:del:ok:")) {
-      const docId = data.split(":")[3];
-      const snap2 = await db.collection("revendedores").doc(docId).get();
-      const nombre = snap2.exists ? (snap2.data()?.nombre || docId) : docId;
-      await db.collection("revendedores").doc(docId).delete();
-      invalidarCacheRevendedores();
-      forceNextPanelAtBottom(chatId);
-      await bot.sendMessage(chatId, `✅ Revendedor *${escMD(nombre)}* eliminado.`, { parse_mode: "Markdown" });
-      return menuGestionRevendedores(chatId);
-    }
-
-    // ✅ VEND: Mis vencidos
-    if (data === "vend:vencidos") {
-      if (!vendOk) return bot.sendMessage(chatId, "⚠️ No está vinculado a un vendedor.");
-      const rows = await getAlertaClientesLocal("vencidos");
-      const misVencidos = rows.filter(x =>
-        normVendorText(x.vendedor || "") === normVendorText(vend.nombre || "")
-      );
-      if (!misVencidos.length) return upsertPanel(chatId,
-        `🔴 *MIS VENCIDOS*\n👤 ${escMD(vend.nombre)}\n\n✅ _No tiene clientes vencidos._`,
-        [[{ text: "🏠 Inicio", callback_data: "go:inicio" }]]
-      );
-      let txt = `🔴 *MIS VENCIDOS*\n👤 *${escMD(vend.nombre)}*\n*Total: ${misVencidos.length}*\n\n`;
-      misVencidos.forEach((x, i) => {
-        txt += `*${i + 1}.* ${escMD(x.nombrePerfil || "Sin nombre")}\n`;
-        txt += `   📦 ${escMD(humanPlatAlertLocal(x.plataforma || ""))} · 📅 ${escMD(x.fechaRenovacion || "-")} · ⏰ ${x.atrasoDias}d\n`;
-      });
-      const kb = misVencidos.slice(0, 20).map((x, i) => [{
-        text: `${i + 1}) ${(x.nombrePerfil || "Sin nombre").slice(0, 24)} • ${x.atrasoDias}d`,
-        callback_data: `cli:view:${x.clientId}`,
-      }]);
-      kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
-      return upsertPanel(chatId, txt, kb);
-    }
-
-    // ✅ VEND: Lista de precios revendedor
-    if (data === "vend:precios") {
-      const PRECIOS_REVENDEDOR = [
-        { plat: "Netflix",      precio: "L. 270" },
-        { plat: "Disney+",      precio: "L. 120" },
-        { plat: "HBO Max",      precio: "L. 130" },
-        { plat: "Prime Video",  precio: "L. 90"  },
-        { plat: "Paramount+",   precio: "L. 90"  },
-        { plat: "Crunchyroll",  precio: "L. 90"  },
-        { plat: "Apple TV",     precio: "L. 90"  },
-        { plat: "Spotify",      precio: "L. 90"  },
-        { plat: "YouTube",      precio: "L. 90"  },
-        { plat: "Canva",        precio: "L. 90"  },
-        { plat: "ChatGPT",      precio: "L. 160" },
-        { plat: "Gemini",       precio: "L. 90"  },
-        { plat: "IPTV",         precio: "L. 150" },
-      ];
-      let txt = "💲 *LISTA DE PRECIOS — REVENDEDOR*\n\n";
-      PRECIOS_REVENDEDOR.forEach(p => {
-        txt += `• ${escMD(p.plat)}: *${escMD(p.precio)}*\n`;
-      });
-      txt += "\n_Precios por perfil mensual._";
-      return upsertPanel(chatId, txt, [[{ text: "🏠 Inicio", callback_data: "go:inicio" }]]);
-    }
-
     return bot.sendMessage(chatId, "⚠️ Acción no reconocida.");
   } catch (err) {
     logErr("callback_query", err?.stack || err?.message || err);
@@ -3299,8 +3150,7 @@ bot.on("message", async (msg) => {
   // Modo app: los textos de navegación los atienden los atajos bot.onText.
   // Aquí se detienen para que NO disparen búsqueda ni "Sin resultados".
   if (isNavigationTextLocal(textClean)) {
-    clearFlowStateKeepPanel(chatId);
-    return sendBottomMainMenu(chatId, userId);
+    return sendBottomMainMenu(chatId, userId, true);
   }
 
   try {
@@ -3759,39 +3609,48 @@ bot.on("message", async (msg) => {
         return mostrarPanelCorreo(chatId, p.plataforma, nuevoCorreo);
       }
 
-      // ✅ AGREGAR REVENDEDOR — paso 1: nombre recibido, pedir ID Telegram
-      if (p.mode === "revAddNombre") {
-        if (!t) return bot.sendMessage(chatId, "⚠️ Escriba el nombre.");
-        pending.set(String(chatId), { mode: "revAddTelegramId", nombre: t.trim() });
-        return upsertPanel(chatId,
-          `➕ *AGREGAR REVENDEDOR*\n\n👤 *Nombre:* ${escMD(t.trim())}\n\nEscriba el *ID de Telegram* del revendedor\n_(número, ej: 123456789)_:`,
-          [[{ text: "❌ Cancelar", callback_data: "menu:revendedores" }]]
+      // ✅ NUEVA CUENTA — paso 2: recibió correo, pedir clave
+      if (p.mode === "invNewCorreo") {
+        if (!t) return bot.sendMessage(chatId, "⚠️ Escriba el correo.");
+        const correoNorm = normalizeIdentByPlatformLocal(p.plat, t);
+        const ref = db.collection("inventario").doc(docIdInventarioLocal(correoNorm, p.plat));
+        const doc = await ref.get();
+        if (doc.exists) return bot.sendMessage(chatId, `⚠️ Ya existe una cuenta con ese correo para *${p.plat.toUpperCase()}*.`, { parse_mode: "Markdown" });
+        pending.set(String(chatId), { mode: "invNewClave", plat: p.plat, correo: correoNorm });
+        return bot.sendMessage(chatId,
+          `➕ *NUEVA CUENTA*\n📌 ${p.plat.toUpperCase()}\n${identIcon(p.plat)} ${escMD(correoNorm)}\n\nEscriba la *clave*:`,
+          { parse_mode: "Markdown" }
         );
       }
 
-      // ✅ AGREGAR REVENDEDOR — paso 2: ID Telegram recibido, guardar
-      if (p.mode === "revAddTelegramId") {
-        const telegramId = t.trim().replace(/[^0-9]/g, "");
-        if (!telegramId || telegramId.length < 5) return bot.sendMessage(chatId, "⚠️ ID inválido. Debe ser un número (ej: 123456789).");
-        pending.delete(String(chatId));
-        forceNextPanelAtBottom(chatId);
-        const nombre = p.nombre || "Sin nombre";
-        const docId = String(nombre).toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").trim().replace(/\s+/g, " ");
-        await db.collection("revendedores").doc(docId).set({
-          nombre,
-          nombre_norm: docId,
-          telegramId: String(telegramId),
-          activo: true,
-          autoLastSent: "",
-          createdAt: admin.firestore.FieldValue.serverTimestamp(),
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        }, { merge: true });
-        invalidarCacheRevendedores();
-        await bot.sendMessage(chatId,
-          `✅ Revendedor agregado:\n\n👤 *${escMD(nombre)}*\n🆔 *${escMD(telegramId)}*`,
+      // ✅ NUEVA CUENTA — paso 3: recibió clave, pedir perfiles
+      if (p.mode === "invNewClave") {
+        if (!t) return bot.sendMessage(chatId, "⚠️ Escriba la clave.");
+        pending.set(String(chatId), { mode: "invNewPerfiles", plat: p.plat, correo: p.correo, clave: t });
+        return bot.sendMessage(chatId,
+          `➕ *NUEVA CUENTA*\n📌 ${p.plat.toUpperCase()}\n${identIcon(p.plat)} ${escMD(p.correo)}\n🔑 ${escMD(t)}\n\nEscriba la *cantidad de perfiles* (ej: 4):`,
           { parse_mode: "Markdown" }
         );
-        return menuGestionRevendedores(chatId);
+      }
+
+      // ✅ NUEVA CUENTA — paso 4: guardar en Firestore
+      if (p.mode === "invNewPerfiles") {
+        const qty = Number(t);
+        if (!Number.isFinite(qty) || qty <= 0 || qty > 20) return bot.sendMessage(chatId, "⚠️ Cantidad inválida. Escriba un número entre 1 y 20.");
+        pending.delete(String(chatId));
+        forceNextPanelAtBottom(chatId);
+        const correoNorm = normalizeIdentByPlatformLocal(p.plat, p.correo);
+        const ref = db.collection("inventario").doc(docIdInventarioLocal(correoNorm, p.plat));
+        await ref.set({
+          plataforma: p.plat, correo: correoNorm, ident: correoNorm,
+          clave: p.clave, capacidad: qty, ocupados: 0,
+          disponibles: qty, disp: qty, estado: "activa", clientes: [],
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+        await bot.sendMessage(chatId, `✅ Cuenta *${escMD(correoNorm)}* creada con ${qty} perfiles.`, { parse_mode: "Markdown" });
+        pending.set(String(chatId), { mode: "invSubmenuCtx", plat: p.plat, correo: correoNorm });
+        return enviarSubmenuInventario(chatId, p.plat, correoNorm);
       }
 
       if (p.mode === "invSumarQty") {
@@ -4056,18 +3915,53 @@ function getTimePartsNow() {
   };
 }
 
+// Envía lista con botones de renovaciones del día al vendedor
+async function enviarListaRenovacionesVendedor7AM(chatId, vendedorNombre) {
+  const fecha = hoyDMY();
+  const list  = await obtenerRenovacionesPorFecha(fecha, vendedorNombre);
+  if (!list.length) return false;
+
+  let total = 0;
+  list.forEach(x => { total += Number(x.precio || 0); });
+
+  let txt = `📅 *RENOVACIONES DE HOY — ${escMD(fecha)}*\n`;
+  txt += `👤 *${escMD(vendedorNombre)}*\n`;
+  txt += `👥 *${list.length}* cliente(s) · 💰 *${escMD(total.toFixed(2))} Lps*\n\n`;
+  list.forEach((x, i) => {
+    txt += `*${i + 1}.* ${iconPlataforma(x.plataforma || "")} ${escMD(x.nombrePerfil || "Sin nombre")}\n`;
+    txt += `   📱 ${escMD(x.telefono || "-")} · 💰 ${escMD(Number(x.precio || 0).toFixed(2))} Lps\n`;
+  });
+
+  const kb = list.slice(0, 20).map((x, i) => [{
+    text: `${i + 1}) ${(x.nombrePerfil || "Sin nombre").slice(0, 22)} • ${humanPlataforma(x.plataforma || "")}`,
+    callback_data: `cli:view:${x.clientId || x.id || ""}`,
+  }]);
+
+  try {
+    await bot.sendMessage(String(chatId), txt, {
+      parse_mode: "Markdown",
+      reply_markup: { inline_keyboard: kb },
+    });
+    return true;
+  } catch (e) {
+    logErr(`enviarListaRenovacionesVendedor7AM:${vendedorNombre}`, e);
+    return false;
+  }
+}
+
 async function enviarTxtRenovacionesDiarias7AM() {
   if (!hasRuntimeLock()) return;
   const { dmy } = getTimePartsNow();
   const adminIds = new Set(await getActiveAdminIdsLocal());
 
-  // ✅ Enviar a todos los revendedores (incluyendo admins que sean vendedores)
-  // Solo el TXT filtrado por su propio nombre de vendedor
   const revendedores = await getActiveRevendedoresLocal();
   const revendedoresEnviados = new Set();
 
   for (const rev of revendedores) {
     try {
+      // ✅ Enviar primero la lista interactiva con botones
+      await enviarListaRenovacionesVendedor7AM(rev.telegramId, rev.nombre);
+      // ✅ Luego el TXT como siempre
       const sent = await enviarTxtRenovacionesVendedorPro(rev.telegramId, rev.nombre);
       if (!sent) continue;
       revendedoresEnviados.add(normalizeTelegramIdLocal(rev.telegramId));
@@ -4075,7 +3969,7 @@ async function enviarTxtRenovacionesDiarias7AM() {
     } catch (e) { logErr(`AutoTXT:revendedor:${rev.id}`, e); }
   }
 
-  // ✅ Admins que NO son revendedores reciben el TXT GENERAL (con todos)
+  // ✅ Admins que NO son revendedores reciben el TXT GENERAL
   try {
     for (const adminId of adminIds) {
       try {
