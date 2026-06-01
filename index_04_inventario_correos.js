@@ -1,12 +1,12 @@
-/* ✅ SUBLICUENTAS TG BOT — PARTE 4/6 CORREGIDA Y COMPATIBLE
+/* âœ… SUBLICUENTAS TG BOT â€” PARTE 4/6 CORREGIDA Y COMPATIBLE
    INVENTARIO / CUENTAS / PANEL POR CORREO-USUARIO
    -----------------------------------------------
    Compatible con index_05_finanzas_menus_2filas y index_06_handlers_columna_corregido
 
-   ✅ AJUSTES CLAVE:
+   âœ… AJUSTES CLAVE:
    - Se respeta correo || usuario en vistas y botones
    - disneys ajustado a capacidad 3
-   - ✅ v4: Eliminada línea "Tipo:" innecesaria del panel de cuenta
+   - âœ… v4: Eliminada lÃ­nea "Tipo:" innecesaria del panel de cuenta
 */
 
 const {
@@ -84,7 +84,7 @@ function getIdentLabel(plataforma = "") {
 }
 
 function getIdentIcon(plataforma = "") {
-  return isUserPlatform(plataforma) ? "👤" : "📧";
+  return isUserPlatform(plataforma) ? "ðŸ‘¤" : "ðŸ“§";
 }
 
 function getAccessTypeLabel(plataforma = "") {
@@ -176,7 +176,7 @@ function formatCuentaResumen(data = {}, plataforma = "") {
   const capacidad = getCapacidadCorreo(data, plataforma);
   const ocupados = getOcupados(data);
   const disponibles = getDisponibles(data, plataforma);
-  const estado = getEstado(data, plataforma) === "llena" ? "🔴 LLENA" : "🟢 ACTIVA";
+  const estado = getEstado(data, plataforma) === "llena" ? "ðŸ”´ LLENA" : "ðŸŸ¢ ACTIVA";
   return { capacidad, ocupados, disponibles, estado };
 }
 
@@ -208,7 +208,7 @@ function scoreMatch(value = "", query = "") {
 }
 
 // ===============================
-// BÚSQUEDAS INVENTARIO
+// BÃšSQUEDAS INVENTARIO
 // ===============================
 async function buscarInventarioPorCorreo(query = "") {
   const q = String(query || "").trim();
@@ -334,28 +334,29 @@ async function enviarInventarioPlataforma(chatId, plataforma = "", page = 0) {
     const disponibles = rows.filter((r) => getDisponibles(r, plat) > 0);
     const llenas = rows.filter((r) => getDisponibles(r, plat) <= 0);
 
-    let txt = `📦 *${escMD(humanPlatSafe(plat).toUpperCase())}*\n\n`;
-    txt += `Seleccione qué desea ver:\n\n`;
-    txt += `🟢 *Disponibles:* ${disponibles.length}\n`;
-    txt += `🔴 *Llenas:* ${llenas.length}`;
+    let txt = `ðŸ“¦ *${escMD(humanPlatSafe(plat).toUpperCase())}*\n\n`;
+    txt += `Seleccione quÃ© desea ver:\n\n`;
+    txt += `ðŸŸ¢ *Disponibles:* ${disponibles.length}\n`;
+    txt += `ðŸ”´ *Llenas:* ${llenas.length}`;
 
     return upsertPanel(
       chatId,
       txt,
       [
         [
-          { text: `🟢 Disponibles (${disponibles.length})`, callback_data: `invf:${plat}:disponibles:0` },
-          { text: `🔴 Llenas (${llenas.length})`, callback_data: `invf:${plat}:llenas:0` },
+          { text: `ðŸŸ¢ Disponibles (${disponibles.length})`, callback_data: `invf:${plat}:disponibles:0` },
+          { text: `ðŸ”´ Llenas (${llenas.length})`, callback_data: `invf:${plat}:llenas:0` },
         ],
+        [{ text: "âž• Nueva cuenta", callback_data: `inv:new:plat:${plat}` }],
         [
-          { text: "⬅️ Volver Inventario", callback_data: "menu:inventario" },
-          { text: "🏠 Inicio", callback_data: "go:inicio" },
+          { text: "â¬…ï¸ Volver Inventario", callback_data: "menu:inventario" },
+          { text: "ðŸ  Inicio", callback_data: "go:inicio" },
         ],
       ]
     );
   } catch (e) {
     logErr("enviarInventarioPlataforma.selector", e);
-    return bot.sendMessage(chatId, "⚠️ Error al abrir inventario de esa plataforma.");
+    return bot.sendMessage(chatId, "âš ï¸ Error al abrir inventario de esa plataforma.");
   }
 }
 
@@ -373,11 +374,11 @@ async function enviarInventarioPlataformaEstado(chatId, plataforma = "", filtro 
     if (!rows.length) {
       return upsertPanel(
         chatId,
-        `📦 *${escMD(humanPlatSafe(plat).toUpperCase())}*\n\n_No hay cuentas en la sección ${filtroNorm === "llenas" ? "llenas" : "disponibles"}._`,
+        `ðŸ“¦ *${escMD(humanPlatSafe(plat).toUpperCase())}*\n\n_No hay cuentas en la secciÃ³n ${filtroNorm === "llenas" ? "llenas" : "disponibles"}._`,
         [
           [
-            { text: "⬅️ Volver plataforma", callback_data: `inv:${plat}:0` },
-            { text: "🏠 Inicio", callback_data: "go:inicio" },
+            { text: "â¬…ï¸ Volver plataforma", callback_data: `inv:${plat}:0` },
+            { text: "ðŸ  Inicio", callback_data: "go:inicio" },
           ],
         ]
       );
@@ -388,45 +389,45 @@ async function enviarInventarioPlataformaEstado(chatId, plataforma = "", filtro 
     const start = safePage * pageSize;
     const slice = rows.slice(start, start + pageSize);
 
-    const emojiEstado = filtroNorm === "llenas" ? "🔴" : "🟢";
+    const emojiEstado = filtroNorm === "llenas" ? "ðŸ”´" : "ðŸŸ¢";
     const tituloEstado = filtroNorm === "llenas" ? "LLENAS" : "DISPONIBLES";
 
-    let txt = `📦 *${escMD(humanPlatSafe(plat).toUpperCase())}*\n`;
+    let txt = `ðŸ“¦ *${escMD(humanPlatSafe(plat).toUpperCase())}*\n`;
     txt += `${emojiEstado} *${tituloEstado}*\n`;
-    txt += `Página *${safePage + 1}/${totalPages}*\n\n`;
+    txt += `PÃ¡gina *${safePage + 1}/${totalPages}*\n\n`;
 
     slice.forEach((r, idx) => {
       const ident = getStoredIdent(r);
       const { capacidad, ocupados, disponibles } = formatCuentaResumen(r, plat);
-      txt += `*${start + idx + 1}.* ${filtroNorm === "llenas" ? "🔴" : "🟢"} ${getIdentIcon(plat)} ${escMD(ident)}\n`;
-      txt += `   👥 ${ocupados}/${capacidad} • ✅ ${disponibles}\n`;
-      if (r.clave) txt += `   🔑 ${escMD(String(r.clave))}\n`;
+      txt += `*${start + idx + 1}.* ${filtroNorm === "llenas" ? "ðŸ”´" : "ðŸŸ¢"} ${getIdentIcon(plat)} ${escMD(ident)}\n`;
+      txt += `   ðŸ‘¥ ${ocupados}/${capacidad} â€¢ âœ… ${disponibles}\n`;
+      if (r.clave) txt += `   ðŸ”‘ ${escMD(String(r.clave))}\n`;
     });
 
     const kb = slice.map((r) => {
       const ident = getStoredIdent(r);
       return [
         {
-          text: `${filtroNorm === "llenas" ? "🔴" : "🟢"} ${ident} • ${getDisponibles(r, plat)}/${getCapacidadCorreo(r, plat)}`,
+          text: `${filtroNorm === "llenas" ? "ðŸ”´" : "ðŸŸ¢"} ${ident} â€¢ ${getDisponibles(r, plat)}/${getCapacidadCorreo(r, plat)}`,
           callback_data: `inv:open:${plat}:${encodeURIComponent(String(ident || ""))}`,
         },
       ];
     });
 
     const nav = [];
-    if (safePage > 0) nav.push({ text: "⬅️ Anterior", callback_data: `invf:${plat}:${filtroNorm}:${safePage - 1}` });
-    if (safePage < totalPages - 1) nav.push({ text: "Siguiente ➡️", callback_data: `invf:${plat}:${filtroNorm}:${safePage + 1}` });
+    if (safePage > 0) nav.push({ text: "â¬…ï¸ Anterior", callback_data: `invf:${plat}:${filtroNorm}:${safePage - 1}` });
+    if (safePage < totalPages - 1) nav.push({ text: "Siguiente âž¡ï¸", callback_data: `invf:${plat}:${filtroNorm}:${safePage + 1}` });
     if (nav.length) kb.push(nav);
 
     kb.push([
-      { text: "⬅️ Volver plataforma", callback_data: `inv:${plat}:0` },
-      { text: "🏠 Inicio", callback_data: "go:inicio" },
+      { text: "â¬…ï¸ Volver plataforma", callback_data: `inv:${plat}:0` },
+      { text: "ðŸ  Inicio", callback_data: "go:inicio" },
     ]);
 
     return upsertPanel(chatId, txt, kb);
   } catch (e) {
     logErr("enviarInventarioPlataformaEstado", e);
-    return bot.sendMessage(chatId, "⚠️ Error al listar cuentas de esa plataforma.");
+    return bot.sendMessage(chatId, "âš ï¸ Error al listar cuentas de esa plataforma.");
   }
 }
 
@@ -461,16 +462,16 @@ async function mostrarStockGeneral(chatId) {
       return humanPlatSafe(a).localeCompare(humanPlatSafe(b), "es", { sensitivity: "base" });
     });
 
-    let txt = "📊 *STOCK GENERAL*\n\n";
+    let txt = "ðŸ“Š *STOCK GENERAL*\n\n";
     if (!keys.length) {
       txt += "_No hay cuentas cargadas en inventario._";
     } else {
       for (const k of keys) {
         const x = map[k];
         txt += `*${escMD(humanPlatSafe(k))}*\n`;
-        txt += `   📦 Cuentas: ${x.cuentas}\n`;
-        txt += `   👥 Ocupados: ${x.ocupados}/${x.capacidad}\n`;
-        txt += `   ✅ Disponibles: ${x.disponibles}\n\n`;
+        txt += `   ðŸ“¦ Cuentas: ${x.cuentas}\n`;
+        txt += `   ðŸ‘¥ Ocupados: ${x.ocupados}/${x.capacidad}\n`;
+        txt += `   âœ… Disponibles: ${x.disponibles}\n\n`;
       }
     }
 
@@ -478,58 +479,59 @@ async function mostrarStockGeneral(chatId) {
       chatId,
       txt,
       [
-        [{ text: "⬅️ Volver Inventario", callback_data: "menu:inventario" }],
-        [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
+        [{ text: "â¬…ï¸ Volver Inventario", callback_data: "menu:inventario" }],
+        [{ text: "ðŸ  Inicio", callback_data: "go:inicio" }],
       ]
     );
   } catch (e) {
     logErr("mostrarStockGeneral", e);
-    return bot.sendMessage(chatId, "⚠️ Error al generar stock general.");
+    return bot.sendMessage(chatId, "âš ï¸ Error al generar stock general.");
   }
 }
 
 // ===============================
-// ✅ PANEL DE CUENTA — sin línea "Tipo:"
+// âœ… PANEL DE CUENTA â€” sin lÃ­nea "Tipo:"
 // ===============================
 async function mostrarPanelCorreo(chatId, plataforma = "", acceso = "") {
   const plat = normalizarPlataforma(plataforma);
   const found = await buscarCorreoInventarioPorPlatCorreo(plat, acceso);
-  if (!found) return bot.sendMessage(chatId, "⚠️ Esa cuenta no existe en inventario.");
+  if (!found) return bot.sendMessage(chatId, "âš ï¸ Esa cuenta no existe en inventario.");
 
   const data = found.data || {};
   const ident = getStoredIdent(data) || String(acceso || "");
   const clave = String(data.clave || "Sin clave");
   const { capacidad, ocupados, disponibles, estado } = formatCuentaResumen(data, plat);
 
-  // ✅ Panel compacto para que ocupe menos pantalla
-  let txt = `📦 *${escMD(humanPlatSafe(plat))}*\n`;
+  // âœ… Panel compacto para que ocupe menos pantalla
+  let txt = `ðŸ“¦ *${escMD(humanPlatSafe(plat))}*\n`;
   txt += `${getIdentIcon(plat)} ${escMD(ident)}\n`;
-  txt += `🔑 ${escMD(clave)}\n`;
-  txt += `👥 ${ocupados}/${capacidad} · ✅ ${disponibles}\n`;
+  txt += `ðŸ”‘ ${escMD(clave)}\n`;
+  txt += `ðŸ‘¥ ${ocupados}/${capacidad} Â· âœ… ${disponibles}\n`;
   txt += `${escMD(estado)}`;
 
   if (isNetflixPlatform(plat) && boolHasCodes(data)) {
-    txt += `\n\n💡 Tiene datos/códigos de Netflix disponibles.`;
+    txt += `\n\nðŸ’¡ Tiene datos/cÃ³digos de Netflix disponibles.`;
   }
 
   const kb = [
-    [{ text: "👥 Clientes", callback_data: `mail_menu_clientes|${plat}|${encodeURIComponent(ident)}` }],
+    [{ text: "ðŸ‘¥ Clientes", callback_data: `mail_menu_clientes|${plat}|${encodeURIComponent(ident)}` }],
   ];
 
   if (isNetflixPlatform(plat) && boolHasCodes(data)) {
-    kb.push([{ text: "🔑 Ver códigos Netflix", callback_data: `mail_menu_codigos|${plat}|${encodeURIComponent(ident)}` }]);
+    kb.push([{ text: "ðŸ”‘ Ver cÃ³digos Netflix", callback_data: `mail_menu_codigos|${plat}|${encodeURIComponent(ident)}` }]);
   }
 
   kb.push([
-    { text: "✏️ Editar clave", callback_data: `mail_edit_clave|${plat}|${encodeURIComponent(ident)}` },
-    { text: "✉️ Editar correo", callback_data: `mail_edit_correo|${plat}|${encodeURIComponent(ident)}` },
+    { text: "âœï¸ Editar clave", callback_data: `mail_edit_clave|${plat}|${encodeURIComponent(ident)}` },
+    { text: "âœ‰ï¸ Editar correo", callback_data: `mail_edit_correo|${plat}|${encodeURIComponent(ident)}` },
   ]);
+  kb.push([{ text: "ðŸ‘¥ Editar perfiles", callback_data: `mail_edit_perfiles|${plat}|${encodeURIComponent(ident)}` }]);
 
-  kb.push([{ text: "🗑️ Borrar cuenta", callback_data: `mail_delete|${plat}|${encodeURIComponent(ident)}` }]);
+  kb.push([{ text: "ðŸ—‘ï¸ Borrar cuenta", callback_data: `mail_delete|${plat}|${encodeURIComponent(ident)}` }]);
 
   kb.push([
-    { text: "⬅️ Volver plataforma", callback_data: `inv:${plat}:0` },
-    { text: "🏠 Inicio", callback_data: "go:inicio" },
+    { text: "â¬…ï¸ Volver plataforma", callback_data: `inv:${plat}:0` },
+    { text: "ðŸ  Inicio", callback_data: "go:inicio" },
   ]);
 
   return upsertPanel(chatId, txt, kb);
@@ -542,70 +544,70 @@ async function enviarSubmenuInventario(chatId, plataforma = "", acceso = "") {
 async function mostrarMenuClientesCorreo(chatId, plataforma = "", acceso = "") {
   const plat = normalizarPlataforma(plataforma);
   const found = await buscarCorreoInventarioPorPlatCorreo(plat, acceso);
-  if (!found) return bot.sendMessage(chatId, "⚠️ Esa cuenta no existe en inventario.");
+  if (!found) return bot.sendMessage(chatId, "âš ï¸ Esa cuenta no existe en inventario.");
 
   const data = found.data || {};
   const ident = getStoredIdent(data) || String(acceso || "");
   const { capacidad, ocupados, disponibles, estado } = formatCuentaResumen(data, plat);
 
   const txt =
-    `👥 *CLIENTES DE LA CUENTA*\n\n` +
-    `📌 *Plataforma:* ${escMD(humanPlatSafe(plat))}\n` +
+    `ðŸ‘¥ *CLIENTES DE LA CUENTA*\n\n` +
+    `ðŸ“Œ *Plataforma:* ${escMD(humanPlatSafe(plat))}\n` +
     `${getIdentIcon(plat)} *${escMD(getIdentLabel(plat))}:* ${escMD(ident)}\n` +
-    `👥 *Ocupados:* ${ocupados}/${capacidad}\n` +
-    `✅ *Disponibles:* ${disponibles}\n` +
-    `📊 *Estado:* ${escMD(estado)}\n\n` +
-    `Seleccione una acción:`;
+    `ðŸ‘¥ *Ocupados:* ${ocupados}/${capacidad}\n` +
+    `âœ… *Disponibles:* ${disponibles}\n` +
+    `ðŸ“Š *Estado:* ${escMD(estado)}\n\n` +
+    `Seleccione una acciÃ³n:`;
 
   return upsertPanel(
     chatId,
     txt,
     [
       [
-        { text: "➕ Agregar cliente", callback_data: `mail_add_cliente|${plat}|${encodeURIComponent(ident)}` },
-        { text: "➖ Quitar cliente", callback_data: `mail_del_cliente|${plat}|${encodeURIComponent(ident)}` },
+        { text: "âž• Agregar cliente", callback_data: `mail_add_cliente|${plat}|${encodeURIComponent(ident)}` },
+        { text: "âž– Quitar cliente", callback_data: `mail_del_cliente|${plat}|${encodeURIComponent(ident)}` },
       ],
       [
-        { text: "🔐 Editar PIN cliente", callback_data: `mail_edit_pin|${plat}|${encodeURIComponent(ident)}` },
-        { text: "👥 Ver clientes", callback_data: `mail_ver_clientes|${plat}|${encodeURIComponent(ident)}` },
+        { text: "ðŸ” Editar PIN cliente", callback_data: `mail_edit_pin|${plat}|${encodeURIComponent(ident)}` },
+        { text: "ðŸ‘¥ Ver clientes", callback_data: `mail_ver_clientes|${plat}|${encodeURIComponent(ident)}` },
       ],
       [
-        { text: "⬅️ Cuenta", callback_data: `mail_panel|${plat}|${encodeURIComponent(ident)}` },
-        { text: "🏠 Inicio", callback_data: "go:inicio" },
+        { text: "â¬…ï¸ Cuenta", callback_data: `mail_panel|${plat}|${encodeURIComponent(ident)}` },
+        { text: "ðŸ  Inicio", callback_data: "go:inicio" },
       ],
     ]
   );
 }
 
 // ===============================
-// NETFLIX CÓDIGOS
+// NETFLIX CÃ“DIGOS
 // ===============================
 async function responderMenuCodigosNetflix(chatId, plataforma = "", acceso = "") {
   const plat = normalizarPlataforma(plataforma);
   const found = await buscarCorreoInventarioPorPlatCorreo(plat, acceso);
-  if (!found) return bot.sendMessage(chatId, "⚠️ Esa cuenta no existe en inventario.");
+  if (!found) return bot.sendMessage(chatId, "âš ï¸ Esa cuenta no existe en inventario.");
 
   const data = found.data || {};
   const ident = getStoredIdent(data) || String(acceso || "");
 
   const txt =
-    `🔑 *CÓDIGOS / DATOS NETFLIX*\n\n` +
-    `📌 *Plataforma:* ${escMD(humanPlatSafe(plat))}\n` +
-    `📧 *Cuenta:* ${escMD(ident)}\n\n` +
-    `Seleccione qué desea ver:`;
+    `ðŸ”‘ *CÃ“DIGOS / DATOS NETFLIX*\n\n` +
+    `ðŸ“Œ *Plataforma:* ${escMD(humanPlatSafe(plat))}\n` +
+    `ðŸ“§ *Cuenta:* ${escMD(ident)}\n\n` +
+    `Seleccione quÃ© desea ver:`;
 
   const kb = [
     [
-      { text: "🔐 Login", callback_data: `nf_code|login|${encodeURIComponent(ident)}` },
-      { text: "🏠 Código hogar", callback_data: `nf_code|hogar|${encodeURIComponent(ident)}` },
+      { text: "ðŸ” Login", callback_data: `nf_code|login|${encodeURIComponent(ident)}` },
+      { text: "ðŸ  CÃ³digo hogar", callback_data: `nf_code|hogar|${encodeURIComponent(ident)}` },
     ],
     [
-      { text: "⏱️ Código temporal", callback_data: `nf_code|temporal|${encodeURIComponent(ident)}` },
-      { text: "📌 PIN / perfil", callback_data: `nf_code|pin|${encodeURIComponent(ident)}` },
+      { text: "â±ï¸ CÃ³digo temporal", callback_data: `nf_code|temporal|${encodeURIComponent(ident)}` },
+      { text: "ðŸ“Œ PIN / perfil", callback_data: `nf_code|pin|${encodeURIComponent(ident)}` },
     ],
     [
-      { text: "⬅️ Cuenta", callback_data: `mail_panel|${plat}|${encodeURIComponent(ident)}` },
-      { text: "🏠 Inicio", callback_data: "go:inicio" },
+      { text: "â¬…ï¸ Cuenta", callback_data: `mail_panel|${plat}|${encodeURIComponent(ident)}` },
+      { text: "ðŸ  Inicio", callback_data: "go:inicio" },
     ],
   ];
 
@@ -623,7 +625,7 @@ async function responderCodigoNetflix(chatId, acceso = "", tipo = "") {
     if (found) break;
   }
 
-  if (!found) return bot.sendMessage(chatId, "⚠️ No encontré esa cuenta de Netflix.");
+  if (!found) return bot.sendMessage(chatId, "âš ï¸ No encontrÃ© esa cuenta de Netflix.");
 
   const data = found.data || {};
   const plat = normalizarPlataforma(data.plataforma || "");
@@ -635,10 +637,10 @@ async function responderCodigoNetflix(chatId, acceso = "", tipo = "") {
       ["Clave", data.clave || "Sin clave"],
     ],
     hogar: [
-      ["Código hogar", data.codigo_hogar || data.hogarCode || data.hogar_code || data.hogar || "No disponible"],
+      ["CÃ³digo hogar", data.codigo_hogar || data.hogarCode || data.hogar_code || data.hogar || "No disponible"],
     ],
     temporal: [
-      ["Código temporal", data.codigo_temporal || data.tempCode || data.temporal || data.codigo || data.code || "No disponible"],
+      ["CÃ³digo temporal", data.codigo_temporal || data.tempCode || data.temporal || data.codigo || data.code || "No disponible"],
     ],
     pin: [
       ["PIN", data.pin || data.pin_hogar || data.pin_temporal || "No disponible"],
@@ -647,9 +649,9 @@ async function responderCodigoNetflix(chatId, acceso = "", tipo = "") {
   };
 
   const rows = maps[tipoNorm] || [["Dato", "No disponible"]];
-  let txt = `🔑 *NETFLIX — ${escMD(tipoNorm.toUpperCase())}*\n\n`;
-  txt += `📧 *Cuenta:* ${escMD(cuenta)}\n`;
-  txt += `📌 *Plataforma:* ${escMD(humanPlatSafe(plat))}\n\n`;
+  let txt = `ðŸ”‘ *NETFLIX â€” ${escMD(tipoNorm.toUpperCase())}*\n\n`;
+  txt += `ðŸ“§ *Cuenta:* ${escMD(cuenta)}\n`;
+  txt += `ðŸ“Œ *Plataforma:* ${escMD(humanPlatSafe(plat))}\n\n`;
 
   rows.forEach(([k, v]) => {
     txt += `*${escMD(String(k))}:* ${escMD(String(v || "No disponible"))}\n`;
@@ -660,8 +662,8 @@ async function responderCodigoNetflix(chatId, acceso = "", tipo = "") {
     txt,
     [
       [
-        { text: "⬅️ Volver códigos", callback_data: `mail_menu_codigos|${plat}|${encodeURIComponent(cuenta)}` },
-        { text: "🏠 Inicio", callback_data: "go:inicio" },
+        { text: "â¬…ï¸ Volver cÃ³digos", callback_data: `mail_menu_codigos|${plat}|${encodeURIComponent(cuenta)}` },
+        { text: "ðŸ  Inicio", callback_data: "go:inicio" },
       ],
     ]
   );
@@ -691,7 +693,7 @@ async function aplicarAutoLleno(chatId, ref, antes = {}, despues = {}) {
     if (beforeDisp > 0 && afterDisp <= 0 && chatId) {
       await bot.sendMessage(
         chatId,
-        `🔴 *CUENTA LLENA*\n\n📌 ${escMD(humanPlatSafe(plat))}\n${getIdentIcon(plat)} ${escMD(ident)}`,
+        `ðŸ”´ *CUENTA LLENA*\n\nðŸ“Œ ${escMD(humanPlatSafe(plat))}\n${getIdentIcon(plat)} ${escMD(ident)}`,
         { parse_mode: "Markdown" }
       );
     }
@@ -699,7 +701,7 @@ async function aplicarAutoLleno(chatId, ref, antes = {}, despues = {}) {
     if (beforeDisp <= 0 && afterDisp > 0 && chatId) {
       await bot.sendMessage(
         chatId,
-        `🟢 *CUENTA CON ESPACIO*\n\n📌 ${escMD(humanPlatSafe(plat))}\n${getIdentIcon(plat)} ${escMD(ident)}\n✅ Disponibles: ${afterDisp}`,
+        `ðŸŸ¢ *CUENTA CON ESPACIO*\n\nðŸ“Œ ${escMD(humanPlatSafe(plat))}\n${getIdentIcon(plat)} ${escMD(ident)}\nâœ… Disponibles: ${afterDisp}`,
         { parse_mode: "Markdown" }
       );
     }
