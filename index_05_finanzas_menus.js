@@ -426,6 +426,7 @@ async function menuAlertas(chatId) {
   return upsertPanel(chatId,
     "🚨 *ALERTAS*\n\nSeleccione una opción:", [
     [{ text: "🔴 Clientes vencidos", callback_data: "alert:vencidos:0" }, { text: "🟠 Vencen hoy", callback_data: "alert:hoy:0" }],
+    [{ text: "⚡ Renovación masiva vencidos", callback_data: "masivo:start" }],
     [{ text: "🟡 Vencen en 3 días", callback_data: "alert:3dias:0" }, { text: "📦 Inventario crítico", callback_data: "alert:inventario:0" }],
     [{ text: "📄 TXT alertas del día", callback_data: "alert:txt:hoy" }, { text: "⬅️ Volver", callback_data: "go:inicio" }],
     [{ text: "⬅️ Volver", callback_data: "go:inicio" }],
