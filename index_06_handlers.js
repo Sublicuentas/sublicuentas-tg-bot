@@ -39,6 +39,7 @@ const {
   panelMsgId,
   bindPanelFromCallback,
   upsertPanel: upsertPanelBase,
+  markPanelForDeletion,
   wizard,
   pending,
   limpiarQuery,
@@ -65,7 +66,7 @@ const {
   dedupeClientes,
   buscarPorTelefonoTodos,
   buscarClienteRobusto,
-  enviarFichaCliente,
+  enviarFichaCliente, enviarFichaClienteVendedor, renderFichaClienteMarkdown,
   enviarListaResultadosClientes,
   reporteClientesTXTGeneral,
   reporteClientesSplitPorVendedorTXT,
@@ -477,7 +478,11 @@ function clearFlowStateKeepPanel(chatId) {
 }
 
 function forceNextPanelAtBottom(chatId) {
-  try { panelMsgId?.delete?.(String(chatId)); } catch (_) {}
+  try {
+    // ✅ FIX: marcar panel para borrado físico en vez de solo limpiar el ID
+    if (typeof markPanelForDeletion === "function") markPanelForDeletion(chatId);
+    else panelMsgId?.delete?.(String(chatId));
+  } catch (_) {}
 }
 
 
@@ -509,6 +514,7 @@ async function sendBottomMainMenu(chatId, userId, fromText = false) {
         [{ text: "📄 TXT renovaciones",      callback_data: "txt:mis" },           { text: "👥 Mis clientes",         callback_data: "vend:clientes" }],
         [{ text: "🧾 TXT mis clientes",      callback_data: "vend:clientes:txt" }, { text: "💰 Mi resumen del mes",   callback_data: "vend:resumen" }],
         [{ text: "🔴 Mis vencidos",          callback_data: "vend:vencidos" },     { text: "💲 Lista de precios",     callback_data: "vend:precios" }],
+        [{ text: "🔍 Buscar cliente",          callback_data: "vend:buscar" }],
       ], "Markdown");
     } else {
       return bot.sendMessage(chatId, "⛔ Acceso denegado");
@@ -1434,14 +1440,12 @@ function renderMasivoVencidos(rows = [], selSet = new Set(), page = 0) {
   const safePage   = Math.max(0, Math.min(page, totalPages - 1));
   const start      = safePage * MASIVO_PAGE_SIZE;
   const slice      = rows.slice(start, start + MASIVO_PAGE_SIZE);
-  let txt = `🔴 *RENOVACIÓN MASIVA — VENCIDOS*\n`;
-  txt += `*${rows.length}* cliente(s) vencidos`;
-  if (totalPages > 1) txt += ` — Página *${safePage + 1}/${totalPages}*`;
-  txt += `\n✅ *${selSet.size}* seleccionado(s)\n\n`;
+  // ✅ Texto compacto para evitar que el mensaje sea demasiado largo
+  let txt = `🔴 *RENOVACIÓN MASIVA*\n`;
+  txt += `${rows.length} vencidos — Pág *${safePage + 1}/${totalPages}* — ✅ *${selSet.size}* sel.\n\n`;
   slice.forEach((x, i) => {
     const sel = selSet.has(x.clientId) ? "✅" : "⬜";
-    txt += `${sel} *${start + i + 1}.* ${escMD(x.nombrePerfil || "Sin nombre")}\n`;
-    txt += `   📦 ${escMD(humanPlatAlertLocal(x.plataforma || ""))} · ⏰ ${x.atrasoDias}d\n\n`;
+    txt += `${sel} ${start + i + 1}. ${escMD((x.nombrePerfil || "Sin nombre").slice(0, 20))} · ${x.atrasoDias}d\n`;
   });
   return { txt, safePage, totalPages, slice };
 }
@@ -2122,16 +2126,19 @@ bot.on("callback_query", async (q) => {
 
     if (data === "go:inicio") {
       resetChatStateFull(chatId);
-      if (adminOk) return menuPrincipal(chatId);
-      return menuVendedor(chatId);
+      // ✅ Siempre usar Centro de Operaciones — nunca el menú viejo
+      return sendBottomMainMenu(chatId, userId);
     }
 
     const vendedorOnlyAllowed = new Set([
       "ren:mis:hoy", "ren:mis:prox3", "txt:mis", "vend:clientes",
-      "vend:clientes:txt", "vend:resumen", "vend:vencidos", "vend:precios", "go:inicio",
+      "vend:clientes:txt", "vend:resumen", "vend:vencidos", "vend:precios",
+      "vend:buscar", "go:inicio",
     ]);
 
-    if (!adminOk && !vendedorOnlyAllowed.has(data)) {
+    // ✅ Los callbacks de ficha de cliente para vendedores se permiten
+    const vendedorDynamicOk = data.startsWith("vend:cli:");
+    if (!adminOk && !vendedorOnlyAllowed.has(data) && !vendedorDynamicOk) {
       return upsertPanel(
         chatId,
         "⛔ Modo vendedor.\n\nUsa:\n• Mis renovaciones hoy\n• Renovaciones en 3 días\n• TXT renovaciones\n• Mis clientes\n• TXT Mis clientes\n• Mi resumen\n",
@@ -2201,8 +2208,17 @@ bot.on("callback_query", async (q) => {
       if (data.startsWith("masivo:ver:")) {
         const parts = data.split(":");
         const cliId = parts[2]; const pg = Number(parts[3] || 0);
-        pending.set(String(chatId), { mode: "masivoBackCtx", page: pg });
-        return enviarFichaCliente(chatId, cliId);
+        const cVer = await getCliente(cliId);
+        if (!cVer) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
+        // ✅ Ficha con botón Volver al masivo en la misma página
+        return upsertPanel(chatId, renderFichaClienteMarkdown(cVer), [
+          [{ text: "✏️ Editar cliente",         callback_data: `cli:edit:menu:${cVer.id}` }],
+          [{ text: "🧩 Editar servicios",       callback_data: `cli:serv:list:${cVer.id}` }],
+          [{ text: "🔄 Gestionar renovaciones", callback_data: `cli:ren:list:${cVer.id}` }],
+          [{ text: "➕ Agregar servicio",       callback_data: `cli:serv:add:${cVer.id}` }],
+          [{ text: "🗑️ Borrar cliente",        callback_data: `cli:del:ask:${cVer.id}` }],
+          [{ text: "⬅️ Volver masivo", callback_data: `masivo:pg:${pg}` }, { text: "🏠 Inicio", callback_data: "go:inicio" }],
+        ]);
       }
       if (data === "masivo:back" || data.startsWith("masivo:back:")) {
         return refrescarPanelMasivo(chatId, Number((data.split(":")[2]) || 0));
@@ -3377,6 +3393,12 @@ bot.on("callback_query", async (q) => {
 
     if (data === "rev:lista") return listarRevendedores(chatId);
 
+    // ✅ Ver ficha de cliente desde búsqueda del vendedor
+    if (data.startsWith("vend:cli:")) {
+      const clientId = data.slice("vend:cli:".length);
+      return enviarFichaClienteVendedor(chatId, clientId, "vend:buscar");
+    }
+
     if (data === "rev:add:start") {
       pending.set(String(chatId), { mode: "revAddNombre" });
       return upsertPanel(chatId,
@@ -3428,6 +3450,15 @@ bot.on("callback_query", async (q) => {
       }]);
       kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
       return upsertPanel(chatId, txt, kb);
+    }
+
+    if (data === "vend:buscar") {
+      if (!vendOk) return bot.sendMessage(chatId, "⚠️ No está vinculado a un vendedor.");
+      pending.set(String(chatId), { mode: "vendBuscarCliente" });
+      return upsertPanel(chatId,
+        "🔍 *BUSCAR CLIENTE*\n\nEscriba el nombre o teléfono del cliente:",
+        [[{ text: "❌ Cancelar", callback_data: "go:inicio" }]]
+      );
     }
 
     if (data === "vend:precios") {
@@ -3930,6 +3961,31 @@ bot.on("message", async (msg) => {
       }
 
       // ✅ AGREGAR REVENDEDOR — paso 1: nombre
+      // ✅ BÚSQUEDA DE CLIENTE PARA VENDEDOR
+      if (p.mode === "vendBuscarCliente") {
+        pending.delete(String(chatId));
+        forceNextPanelAtBottom(chatId);
+        if (!t || t.length < 2) return bot.sendMessage(chatId, "⚠️ Escriba al menos 2 caracteres.");
+        const { buscarClienteRobusto } = require("./index_03_clientes_crm");
+        const resultados = await buscarClienteRobusto(t);
+        if (!resultados.length) {
+          return upsertPanel(chatId,
+            `🔍 Sin resultados para *${escMD(t)}*`,
+            [[{ text: "🔍 Buscar de nuevo", callback_data: "vend:buscar" }, { text: "🏠 Inicio", callback_data: "go:inicio" }]]
+          );
+        }
+        if (resultados.length === 1) {
+          return enviarFichaClienteVendedor(chatId, resultados[0].id, "vend:buscar");
+        }
+        // Varios resultados — mostrar lista
+        const kb = resultados.slice(0, 20).map(r => [{
+          text: `👤 ${(r.nombrePerfil || "Sin nombre").slice(0, 25)} • ${r.telefono || "-"}`,
+          callback_data: `vend:cli:${r.id}`,
+        }]);
+        kb.push([{ text: "🔍 Nueva búsqueda", callback_data: "vend:buscar" }, { text: "🏠 Inicio", callback_data: "go:inicio" }]);
+        return upsertPanel(chatId, `🔍 *RESULTADOS — "${escMD(t)}"*\n\n${resultados.length} cliente(s) encontrado(s):`, kb);
+      }
+
       if (p.mode === "revAddNombre") {
         if (!t) return bot.sendMessage(chatId, "⚠️ Escriba el nombre.");
         pending.set(String(chatId), { mode: "revAddTelegramId", nombre: t.trim() });
