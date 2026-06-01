@@ -614,7 +614,24 @@ async function enviarFichaCliente(chatId, clientId) {
     [{ text: "🔄 Gestionar renovaciones", callback_data: `cli:ren:list:${c.id}` }],
     [{ text: "➕ Agregar servicio", callback_data: `cli:serv:add:${c.id}` }],
     [{ text: "📜 Historial TXT", callback_data: `cli:txt:hist:${c.id}` }, { text: "📄 TXT Cliente", callback_data: `cli:txt:one:${c.id}` }],
+    [{ text: "🗑️ Borrar cliente", callback_data: `cli:del:ask:${c.id}` }],
     [{ text: "🏠 Inicio",                  callback_data: "go:inicio" }],
+  ]);
+}
+
+// ✅ Ficha de cliente abierta desde lista de alertas — el botón Volver regresa a la lista
+async function enviarFichaClienteDesdeAlerta(chatId, clientId, tipo = "vencidos", page = 0) {
+  const c = await getCliente(clientId);
+  if (!c) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
+
+  return upsertPanel(chatId, renderFichaClienteMarkdown(c), [
+    [{ text: "✏️ Editar cliente", callback_data: `cli:edit:menu:${c.id}` }],
+    [{ text: "🧩 Editar servicios", callback_data: `cli:serv:list:${c.id}` }],
+    [{ text: "🔄 Gestionar renovaciones", callback_data: `cli:ren:list:${c.id}` }],
+    [{ text: "➕ Agregar servicio", callback_data: `cli:serv:add:${c.id}` }],
+    [{ text: "📜 Historial TXT", callback_data: `cli:txt:hist:${c.id}` }, { text: "📄 TXT Cliente", callback_data: `cli:txt:one:${c.id}` }],
+    [{ text: "🗑️ Borrar cliente", callback_data: `cli:del:ask:${c.id}` }],
+    [{ text: "⬅️ Volver lista", callback_data: `alert:pg:${tipo}:${page}` }, { text: "🏠 Inicio", callback_data: "go:inicio" }],
   ]);
 }
 
@@ -1240,7 +1257,7 @@ async function enviarMisClientesTXT(chatId, vendedorNombre = "") {
 module.exports = {
   humanPlataforma, serviciosConIndiceOriginal, dedupeClientes, clienteDuplicado,
   getCliente, buscarPorTelefonoTodos, buscarClienteRobusto,
-  enviarFichaCliente, enviarListaResultadosClientes, menuEditarCliente,
+  enviarFichaCliente, enviarFichaClienteDesdeAlerta, enviarListaResultadosClientes, menuEditarCliente,
   menuListaServicios, menuServicio,
   patchServicio, addServicioTx, eliminarServicioTx, removeServicioDeInventario,
   menuListaRenovacion, menuRenovacionServicio, enviarPanelRenovacionesConAcciones,
