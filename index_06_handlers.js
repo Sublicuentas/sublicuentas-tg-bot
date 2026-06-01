@@ -484,8 +484,6 @@ function forceNextPanelAtBottom(chatId) {
 
 async function sendBottomMainMenu(chatId, userId, fromText = false) {
   try {
-    // ✅ FIX: si viene de texto libre, forzar panel nuevo al fondo
-    // para evitar que intente editar un panel viejo y queden 2 paneles
     if (fromText) forceNextPanelAtBottom(chatId);
     clearFlowStateKeepPanel(chatId);
 
@@ -502,6 +500,7 @@ async function sendBottomMainMenu(chatId, userId, fromText = false) {
         ],
         [
           { text: "📊 Análisis", callback_data: "menu:dashboard" },
+          { text: "👤 Revendedores", callback_data: "menu:revendedores" },
         ],
       ], "Markdown");
     } else if (await safeIsVendedorLocal(userId)) {
@@ -509,6 +508,7 @@ async function sendBottomMainMenu(chatId, userId, fromText = false) {
         [{ text: "📅 Mis renovaciones hoy",  callback_data: "ren:mis:hoy" },      { text: "⏳ Próximos 3 días",      callback_data: "ren:mis:prox3" }],
         [{ text: "📄 TXT renovaciones",      callback_data: "txt:mis" },           { text: "👥 Mis clientes",         callback_data: "vend:clientes" }],
         [{ text: "🧾 TXT mis clientes",      callback_data: "vend:clientes:txt" }, { text: "💰 Mi resumen del mes",   callback_data: "vend:resumen" }],
+        [{ text: "🔴 Mis vencidos",          callback_data: "vend:vencidos" },     { text: "💲 Lista de precios",     callback_data: "vend:precios" }],
       ], "Markdown");
     } else {
       return bot.sendMessage(chatId, "⛔ Acceso denegado");
@@ -1083,6 +1083,31 @@ async function listarRevendedores(chatId) {
   return bot.sendMessage(chatId, t, { parse_mode: "Markdown" });
 }
 
+// ✅ GESTIÓN REVENDEDORES POR BOTONES
+async function menuGestionRevendedores(chatId) {
+  const snap = await db.collection("revendedores").get();
+  const all = snap.docs.map(d => ({ id: d.id, ...(d.data() || {}) }));
+  all.sort((a, b) => String(a.nombre || "").localeCompare(String(b.nombre || ""), "es", { sensitivity: "base" }));
+
+  let txt = "👤 *GESTIÓN REVENDEDORES*\n\n";
+  if (!all.length) {
+    txt += "_No hay revendedores registrados._";
+  } else {
+    all.forEach((x, i) => {
+      txt += `*${i + 1}.* ${escMD(x.nombre || x.id)} — ${x.activo ? "✅" : "⛔"}`;
+      txt += x.telegramId ? ` | 🆔 ${escMD(String(x.telegramId))}` : " | sin ID";
+      txt += "\n";
+    });
+  }
+  const kb = [];
+  all.forEach(x => {
+    kb.push([{ text: `🗑️ Eliminar ${(x.nombre || x.id).slice(0, 20)}`, callback_data: `rev:del:ask:${x.id}` }]);
+  });
+  kb.push([{ text: "➕ Agregar revendedor", callback_data: "rev:add:start" }]);
+  kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
+  return upsertPanel(chatId, txt, kb);
+}
+
 function humanPlatAlertLocal(key = "") {
   const k = normalizarPlataforma(key);
   const map = {
@@ -1397,6 +1422,80 @@ async function enviarTxtAlertasDiaLocal(chatId) {
 
 // ===============================
 // ✅ PAGINACIÓN ALERTAS: mostrarPanelAlertaSeguro recibe page y muestra 10 en 10
+
+// ===============================
+// ✅ RENOVACIÓN MASIVA VENCIDOS
+// ===============================
+const MASIVO_PAGE_SIZE = 10;
+function masivoKey(chatId) { return `masivo:${chatId}`; }
+
+function renderMasivoVencidos(rows = [], selSet = new Set(), page = 0) {
+  const totalPages = Math.max(1, Math.ceil(rows.length / MASIVO_PAGE_SIZE));
+  const safePage   = Math.max(0, Math.min(page, totalPages - 1));
+  const start      = safePage * MASIVO_PAGE_SIZE;
+  const slice      = rows.slice(start, start + MASIVO_PAGE_SIZE);
+  let txt = `🔴 *RENOVACIÓN MASIVA — VENCIDOS*\n`;
+  txt += `*${rows.length}* cliente(s) vencidos`;
+  if (totalPages > 1) txt += ` — Página *${safePage + 1}/${totalPages}*`;
+  txt += `\n✅ *${selSet.size}* seleccionado(s)\n\n`;
+  slice.forEach((x, i) => {
+    const sel = selSet.has(x.clientId) ? "✅" : "⬜";
+    txt += `${sel} *${start + i + 1}.* ${escMD(x.nombrePerfil || "Sin nombre")}\n`;
+    txt += `   📦 ${escMD(humanPlatAlertLocal(x.plataforma || ""))} · ⏰ ${x.atrasoDias}d\n\n`;
+  });
+  return { txt, safePage, totalPages, slice };
+}
+
+function buildMasivoKb(rows = [], selSet = new Set(), page = 0) {
+  const { safePage, totalPages, slice } = renderMasivoVencidos(rows, selSet, page);
+  const start = safePage * MASIVO_PAGE_SIZE;
+  const kb = [];
+  slice.forEach((x, i) => {
+    const sel = selSet.has(x.clientId);
+    kb.push([
+      { text: `${sel ? "✅" : "⬜"} ${start + i + 1}. ${(x.nombrePerfil || "Sin nombre").slice(0, 18)}`, callback_data: `masivo:toggle:${x.clientId}:${safePage}` },
+      { text: "👁 Ver", callback_data: `masivo:ver:${x.clientId}:${safePage}` },
+    ]);
+  });
+  const todosEnPag = slice.every(x => selSet.has(x.clientId));
+  kb.push([
+    { text: todosEnPag ? "⬜ Deselec. página" : "✅ Selec. página", callback_data: `masivo:selpage:${safePage}` },
+    { text: "✅ Todos", callback_data: "masivo:selall" },
+  ]);
+  if (selSet.size > 0) kb.push([
+    { text: `⏫ +30d (${selSet.size})`, callback_data: `masivo:ren:30:${safePage}` },
+    { text: `⏫ +31d (${selSet.size})`, callback_data: `masivo:ren:31:${safePage}` },
+  ]);
+  const nav = [];
+  if (safePage > 0)              nav.push({ text: "⬅️ Anterior", callback_data: `masivo:pg:${safePage - 1}` });
+  if (safePage < totalPages - 1) nav.push({ text: "Siguiente ➡️", callback_data: `masivo:pg:${safePage + 1}` });
+  if (nav.length) kb.push(nav);
+  kb.push([{ text: "⬅️ Volver alertas", callback_data: "menu:alertas" }, { text: "🏠 Inicio", callback_data: "go:inicio" }]);
+  return kb;
+}
+
+async function mostrarPanelMasivoVencidos(chatId, page = 0) {
+  const sesion = global[masivoKey(chatId)] || { seleccionados: [] };
+  const selSet = new Set(sesion.seleccionados || []);
+  const rows = await getAlertaClientesLocal("vencidos");
+  if (!rows.length) {
+    global[masivoKey(chatId)] = null;
+    return upsertPanel(chatId, "✅ *Sin clientes vencidos.*", [[{ text: "⬅️ Volver alertas", callback_data: "menu:alertas" }]]);
+  }
+  global[masivoKey(chatId)] = { seleccionados: [...selSet], rows };
+  const { txt } = renderMasivoVencidos(rows, selSet, page);
+  return upsertPanel(chatId, txt, buildMasivoKb(rows, selSet, page));
+}
+
+async function refrescarPanelMasivo(chatId, page = 0) {
+  const sesion = global[masivoKey(chatId)];
+  if (!sesion) return mostrarPanelMasivoVencidos(chatId, page);
+  const rows = sesion.rows || await getAlertaClientesLocal("vencidos");
+  const selSet = new Set(sesion.seleccionados || []);
+  global[masivoKey(chatId)] = { ...sesion, rows };
+  const { txt } = renderMasivoVencidos(rows, selSet, page);
+  return upsertPanel(chatId, txt, buildMasivoKb(rows, selSet, page));
+}
 async function mostrarPanelAlertaSeguro(chatId, tipo = "", page = 0) {
   const safePage = Math.max(0, Number(page || 0));
 
@@ -1874,16 +1973,12 @@ bot.onText(/\/adminlist/i, async (msg) => {
 // ===============================
 bot.onText(/^\/start(?:@\w+)?$/i, async (msg) => {
   if (!hasRuntimeLock()) return;
-  const chatId = msg.chat.id;
-  const userId = msg.from.id;
-  return sendBottomMainMenu(chatId, userId, true);
+  return sendBottomMainMenu(msg.chat.id, msg.from.id, true);
 });
 
 bot.onText(/^\/menu(?:@\w+)?$/i, async (msg) => {
   if (!hasRuntimeLock()) return;
-  const chatId = msg.chat.id;
-  const userId = msg.from.id;
-  return sendBottomMainMenu(chatId, userId, true);
+  return sendBottomMainMenu(msg.chat.id, msg.from.id, true);
 });
 
 // ✅ ATajos DE TEXTO SIN SLASH
@@ -2033,7 +2128,7 @@ bot.on("callback_query", async (q) => {
 
     const vendedorOnlyAllowed = new Set([
       "ren:mis:hoy", "ren:mis:prox3", "txt:mis", "vend:clientes",
-      "vend:clientes:txt", "vend:resumen", "go:inicio",
+      "vend:clientes:txt", "vend:resumen", "vend:vencidos", "vend:precios", "go:inicio",
     ]);
 
     if (!adminOk && !vendedorOnlyAllowed.has(data)) {
@@ -2055,6 +2150,7 @@ bot.on("callback_query", async (q) => {
       if (data === "menu:pagos") return menuPagos(chatId);
       if (data === "menu:alertas") return menuAlertas(chatId);
       if (data === "menu:renovaciones") return menuRenovaciones(chatId, userId);
+      if (data === "menu:revendedores")  return menuGestionRevendedores(chatId);
 
       // ✅ FIX ALERTAS: usar startsWith para tolerar el sufijo :0 de paginación
       // Formato: alert:vencidos:0 o alert:pg:vencidos:2 (navegación)
@@ -2064,6 +2160,101 @@ bot.on("callback_query", async (q) => {
         const tipo = parts[2] || "";
         const pg = Number(parts[3] || 0);
         return mostrarPanelAlertaSeguro(chatId, tipo, pg);
+      }
+
+      // ✅ RENOVACIÓN MASIVA
+      if (data === "masivo:start") {
+        global[masivoKey(chatId)] = null;
+        return mostrarPanelMasivoVencidos(chatId, 0);
+      }
+      if (data.startsWith("masivo:pg:")) {
+        return refrescarPanelMasivo(chatId, Number(data.split(":")[2] || 0));
+      }
+      if (data.startsWith("masivo:toggle:")) {
+        const parts = data.split(":");
+        const sesion = global[masivoKey(chatId)] || {};
+        const selSet = new Set(Array.isArray(sesion.seleccionados) ? sesion.seleccionados : []);
+        selSet.has(parts[2]) ? selSet.delete(parts[2]) : selSet.add(parts[2]);
+        global[masivoKey(chatId)] = { ...sesion, seleccionados: [...selSet] };
+        return refrescarPanelMasivo(chatId, Number(parts[3] || 0));
+      }
+      if (data.startsWith("masivo:selpage:")) {
+        const pg = Number(data.split(":")[2] || 0);
+        const sesion = global[masivoKey(chatId)] || {};
+        const rows = sesion.rows || await getAlertaClientesLocal("vencidos");
+        const slice = rows.slice(pg * MASIVO_PAGE_SIZE, (pg + 1) * MASIVO_PAGE_SIZE);
+        const selSet = new Set(Array.isArray(sesion.seleccionados) ? sesion.seleccionados : []);
+        const todosEnPag = slice.every(x => selSet.has(x.clientId));
+        slice.forEach(x => todosEnPag ? selSet.delete(x.clientId) : selSet.add(x.clientId));
+        global[masivoKey(chatId)] = { ...sesion, rows, seleccionados: [...selSet] };
+        return refrescarPanelMasivo(chatId, pg);
+      }
+      if (data === "masivo:selall") {
+        const sesion = global[masivoKey(chatId)] || {};
+        const rows = sesion.rows || await getAlertaClientesLocal("vencidos");
+        const selSet = new Set(Array.isArray(sesion.seleccionados) ? sesion.seleccionados : []);
+        const todosSelec = rows.every(x => selSet.has(x.clientId));
+        todosSelec ? selSet.clear() : rows.forEach(x => selSet.add(x.clientId));
+        global[masivoKey(chatId)] = { ...sesion, rows, seleccionados: [...selSet] };
+        return refrescarPanelMasivo(chatId, 0);
+      }
+      if (data.startsWith("masivo:ver:")) {
+        const parts = data.split(":");
+        const cliId = parts[2]; const pg = Number(parts[3] || 0);
+        pending.set(String(chatId), { mode: "masivoBackCtx", page: pg });
+        return enviarFichaCliente(chatId, cliId);
+      }
+      if (data === "masivo:back" || data.startsWith("masivo:back:")) {
+        return refrescarPanelMasivo(chatId, Number((data.split(":")[2]) || 0));
+      }
+      if (data.startsWith("masivo:ren:") && !data.startsWith("masivo:ren:ok:")) {
+        const parts = data.split(":");
+        const dias = Number(parts[2] || 30); const pg = Number(parts[3] || 0);
+        const sesion = global[masivoKey(chatId)] || {};
+        const selArr = Array.isArray(sesion.seleccionados) ? sesion.seleccionados : [];
+        if (!selArr.length) return bot.sendMessage(chatId, "⚠️ No hay clientes seleccionados.");
+        const rows = sesion.rows || [];
+        const nombres = selArr.slice(0, 5).map(id => {
+          const r = rows.find(x => x.clientId === id);
+          return r ? escMD(r.nombrePerfil || id) : id;
+        });
+        const extra = selArr.length > 5 ? ` y ${selArr.length - 5} más` : "";
+        return upsertPanel(chatId,
+          `⚡ *CONFIRMAR RENOVACIÓN MASIVA*\n\n📅 *+${dias} días* a *${selArr.length}* cliente(s):\n\n${nombres.map(n => `• ${n}`).join("\n")}${escMD(extra)}\n\n⚠️ Se renuevan todos los servicios de cada cliente.`,
+          [[{ text: `✅ Confirmar +${dias}d`, callback_data: `masivo:ren:ok:${dias}:${pg}` }, { text: "❌ Cancelar", callback_data: `masivo:pg:${pg}` }]]
+        );
+      }
+      if (data.startsWith("masivo:ren:ok:")) {
+        const parts = data.split(":");
+        const dias = Number(parts[3] || 30); const pg = Number(parts[4] || 0);
+        const sesion = global[masivoKey(chatId)] || {};
+        const selArr = Array.isArray(sesion.seleccionados) ? sesion.seleccionados : [];
+        if (!selArr.length) return bot.sendMessage(chatId, "⚠️ No hay clientes seleccionados.");
+        await bot.sendMessage(chatId, `⏳ Renovando ${selArr.length} cliente(s)...`);
+        let ok = 0; let err = 0;
+        const { cacheInvalidatePrefix: cIPM } = require("./index_01_core");
+        for (const cliId of selArr) {
+          try {
+            const ref = db.collection("clientes").doc(String(cliId));
+            const doc = await ref.get();
+            if (!doc.exists) { err++; continue; }
+            const cData = doc.data() || {};
+            const servicios = Array.isArray(cData.servicios) ? cData.servicios : [];
+            if (!servicios.length) { err++; continue; }
+            const nuevos = servicios.map(s => {
+              const base = isFechaDMY(String(s.fechaRenovacion || "")) ? String(s.fechaRenovacion) : hoyDMY();
+              return { ...s, fechaRenovacion: addDaysDMY(base, dias) };
+            });
+            await ref.set({ servicios: nuevos, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+            cIPM(`clientes:doc:${cliId}`); ok++;
+          } catch(e) { logErr(`masivo:ren:ok:${cliId}`, e); err++; }
+        }
+        global[masivoKey(chatId)] = null;
+        await bot.sendMessage(chatId,
+          `✅ *Renovación masiva completada*\n✅ Renovados: *${ok}*${err ? `\n❌ Con error: *${err}*` : ""}\n📅 +${dias} días`,
+          { parse_mode: "Markdown" }
+        );
+        return mostrarPanelMasivoVencidos(chatId, 0);
       }
 
       if (data.startsWith("alert:vencidos") || data.startsWith("alertas:vencidos")) {
@@ -2285,7 +2476,6 @@ bot.on("callback_query", async (q) => {
 
       if (data === "inv:general") return mostrarStockGeneral(chatId);
 
-      // ✅ NUEVA CUENTA — paso 1: pedir correo
       if (data.startsWith("inv:new:plat:")) {
         const plat = normalizarPlataforma(data.split(":")[3]);
         pending.set(String(chatId), { mode: "invNewCorreo", plat });
@@ -2625,6 +2815,35 @@ bot.on("callback_query", async (q) => {
         const clientId = data.split(":")[3];
         pending.set(String(chatId), { mode: "cliEditVendedor", clientId });
         return upsertPanel(chatId, "🧑‍💼 *Editar vendedor*\nEscriba el nuevo vendedor:", [[{ text: "⬅️ Cancelar", callback_data: `cli:edit:menu:${clientId}` }]]);
+      }
+
+      // ✅ BORRAR CLIENTE
+      if (data.startsWith("cli:del:ask:")) {
+        const clientId = data.split(":")[3];
+        const c2 = await getCliente(clientId);
+        const nombre = c2?.nombrePerfil || "este cliente";
+        return upsertPanel(chatId,
+          `🗑️ *BORRAR CLIENTE*\n\n👤 *${escMD(nombre)}*\n\n⚠️ Se eliminará el cliente y todo su historial. No se puede deshacer.\n\n¿Confirma borrar a *${escMD(nombre)}*?`,
+          [
+            [{ text: "✅ Sí, borrar definitivamente", callback_data: `cli:del:ok:${clientId}` }],
+            [{ text: "❌ Cancelar", callback_data: `cli:view:${clientId}` }],
+          ]
+        );
+      }
+
+      if (data.startsWith("cli:del:ok:")) {
+        const clientId = data.split(":")[3];
+        const c2 = await getCliente(clientId);
+        const nombre = c2?.nombrePerfil || "Cliente";
+        const batch = db.batch();
+        batch.delete(db.collection("clientes").doc(clientId));
+        const histSnap = await db.collection("historial_clientes").where("clientId", "==", clientId).get();
+        histSnap.forEach(d => batch.delete(d.ref));
+        await batch.commit();
+        const { cacheInvalidatePrefix: cIPDel } = require("./index_01_core");
+        cIPDel(`clientes:doc:${clientId}`);
+        forceNextPanelAtBottom(chatId);
+        return bot.sendMessage(chatId, `✅ Cliente *${escMD(nombre)}* eliminado.`, { parse_mode: "Markdown" });
       }
 
       if (data.startsWith("cli:serv:list:")) return menuListaServicios(chatId, data.split(":")[3]);
@@ -3090,14 +3309,46 @@ bot.on("callback_query", async (q) => {
       if (!vendOk) return bot.sendMessage(chatId, "⚠️ No está vinculado a un vendedor.");
       const fecha = hoyDMY();
       const list = await obtenerRenovacionesPorFecha(fecha, vend.nombre);
-      return bot.sendMessage(chatId, renovacionesTexto(list, fecha, vend.nombre), { parse_mode: "Markdown" });
+      if (!list.length) return upsertPanel(chatId,
+        `📅 *RENOVACIONES HOY — ${escMD(fecha)}*\n👤 ${escMD(vend.nombre)}\n\n_Sin renovaciones para hoy._`,
+        [[{ text: "🏠 Inicio", callback_data: "go:inicio" }]]
+      );
+      let total = 0; list.forEach(x => { total += Number(x.precio || 0); });
+      let txt = `📅 *RENOVACIONES HOY — ${escMD(fecha)}*\n`;
+      txt += `👤 *${escMD(vend.nombre)}* · 👥 *${list.length}* · 💰 *${escMD(total.toFixed(2))} Lps*\n\n`;
+      list.forEach((x, i) => {
+        txt += `*${i + 1}.* ${iconPlataforma(x.plataforma || "")} ${escMD(x.nombrePerfil || "Sin nombre")}\n`;
+        txt += `   📱 ${escMD(x.telefono || "-")} · 💰 ${escMD(Number(x.precio || 0).toFixed(2))} Lps\n`;
+      });
+      const kb = list.slice(0, 20).map((x, i) => [{
+        text: `${i + 1}) ${(x.nombrePerfil || "Sin nombre").slice(0, 22)} • ${humanPlataforma(x.plataforma || "")}`,
+        callback_data: `cli:view:${x.clientId || x.id || ""}`,
+      }]);
+      kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
+      return upsertPanel(chatId, txt, kb);
     }
 
     if (data === "ren:mis:prox3") {
       if (!vendOk) return bot.sendMessage(chatId, "⚠️ No está vinculado a un vendedor.");
       const fecha = addDaysDMY(hoyDMY(), 3);
       const list = await obtenerRenovacionesPorFecha(fecha, vend.nombre);
-      return bot.sendMessage(chatId, renovacionesTexto(list, fecha, vend.nombre), { parse_mode: "Markdown" });
+      if (!list.length) return upsertPanel(chatId,
+        `⏳ *RENOVACIONES EN 3 DÍAS — ${escMD(fecha)}*\n👤 ${escMD(vend.nombre)}\n\n_Sin renovaciones._`,
+        [[{ text: "🏠 Inicio", callback_data: "go:inicio" }]]
+      );
+      let total = 0; list.forEach(x => { total += Number(x.precio || 0); });
+      let txt = `⏳ *RENOVACIONES EN 3 DÍAS — ${escMD(fecha)}*\n`;
+      txt += `👤 *${escMD(vend.nombre)}* · 👥 *${list.length}* · 💰 *${escMD(total.toFixed(2))} Lps*\n\n`;
+      list.forEach((x, i) => {
+        txt += `*${i + 1}.* ${iconPlataforma(x.plataforma || "")} ${escMD(x.nombrePerfil || "Sin nombre")}\n`;
+        txt += `   📱 ${escMD(x.telefono || "-")} · 💰 ${escMD(Number(x.precio || 0).toFixed(2))} Lps\n`;
+      });
+      const kb = list.slice(0, 20).map((x, i) => [{
+        text: `${i + 1}) ${(x.nombrePerfil || "Sin nombre").slice(0, 22)} • ${humanPlataforma(x.plataforma || "")}`,
+        callback_data: `cli:view:${x.clientId || x.id || ""}`,
+      }]);
+      kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
+      return upsertPanel(chatId, txt, kb);
     }
 
     if (data === "txt:mis") {
@@ -3125,6 +3376,75 @@ bot.on("callback_query", async (q) => {
     }
 
     if (data === "rev:lista") return listarRevendedores(chatId);
+
+    if (data === "rev:add:start") {
+      pending.set(String(chatId), { mode: "revAddNombre" });
+      return upsertPanel(chatId,
+        "➕ *AGREGAR REVENDEDOR*\n\nEscriba el *nombre* del revendedor:",
+        [[{ text: "❌ Cancelar", callback_data: "menu:revendedores" }]]
+      );
+    }
+
+    if (data.startsWith("rev:del:ask:")) {
+      const docId = data.split(":")[3];
+      const snap2 = await db.collection("revendedores").doc(docId).get();
+      const nombre = snap2.exists ? (snap2.data()?.nombre || docId) : docId;
+      return upsertPanel(chatId,
+        `🗑️ *ELIMINAR REVENDEDOR*\n\n👤 *${escMD(nombre)}*\n\n¿Confirma eliminación?`,
+        [
+          [{ text: "✅ Sí, eliminar", callback_data: `rev:del:ok:${docId}` }],
+          [{ text: "❌ Cancelar",     callback_data: "menu:revendedores" }],
+        ]
+      );
+    }
+
+    if (data.startsWith("rev:del:ok:")) {
+      const docId = data.split(":")[3];
+      const snap2 = await db.collection("revendedores").doc(docId).get();
+      const nombre = snap2.exists ? (snap2.data()?.nombre || docId) : docId;
+      await db.collection("revendedores").doc(docId).delete();
+      invalidarCacheRevendedores();
+      forceNextPanelAtBottom(chatId);
+      await bot.sendMessage(chatId, `✅ Revendedor *${escMD(nombre)}* eliminado.`, { parse_mode: "Markdown" });
+      return menuGestionRevendedores(chatId);
+    }
+
+    if (data === "vend:vencidos") {
+      if (!vendOk) return bot.sendMessage(chatId, "⚠️ No está vinculado a un vendedor.");
+      const rows = await getAlertaClientesLocal("vencidos");
+      const misVencidos = rows.filter(x => normVendorText(x.vendedor || "") === normVendorText(vend.nombre || ""));
+      if (!misVencidos.length) return upsertPanel(chatId,
+        `🔴 *MIS VENCIDOS*\n👤 ${escMD(vend.nombre)}\n\n✅ _No tiene clientes vencidos._`,
+        [[{ text: "🏠 Inicio", callback_data: "go:inicio" }]]
+      );
+      let txt = `🔴 *MIS VENCIDOS*\n👤 *${escMD(vend.nombre)}*\n*Total: ${misVencidos.length}*\n\n`;
+      misVencidos.forEach((x, i) => {
+        txt += `*${i + 1}.* ${escMD(x.nombrePerfil || "Sin nombre")}\n`;
+        txt += `   📦 ${escMD(humanPlatAlertLocal(x.plataforma || ""))} · 📅 ${escMD(x.fechaRenovacion || "-")} · ⏰ ${x.atrasoDias}d\n`;
+      });
+      const kb = misVencidos.slice(0, 20).map((x, i) => [{
+        text: `${i + 1}) ${(x.nombrePerfil || "Sin nombre").slice(0, 24)} • ${x.atrasoDias}d`,
+        callback_data: `cli:view:${x.clientId}`,
+      }]);
+      kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
+      return upsertPanel(chatId, txt, kb);
+    }
+
+    if (data === "vend:precios") {
+      const PRECIOS = [
+        { plat: "Netflix",      precio: "L. 270" }, { plat: "Disney+",     precio: "L. 120" },
+        { plat: "HBO Max",      precio: "L. 130" }, { plat: "Prime Video", precio: "L. 90"  },
+        { plat: "Paramount+",   precio: "L. 90"  }, { plat: "Crunchyroll", precio: "L. 90"  },
+        { plat: "Apple TV",     precio: "L. 90"  }, { plat: "Spotify",     precio: "L. 90"  },
+        { plat: "YouTube",      precio: "L. 90"  }, { plat: "Canva",       precio: "L. 90"  },
+        { plat: "ChatGPT",      precio: "L. 160" }, { plat: "Gemini",      precio: "L. 90"  },
+        { plat: "IPTV",         precio: "L. 150" },
+      ];
+      let txt = "💲 *LISTA DE PRECIOS — REVENDEDOR*\n\n";
+      PRECIOS.forEach(p => { txt += `• ${escMD(p.plat)}: *${escMD(p.precio)}*\n`; });
+      txt += "\n_Precios por perfil mensual._";
+      return upsertPanel(chatId, txt, [[{ text: "🏠 Inicio", callback_data: "go:inicio" }]]);
+    }
 
     return bot.sendMessage(chatId, "⚠️ Acción no reconocida.");
   } catch (err) {
@@ -3609,31 +3929,50 @@ bot.on("message", async (msg) => {
         return mostrarPanelCorreo(chatId, p.plataforma, nuevoCorreo);
       }
 
-      // ✅ NUEVA CUENTA — paso 2: recibió correo, pedir clave
+      // ✅ AGREGAR REVENDEDOR — paso 1: nombre
+      if (p.mode === "revAddNombre") {
+        if (!t) return bot.sendMessage(chatId, "⚠️ Escriba el nombre.");
+        pending.set(String(chatId), { mode: "revAddTelegramId", nombre: t.trim() });
+        return upsertPanel(chatId,
+          `➕ *AGREGAR REVENDEDOR*\n👤 *${escMD(t.trim())}*\n\nEscriba el *ID de Telegram* (número):`,
+          [[{ text: "❌ Cancelar", callback_data: "menu:revendedores" }]]
+        );
+      }
+
+      // ✅ AGREGAR REVENDEDOR — paso 2: ID Telegram
+      if (p.mode === "revAddTelegramId") {
+        const telegramId = t.trim().replace(/[^0-9]/g, "");
+        if (!telegramId || telegramId.length < 5) return bot.sendMessage(chatId, "⚠️ ID inválido. Debe ser un número (ej: 123456789).");
+        pending.delete(String(chatId));
+        forceNextPanelAtBottom(chatId);
+        const nombre = p.nombre || "Sin nombre";
+        const docId = nombre.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").trim().replace(/\s+/g, " ");
+        await db.collection("revendedores").doc(docId).set({
+          nombre, nombre_norm: docId, telegramId: String(telegramId), activo: true,
+          autoLastSent: "", createdAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        }, { merge: true });
+        invalidarCacheRevendedores();
+        await bot.sendMessage(chatId, `✅ Revendedor *${escMD(nombre)}* agregado.\n🆔 ${escMD(telegramId)}`, { parse_mode: "Markdown" });
+        return menuGestionRevendedores(chatId);
+      }
+
       if (p.mode === "invNewCorreo") {
         if (!t) return bot.sendMessage(chatId, "⚠️ Escriba el correo.");
         const correoNorm = normalizeIdentByPlatformLocal(p.plat, t);
         const ref = db.collection("inventario").doc(docIdInventarioLocal(correoNorm, p.plat));
         const doc = await ref.get();
-        if (doc.exists) return bot.sendMessage(chatId, `⚠️ Ya existe una cuenta con ese correo para *${p.plat.toUpperCase()}*.`, { parse_mode: "Markdown" });
+        if (doc.exists) return bot.sendMessage(chatId, `⚠️ Ya existe una cuenta con ese correo para *${String(p.plat).toUpperCase()}*.`, { parse_mode: "Markdown" });
         pending.set(String(chatId), { mode: "invNewClave", plat: p.plat, correo: correoNorm });
-        return bot.sendMessage(chatId,
-          `➕ *NUEVA CUENTA*\n📌 ${p.plat.toUpperCase()}\n${identIcon(p.plat)} ${escMD(correoNorm)}\n\nEscriba la *clave*:`,
-          { parse_mode: "Markdown" }
-        );
+        return bot.sendMessage(chatId, `➕ *NUEVA CUENTA*\n📌 ${String(p.plat).toUpperCase()}\n${identIcon(p.plat)} ${escMD(correoNorm)}\n\nEscriba la *clave*:`, { parse_mode: "Markdown" });
       }
 
-      // ✅ NUEVA CUENTA — paso 3: recibió clave, pedir perfiles
       if (p.mode === "invNewClave") {
         if (!t) return bot.sendMessage(chatId, "⚠️ Escriba la clave.");
         pending.set(String(chatId), { mode: "invNewPerfiles", plat: p.plat, correo: p.correo, clave: t });
-        return bot.sendMessage(chatId,
-          `➕ *NUEVA CUENTA*\n📌 ${p.plat.toUpperCase()}\n${identIcon(p.plat)} ${escMD(p.correo)}\n🔑 ${escMD(t)}\n\nEscriba la *cantidad de perfiles* (ej: 4):`,
-          { parse_mode: "Markdown" }
-        );
+        return bot.sendMessage(chatId, `➕ *NUEVA CUENTA*\n📌 ${String(p.plat).toUpperCase()}\n${identIcon(p.plat)} ${escMD(p.correo)}\n🔑 ${escMD(t)}\n\nEscriba la *cantidad de perfiles* (ej: 4):`, { parse_mode: "Markdown" });
       }
 
-      // ✅ NUEVA CUENTA — paso 4: guardar en Firestore
       if (p.mode === "invNewPerfiles") {
         const qty = Number(t);
         if (!Number.isFinite(qty) || qty <= 0 || qty > 20) return bot.sendMessage(chatId, "⚠️ Cantidad inválida. Escriba un número entre 1 y 20.");
@@ -3641,13 +3980,7 @@ bot.on("message", async (msg) => {
         forceNextPanelAtBottom(chatId);
         const correoNorm = normalizeIdentByPlatformLocal(p.plat, p.correo);
         const ref = db.collection("inventario").doc(docIdInventarioLocal(correoNorm, p.plat));
-        await ref.set({
-          plataforma: p.plat, correo: correoNorm, ident: correoNorm,
-          clave: p.clave, capacidad: qty, ocupados: 0,
-          disponibles: qty, disp: qty, estado: "activa", clientes: [],
-          createdAt: admin.firestore.FieldValue.serverTimestamp(),
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        });
+        await ref.set({ plataforma: p.plat, correo: correoNorm, ident: correoNorm, clave: p.clave, capacidad: qty, ocupados: 0, disponibles: qty, disp: qty, estado: "activa", clientes: [], createdAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp() });
         await bot.sendMessage(chatId, `✅ Cuenta *${escMD(correoNorm)}* creada con ${qty} perfiles.`, { parse_mode: "Markdown" });
         pending.set(String(chatId), { mode: "invSubmenuCtx", plat: p.plat, correo: correoNorm });
         return enviarSubmenuInventario(chatId, p.plat, correoNorm);
@@ -3915,38 +4248,19 @@ function getTimePartsNow() {
   };
 }
 
-// Envía lista con botones de renovaciones del día al vendedor
 async function enviarListaRenovacionesVendedor7AM(chatId, vendedorNombre) {
   const fecha = hoyDMY();
   const list  = await obtenerRenovacionesPorFecha(fecha, vendedorNombre);
   if (!list.length) return false;
-
-  let total = 0;
-  list.forEach(x => { total += Number(x.precio || 0); });
-
+  let total = 0; list.forEach(x => { total += Number(x.precio || 0); });
   let txt = `📅 *RENOVACIONES DE HOY — ${escMD(fecha)}*\n`;
-  txt += `👤 *${escMD(vendedorNombre)}*\n`;
-  txt += `👥 *${list.length}* cliente(s) · 💰 *${escMD(total.toFixed(2))} Lps*\n\n`;
+  txt += `👤 *${escMD(vendedorNombre)}* · 👥 *${list.length}* · 💰 *${escMD(total.toFixed(2))} Lps*\n\n`;
   list.forEach((x, i) => {
     txt += `*${i + 1}.* ${iconPlataforma(x.plataforma || "")} ${escMD(x.nombrePerfil || "Sin nombre")}\n`;
     txt += `   📱 ${escMD(x.telefono || "-")} · 💰 ${escMD(Number(x.precio || 0).toFixed(2))} Lps\n`;
   });
-
-  const kb = list.slice(0, 20).map((x, i) => [{
-    text: `${i + 1}) ${(x.nombrePerfil || "Sin nombre").slice(0, 22)} • ${humanPlataforma(x.plataforma || "")}`,
-    callback_data: `cli:view:${x.clientId || x.id || ""}`,
-  }]);
-
-  try {
-    await bot.sendMessage(String(chatId), txt, {
-      parse_mode: "Markdown",
-      reply_markup: { inline_keyboard: kb },
-    });
-    return true;
-  } catch (e) {
-    logErr(`enviarListaRenovacionesVendedor7AM:${vendedorNombre}`, e);
-    return false;
-  }
+  const kb = list.slice(0, 20).map((x, i) => [{ text: `${i + 1}) ${(x.nombrePerfil || "Sin nombre").slice(0, 22)} • ${humanPlataforma(x.plataforma || "")}`, callback_data: `cli:view:${x.clientId || x.id || ""}` }]);
+  try { await bot.sendMessage(String(chatId), txt, { parse_mode: "Markdown", reply_markup: { inline_keyboard: kb } }); return true; } catch(e) { return false; }
 }
 
 async function enviarTxtRenovacionesDiarias7AM() {
@@ -3954,14 +4268,14 @@ async function enviarTxtRenovacionesDiarias7AM() {
   const { dmy } = getTimePartsNow();
   const adminIds = new Set(await getActiveAdminIdsLocal());
 
+  // ✅ Enviar a todos los revendedores (incluyendo admins que sean vendedores)
+  // Solo el TXT filtrado por su propio nombre de vendedor
   const revendedores = await getActiveRevendedoresLocal();
   const revendedoresEnviados = new Set();
 
   for (const rev of revendedores) {
     try {
-      // ✅ Enviar primero la lista interactiva con botones
       await enviarListaRenovacionesVendedor7AM(rev.telegramId, rev.nombre);
-      // ✅ Luego el TXT como siempre
       const sent = await enviarTxtRenovacionesVendedorPro(rev.telegramId, rev.nombre);
       if (!sent) continue;
       revendedoresEnviados.add(normalizeTelegramIdLocal(rev.telegramId));
@@ -3969,7 +4283,7 @@ async function enviarTxtRenovacionesDiarias7AM() {
     } catch (e) { logErr(`AutoTXT:revendedor:${rev.id}`, e); }
   }
 
-  // ✅ Admins que NO son revendedores reciben el TXT GENERAL
+  // ✅ Admins que NO son revendedores reciben el TXT GENERAL (con todos)
   try {
     for (const adminId of adminIds) {
       try {
