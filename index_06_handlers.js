@@ -537,8 +537,10 @@ async function sendBottomMainMenu(chatId, userId, fromText = false) {
       return bot.sendMessage(chatId, "⛔ Acceso denegado");
     }
   } catch (err) {
-    logErr("sendBottomMainMenu", err?.stack || err?.message || err);
-    return bot.sendMessage(chatId, "⚠️ Error interno al abrir el menú.");
+    const errMsg = String(err?.message || err || "desconocido");
+    logErr("sendBottomMainMenu", err?.stack || errMsg);
+    // ✅ Mostrar el error real para diagnóstico
+    return bot.sendMessage(chatId, `⚠️ Error: ${errMsg.slice(0, 200)}`);
   }
 }
 
