@@ -39,7 +39,6 @@ const {
   panelMsgId,
   bindPanelFromCallback,
   upsertPanel: upsertPanelBase,
-  markPanelForDeletion,
   wizard,
   pending,
   limpiarQuery,
@@ -491,13 +490,7 @@ function isMenuDebounced(chatId) {
 }
 
 function forceNextPanelAtBottom(chatId) {
-  // ✅ FIX: quitar botones del panel viejo y marcar para borrar
-  // markPanelForDeletion es async — llamar sin await para no bloquear
-  if (typeof markPanelForDeletion === "function") {
-    markPanelForDeletion(chatId).catch(() => {});
-  } else {
-    try { panelMsgId?.delete?.(String(chatId)); } catch (_) {}
-  }
+  try { panelMsgId?.delete?.(String(chatId)); } catch (_) {}
 }
 
 
@@ -537,10 +530,8 @@ async function sendBottomMainMenu(chatId, userId, fromText = false) {
       return bot.sendMessage(chatId, "⛔ Acceso denegado");
     }
   } catch (err) {
-    const errMsg = String(err?.message || err || "desconocido");
-    logErr("sendBottomMainMenu", err?.stack || errMsg);
-    // ✅ Mostrar el error real para diagnóstico
-    return bot.sendMessage(chatId, `⚠️ Error: ${errMsg.slice(0, 200)}`);
+    logErr("sendBottomMainMenu", err?.stack || err?.message || err);
+    return bot.sendMessage(chatId, "⚠️ Error interno al abrir el menú.");
   }
 }
 
