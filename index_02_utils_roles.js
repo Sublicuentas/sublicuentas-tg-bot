@@ -463,15 +463,24 @@ function normalizeInlineKeyboard(keyboard = []) {
     .filter((row) => row.length);
 }
 
-// ✅ FIX PANEL DUPLICADO: mapa separado para IDs a eliminar físicamente
+// ✅ FIX PANEL DUPLICADO: mapa para IDs de paneles a desactivar
 const panelMsgToDelete = global.__SUBLICUENTAS_PANEL_MSG_DELETE__ =
   global.__SUBLICUENTAS_PANEL_MSG_DELETE__ || new Map();
 
-// Marca el panel actual para ser eliminado en el próximo upsertPanel
-function markPanelForDeletion(chatId) {
+// Quita los botones del panel actual y lo marca para que se mande uno nuevo
+async function markPanelForDeletion(chatId) {
   const chatKey = String(chatId);
   const msgId = panelMsgId.get(chatKey);
-  if (msgId) panelMsgToDelete.set(chatKey, msgId);
+  if (msgId) {
+    // Intentar quitar los botones del panel viejo (no borrar — puede ser muy viejo)
+    try {
+      await bot.editMessageReplyMarkup(
+        { inline_keyboard: [] },
+        { chat_id: chatId, message_id: msgId }
+      );
+    } catch (_) {}
+    panelMsgToDelete.set(chatKey, msgId);
+  }
   panelMsgId.delete(chatKey);
 }
 
@@ -495,14 +504,11 @@ async function upsertPanel(chatId, text, inlineKeyboard = [], parseMode = "Markd
         msg.includes("message can't be edited") ||
         msg.includes("MESSAGE_NOT_MODIFIED");
       if (!ignorable) logErr("upsertPanel.edit", e);
-      // Si no se pudo editar, marcar para borrar y mandar nuevo
-      panelMsgToDelete.set(chatKey, knownMsgId);
       panelMsgId.delete(chatKey);
     }
   }
 
-  // ✅ FIX: Si hay un panel anterior marcado para borrar, eliminarlo físicamente
-  // antes de mandar el nuevo — evita que queden dos paneles en pantalla
+  // Intentar borrar el panel anterior marcado
   const toDelete = panelMsgToDelete.get(chatKey);
   if (toDelete) {
     panelMsgToDelete.delete(chatKey);
@@ -510,9 +516,7 @@ async function upsertPanel(chatId, text, inlineKeyboard = [], parseMode = "Markd
   }
 
   try {
-    // ✅ Asegurar que el texto es una string UTF-8 limpia
-    const cleanText = Buffer.from(String(text || ""), "utf8").toString("utf8");
-    const sent = await bot.sendMessage(chatId, cleanText, {
+    const sent = await bot.sendMessage(chatId, String(text || ""), {
       parse_mode: parseMode, reply_markup,
     });
     if (sent?.message_id) panelMsgId.set(chatKey, sent.message_id);
