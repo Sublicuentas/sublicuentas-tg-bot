@@ -503,9 +503,9 @@ function forceNextPanelAtBottom(chatId) {
 
 
 async function sendBottomMainMenu(chatId, userId, fromText = false) {
+  // ✅ DEBOUNCE: si ya se abrió el menú en los últimos 2s, ignorar silenciosamente
+  if (fromText && isMenuDebounced(chatId)) return null;
   try {
-    // ✅ DEBOUNCE: si ya se abrió el menú en los últimos 2s, ignorar
-    if (fromText && isMenuDebounced(chatId)) return;
     if (fromText) forceNextPanelAtBottom(chatId);
     clearFlowStateKeepPanel(chatId);
 
@@ -2142,7 +2142,6 @@ bot.on("callback_query", async (q) => {
     if (data === "noop") return;
 
     if (data === "go:inicio") {
-      if (isMenuDebounced(chatId)) return;
       resetChatStateFull(chatId);
       return sendBottomMainMenu(chatId, userId);
     }
