@@ -478,11 +478,13 @@ function clearFlowStateKeepPanel(chatId) {
 }
 
 function forceNextPanelAtBottom(chatId) {
-  try {
-    // ✅ FIX: marcar panel para borrado físico en vez de solo limpiar el ID
-    if (typeof markPanelForDeletion === "function") markPanelForDeletion(chatId);
-    else panelMsgId?.delete?.(String(chatId));
-  } catch (_) {}
+  // ✅ FIX: quitar botones del panel viejo y marcar para borrar
+  // markPanelForDeletion es async — llamar sin await para no bloquear
+  if (typeof markPanelForDeletion === "function") {
+    markPanelForDeletion(chatId).catch(() => {});
+  } else {
+    try { panelMsgId?.delete?.(String(chatId)); } catch (_) {}
+  }
 }
 
 
