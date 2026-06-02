@@ -335,9 +335,9 @@ async function enviarInventarioPlataforma(chatId, plataforma = "", page = 0) {
     const llenas = rows.filter((r) => getDisponibles(r, plat) <= 0);
 
     const platLabel = humanPlatSafe(plat).toUpperCase();
-    let txt = `ðŸ“¦ ${escMD(platLabel)}\n\n`;
-    txt += `âœ… Disponibles: ${disponibles.length}\n`;
-    txt += `ðŸ”´ Llenas: ${llenas.length}`;
+    let txt = `${escMD(platLabel)}\n\n`;
+    txt += `Disponibles: ${disponibles.length}\n`;
+    txt += `Llenas: ${llenas.length}`;
 
     return upsertPanel(
       chatId,
