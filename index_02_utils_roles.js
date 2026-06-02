@@ -510,7 +510,9 @@ async function upsertPanel(chatId, text, inlineKeyboard = [], parseMode = "Markd
   }
 
   try {
-    const sent = await bot.sendMessage(chatId, String(text || ""), {
+    // ✅ Asegurar que el texto es una string UTF-8 limpia
+    const cleanText = Buffer.from(String(text || ""), "utf8").toString("utf8");
+    const sent = await bot.sendMessage(chatId, cleanText, {
       parse_mode: parseMode, reply_markup,
     });
     if (sent?.message_id) panelMsgId.set(chatKey, sent.message_id);
