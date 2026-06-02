@@ -477,6 +477,19 @@ function clearFlowStateKeepPanel(chatId) {
   // Modo app: no borrar panelMsgId para que el menú edite la misma pantalla.
 }
 
+// ✅ DEBOUNCE: evita procesar múltiples "menu" rápidos del mismo chat
+const menuDebounce = global.__SUBLICUENTAS_MENU_DEBOUNCE__ =
+  global.__SUBLICUENTAS_MENU_DEBOUNCE__ || new Map();
+
+function isMenuDebounced(chatId) {
+  const key = String(chatId);
+  const last = menuDebounce.get(key) || 0;
+  const now = Date.now();
+  if (now - last < 2000) return true; // bloqueado si < 2 segundos
+  menuDebounce.set(key, now);
+  return false;
+}
+
 function forceNextPanelAtBottom(chatId) {
   // ✅ FIX: quitar botones del panel viejo y marcar para borrar
   // markPanelForDeletion es async — llamar sin await para no bloquear
@@ -491,6 +504,8 @@ function forceNextPanelAtBottom(chatId) {
 
 async function sendBottomMainMenu(chatId, userId, fromText = false) {
   try {
+    // ✅ DEBOUNCE: si ya se abrió el menú en los últimos 2s, ignorar
+    if (fromText && isMenuDebounced(chatId)) return;
     if (fromText) forceNextPanelAtBottom(chatId);
     clearFlowStateKeepPanel(chatId);
 
@@ -2127,8 +2142,8 @@ bot.on("callback_query", async (q) => {
     if (data === "noop") return;
 
     if (data === "go:inicio") {
+      if (isMenuDebounced(chatId)) return;
       resetChatStateFull(chatId);
-      // ✅ Siempre usar Centro de Operaciones — nunca el menú viejo
       return sendBottomMainMenu(chatId, userId);
     }
 
