@@ -463,25 +463,8 @@ function normalizeInlineKeyboard(keyboard = []) {
     .filter((row) => row.length);
 }
 
-// ✅ FIX PANEL DUPLICADO: mapa para IDs de paneles a desactivar
-const panelMsgToDelete = global.__SUBLICUENTAS_PANEL_MSG_DELETE__ =
-  global.__SUBLICUENTAS_PANEL_MSG_DELETE__ || new Map();
-
-// Quita los botones del panel actual y lo marca para que se mande uno nuevo
-async function markPanelForDeletion(chatId) {
-  const chatKey = String(chatId);
-  const msgId = panelMsgId.get(chatKey);
-  if (msgId) {
-    // Intentar quitar los botones del panel viejo (no borrar — puede ser muy viejo)
-    try {
-      await bot.editMessageReplyMarkup(
-        { inline_keyboard: [] },
-        { chat_id: chatId, message_id: msgId }
-      );
-    } catch (_) {}
-    panelMsgToDelete.set(chatKey, msgId);
-  }
-  panelMsgId.delete(chatKey);
+function markPanelForDeletion(chatId) {
+  panelMsgId.delete(String(chatId));
 }
 
 async function upsertPanel(chatId, text, inlineKeyboard = [], parseMode = "Markdown") {
@@ -506,13 +489,6 @@ async function upsertPanel(chatId, text, inlineKeyboard = [], parseMode = "Markd
       if (!ignorable) logErr("upsertPanel.edit", e);
       panelMsgId.delete(chatKey);
     }
-  }
-
-  // Intentar borrar el panel anterior marcado
-  const toDelete = panelMsgToDelete.get(chatKey);
-  if (toDelete) {
-    panelMsgToDelete.delete(chatKey);
-    try { await bot.deleteMessage(chatId, toDelete); } catch (_) {}
   }
 
   try {
