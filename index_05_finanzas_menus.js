@@ -60,17 +60,8 @@ function categoryOfPlat(key = "") {
   return "video";
 }
 function inventoryLabel(key = "") {
-  const k = String(key || "").toLowerCase().trim();
-  const labels = {
-    netflix:"📺 Netflix", vipnetflix:"🔥 Netflix VIP", disneyp:"🏰 Disney Premium",
-    disneys:"🎬 Disney Standard", hbomax:"🎞️ HBO Max", primevideo:"🎥 Prime Video",
-    paramount:"💿 Paramount+", crunchyroll:"🍥 Crunchyroll", vix:"📱 Vix",
-    appletv:"🍎 Apple TV", universal:"🌍 Universal+", spotify:"🎵 Spotify",
-    youtube:"▶️ YouTube", deezer:"🎧 Deezer", oleadatv1:"🌊 Oleada 1",
-    oleadatv3:"🌊 Oleada 3", iptv1:"📡 IPTV 1", iptv3:"📡 IPTV 3", iptv4:"📡 IPTV 4",
-    canva:"🎨 Canva", gemini:"✨ Gemini", chatgpt:"🤖 ChatGPT",
-  };
-  return labels[k] || humanPlatSafe(k);
+  // ✅ Sin emojis en los botones — evita encoding issues con node-telegram-bot-api
+  return humanPlatSafe(key);
 }
 function kbFromItems(items = []) {
   const buttons = items.map((key) => ({ text: inventoryLabel(key), callback_data: `inv:${String(key)}:0` }));
@@ -389,10 +380,10 @@ async function menuInventario(chatId) {
   ]);
 }
 
-async function menuInventarioVideo(chatId) { const items = PLATFORM_KEYS.filter((x) => categoryOfPlat(x) === "video"); const kb = kbFromItems(items); kb.push([{ text: "⬅️ Volver Inventario", callback_data: "menu:inventario" }, { text: "🏠 Inicio", callback_data: "go:inicio" }]); return upsertPanel(chatId, "🎬 *INVENTARIO VIDEO*\n\nSeleccione plataforma:", kb); }
-async function menuInventarioMusica(chatId) { const items = PLATFORM_KEYS.filter((x) => categoryOfPlat(x) === "musica"); const kb = kbFromItems(items); kb.push([{ text: "⬅️ Volver Inventario", callback_data: "menu:inventario" }, { text: "🏠 Inicio", callback_data: "go:inicio" }]); return upsertPanel(chatId, "🎵 *INVENTARIO MÚSICA*\n\nSeleccione plataforma:", kb); }
-async function menuInventarioIptv(chatId) { const items = PLATFORM_KEYS.filter((x) => categoryOfPlat(x) === "iptv"); const kb = kbFromItems(items); kb.push([{ text: "⬅️ Volver Inventario", callback_data: "menu:inventario" }, { text: "🏠 Inicio", callback_data: "go:inicio" }]); return upsertPanel(chatId, "📡 *INVENTARIO IPTV*\n\nSeleccione plataforma:", kb); }
-async function menuInventarioDisenoIA(chatId) { const items = PLATFORM_KEYS.filter((x) => categoryOfPlat(x) === "diseno_ia"); const kb = kbFromItems(items); kb.push([{ text: "⬅️ Volver Inventario", callback_data: "menu:inventario" }, { text: "🏠 Inicio", callback_data: "go:inicio" }]); return upsertPanel(chatId, "🎨 *INVENTARIO DISEÑO E IA*\n\nSeleccione plataforma:", kb); }
+async function menuInventarioVideo(chatId) { const items = PLATFORM_KEYS.filter((x) => categoryOfPlat(x) === "video"); const kb = kbFromItems(items); kb.push([{ text: "⬅️ Volver Inventario", callback_data: "menu:inventario" }, { text: "🏠 Inicio", callback_data: "go:inicio" }]); return upsertPanel(chatId, "VIDEO\n\nSeleccione plataforma:", kb); }
+async function menuInventarioMusica(chatId) { const items = PLATFORM_KEYS.filter((x) => categoryOfPlat(x) === "musica"); const kb = kbFromItems(items); kb.push([{ text: "⬅️ Volver Inventario", callback_data: "menu:inventario" }, { text: "🏠 Inicio", callback_data: "go:inicio" }]); return upsertPanel(chatId, "MUSICA\n\nSeleccione plataforma:", kb); }
+async function menuInventarioIptv(chatId) { const items = PLATFORM_KEYS.filter((x) => categoryOfPlat(x) === "iptv"); const kb = kbFromItems(items); kb.push([{ text: "⬅️ Volver Inventario", callback_data: "menu:inventario" }, { text: "🏠 Inicio", callback_data: "go:inicio" }]); return upsertPanel(chatId, "IPTV\n\nSeleccione plataforma:", kb); }
+async function menuInventarioDisenoIA(chatId) { const items = PLATFORM_KEYS.filter((x) => categoryOfPlat(x) === "diseno_ia"); const kb = kbFromItems(items); kb.push([{ text: "⬅️ Volver Inventario", callback_data: "menu:inventario" }, { text: "🏠 Inicio", callback_data: "go:inicio" }]); return upsertPanel(chatId, "DISENO E IA\n\nSeleccione plataforma:", kb); }
 
 async function menuClientes(chatId) {
   return upsertPanel(chatId,
