@@ -420,7 +420,7 @@ async function menuAlertas(chatId) {
   return upsertPanel(chatId,
     "🚨 *ALERTAS*\n\nSeleccione una opción:", [
     [{ text: "🔴 Clientes vencidos", callback_data: "alert:vencidos:0" }, { text: "🟠 Vencen hoy", callback_data: "alert:hoy:0" }],
-    [{ text: "⚡ Renovación masiva vencidos", callback_data: "masivo:start" }],
+    [{ text: "⚡ Renov. masiva vencidos", callback_data: "masivo:start" }, { text: "⚡ Renov. masiva hoy", callback_data: "masivo:start:hoy" }],
     [{ text: "🟡 Vencen en 3 días", callback_data: "alert:3dias:0" }, { text: "📦 Inventario crítico", callback_data: "alert:inventario:0" }],
     [{ text: "📄 TXT alertas del día", callback_data: "alert:txt:hoy" }, { text: "⬅️ Volver", callback_data: "go:inicio" }],
     [{ text: "⬅️ Volver", callback_data: "go:inicio" }],
@@ -646,18 +646,18 @@ async function generarDashboard(chatId) {
     const labelActual = monthLabelFromKeyLocal(mesActualKey);
     const labelAnterior = monthLabelFromKeyLocal(mesAnteriorKey);
     const fmt = (n) => `${Number(n || 0).toFixed(2)} Lps`;
-    let txt = `📊 *DASHBOARD EJECUTIVO*\n📅 ${escMD(hoy)}\n\n`;
+    let txt = ` *DASHBOARD EJECUTIVO*\n📅 ${escMD(hoy)}\n\n`;
     txt += `💰 *FINANZAS — ${escMD(labelActual)}*\n`;
     txt += `Ingresos: ${escMD(fmt(resMesActual.ingresos))}\n`;
     txt += `Egresos: ${escMD(fmt(resMesActual.egresos))}\n`;
     txt += `Utilidad: ${escMD(fmt(resMesActual.utilidad))}\n`;
     txt += `vs ${escMD(labelAnterior)}: ${varEmoji} ${varPct !== null ? `${varPct}%` : "Sin datos anteriores"}\n\n`;
-    txt += `👥 *CLIENTES*\n`;
+    txt += `Perfiles: *CLIENTES*\n`;
     txt += `Total: ${escMD(String(totalClientes))}\n`;
     txt += `Renovaciones próximos 7 días: ${escMD(String(renovacionesSemana))}\n\n`;
     if (topVendedor) { txt += `🏆 *TOP VENDEDOR*\n`; txt += `${escMD(topVendedor[0])}: ${escMD(fmt(topVendedor[1]))} en cartera\n\n`; }
     if (Array.isArray(resMesActual.topOrdenado) && resMesActual.topOrdenado.length) {
-      txt += `📦 *TOP PLATAFORMAS (${escMD(labelActual)})*\n`;
+      txt += ` *TOP PLATAFORMAS (${escMD(labelActual)})*\n`;
       resMesActual.topOrdenado.slice(0, 5).forEach((x, i) => { txt += `${i + 1}. ${escMD(humanPlatSafe(x.plataforma))} — ${escMD(fmt(x.total))}\n`; });
     }
     return upsertPanel(chatId, txt, [
@@ -791,7 +791,7 @@ async function ejecutarBackupDominical() {
       if (data.activo === false) continue;
       const tg = String(data.telegramId || data.userId || d.id || "").trim();
       if (!tg) continue;
-      try { await bot.sendMessage(tg, resumenMsg, { parse_mode: "Markdown" }); await bot.sendDocument(tg, tempPath, { caption: `📊 Backup ${hoy}` }); enviados++; } catch (e) { logErr(`backup:admin:${tg}`, e); }
+      try { await bot.sendMessage(tg, resumenMsg, { parse_mode: "Markdown" }); await bot.sendDocument(tg, tempPath, { caption: ` Backup ${hoy}` }); enviados++; } catch (e) { logErr(`backup:admin:${tg}`, e); }
     }
     try { fs.unlinkSync(tempPath); } catch (_) {}
     console.log(`✅ Backup dominical enviado a ${enviados} admin(s) — ${hoy}`);
