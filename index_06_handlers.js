@@ -1445,23 +1445,27 @@ async function enviarTxtAlertasDiaLocal(chatId) {
 const MASIVO_PAGE_SIZE = 10;
 function masivoKey(chatId) { return `masivo:${chatId}`; }
 
-function renderMasivoVencidos(rows = [], selSet = new Set(), page = 0) {
+function renderMasivoPanel(rows = [], selSet = new Set(), page = 0, tipo = "vencidos") {
   const totalPages = Math.max(1, Math.ceil(rows.length / MASIVO_PAGE_SIZE));
   const safePage   = Math.max(0, Math.min(page, totalPages - 1));
   const start      = safePage * MASIVO_PAGE_SIZE;
   const slice      = rows.slice(start, start + MASIVO_PAGE_SIZE);
-  // ✅ Texto compacto para evitar que el mensaje sea demasiado largo
-  let txt = `🔴 *RENOVACIÓN MASIVA*\n`;
-  txt += `${rows.length} vencidos — Pág *${safePage + 1}/${totalPages}* — ✅ *${selSet.size}* sel.\n\n`;
+  const titulo     = tipo === "hoy" ? "RENOV. MASIVA — HOY" : "RENOVACION MASIVA";
+  const labelRows  = tipo === "hoy" ? "vencen hoy" : "vencidos";
+  let txt = `*${titulo}*\n`;
+  txt += `${rows.length} ${labelRows} — Pag *${safePage + 1}/${totalPages}* — *${selSet.size}* sel.\n\n`;
   slice.forEach((x, i) => {
     const sel = selSet.has(x.clientId) ? "✅" : "⬜";
-    txt += `${sel} ${start + i + 1}. ${escMD((x.nombrePerfil || "Sin nombre").slice(0, 20))} · ${x.atrasoDias}d\n`;
+    const dias = tipo === "hoy" ? "" : ` · ${x.atrasoDias}d`;
+    txt += `${sel} ${start + i + 1}. ${escMD((x.nombrePerfil || "Sin nombre").slice(0, 20))}${dias}\n`;
   });
   return { txt, safePage, totalPages, slice };
 }
+// alias para compatibilidad
+const renderMasivoVencidos = renderMasivoPanel;
 
-function buildMasivoKb(rows = [], selSet = new Set(), page = 0) {
-  const { safePage, totalPages, slice } = renderMasivoVencidos(rows, selSet, page);
+function buildMasivoKb(rows = [], selSet = new Set(), page = 0, tipo = "vencidos") {
+  const { safePage, totalPages, slice } = renderMasivoPanel(rows, selSet, page, tipo);
   const start = safePage * MASIVO_PAGE_SIZE;
   const kb = [];
   slice.forEach((x, i) => {
@@ -1477,38 +1481,40 @@ function buildMasivoKb(rows = [], selSet = new Set(), page = 0) {
     { text: "✅ Todos", callback_data: "masivo:selall" },
   ]);
   if (selSet.size > 0) kb.push([
-    { text: `⏫ +30d (${selSet.size})`, callback_data: `masivo:ren:30:${safePage}` },
-    { text: `⏫ +31d (${selSet.size})`, callback_data: `masivo:ren:31:${safePage}` },
+    { text: `+30d (${selSet.size})`, callback_data: `masivo:ren:30:${safePage}` },
+    { text: `+31d (${selSet.size})`, callback_data: `masivo:ren:31:${safePage}` },
   ]);
   const nav = [];
-  if (safePage > 0)              nav.push({ text: "⬅️ Anterior", callback_data: `masivo:pg:${safePage - 1}` });
-  if (safePage < totalPages - 1) nav.push({ text: "Siguiente ➡️", callback_data: `masivo:pg:${safePage + 1}` });
+  if (safePage > 0)              nav.push({ text: "< Anterior", callback_data: `masivo:pg:${safePage - 1}` });
+  if (safePage < totalPages - 1) nav.push({ text: "Siguiente >", callback_data: `masivo:pg:${safePage + 1}` });
   if (nav.length) kb.push(nav);
-  kb.push([{ text: "⬅️ Volver alertas", callback_data: "menu:alertas" }, { text: "🏠 Inicio", callback_data: "go:inicio" }]);
+  kb.push([{ text: "< Volver alertas", callback_data: "menu:alertas" }, { text: "Inicio", callback_data: "go:inicio" }]);
   return kb;
 }
 
-async function mostrarPanelMasivoVencidos(chatId, page = 0) {
+async function mostrarPanelMasivoVencidos(chatId, page = 0, tipo = "vencidos") {
   const sesion = global[masivoKey(chatId)] || { seleccionados: [] };
   const selSet = new Set(sesion.seleccionados || []);
-  const rows = await getAlertaClientesLocal("vencidos");
+  const rows = await getAlertaClientesLocal(tipo);
+  const labelVacio = tipo === "hoy" ? "Sin clientes para hoy." : "Sin clientes vencidos.";
   if (!rows.length) {
     global[masivoKey(chatId)] = null;
-    return upsertPanel(chatId, "✅ *Sin clientes vencidos.*", [[{ text: "⬅️ Volver alertas", callback_data: "menu:alertas" }]]);
+    return upsertPanel(chatId, labelVacio, [[{ text: "< Volver alertas", callback_data: "menu:alertas" }]]);
   }
-  global[masivoKey(chatId)] = { seleccionados: [...selSet], rows };
-  const { txt } = renderMasivoVencidos(rows, selSet, page);
-  return upsertPanel(chatId, txt, buildMasivoKb(rows, selSet, page));
+  global[masivoKey(chatId)] = { seleccionados: [...selSet], rows, tipo };
+  const { txt } = renderMasivoPanel(rows, selSet, page, tipo);
+  return upsertPanel(chatId, txt, buildMasivoKb(rows, selSet, page, tipo));
 }
 
 async function refrescarPanelMasivo(chatId, page = 0) {
   const sesion = global[masivoKey(chatId)];
   if (!sesion) return mostrarPanelMasivoVencidos(chatId, page);
-  const rows = sesion.rows || await getAlertaClientesLocal("vencidos");
+  const tipo = sesion.tipo || "vencidos";
+  const rows = sesion.rows || await getAlertaClientesLocal(tipo);
   const selSet = new Set(sesion.seleccionados || []);
   global[masivoKey(chatId)] = { ...sesion, rows };
-  const { txt } = renderMasivoVencidos(rows, selSet, page);
-  return upsertPanel(chatId, txt, buildMasivoKb(rows, selSet, page));
+  const { txt } = renderMasivoPanel(rows, selSet, page, tipo);
+  return upsertPanel(chatId, txt, buildMasivoKb(rows, selSet, page, tipo));
 }
 async function mostrarPanelAlertaSeguro(chatId, tipo = "", page = 0) {
   const safePage = Math.max(0, Number(page || 0));
@@ -2181,7 +2187,11 @@ bot.on("callback_query", async (q) => {
       // ✅ RENOVACIÓN MASIVA
       if (data === "masivo:start") {
         global[masivoKey(chatId)] = null;
-        return mostrarPanelMasivoVencidos(chatId, 0);
+        return mostrarPanelMasivoVencidos(chatId, 0, "vencidos");
+      }
+      if (data === "masivo:start:hoy") {
+        global[masivoKey(chatId)] = null;
+        return mostrarPanelMasivoVencidos(chatId, 0, "hoy");
       }
       if (data.startsWith("masivo:pg:")) {
         return refrescarPanelMasivo(chatId, Number(data.split(":")[2] || 0));
