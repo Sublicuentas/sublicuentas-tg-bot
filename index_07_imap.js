@@ -221,69 +221,107 @@ async function scrapearCodigoWeb(url) {
 }
 
 // ===============================
-// LECTURA IMAP — sin SEARCH para compatibilidad con cPanel
+// LECTURA IMAP — modo robusto para cPanel/Dovecot
 // ===============================
-async function buscarEmails(correo, limite=15) {
-  const correoBuscar = String(correo||"").trim().toLowerCase();
+async function fetchOneSafe(client, seq) {
+  // Algunos servidores cPanel fallan con FETCH por rango largo (ej. 41:*).
+  // Por eso pedimos 1 correo a la vez y si uno falla, seguimos con el siguiente.
+  try {
+    return await client.fetchOne(String(seq), { source: true }, { uid: false });
+  } catch (e1) {
+    try {
+      let out = null;
+      for await (const msg of client.fetch(`${seq}:${seq}`, { source: true }, { uid: false })) {
+        out = msg;
+        break;
+      }
+      return out;
+    } catch (e2) {
+      console.error(`[IMAP fetch seq ${seq}]`, e2?.message || e1?.message || e2 || e1);
+      return null;
+    }
+  }
+}
+
+async function buscarEmails(correo, limite = 15) {
+  const correoBuscar = String(correo || "").trim().toLowerCase();
+  if (!correoBuscar) return [];
 
   const client = new ImapFlow({
-    host:IMAP_HOST, port:IMAP_PORT, secure:true,
-    auth:{user:IMAP_USER, pass:IMAP_PASS},
-    logger:false, tls:{rejectUnauthorized:false},
+    host: IMAP_HOST,
+    port: IMAP_PORT,
+    secure: true,
+    auth: { user: IMAP_USER, pass: IMAP_PASS },
+    logger: false,
+    tls: { rejectUnauthorized: false },
+    connectionTimeout: 20000,
+    greetingTimeout: 20000,
+    socketTimeout: 60000,
   });
 
-  await client.connect();
   const emails = [];
+  await client.connect();
 
   try {
     const lock = await client.getMailboxLock("INBOX");
     try {
-      // ✅ Usar client.mailbox.exists después del lock — no necesita STATUS
-      const total = client.mailbox?.exists || 0;
+      const total = Number(client.mailbox?.exists || 0);
       if (!total) return [];
 
-      const desde = Math.max(1, total - 59);
-      const rango = `${desde}:*`;   // * = hasta el último mensaje
-
+      // Revisa los últimos 120 correos, desde el más nuevo al más viejo.
+      const desde = Math.max(1, total - 119);
       const fechaLimite = new Date();
-      fechaLimite.setDate(fechaLimite.getDate() - 2);
+      fechaLimite.setDate(fechaLimite.getDate() - 5);
 
-      for await (const msg of client.fetch(rango, { source: true })) {
+      for (let seq = total; seq >= desde; seq--) {
+        const msg = await fetchOneSafe(client, seq);
+        if (!msg?.source) continue;
+
         try {
           const p = await simpleParser(msg.source);
-
           const fecha = p.date ? new Date(p.date) : new Date(0);
           if (fecha < fechaLimite) continue;
 
-          const bodyText = String(p.text  || "").toLowerCase();
-          const bodyHtml = String(p.html  || "").toLowerCase();
-          const subj     = String(p.subject || "").toLowerCase();
-          const toAddr   = (p.to?.text   || "").toLowerCase();
-          const allText  = bodyText + " " + bodyHtml + " " + subj + " " + toAddr;
+          const headerText = [
+            p.headers?.get?.("to"),
+            p.headers?.get?.("delivered-to"),
+            p.headers?.get?.("x-original-to"),
+            p.headers?.get?.("envelope-to"),
+            p.headers?.get?.("received"),
+          ].map(x => String(x || "")).join(" ").toLowerCase();
+
+          const bodyText = String(p.text || "").toLowerCase();
+          const bodyHtml = String(p.html || "").toLowerCase();
+          const subj = String(p.subject || "").toLowerCase();
+          const toAddr = String(p.to?.text || "").toLowerCase();
+          const fromAddr = String(p.from?.text || "").toLowerCase();
+          const allText = `${bodyText} ${bodyHtml} ${subj} ${toAddr} ${fromAddr} ${headerText}`;
 
           if (!allText.includes(correoBuscar)) continue;
 
           emails.push({
-            from:    String(p.from?.text || ""),
-            subject: String(p.subject   || ""),
-            text:    String(p.text      || ""),
-            html:    String(p.html      || ""),
-            date:    p.date || new Date(),
+            from: String(p.from?.text || ""),
+            subject: String(p.subject || ""),
+            text: String(p.text || ""),
+            html: String(p.html || ""),
+            date: p.date || new Date(),
           });
 
           if (emails.length >= limite) break;
-        } catch(_) {}
+        } catch (parseErr) {
+          console.error(`[IMAP parse seq ${seq}]`, parseErr?.message || parseErr);
+        }
       }
-    } finally { lock.release(); }
-  } catch(err) {
-    // Loguear el error real para diagnóstico en Render
-    console.error("[IMAP buscarEmails] Error:", err?.message || err);
+    } finally {
+      lock.release();
+    }
+  } catch (err) {
+    console.error("[IMAP buscarEmails] Error real:", err?.message || err);
     throw err;
   } finally {
-    try { await client.logout(); } catch(_) {}
+    try { await client.logout(); } catch (_) {}
   }
 
-  // Más reciente primero
   return emails.sort((a, b) => new Date(b.date) - new Date(a.date));
 }
 
