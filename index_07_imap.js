@@ -238,15 +238,12 @@ async function buscarEmails(correo, limite=15) {
   try {
     const lock = await client.getMailboxLock("INBOX");
     try {
-      // ✅ NO usar SEARCH — cPanel a veces no lo soporta
-      // En cambio: obtener el total de mensajes y leer los últimos N directamente
-      const status = await client.status("INBOX", { messages: true });
-      const total  = status?.messages || 0;
+      // ✅ Usar client.mailbox.exists después del lock — no necesita STATUS
+      const total = client.mailbox?.exists || 0;
       if (!total) return [];
 
-      // Leer los últimos 60 mensajes (más que suficiente para 2 días)
-      const desde  = Math.max(1, total - 59);
-      const rango  = `${desde}:${total}`;
+      const desde = Math.max(1, total - 59);
+      const rango = `${desde}:*`;   // * = hasta el último mensaje
 
       const fechaLimite = new Date();
       fechaLimite.setDate(fechaLimite.getDate() - 2);
@@ -255,24 +252,22 @@ async function buscarEmails(correo, limite=15) {
         try {
           const p = await simpleParser(msg.source);
 
-          // Filtrar por fecha (últimos 2 días)
           const fecha = p.date ? new Date(p.date) : new Date(0);
           if (fecha < fechaLimite) continue;
 
-          const bodyText = String(p.text||"").toLowerCase();
-          const bodyHtml = String(p.html||"").toLowerCase();
-          const subj     = String(p.subject||"").toLowerCase();
-          const toAddr   = (p.to?.text||"").toLowerCase();
+          const bodyText = String(p.text  || "").toLowerCase();
+          const bodyHtml = String(p.html  || "").toLowerCase();
+          const subj     = String(p.subject || "").toLowerCase();
+          const toAddr   = (p.to?.text   || "").toLowerCase();
           const allText  = bodyText + " " + bodyHtml + " " + subj + " " + toAddr;
 
-          // Filtrar por correo del cliente
           if (!allText.includes(correoBuscar)) continue;
 
           emails.push({
-            from:    String(p.from?.text||""),
-            subject: String(p.subject||""),
-            text:    String(p.text||""),
-            html:    String(p.html||""),
+            from:    String(p.from?.text || ""),
+            subject: String(p.subject   || ""),
+            text:    String(p.text      || ""),
+            html:    String(p.html      || ""),
             date:    p.date || new Date(),
           });
 
@@ -280,7 +275,13 @@ async function buscarEmails(correo, limite=15) {
         } catch(_) {}
       }
     } finally { lock.release(); }
-  } finally { await client.logout(); }
+  } catch(err) {
+    // Loguear el error real para diagnóstico en Render
+    console.error("[IMAP buscarEmails] Error:", err?.message || err);
+    throw err;
+  } finally {
+    try { await client.logout(); } catch(_) {}
+  }
 
   // Más reciente primero
   return emails.sort((a, b) => new Date(b.date) - new Date(a.date));
