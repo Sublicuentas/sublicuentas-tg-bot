@@ -3565,7 +3565,10 @@ bot.on("message", async (msg) => {
         "addvendedor", "delvendedor", "id", "miid", "vincular_vendedor",
         "sincronizar_todo", "addcorreo", "finanzas", "resumen_fecha", "bancos_mes",
         "top_plataformas_mes", "cierre_caja", "cierre_caja_rango", "excel_finanzas",
-        "editar_movimiento", ...PLATFORM_KEYS,
+        "editar_movimiento",
+        // ✅ Comandos IMAP — no pasar a resolverBusquedaAdmin
+        "code", "link", "hogar", "prime", "inbox",
+        ...PLATFORM_KEYS,
       ]);
 
       if (adminOk && !comandosReservados.has(first)) {
