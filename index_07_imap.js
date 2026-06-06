@@ -221,7 +221,7 @@ async function scrapearCodigoWeb(url) {
 }
 
 // ===============================
-// LECTURA IMAP
+// LECTURA IMAP — sin SEARCH para compatibilidad con cPanel
 // ===============================
 async function buscarEmails(correo, limite=15) {
   const correoBuscar = String(correo||"").trim().toLowerCase();
@@ -231,54 +231,59 @@ async function buscarEmails(correo, limite=15) {
     auth:{user:IMAP_USER, pass:IMAP_PASS},
     logger:false, tls:{rejectUnauthorized:false},
   });
+
   await client.connect();
-  const emails=[];
+  const emails = [];
+
   try {
     const lock = await client.getMailboxLock("INBOX");
     try {
-      const desde=new Date(); desde.setDate(desde.getDate()-2);
-      let uids = [];
-      // Intento 1: buscar por body (puede no soportarlo el servidor)
-      try { uids = await client.search({body: correoBuscar, since: desde}); } catch(_) {}
-      
-      // Intento 2: buscar todos los recientes y filtrar localmente
-      if(!uids || !uids.length) {
-        try { uids = await client.search({since: desde}); } catch(err2) {
-          // Si el servidor rechaza el comando, retornar vacío en vez de explotar
-          logErr("buscarEmails.search", err2?.message || err2);
-          return [];
-        }
-      }
-      if(!uids || !uids.length) return [];
+      // ✅ NO usar SEARCH — cPanel a veces no lo soporta
+      // En cambio: obtener el total de mensajes y leer los últimos N directamente
+      const status = await client.status("INBOX", { messages: true });
+      const total  = status?.messages || 0;
+      if (!total) return [];
 
-      const ids = uids.slice(-Math.min(uids.length, 50));
+      // Leer los últimos 60 mensajes (más que suficiente para 2 días)
+      const desde  = Math.max(1, total - 59);
+      const rango  = `${desde}:${total}`;
 
-      for await(const msg of client.fetch(ids, {source:true})){
-        try{
+      const fechaLimite = new Date();
+      fechaLimite.setDate(fechaLimite.getDate() - 2);
+
+      for await (const msg of client.fetch(rango, { source: true })) {
+        try {
           const p = await simpleParser(msg.source);
+
+          // Filtrar por fecha (últimos 2 días)
+          const fecha = p.date ? new Date(p.date) : new Date(0);
+          if (fecha < fechaLimite) continue;
+
           const bodyText = String(p.text||"").toLowerCase();
           const bodyHtml = String(p.html||"").toLowerCase();
           const subj     = String(p.subject||"").toLowerCase();
           const toAddr   = (p.to?.text||"").toLowerCase();
           const allText  = bodyText + " " + bodyHtml + " " + subj + " " + toAddr;
 
-          if(!allText.includes(correoBuscar)) continue;
+          // Filtrar por correo del cliente
+          if (!allText.includes(correoBuscar)) continue;
 
           emails.push({
             from:    String(p.from?.text||""),
             subject: String(p.subject||""),
             text:    String(p.text||""),
             html:    String(p.html||""),
-            date:    p.date||new Date(),
+            date:    p.date || new Date(),
           });
 
-          if(emails.length >= limite) break;
-        }catch(_){}
+          if (emails.length >= limite) break;
+        } catch(_) {}
       }
     } finally { lock.release(); }
   } finally { await client.logout(); }
 
-  return emails.sort((a,b) => new Date(b.date) - new Date(a.date));
+  // Más reciente primero
+  return emails.sort((a, b) => new Date(b.date) - new Date(a.date));
 }
 
 // ===============================
@@ -490,19 +495,32 @@ async function cmdInbox(chatId, correo){
 // ===============================
 // REGISTRO DE COMANDOS (1 sola vez)
 // ===============================
-// ✅ Siempre resetear y re-registrar al cargar — evita handlers duplicados en Render
-global.__SUBLICUENTAS_IMAP_READY__ = false;
+// ✅ Eliminar listeners viejos antes de registrar — evita duplicados en rolling restart
+// Remover todos los listeners de texto actuales del bot para estos comandos
+try {
+  const listeners = bot.listeners("text") || [];
+  listeners.forEach(fn => {
+    const src = fn.toString();
+    if (src.includes("cmdCode") || src.includes("cmdLink") ||
+        src.includes("cmdHogar") || src.includes("cmdPrime") || src.includes("cmdInbox")) {
+      bot.removeListener("text", fn);
+    }
+  });
+} catch(_) {}
 
-if(!global.__SUBLICUENTAS_IMAP_READY__){
-  global.__SUBLICUENTAS_IMAP_READY__=true;
+// Handlers IMAP — comandos de extracción de códigos
+const _imapCodeHandler  = async(msg,m)=>{ if(await isAdmin(msg.from.id)) return cmdCode(msg.chat.id,  normalizarCorreo(m[1])); };
+const _imapLinkHandler  = async(msg,m)=>{ if(await isAdmin(msg.from.id)) return cmdLink(msg.chat.id,  normalizarCorreo(m[1])); };
+const _imapHogarHandler = async(msg,m)=>{ if(await isAdmin(msg.from.id)) return cmdHogar(msg.chat.id, normalizarCorreo(m[1])); };
+const _imapPrimeHandler = async(msg,m)=>{ if(await isAdmin(msg.from.id)) return cmdPrime(msg.chat.id, normalizarCorreo(m[1])); };
+const _imapInboxHandler = async(msg,m)=>{ if(await isAdmin(msg.from.id)) return cmdInbox(msg.chat.id, normalizarCorreo(m[1])); };
 
-  bot.onText(/^\/code\s+(\S+)/i,       async(msg,m)=>{ if(await isAdmin(msg.from.id)) return cmdCode(msg.chat.id,  normalizarCorreo(m[1])); });
-  bot.onText(/^\/link\s+(\S+)/i,       async(msg,m)=>{ if(await isAdmin(msg.from.id)) return cmdLink(msg.chat.id,  normalizarCorreo(m[1])); });
-  bot.onText(/^\/hogar\s+(\S+)/i,      async(msg,m)=>{ if(await isAdmin(msg.from.id)) return cmdHogar(msg.chat.id, normalizarCorreo(m[1])); });
-  bot.onText(/^\/prime\s+(\S+)/i,      async(msg,m)=>{ if(await isAdmin(msg.from.id)) return cmdPrime(msg.chat.id, normalizarCorreo(m[1])); });
-  bot.onText(/^\/inbox\s+(\S+)/i,      async(msg,m)=>{ if(await isAdmin(msg.from.id)) return cmdInbox(msg.chat.id, normalizarCorreo(m[1])); });
+bot.onText(/^\/code\s+(\S+)/i,  _imapCodeHandler);
+bot.onText(/^\/link\s+(\S+)/i,  _imapLinkHandler);
+bot.onText(/^\/hogar\s+(\S+)/i, _imapHogarHandler);
+bot.onText(/^\/prime\s+(\S+)/i, _imapPrimeHandler);
+bot.onText(/^\/inbox\s+(\S+)/i, _imapInboxHandler);
 
-  console.log("✅ Módulo IMAP cargado v16 — /code (Netflix/Disney/HBO/Prime/Vix/Universal) /link (Vix) /hogar (link confirmar) /prime /inbox");
-}
+console.log("✅ Módulo IMAP v16 cargado — /code /link /hogar /prime /inbox");
 
 module.exports = { cmdCode, cmdLink, cmdHogar, cmdPrime, cmdInbox };
