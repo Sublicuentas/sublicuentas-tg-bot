@@ -238,9 +238,17 @@ async function buscarEmails(correo, limite=15) {
     try {
       const desde=new Date(); desde.setDate(desde.getDate()-2);
       let uids = [];
+      // Intento 1: buscar por body (puede no soportarlo el servidor)
       try { uids = await client.search({body: correoBuscar, since: desde}); } catch(_) {}
       
-      if(!uids || !uids.length) { uids = await client.search({since: desde}); }
+      // Intento 2: buscar todos los recientes y filtrar localmente
+      if(!uids || !uids.length) {
+        try { uids = await client.search({since: desde}); } catch(err2) {
+          // Si el servidor rechaza el comando, retornar vacío en vez de explotar
+          logErr("buscarEmails.search", err2?.message || err2);
+          return [];
+        }
+      }
       if(!uids || !uids.length) return [];
 
       const ids = uids.slice(-Math.min(uids.length, 50));
@@ -482,6 +490,9 @@ async function cmdInbox(chatId, correo){
 // ===============================
 // REGISTRO DE COMANDOS (1 sola vez)
 // ===============================
+// ✅ Siempre resetear y re-registrar al cargar — evita handlers duplicados en Render
+global.__SUBLICUENTAS_IMAP_READY__ = false;
+
 if(!global.__SUBLICUENTAS_IMAP_READY__){
   global.__SUBLICUENTAS_IMAP_READY__=true;
 
