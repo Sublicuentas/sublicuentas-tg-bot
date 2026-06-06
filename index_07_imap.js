@@ -495,18 +495,20 @@ async function cmdInbox(chatId, correo){
 // ===============================
 // REGISTRO DE COMANDOS (1 sola vez)
 // ===============================
-// ✅ Eliminar listeners viejos antes de registrar — evita duplicados en rolling restart
-// Remover todos los listeners de texto actuales del bot para estos comandos
+// ✅ Limpiar _textRegexpCallbacks — array interno donde onText guarda los handlers
+// bot.removeListener no funciona para onText, hay que limpiar el array directo
 try {
-  const listeners = bot.listeners("text") || [];
-  listeners.forEach(fn => {
-    const src = fn.toString();
-    if (src.includes("cmdCode") || src.includes("cmdLink") ||
-        src.includes("cmdHogar") || src.includes("cmdPrime") || src.includes("cmdInbox")) {
-      bot.removeListener("text", fn);
-    }
-  });
-} catch(_) {}
+  if (Array.isArray(bot._textRegexpCallbacks)) {
+    bot._textRegexpCallbacks = bot._textRegexpCallbacks.filter(item => {
+      const reg = item.regexp ? item.regexp.toString() : "";
+      return !(
+        reg.includes("\/code") || reg.includes("\/link") ||
+        reg.includes("\/hogar") || reg.includes("\/prime") || reg.includes("\/inbox")
+      );
+    });
+    console.log("✅ IMAP: handlers viejos eliminados, registrando nuevos...");
+  }
+} catch(e) { console.error("IMAP cleanup error:", e?.message); }
 
 // Handlers IMAP — comandos de extracción de códigos
 const _imapCodeHandler  = async(msg,m)=>{ if(await isAdmin(msg.from.id)) return cmdCode(msg.chat.id,  normalizarCorreo(m[1])); };
