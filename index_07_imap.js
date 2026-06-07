@@ -221,55 +221,50 @@ async function scrapearCodigoWeb(url) {
 }
 
 // ===============================
-// LECTURA IMAP — MODO BLINDADO CPANEL / RENDER
+// LECTURA IMAP — sin SEARCH para compatibilidad con cPanel
 // ===============================
 async function buscarEmails(correo, limite=15) {
-  const correoBuscar = String(correo || "").trim().toLowerCase();
-  if (!correoBuscar.includes("@")) return [];
-  if (!IMAP_PASS) throw new Error("Falta EMAIL_ADMIN_PASS en Render");
+  const correoBuscar = String(correo||"").trim().toLowerCase();
 
   const client = new ImapFlow({
-    host: IMAP_HOST,
-    port: IMAP_PORT,
-    secure: true,
-    auth: { user: IMAP_USER, pass: IMAP_PASS },
-    logger: false,
-    tls: { rejectUnauthorized: false },
-    connectionTimeout: 30000,
-    greetingTimeout: 30000,
-    socketTimeout: 90000,
+    host:IMAP_HOST, port:IMAP_PORT, secure:true,
+    auth:{user:IMAP_USER, pass:IMAP_PASS},
+    logger:{
+      debug: (obj) => console.log("[IMAP DBG]", obj?.msg || JSON.stringify(obj).slice(0,120)),
+      info:  (obj) => console.log("[IMAP INF]", obj?.msg || ""),
+      warn:  (obj) => console.warn("[IMAP WRN]", obj?.msg || ""),
+      error: (obj) => console.error("[IMAP ERR]", obj?.msg || ""),
+    },
+    tls:{rejectUnauthorized:false},
   });
 
+  await client.connect();
   const emails = [];
 
   try {
-    await client.connect();
     const lock = await client.getMailboxLock("INBOX");
-
     try {
-      const total = Number(client.mailbox?.exists || 0);
+      const total = client.mailbox?.exists || 0;
       if (!total) return [];
 
       const fechaLimite = new Date();
-      fechaLimite.setDate(fechaLimite.getDate() - 10);
+      fechaLimite.setDate(fechaLimite.getDate() - 3);
 
-      // ✅ NO usamos fetch masivo. Algunos cPanel tiran: Error: Command failed.
-      // Leemos de uno en uno desde el más reciente; si un mensaje falla, se salta.
+      // ✅ Paso 1: traer solo headers de los últimos 50 mensajes (liviano)
+      const inicio = total;
+      const fin    = Math.max(1, total - 49);
+      const rango  = `${fin}:${inicio}`;
+
       const candidatos = [];
-      const maxRevisar = Math.min(total, 90);
-
-      for (let seq = total; seq >= 1 && candidatos.length < 35 && (total - seq) < maxRevisar; seq--) {
+      for await (const msg of client.fetch(rango, { envelope: true, internalDate: true })) {
         try {
-          const msg = await client.fetchOne(String(seq), { envelope: true, internalDate: true }, { uid: false });
-          if (!msg) continue;
-
           const fecha = msg.internalDate ? new Date(msg.internalDate) : new Date(0);
           if (fecha < fechaLimite) continue;
 
-          const fromObj = msg.envelope?.from?.[0] || {};
-          const fromStr = String(`${fromObj.name || ""} ${fromObj.address || ""}`).toLowerCase();
+          const fromStr = String(msg.envelope?.from?.[0]?.address || msg.envelope?.from?.[0]?.name || "").toLowerCase();
           const subjStr = String(msg.envelope?.subject || "").toLowerCase();
 
+          // Solo candidatos de plataformas conocidas
           const esPlatConocida =
             fromStr.includes("netflix") || fromStr.includes("disney") ||
             fromStr.includes("hbo") || fromStr.includes("max.com") ||
@@ -278,60 +273,49 @@ async function buscarEmails(correo, limite=15) {
             fromStr.includes("universal") || fromStr.includes("crunchyroll") ||
             subjStr.includes("netflix") || subjStr.includes("disney") ||
             subjStr.includes("hbo") || subjStr.includes("amazon") ||
-            subjStr.includes("prime") || subjStr.includes("vix") ||
             subjStr.includes("código") || subjStr.includes("codigo") ||
             subjStr.includes("verifica") || subjStr.includes("acceso") ||
-            subjStr.includes("contrase") || subjStr.includes("restablec") ||
-            subjStr.includes("hogar") || subjStr.includes("household");
+            subjStr.includes("contrase") || subjStr.includes("restablec");
 
-          if (esPlatConocida) candidatos.push(seq);
-        } catch (err) {
-          console.error(`[IMAP header seq=${seq}]`, err?.message || err);
-          continue;
-        }
+          if (esPlatConocida) candidatos.push(msg.seq);
+        } catch(_) {}
       }
 
-      // Si no encontró plataformas por header, revisa los últimos 25 directo.
-      const listaFinal = candidatos.length ? candidatos : Array.from({ length: Math.min(total, 25) }, (_, i) => total - i);
-
-      for (const seq of listaFinal) {
+      // ✅ Paso 2: descargar source completo solo de los candidatos relevantes
+      for (const seq of candidatos.reverse()) {
         if (emails.length >= limite) break;
         try {
-          const data = await client.fetchOne(String(seq), { source: true }, { uid: false });
+          const data = await client.fetchOne(String(seq), { source: true });
           if (!data?.source) continue;
 
           const p = await simpleParser(data.source);
-          const bodyText = String(p.text || "").toLowerCase();
-          const bodyHtml = String(p.html || "").toLowerCase();
-          const subj = String(p.subject || "").toLowerCase();
-          const toAddr = String(p.to?.text || "").toLowerCase();
-          const ccAddr = String(p.cc?.text || "").toLowerCase();
-          const allText = `${bodyText} ${bodyHtml} ${subj} ${toAddr} ${ccAddr}`;
+
+          const bodyText = String(p.text    || "").toLowerCase();
+          const bodyHtml = String(p.html    || "").toLowerCase();
+          const subj     = String(p.subject || "").toLowerCase();
+          const toAddr   = (p.to?.text      || "").toLowerCase();
+          const allText  = bodyText + " " + bodyHtml + " " + subj + " " + toAddr;
 
           if (!allText.includes(correoBuscar)) continue;
 
           emails.push({
-            from: String(p.from?.text || ""),
-            subject: String(p.subject || ""),
-            text: String(p.text || ""),
-            html: String(p.html || ""),
-            date: p.date || new Date(),
+            from:    String(p.from?.text || ""),
+            subject: String(p.subject   || ""),
+            text:    String(p.text      || ""),
+            html:    String(p.html      || ""),
+            date:    p.date || new Date(),
           });
-        } catch (err) {
-          console.error(`[IMAP source seq=${seq}]`, err?.message || err);
-          continue;
-        }
+        } catch(_) {}
       }
-    } finally {
-      try { lock.release(); } catch (_) {}
-    }
-  } catch (err) {
+    } finally { lock.release(); }
+  } catch(err) {
     console.error("[IMAP buscarEmails] Error:", err?.message || err);
-    throw new Error(err?.message || "IMAP no pudo conectar");
+    throw err;
   } finally {
-    try { await client.logout(); } catch (_) {}
+    try { await client.logout(); } catch(_) {}
   }
 
+  // Más reciente primero
   return emails.sort((a, b) => new Date(b.date) - new Date(a.date));
 }
 
