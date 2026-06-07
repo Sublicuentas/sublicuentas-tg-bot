@@ -313,90 +313,94 @@ function getSuperAdminIdsLocal() {
   );
 }
 
-// ✅ Caché en memoria para checks de admin — evita timeout de Firestore en arranque frío
-const _adminCache = new Map();
-const _ADMIN_CACHE_TTL = 5 * 60 * 1000; // 5 minutos
+// ✅ Lista de admins en memoria — se carga al arrancar y se refresca cada 10 min
+// Evita hits a Firestore en cada mensaje
+const _adminIds = global.__SUBLICUENTAS_ADMIN_IDS__ =
+  global.__SUBLICUENTAS_ADMIN_IDS__ || new Set();
+let _adminIdsLoaded = global.__SUBLICUENTAS_ADMIN_IDS_LOADED__ || false;
+let _adminIdsLoading = false;
 
-function _adminCacheGet(uid) {
-  const entry = _adminCache.get(uid);
-  if (!entry) return null;
-  if (Date.now() - entry.ts > _ADMIN_CACHE_TTL) { _adminCache.delete(uid); return null; }
-  return entry.val;
+async function cargarAdminIds() {
+  if (_adminIdsLoading) return;
+  _adminIdsLoading = true;
+  try {
+    const snap = await db.collection("admins").get();
+    snap.forEach(doc => {
+      const d = doc.data() || {};
+      if (d.activo !== false) _adminIds.add(String(doc.id).trim());
+    });
+    _adminIdsLoaded = true;
+    global.__SUBLICUENTAS_ADMIN_IDS_LOADED__ = true;
+    global.__SUBLICUENTAS_ADMIN_IDS__ = _adminIds;
+    console.log(`✅ Admins cargados: ${[..._adminIds].join(", ")}`);
+    // Refrescar cada 10 minutos
+    setTimeout(async () => {
+      _adminIdsLoaded = false;
+      global.__SUBLICUENTAS_ADMIN_IDS_LOADED__ = false;
+      _adminIdsLoading = false;
+      await cargarAdminIds();
+    }, 10 * 60 * 1000);
+  } catch (e) {
+    logErr("cargarAdminIds", e?.message || e);
+    _adminIdsLoading = false;
+    // Reintentar en 30 segundos si falla
+    setTimeout(() => cargarAdminIds(), 30 * 1000);
+  }
 }
-function _adminCacheSet(uid, val) {
-  _adminCache.set(uid, { val, ts: Date.now() });
-}
+
+// Cargar admins al iniciar (no bloquea el arranque)
+if (!_adminIdsLoaded) cargarAdminIds();
 
 async function safeIsSuperAdminLocal(userId) {
   const uid = normalizeTelegramIdLocal(userId);
   if (!uid) return false;
 
-  // Caché
-  const cached = _adminCacheGet("super:" + uid);
-  if (cached !== null) return cached;
-
-  let result = false;
-
-  try {
-    if (await isSuperAdmin(userId)) { result = true; }
-  } catch (e) {
-    logErr("safeIsSuperAdminLocal:isSuperAdmin", e?.stack || e?.message || e);
-  }
-
-  if (!result && getSuperAdminIdsLocal().includes(uid)) result = true;
-
-  if (!result) {
+  // Verificar contra lista en memoria (instantáneo)
+  if (_adminIds.has(uid)) {
     try {
       const doc = await db.collection("admins").doc(uid).get();
       if (doc.exists) {
-        const data = doc.data() || {};
-        if (data.activo !== false && (data.superAdmin === true || data.superadmin === true || data.rol === "superadmin")) {
-          result = true;
-        }
+        const d = doc.data() || {};
+        if (d.activo !== false && (d.superAdmin === true || d.superadmin === true || d.rol === "superadmin")) return true;
       }
-    } catch (e) {
-      logErr("safeIsSuperAdminLocal:doc", e?.stack || e?.message || e);
-    }
+    } catch (_) {}
   }
 
-  _adminCacheSet("super:" + uid, result);
-  return result;
+  try { if (await isSuperAdmin(userId)) return true; } catch (_) {}
+  if (getSuperAdminIdsLocal().includes(uid)) return true;
+  return false;
 }
 
 async function safeIsAdminLocal(userId) {
   const uid = normalizeTelegramIdLocal(userId);
   if (!uid) return false;
 
-  // Caché
-  const cached = _adminCacheGet("admin:" + uid);
-  if (cached !== null) return cached;
+  // ✅ Si la lista ya cargó, verificar instantáneamente sin Firestore
+  if (_adminIdsLoaded && _adminIds.has(uid)) return true;
 
-  let result = false;
-
-  if (await safeIsSuperAdminLocal(uid)) { result = true; }
-
-  if (!result) {
-    try {
-      if (await isAdmin(userId)) result = true;
-    } catch (e) {
-      logErr("safeIsAdminLocal:isAdmin", e?.stack || e?.message || e);
+  // Si aún no cargó, esperar hasta 3 segundos a que cargue
+  if (!_adminIdsLoaded) {
+    let waited = 0;
+    while (!_adminIdsLoaded && waited < 3000) {
+      await new Promise(r => setTimeout(r, 200));
+      waited += 200;
     }
+    if (_adminIdsLoaded && _adminIds.has(uid)) return true;
   }
 
-  if (!result) {
-    try {
-      const doc = await db.collection("admins").doc(uid).get();
-      if (doc.exists) {
-        const data = doc.data() || {};
-        if (data.activo !== false) result = true;
-      }
-    } catch (e) {
-      logErr("safeIsAdminLocal:doc", e?.stack || e?.message || e);
+  // Fallback: consulta directa a Firestore
+  try { if (await isAdmin(userId)) return true; } catch (_) {}
+  try {
+    const doc = await db.collection("admins").doc(uid).get();
+    if (doc.exists && (doc.data() || {}).activo !== false) {
+      _adminIds.add(uid); // Agregar a la lista para próximas veces
+      return true;
     }
+  } catch (e) {
+    logErr("safeIsAdminLocal:doc", e?.message || e);
   }
 
-  _adminCacheSet("admin:" + uid, result);
-  return result;
+  return false;
 }
 
 async function safeGetRevendedorLocal(userId) {
