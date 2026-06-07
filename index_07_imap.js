@@ -244,20 +244,45 @@ async function buscarEmails(correo, limite=15) {
       const fechaLimite = new Date();
       fechaLimite.setDate(fechaLimite.getDate() - 3);
 
-      // ✅ Recorrer uno por uno desde el más reciente — compatible con Dovecot/cPanel
+      // ✅ Paso 1: traer solo headers de los últimos 50 mensajes (liviano)
       const inicio = total;
-      const fin    = Math.max(1, total - 80);
+      const fin    = Math.max(1, total - 49);
+      const rango  = `${fin}:${inicio}`;
 
-      for (let seq = inicio; seq >= fin; seq--) {
+      const candidatos = [];
+      for await (const msg of client.fetch(rango, { envelope: true, internalDate: true })) {
+        try {
+          const fecha = msg.internalDate ? new Date(msg.internalDate) : new Date(0);
+          if (fecha < fechaLimite) continue;
+
+          const fromStr = String(msg.envelope?.from?.[0]?.address || msg.envelope?.from?.[0]?.name || "").toLowerCase();
+          const subjStr = String(msg.envelope?.subject || "").toLowerCase();
+
+          // Solo candidatos de plataformas conocidas
+          const esPlatConocida =
+            fromStr.includes("netflix") || fromStr.includes("disney") ||
+            fromStr.includes("hbo") || fromStr.includes("max.com") ||
+            fromStr.includes("amazon") || fromStr.includes("primevideo") ||
+            fromStr.includes("paramount") || fromStr.includes("vix") ||
+            fromStr.includes("universal") || fromStr.includes("crunchyroll") ||
+            subjStr.includes("netflix") || subjStr.includes("disney") ||
+            subjStr.includes("hbo") || subjStr.includes("amazon") ||
+            subjStr.includes("código") || subjStr.includes("codigo") ||
+            subjStr.includes("verifica") || subjStr.includes("acceso") ||
+            subjStr.includes("contrase") || subjStr.includes("restablec");
+
+          if (esPlatConocida) candidatos.push(msg.seq);
+        } catch(_) {}
+      }
+
+      // ✅ Paso 2: descargar source completo solo de los candidatos relevantes
+      for (const seq of candidatos.reverse()) {
         if (emails.length >= limite) break;
         try {
           const data = await client.fetchOne(String(seq), { source: true });
           if (!data?.source) continue;
 
           const p = await simpleParser(data.source);
-
-          const fecha = p.date ? new Date(p.date) : new Date(0);
-          if (fecha < fechaLimite) continue;
 
           const bodyText = String(p.text    || "").toLowerCase();
           const bodyHtml = String(p.html    || "").toLowerCase();
