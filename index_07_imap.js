@@ -609,4 +609,90 @@ bot.onText(/^\/inbox\s+(\S+)/i, _imapInboxHandler);
 
 console.log("✅ Módulo IMAP v16 cargado — /code /link /hogar /prime /inbox");
 
-module.exports = { cmdCode, cmdLink, cmdHogar, cmdPrime, cmdInbox };
+
+// ===============================
+// API JSON — consumidas por index_08_api.js (la app Android)
+// Reutilizan buscarEmails + los mismos detectores/extractores de arriba.
+// Devuelven objetos (no envían a Telegram).
+// ===============================
+async function apiCode(correo) {
+  const emails = await buscarEmails(correo);
+  for (const e of emails) {
+    const subjL = e.subject.toLowerCase();
+    if (esNetflix(e.from, e.subject)) {
+      if (subjL.includes("restablecimiento") || subjL.includes("contrase") || subjL.includes("cambio")) continue;
+      const codigo = extraerCodigoInteligente(e.text, e.subject, e.html, "netflix");
+      if (codigo) return { found: true, plataforma: "Netflix", emoji: "\ud83c\udfac", tipo: "codigo", codigo, asunto: e.subject, fecha: formatearFecha(e.date) };
+      continue;
+    }
+    if (esDisney(e.from, e.subject)) {
+      const codigo = extraerCodigoInteligente(e.text, e.subject, e.html, "disney");
+      if (codigo) return { found: true, plataforma: "Disney+", emoji: "\ud83c\udff0", tipo: "codigo", codigo, asunto: e.subject, fecha: formatearFecha(e.date) };
+      continue;
+    }
+    if (esHBO(e.from, e.subject)) {
+      if (subjL.includes("restablecimiento") || subjL.includes("reset") || subjL.includes("contrase")) continue;
+      const codigo = extraerCodigoInteligente(e.text, e.subject, e.html, "otro");
+      if (codigo) return { found: true, plataforma: "HBO Max", emoji: "\ud83c\udf9e\ufe0f", tipo: "codigo", codigo, asunto: e.subject, fecha: formatearFecha(e.date) };
+      continue;
+    }
+    if (esPrime(e.from, e.subject)) {
+      const codigo = extraerCodigoInteligente(e.text, e.subject, e.html, "otro");
+      if (codigo) return { found: true, plataforma: "Prime Video", emoji: "\ud83c\udfa5", tipo: "codigo", codigo, asunto: e.subject, fecha: formatearFecha(e.date) };
+      continue;
+    }
+    if (esVix(e.from, e.subject)) {
+      const codigo = extraerCodigoInteligente(e.text, e.subject, e.html, "otro");
+      if (codigo) return { found: true, plataforma: "Vix", emoji: "\ud83d\udcf1", tipo: "codigo", codigo, asunto: e.subject, fecha: formatearFecha(e.date) };
+      continue;
+    }
+    if (esUniversal(e.from, e.subject)) {
+      const codigo = extraerCodigoInteligente(e.text, e.subject, e.html, "universal");
+      if (codigo) return { found: true, plataforma: "Universal+", emoji: "\ud83c\udf0e", tipo: "codigo", codigo, asunto: e.subject, fecha: formatearFecha(e.date) };
+      continue;
+    }
+  }
+  return { found: false };
+}
+
+async function apiLink(correo) {
+  const emails = await buscarEmails(correo);
+  for (const e of emails) {
+    const isN = esNetflixReset(e.from, e.subject), isD = esDisney(e.from, e.subject), isH = esHBO(e.from, e.subject);
+    const isP = esParamount(e.from, e.subject), isU = esUniversal(e.from, e.subject), isV = esVix(e.from, e.subject);
+    if (!isN && !isD && !isH && !isP && !isU && !isV) continue;
+    const link = extraerLink(e.text, e.html);
+    if (!link) continue;
+    const fromL = e.from.toLowerCase();
+    const plat = (isN || fromL.includes("netflix")) ? "Netflix"
+      : (isD || fromL.includes("disney")) ? "Disney+"
+      : (fromL.includes("amazon") || fromL.includes("prime")) ? "Prime Video"
+      : (isP || fromL.includes("paramount")) ? "Paramount+"
+      : (isU || fromL.includes("universal")) ? "Universal+"
+      : (isV || fromL.includes("vix")) ? "Vix" : "HBO Max";
+    return { found: true, plataforma: plat, tipo: "link", link, asunto: e.subject, fecha: formatearFecha(e.date) };
+  }
+  return { found: false };
+}
+
+async function apiHogar(correo) {
+  const emails = await buscarEmails(correo);
+  for (const e of emails) {
+    if (!esNetflix(e.from, e.subject) || !esHogar(e.subject, e.text)) continue;
+    let codigo = extraerCodigoInteligente(e.text, e.subject, e.html, "netflix");
+    const linkWeb = extraerLinkObtenerCodigo(e.html);
+    if (!codigo && linkWeb) codigo = await scrapearCodigoWeb(linkWeb);
+    if (codigo) return { found: true, plataforma: "Netflix Hogar", emoji: "\ud83c\udfe0", tipo: "hogar", codigo, asunto: e.subject, fecha: formatearFecha(e.date) };
+    if (linkWeb) return { found: true, plataforma: "Netflix Hogar", emoji: "\ud83c\udfe0", tipo: "hogar_link", link: linkWeb, asunto: e.subject, fecha: formatearFecha(e.date) };
+    const linkReset = extraerLink(e.text, e.html);
+    if (linkReset) return { found: true, plataforma: "Netflix Hogar", emoji: "\ud83c\udfe0", tipo: "hogar_link", link: linkReset, asunto: e.subject, fecha: formatearFecha(e.date) };
+  }
+  return { found: false };
+}
+
+async function apiInbox(correo) {
+  const emails = await buscarEmails(correo, 5);
+  return { emails: emails.map((e) => ({ from: e.from, asunto: e.subject, fecha: formatearFecha(e.date) })) };
+}
+
+module.exports = { cmdCode, cmdLink, cmdHogar, cmdPrime, cmdInbox, apiCode, apiLink, apiHogar, apiInbox };
