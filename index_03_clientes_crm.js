@@ -619,26 +619,30 @@ async function enviarFichaCliente(chatId, clientId) {
   ]);
 }
 
-// ✅ Ficha resumida para revendedores — solo info relevante, sin edición
+// ✅ Ficha completa para revendedores — cuentas, claves, fecha, monto
 async function enviarFichaClienteVendedor(chatId, clientId, backCb = "vend:clientes") {
   const c = await getCliente(clientId);
   if (!c) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
 
   const servicios = Array.isArray(c.servicios) ? c.servicios : [];
+  let total = 0;
+  servicios.forEach(s => { total += Number(s.precio || 0); });
+
   let txt = `👤 *${escMD(c.nombrePerfil || "Sin nombre")}*\n`;
   txt += `📱 ${escMD(c.telefono || "-")}\n`;
-  txt += `🧾 ${escMD(c.vendedor || "-")}\n\n`;
+  if (total > 0) txt += `💰 *Total mensual: ${escMD(total.toFixed(2))} Lps*\n`;
+  txt += `\n`;
 
   if (!servicios.length) {
     txt += "_Sin servicios._";
   } else {
     servicios.forEach((s, i) => {
       const est = getEstadoServicio(s.fechaRenovacion || "");
-      txt += `*${i + 1}.* ${iconPlataforma(s.plataforma || "")} *${escMD(humanPlataforma(s.plataforma || ""))}*\n`;
-      txt += `   ${getIdentLabelLocal(s.plataforma || "") === "Usuario" ? "👤" : "📧"} ${escMD(s.correo || "-")}\n`;
-      txt += `   🔑 ${escMD(s.pin || "-")}\n`;
-      txt += `   💰 ${escMD(Number(s.precio || 0).toFixed(2))} Lps\n`;
-      txt += `   📅 ${escMD(s.fechaRenovacion || "-")} ${est.emoji}\n\n`;
+      txt += `*${i + 1}.* *${escMD(humanPlataforma(s.plataforma || ""))}*\n`;
+      txt += `   📧 ${escMD(s.correo || "-")}\n`;
+      txt += `   🔑 ${escMD(s.pin || s.clave || "-")}\n`;
+      txt += `   📅 ${escMD(s.fechaRenovacion || "-")} ${est.emoji}\n`;
+      txt += `   💵 ${escMD(Number(s.precio || 0).toFixed(2))} Lps\n\n`;
     });
   }
 
