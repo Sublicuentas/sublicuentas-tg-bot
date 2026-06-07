@@ -153,6 +153,57 @@ function extraerCodigoInteligente(text = "", subject = "", html = "", plataforma
     }
   }
 
+  const subjL = String(subject || "").toLowerCase();
+
+  // ✅ Netflix "inicio de sesión" y "acceso temporal" usan 4 dígitos — buscar 4 primero
+  const netflixPide4 = plataforma === "netflix" && (
+    subjL.includes("inicio de sesi") ||
+    subjL.includes("acceso temporal") ||
+    subjL.includes("ingresa este c") ||
+    subjL.includes("code to sign in") ||
+    subjL.includes("sign-in code")
+  );
+
+  // ✅ Netflix "verificación" y "confirmación" usan 6 dígitos
+  const netflixPide6 = plataforma === "netflix" && (
+    subjL.includes("verificaci") ||
+    subjL.includes("confirmaci") ||
+    subjL.includes("código de verif")
+  );
+
+  if (netflixPide4) {
+    // Buscar 4 dígitos primero, ignorar 6 dígitos
+    const match4 = fuente.match(/(?<!\d)(\d{4})(?!\d)/g);
+    if (match4) {
+      for (const c of match4) { const v = esValido(c); if (v) return v; }
+    }
+    return null;
+  }
+
+  if (netflixPide6) {
+    // Buscar 6 dígitos primero
+    const match6 = fuente.match(/(?<!\d)(\d{6})(?!\d)/g);
+    if (match6) {
+      for (const c of match6) { const v = esValido(c); if (v) return v; }
+    }
+    // Fallback a 4
+    const match4 = fuente.match(/(?<!\d)(\d{4})(?!\d)/g);
+    if (match4) {
+      for (const c of match4) { const v = esValido(c); if (v) return v; }
+    }
+    return null;
+  }
+
+  // Para otras plataformas y Netflix genérico: probar 4 dígitos cerca de palabras clave primero
+  // luego 6, luego 4 general
+  const match4cerca = fuente.match(/(?:código|code|clave|pin)[^\d]{0,20}(\d{4})(?!\d)/gi);
+  if (match4cerca) {
+    for (const m of match4cerca) {
+      const nums = m.match(/\d{4}/);
+      if (nums) { const v = esValido(nums[0]); if (v) return v; }
+    }
+  }
+
   const match6 = fuente.match(/(?<!\d)(\d{6})(?!\d)/g);
   if (match6) {
     for (const c of match6) { const v = esValido(c); if (v) return v; }
