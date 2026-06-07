@@ -313,56 +313,90 @@ function getSuperAdminIdsLocal() {
   );
 }
 
+// ✅ Caché en memoria para checks de admin — evita timeout de Firestore en arranque frío
+const _adminCache = new Map();
+const _ADMIN_CACHE_TTL = 5 * 60 * 1000; // 5 minutos
+
+function _adminCacheGet(uid) {
+  const entry = _adminCache.get(uid);
+  if (!entry) return null;
+  if (Date.now() - entry.ts > _ADMIN_CACHE_TTL) { _adminCache.delete(uid); return null; }
+  return entry.val;
+}
+function _adminCacheSet(uid, val) {
+  _adminCache.set(uid, { val, ts: Date.now() });
+}
+
 async function safeIsSuperAdminLocal(userId) {
   const uid = normalizeTelegramIdLocal(userId);
   if (!uid) return false;
 
+  // Caché
+  const cached = _adminCacheGet("super:" + uid);
+  if (cached !== null) return cached;
+
+  let result = false;
+
   try {
-    if (await isSuperAdmin(userId)) return true;
+    if (await isSuperAdmin(userId)) { result = true; }
   } catch (e) {
     logErr("safeIsSuperAdminLocal:isSuperAdmin", e?.stack || e?.message || e);
   }
 
-  if (getSuperAdminIdsLocal().includes(uid)) return true;
+  if (!result && getSuperAdminIdsLocal().includes(uid)) result = true;
 
-  try {
-    const doc = await db.collection("admins").doc(uid).get();
-    if (doc.exists) {
-      const data = doc.data() || {};
-      if (data.activo !== false && (data.superAdmin === true || data.superadmin === true || data.rol === "superadmin")) {
-        return true;
+  if (!result) {
+    try {
+      const doc = await db.collection("admins").doc(uid).get();
+      if (doc.exists) {
+        const data = doc.data() || {};
+        if (data.activo !== false && (data.superAdmin === true || data.superadmin === true || data.rol === "superadmin")) {
+          result = true;
+        }
       }
+    } catch (e) {
+      logErr("safeIsSuperAdminLocal:doc", e?.stack || e?.message || e);
     }
-  } catch (e) {
-    logErr("safeIsSuperAdminLocal:doc", e?.stack || e?.message || e);
   }
 
-  return false;
+  _adminCacheSet("super:" + uid, result);
+  return result;
 }
 
 async function safeIsAdminLocal(userId) {
   const uid = normalizeTelegramIdLocal(userId);
   if (!uid) return false;
 
-  if (await safeIsSuperAdminLocal(uid)) return true;
+  // Caché
+  const cached = _adminCacheGet("admin:" + uid);
+  if (cached !== null) return cached;
 
-  try {
-    if (await isAdmin(userId)) return true;
-  } catch (e) {
-    logErr("safeIsAdminLocal:isAdmin", e?.stack || e?.message || e);
-  }
+  let result = false;
 
-  try {
-    const doc = await db.collection("admins").doc(uid).get();
-    if (doc.exists) {
-      const data = doc.data() || {};
-      if (data.activo !== false) return true;
+  if (await safeIsSuperAdminLocal(uid)) { result = true; }
+
+  if (!result) {
+    try {
+      if (await isAdmin(userId)) result = true;
+    } catch (e) {
+      logErr("safeIsAdminLocal:isAdmin", e?.stack || e?.message || e);
     }
-  } catch (e) {
-    logErr("safeIsAdminLocal:doc", e?.stack || e?.message || e);
   }
 
-  return false;
+  if (!result) {
+    try {
+      const doc = await db.collection("admins").doc(uid).get();
+      if (doc.exists) {
+        const data = doc.data() || {};
+        if (data.activo !== false) result = true;
+      }
+    } catch (e) {
+      logErr("safeIsAdminLocal:doc", e?.stack || e?.message || e);
+    }
+  }
+
+  _adminCacheSet("admin:" + uid, result);
+  return result;
 }
 
 async function safeGetRevendedorLocal(userId) {
