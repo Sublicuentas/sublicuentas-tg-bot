@@ -334,22 +334,22 @@ async function cargarAdminIds() {
     global.__SUBLICUENTAS_ADMIN_IDS__ = _adminIds;
     console.log(`✅ Admins cargados: ${[..._adminIds].join(", ")}`);
     // Refrescar cada 10 minutos
-    setTimeout(async () => {
+    setTimeout(() => {
       _adminIdsLoaded = false;
       global.__SUBLICUENTAS_ADMIN_IDS_LOADED__ = false;
       _adminIdsLoading = false;
-      await cargarAdminIds();
+      cargarAdminIds().catch(() => {});
     }, 10 * 60 * 1000);
   } catch (e) {
     logErr("cargarAdminIds", e?.message || e);
     _adminIdsLoading = false;
     // Reintentar en 30 segundos si falla
-    setTimeout(() => cargarAdminIds(), 30 * 1000);
+    setTimeout(() => cargarAdminIds().catch(() => {}), 30 * 1000);
   }
 }
 
 // Cargar admins al iniciar (no bloquea el arranque)
-if (!_adminIdsLoaded) cargarAdminIds();
+if (!_adminIdsLoaded) cargarAdminIds().catch(e => logErr("cargarAdminIds:init", e?.message || e));
 
 async function safeIsSuperAdminLocal(userId) {
   const uid = normalizeTelegramIdLocal(userId);
@@ -561,7 +561,7 @@ async function sendBottomMainMenu(chatId, userId, fromText = false) {
         [{ text: "📅 Mis renovaciones hoy",  callback_data: "ren:mis:hoy" },      { text: "⏳ Próximos 3 días",      callback_data: "ren:mis:prox3" }],
         [{ text: "📄 TXT renovaciones",      callback_data: "txt:mis" },           { text: "👥 Mis clientes",         callback_data: "vend:clientes" }],
         [{ text: "🧾 TXT mis clientes",      callback_data: "vend:clientes:txt" }, { text: "💰 Mi resumen del mes",   callback_data: "vend:resumen" }],
-        [{ text: "🔴 Mis vencidos",          callback_data: "vend:vencidos" },     { text: "💲 Lista de precios",     callback_data: "vend:precios" }],
+        [{ text: "🔴 Mis vencidos",          callback_data: "vend:vencidos" }],
         [{ text: "🔍 Buscar cliente",          callback_data: "vend:buscar" }],
       ], "Markdown");
     } else {
