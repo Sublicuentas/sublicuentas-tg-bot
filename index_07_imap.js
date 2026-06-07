@@ -1,7 +1,3 @@
-index_07_imap.js — BLINDADO
-Presione el botón para descargar el archivo JS corregido.
-
-⬇️ Descargar index_07_imap.js
 /* ✅ SUBLICUENTAS TG BOT — PARTE 7/7 v16
    IMAP — CÓDIGOS Y LINKS: NETFLIX / DISNEY / HBO / PRIME / VIX / UNIVERSAL
    ----------------------------------------------------------------
