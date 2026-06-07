@@ -365,7 +365,7 @@ async function menuVendedor(chatId) {
     [{ text: "📅 Mis renovaciones hoy", callback_data: "ren:mis:hoy" }, { text: "⏳ Próximos 3 días", callback_data: "ren:mis:prox3" }],
     [{ text: "📄 TXT renovaciones", callback_data: "txt:mis" }, { text: "👥 Mis clientes", callback_data: "vend:clientes" }],
     [{ text: "🧾 TXT mis clientes", callback_data: "vend:clientes:txt" }, { text: "💰 Mi resumen del mes", callback_data: "vend:resumen" }],
-    [{ text: "🔴 Mis vencidos", callback_data: "vend:vencidos" }, { text: "💲 Lista de precios", callback_data: "vend:precios" }],
+    [{ text: "🔴 Mis vencidos", callback_data: "vend:vencidos" }],
     [{ text: "🔍 Buscar cliente", callback_data: "vend:buscar" }],
   ]);
 }
