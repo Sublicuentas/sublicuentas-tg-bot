@@ -3188,6 +3188,21 @@ bot.on("callback_query", async (q) => {
         }
       }
 
+      // ✅ RENOVAR TODOS — FECHA PERSONALIZADA (aplica a todos los servicios del cliente)
+      if (data.startsWith("cli:ren:allcustom:ask:")) {
+        const clientId = data.slice("cli:ren:allcustom:ask:".length);
+        pending.set(String(chatId), { mode: "cliRenovarFechaManualAll", clientId });
+        return upsertPanel(chatId,
+          "📅 *Renovar TODOS — fecha personalizada*\n\n" +
+          "Escriba la fecha o los días a sumar:\n\n" +
+          "• `dd/mm/yyyy` — fecha exacta para todos los servicios\n" +
+          "• `+40` — suma 40 días desde hoy a todos\n" +
+          "• `+3m` — suma 3 meses desde hoy a todos\n" +
+          "• `+90` — suma 90 días desde hoy a todos",
+          [[{ text: "⬅️ Cancelar", callback_data: `cli:ren:list:${clientId}` }]]
+        );
+      }
+
       if (data.startsWith("cli:ren:all:ask:")) {
         const clientId = data.slice("cli:ren:all:ask:".length);
         return upsertPanel(chatId, "⏫ *Renovar TODOS +30 días*\n\n¿Desea renovar todos los servicios de este cliente?", [
@@ -4164,6 +4179,45 @@ bot.on("message", async (msg) => {
         await ref.set({ clave: t, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
         pending.set(String(chatId), { mode: "invSubmenuCtx", plat, correo: acceso });
         return enviarSubmenuInventario(chatId, plat, acceso);
+      }
+
+      if (p.mode === "cliRenovarFechaManualAll") {
+        // Acepta: dd/mm/yyyy | +40 | +3m | +90 — aplica a TODOS los servicios del cliente
+        let fechaFinal = "";
+        const tClean = t.trim();
+
+        if (isFechaDMY(tClean)) {
+          fechaFinal = tClean;
+        } else if (/^\+\d+m$/i.test(tClean)) {
+          const meses = parseInt(tClean.slice(1));
+          const hoy = hoyDMY();
+          const [dd, mm, yyyy] = hoy.split("/").map(Number);
+          const dt = new Date(Date.UTC(yyyy, mm - 1 + meses, dd, 12));
+          fechaFinal = `${String(dt.getUTCDate()).padStart(2,"0")}/${String(dt.getUTCMonth()+1).padStart(2,"0")}/${dt.getUTCFullYear()}`;
+        } else if (/^\+\d+$/.test(tClean)) {
+          const dias = parseInt(tClean.slice(1));
+          fechaFinal = addDaysDMY(hoyDMY(), dias);
+        } else {
+          return bot.sendMessage(chatId,
+            "⚠️ Formato inválido.\n\nUse:\n• `dd/mm/yyyy` — fecha exacta\n• `+40` — suma 40 días\n• `+3m` — suma 3 meses",
+            { parse_mode: "Markdown" }
+          );
+        }
+
+        pending.delete(String(chatId));
+        forceNextPanelAtBottom(chatId);
+        const ref = db.collection("clientes").doc(String(p.clientId));
+        const doc = await ref.get();
+        if (!doc.exists) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
+        const c = doc.data() || {};
+        const servicios = Array.isArray(c.servicios) ? c.servicios : [];
+        if (!servicios.length) return bot.sendMessage(chatId, "⚠️ Este cliente no tiene servicios.");
+        const nuevos = servicios.map(s => ({ ...s, fechaRenovacion: fechaFinal }));
+        await ref.set({ servicios: nuevos, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        const { cacheInvalidatePrefix: cIPallc } = require("./index_01_core");
+        cIPallc(`clientes:doc:${p.clientId}`);
+        await bot.sendMessage(chatId, `✅ Todos los servicios renovados a la fecha: *${fechaFinal}*`, { parse_mode: "Markdown" });
+        return enviarFichaCliente(chatId, p.clientId);
       }
 
       if (p.mode === "cliRenovarFechaManual") {
