@@ -327,7 +327,9 @@ async function cargarAdminIds() {
     const snap = await db.collection("admins").get();
     snap.forEach(doc => {
       const d = doc.data() || {};
-      if (d.activo !== false) _adminIds.add(String(doc.id).trim());
+      const id = String(doc.id).trim();
+      // ✅ Solo IDs numéricos válidos de Telegram (ignorar docs basura como "user_id")
+      if (d.activo !== false && /^\d+$/.test(id)) _adminIds.add(id);
     });
     _adminIdsLoaded = true;
     global.__SUBLICUENTAS_ADMIN_IDS_LOADED__ = true;
