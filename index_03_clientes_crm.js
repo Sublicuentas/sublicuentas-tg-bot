@@ -917,6 +917,7 @@ async function menuListaRenovacion(chatId, clientId) {
     { text: "⏫ Todos +30 días", callback_data: `cli:ren:all:ask:${clientId}` },
     { text: "⏫ Todos +31 días", callback_data: `cli:ren:all31:ask:${clientId}` },
   ]);
+  kb.push([{ text: "📅 Todos — fecha personalizada", callback_data: `cli:ren:allcustom:ask:${clientId}` }]);
   kb.push([{ text: "🗑️ Baja masiva de servicios", callback_data: `cli:baja:menu:${clientId}` }]);
   kb.push([{ text: "⬅️ Volver Ficha", callback_data: `cli:view:${clientId}` }, { text: "🏠 Inicio", callback_data: "go:inicio" }]);
 
