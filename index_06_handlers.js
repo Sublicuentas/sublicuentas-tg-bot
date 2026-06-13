@@ -4255,6 +4255,8 @@ bot.on("message", async (msg) => {
         if (p.idx < 0 || p.idx >= servicios.length) return bot.sendMessage(chatId, "⚠️ Servicio inválido.");
         servicios[p.idx] = { ...(servicios[p.idx] || {}), fechaRenovacion: fechaFinal };
         await ref.set({ servicios, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        const { cacheInvalidatePrefix: cIPone } = require("./index_01_core");
+        cIPone(`clientes:doc:${p.clientId}`);
         await bot.sendMessage(chatId, `✅ Fecha actualizada: *${fechaFinal}*`, { parse_mode: "Markdown" });
         return menuServicio(chatId, p.clientId, p.idx);
       }
