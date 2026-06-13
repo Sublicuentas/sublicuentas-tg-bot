@@ -908,6 +908,10 @@ async function resolverBusquedaAdmin(chatId, query = "") {
   if (!q) return bot.sendMessage(chatId, "⚠️ Escriba algo para buscar.");
   if (isNavigationTextLocal(q)) return;
 
+  // ✅ Cada búsqueda por texto debe aparecer como mensaje nuevo abajo,
+  // no editar el panel anterior que quedó más arriba en el chat
+  forceNextPanelAtBottom(chatId);
+
   const qDigits = onlyDigits(q);
   const qNorm = normalizeLooseText(q);
   const isMail = isEmailLike(q);
