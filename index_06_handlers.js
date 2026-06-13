@@ -3605,7 +3605,7 @@ bot.on("message", async (msg) => {
         "top_plataformas_mes", "cierre_caja", "cierre_caja_rango", "excel_finanzas",
         "editar_movimiento",
         // ✅ Comandos IMAP — no pasar a resolverBusquedaAdmin
-        "code", "link", "hogar", "prime", "inbox",
+        "code", "link", "hogar", "prime", "inbox", "debug",
         ...PLATFORM_KEYS,
       ]);
 
