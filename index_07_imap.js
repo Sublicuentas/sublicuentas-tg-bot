@@ -452,6 +452,36 @@ async function cmdCode(chatId, correo){
   }catch(e){ logErr("cmdCode",e); return bot.sendMessage(chatId,`❌ Error: ${escMD(e?.message||"IMAP error")}`,{parse_mode:"Markdown"}); }
 }
 
+/** /debug — temporal: ver texto crudo del email para diagnosticar extracción de código */
+async function cmdDebug(chatId, correo){
+  if(!correo) return bot.sendMessage(chatId,"⚠️ Uso: /debug correo@dominio.com");
+  try{
+    const emails = await buscarEmails(correo, 3);
+    if(!emails.length) return bot.sendMessage(chatId,"📬 Sin emails.");
+
+    for (let i = 0; i < emails.length; i++) {
+      const e = emails[i];
+      const text = String(e.text || "").replace(/\s+/g, " ").trim();
+      const html = String(e.html || "").replace(/\s+/g, " ").trim();
+
+      // Buscar todos los números de 6 y 4 dígitos en text y html
+      const nums6text = (text.match(/(?<!\d)\d{6}(?!\d)/g) || []);
+      const nums6html = (html.match(/(?<!\d)\d{6}(?!\d)/g) || []);
+      const nums4text = (text.match(/(?<!\d)\d{4}(?!\d)/g) || []);
+
+      let msg = `📧 *Email ${i+1}*\n`;
+      msg += `Asunto: ${escMD(e.subject)}\n`;
+      msg += `Fecha: ${escMD(formatearFecha(e.date))}\n\n`;
+      msg += `*6 dígitos en TEXT:* ${nums6text.join(", ") || "ninguno"}\n`;
+      msg += `*6 dígitos en HTML:* ${nums6html.slice(0,15).join(", ") || "ninguno"}\n`;
+      msg += `*4 dígitos en TEXT:* ${nums4text.join(", ") || "ninguno"}\n\n`;
+      msg += `*TEXT (primeros 600 char):*\n\\`${escMD(text.slice(0,600))}\\``;
+
+      await bot.sendMessage(chatId, msg, {parse_mode:"Markdown"});
+    }
+  }catch(e){ logErr("cmdDebug",e); return bot.sendMessage(chatId,`❌ Error: ${escMD(e?.message||"IMAP error")}`,{parse_mode:"Markdown"}); }
+}
+
 /** /link — Reset de contraseña */
 async function cmdLink(chatId, correo){
   if(!correo) return bot.sendMessage(chatId,"⚠️ Uso: /link correo@dominio.com");
@@ -605,12 +635,14 @@ const _imapLinkHandler  = async(msg,m)=>{ if(await isAdmin(msg.from.id)) return 
 const _imapHogarHandler = async(msg,m)=>{ if(await isAdmin(msg.from.id)) return cmdHogar(msg.chat.id, normalizarCorreo(m[1])); };
 const _imapPrimeHandler = async(msg,m)=>{ if(await isAdmin(msg.from.id)) return cmdPrime(msg.chat.id, normalizarCorreo(m[1])); };
 const _imapInboxHandler = async(msg,m)=>{ if(await isAdmin(msg.from.id)) return cmdInbox(msg.chat.id, normalizarCorreo(m[1])); };
+const _imapDebugHandler = async(msg,m)=>{ if(await isAdmin(msg.from.id)) return cmdDebug(msg.chat.id, normalizarCorreo(m[1])); };
 
 bot.onText(/^\/code\s+(\S+)/i,  _imapCodeHandler);
 bot.onText(/^\/link\s+(\S+)/i,  _imapLinkHandler);
 bot.onText(/^\/hogar\s+(\S+)/i, _imapHogarHandler);
 bot.onText(/^\/prime\s+(\S+)/i, _imapPrimeHandler);
 bot.onText(/^\/inbox\s+(\S+)/i, _imapInboxHandler);
+bot.onText(/^\/debug\s+(\S+)/i, _imapDebugHandler);
 
 console.log("✅ Módulo IMAP v16 cargado — /code /link /hogar /prime /inbox");
 
