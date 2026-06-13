@@ -475,7 +475,7 @@ async function cmdDebug(chatId, correo){
       msg += `*6 dígitos en TEXT:* ${nums6text.join(", ") || "ninguno"}\n`;
       msg += `*6 dígitos en HTML:* ${nums6html.slice(0,15).join(", ") || "ninguno"}\n`;
       msg += `*4 dígitos en TEXT:* ${nums4text.join(", ") || "ninguno"}\n\n`;
-      msg += `*TEXT (primeros 600 char):*\n\\`${escMD(text.slice(0,600))}\\``;
+      msg += "*TEXT (primeros 600 char):*\n`" + escMD(text.slice(0,600)) + "`";
 
       await bot.sendMessage(chatId, msg, {parse_mode:"Markdown"});
     }
