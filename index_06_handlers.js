@@ -4270,6 +4270,7 @@ bot.on("message", async (msg) => {
       forceNextPanelAtBottom(chatId);
         const ref = db.collection("clientes").doc(String(p.clientId));
         await ref.set({ nombrePerfil: t, nombre_norm: String(t || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().replace(/\s+/g, " "), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        { const { cacheInvalidatePrefix: cIPn } = require("./index_01_core"); cIPn(`clientes:doc:${p.clientId}`); }
         return menuEditarCliente(chatId, p.clientId);
       }
 
@@ -4282,6 +4283,7 @@ bot.on("message", async (msg) => {
       forceNextPanelAtBottom(chatId);
         const ref = db.collection("clientes").doc(String(p.clientId));
         await ref.set({ telefono: t, telefono_norm: onlyDigits(t), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        { const { cacheInvalidatePrefix: cIPt } = require("./index_01_core"); cIPt(`clientes:doc:${p.clientId}`); }
         return menuEditarCliente(chatId, p.clientId);
       }
 
@@ -4290,6 +4292,7 @@ bot.on("message", async (msg) => {
       forceNextPanelAtBottom(chatId);
         const ref = db.collection("clientes").doc(String(p.clientId));
         await ref.set({ vendedor: t, vendedor_norm: String(t || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().replace(/\s+/g, " "), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        { const { cacheInvalidatePrefix: cIPv } = require("./index_01_core"); cIPv(`clientes:doc:${p.clientId}`); }
         return menuEditarCliente(chatId, p.clientId);
       }
 
