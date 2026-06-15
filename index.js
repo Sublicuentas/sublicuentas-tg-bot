@@ -6,6 +6,7 @@ require("./index_04_inventario_correos");
 require("./index_05_finanzas_menus");
 require("./index_06_handlers");
 require("./index_07_imap");
+require("./index_08_api");
 
 (async () => {
   await startBotPollingSafe();
