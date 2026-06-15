@@ -1,0 +1,154 @@
+/* ════════════════════════════════════════════════════════════════
+   server_api.js  ·  API del PANEL DE REVENDEDORES (independiente)
+   ────────────────────────────────────────────────────────────────
+   Arranca SOLO la API REST del panel. NO inicia el polling del bot
+   (reusa Firebase de index_01_core, donde el bot está en polling:false).
+   Pensado para correr en un Web Service de Render aparte del Worker.
+
+   Start command en Render:  node server_api.js
+
+   Variables de entorno necesarias (las mismas del bot + las del panel):
+     FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, FIREBASE_PRIVATE_KEY
+     BOT_TOKEN            (el mismo; aquí NO hace polling, solo evita warnings)
+     JWT_SECRET           (una frase larga aleatoria)
+     ADMIN_USER           (tu usuario admin)
+     ADMIN_PASSWORD       (tu clave admin)
+   ════════════════════════════════════════════════════════════════ */
+
+const express = require("express");
+const cors = require("cors");
+const bcrypt = require("bcryptjs");
+const jwt = require("jsonwebtoken");
+
+// Reusa Firebase ya inicializado en el core (no arranca el bot)
+const { db, PORT } = require("./index_01_core");
+
+const JWT_SECRET = process.env.JWT_SECRET || "CAMBIAME_EN_RENDER";
+const ADMIN_USER = (process.env.ADMIN_USER || "").trim().toLowerCase();
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "";
+
+const app = express();
+app.use(cors());
+app.use(express.json({ limit: "1mb" }));
+
+// keepalive / health (para que Render lo mantenga vivo)
+app.get("/", (_req, res) => res.type("text/plain").send("Sublicuentas Panel API OK"));
+app.get("/health", (_req, res) => res.json({ ok: true, ts: Date.now() }));
+
+// ── helpers ──
+function revAuth(req, res, next) {
+  const h = req.headers.authorization || "";
+  const token = h.startsWith("Bearer ") ? h.slice(7) : null;
+  if (!token) return res.status(401).json({ error: "sin_token" });
+  try { req.rev = jwt.verify(token, JWT_SECRET); next(); }
+  catch (e) { return res.status(401).json({ error: "token_invalido" }); }
+}
+function revAdminAuth(req, res, next) {
+  const h = req.headers.authorization || "";
+  const token = h.startsWith("Bearer ") ? h.slice(7) : null;
+  if (!token) return res.status(401).json({ error: "sin_token" });
+  try {
+    const p = jwt.verify(token, JWT_SECRET);
+    if (!p.admin) return res.status(403).json({ error: "no_admin" });
+    req.admin = p; next();
+  } catch (e) { return res.status(401).json({ error: "token_invalido" }); }
+}
+function revParseFecha(v) {
+  if (v == null) return null;
+  if (typeof v === "object") { if (v._seconds) return new Date(v._seconds * 1000); if (v.seconds) return new Date(v.seconds * 1000); }
+  if (typeof v === "number") return new Date(v < 1e12 ? v * 1000 : v);
+  const s = String(v).trim();
+  const m = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/);
+  if (m) { let [, d, mo, y] = m; y = y.length === 2 ? "20" + y : y; return new Date(+y, +mo - 1, +d); }
+  const d = new Date(s); return isNaN(d) ? null : d;
+}
+function revDiasRest(d) { if (!d) return null; const h = new Date(); h.setHours(0, 0, 0, 0); return Math.round((d - h) / 86400000); }
+
+// ── LOGIN (revendedor o admin) ──
+app.post("/rev/login", async (req, res) => {
+  try {
+    const usuario = (req.body.usuario || "").trim().toLowerCase();
+    const password = (req.body.password || "").trim();
+    if (!usuario || !password) return res.status(400).json({ error: "faltan_datos" });
+
+    if (ADMIN_USER && usuario === ADMIN_USER && password === ADMIN_PASSWORD) {
+      const token = jwt.sign({ admin: true, nombre: "Admin" }, JWT_SECRET, { expiresIn: "30d" });
+      return res.json({ token, admin: true, nombre: "Admin" });
+    }
+
+    const snap = await db.collection("revendedores").where("nombre_norm", "==", usuario).limit(1).get();
+    if (snap.empty) return res.status(401).json({ error: "credenciales" });
+    const doc = snap.docs[0], d = doc.data();
+    if (d.activo === false) return res.status(403).json({ error: "inactivo" });
+
+    if (!d.passwordHash) {
+      const hash = await bcrypt.hash(password, 10);
+      await doc.ref.update({ passwordHash: hash });
+    } else {
+      const okp = await bcrypt.compare(password, d.passwordHash);
+      if (!okp) return res.status(401).json({ error: "credenciales" });
+    }
+    const token = jwt.sign({ id: doc.id, nombre: d.nombre, nombre_norm: d.nombre_norm }, JWT_SECRET, { expiresIn: "30d" });
+    res.json({ token, nombre: d.nombre, nombre_norm: d.nombre_norm });
+  } catch (e) { console.error("rev/login", e); res.status(500).json({ error: "server" }); }
+});
+
+// ── CLIENTES del revendedor ──
+app.get("/rev/clientes", revAuth, async (req, res) => {
+  try {
+    const snap = await db.collection("clientes").where("vendedor_norm", "==", req.rev.nombre_norm).get();
+    res.json(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+  } catch (e) { console.error("rev/clientes", e); res.status(500).json({ error: "server" }); }
+});
+
+// ── PRECIOS (inventario) ──
+app.get("/rev/precios", revAuth, async (req, res) => {
+  try {
+    const snap = await db.collection("inventario").get();
+    res.json(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+  } catch (e) { console.error("rev/precios", e); res.status(500).json({ error: "server" }); }
+});
+
+// ── ADMIN: lista de revendedores con contadores ──
+app.get("/rev/admin/revendedores", revAdminAuth, async (req, res) => {
+  try {
+    const [revSnap, cliSnap] = await Promise.all([
+      db.collection("revendedores").get(),
+      db.collection("clientes").get(),
+    ]);
+    const porVend = {};
+    cliSnap.docs.forEach((d) => {
+      const c = d.data();
+      const key = c.vendedor_norm || "";
+      if (!porVend[key]) porVend[key] = { clientes: 0, servicios: 0, vencidos: 0, porVencer: 0 };
+      porVend[key].clientes++;
+      (Array.isArray(c.servicios) ? c.servicios : []).forEach((s) => {
+        porVend[key].servicios++;
+        const n = revDiasRest(revParseFecha(s.fechaRenovacion || s.vencimiento || s.fechaFin));
+        if (n != null) { if (n < 0) porVend[key].vencidos++; else if (n <= 5) porVend[key].porVencer++; }
+      });
+    });
+    const lista = revSnap.docs.map((d) => {
+      const r = d.data();
+      const k = r.nombre_norm || (r.nombre || d.id).toLowerCase();
+      const c = porVend[k] || { clientes: 0, servicios: 0, vencidos: 0, porVencer: 0 };
+      return { id: d.id, nombre: r.nombre || d.id, nombre_norm: k, activo: r.activo !== false, telegramId: r.telegramId || "", ...c };
+    }).sort((a, b) => b.clientes - a.clientes);
+    res.json(lista);
+  } catch (e) { console.error("rev/admin", e); res.status(500).json({ error: "server" }); }
+});
+
+// ── ADMIN: "ver como" ──
+app.post("/rev/admin/impersonate", revAdminAuth, async (req, res) => {
+  try {
+    const nombre_norm = (req.body.nombre_norm || "").trim().toLowerCase();
+    if (!nombre_norm) return res.status(400).json({ error: "falta_revendedor" });
+    const snap = await db.collection("revendedores").where("nombre_norm", "==", nombre_norm).limit(1).get();
+    if (snap.empty) return res.status(404).json({ error: "no_existe" });
+    const d = snap.docs[0].data();
+    const token = jwt.sign({ id: snap.docs[0].id, nombre: d.nombre, nombre_norm: d.nombre_norm }, JWT_SECRET, { expiresIn: "6h" });
+    res.json({ token, nombre: d.nombre, nombre_norm: d.nombre_norm });
+  } catch (e) { console.error("rev/impersonate", e); res.status(500).json({ error: "server" }); }
+});
+
+app.listen(PORT, () => console.log("🌐 Panel API (revendedores) activa en puerto", PORT));
