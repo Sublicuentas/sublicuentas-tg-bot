@@ -4503,6 +4503,7 @@ console.log("✅ index_06_handlers actualizado");
 // ===============================
 // HTTP KEEPALIVE FINAL
 // ===============================
+/* ⛔ KEEPALIVE DESACTIVADO — ahora el puerto lo abre index_08_api.js
 const PORT = process.env.PORT || 10000;
 
 if (!global.__SUBLICUENTAS_HTTP_SERVER__) {
@@ -4517,3 +4518,4 @@ if (!global.__SUBLICUENTAS_HTTP_SERVER__) {
     })
     .listen(PORT, () => { console.log("🌐 HTTP KEEPALIVE activo en puerto", PORT); });
              }
+*/
