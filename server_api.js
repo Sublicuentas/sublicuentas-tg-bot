@@ -1,18 +1,9 @@
 /* ════════════════════════════════════════════════════════════════
    server_api.js  ·  API del PANEL DE REVENDEDORES (independiente)
-   ────────────────────────────────────────────────────────────────
-   Arranca SOLO la API REST del panel. NO inicia el polling del bot
-   (reusa Firebase de index_01_core, donde el bot está en polling:false).
-   Pensado para correr en un Web Service de Render aparte del Worker.
-
+   Arranca SOLO la API REST del panel. NO inicia el polling del bot.
    Start command en Render:  node server_api.js
-
-   Variables de entorno necesarias (las mismas del bot + las del panel):
-     FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, FIREBASE_PRIVATE_KEY
-     BOT_TOKEN            (el mismo; aquí NO hace polling, solo evita warnings)
-     JWT_SECRET           (una frase larga aleatoria)
-     ADMIN_USER           (tu usuario admin)
-     ADMIN_PASSWORD       (tu clave admin)
+   Variables: FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, FIREBASE_PRIVATE_KEY,
+              BOT_TOKEN, JWT_SECRET, ADMIN_USER, ADMIN_PASSWORD
    ════════════════════════════════════════════════════════════════ */
 
 const express = require("express");
@@ -20,7 +11,6 @@ const cors = require("cors");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 
-// Reusa Firebase ya inicializado en el core (no arranca el bot)
 const { db, PORT } = require("./index_01_core");
 
 const JWT_SECRET = process.env.JWT_SECRET || "CAMBIAME_EN_RENDER";
@@ -31,11 +21,9 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: "1mb" }));
 
-// keepalive / health (para que Render lo mantenga vivo)
 app.get("/", (_req, res) => res.type("text/plain").send("Sublicuentas Panel API OK"));
 app.get("/health", (_req, res) => res.json({ ok: true, ts: Date.now() }));
 
-// ── helpers ──
 function revAuth(req, res, next) {
   const h = req.headers.authorization || "";
   const token = h.startsWith("Bearer ") ? h.slice(7) : null;
@@ -64,7 +52,6 @@ function revParseFecha(v) {
 }
 function revDiasRest(d) { if (!d) return null; const h = new Date(); h.setHours(0, 0, 0, 0); return Math.round((d - h) / 86400000); }
 
-// ── LOGIN (revendedor o admin) ──
 app.post("/rev/login", async (req, res) => {
   try {
     const usuario = (req.body.usuario || "").trim().toLowerCase();
@@ -93,7 +80,6 @@ app.post("/rev/login", async (req, res) => {
   } catch (e) { console.error("rev/login", e); res.status(500).json({ error: "server" }); }
 });
 
-// ── CLIENTES del revendedor ──
 app.get("/rev/clientes", revAuth, async (req, res) => {
   try {
     const snap = await db.collection("clientes").where("vendedor_norm", "==", req.rev.nombre_norm).get();
@@ -101,7 +87,6 @@ app.get("/rev/clientes", revAuth, async (req, res) => {
   } catch (e) { console.error("rev/clientes", e); res.status(500).json({ error: "server" }); }
 });
 
-// ── PRECIOS (inventario) ──
 app.get("/rev/precios", revAuth, async (req, res) => {
   try {
     const snap = await db.collection("inventario").get();
@@ -109,7 +94,6 @@ app.get("/rev/precios", revAuth, async (req, res) => {
   } catch (e) { console.error("rev/precios", e); res.status(500).json({ error: "server" }); }
 });
 
-// ── ADMIN: lista de revendedores con contadores ──
 app.get("/rev/admin/revendedores", revAdminAuth, async (req, res) => {
   try {
     const [revSnap, cliSnap] = await Promise.all([
@@ -138,7 +122,6 @@ app.get("/rev/admin/revendedores", revAdminAuth, async (req, res) => {
   } catch (e) { console.error("rev/admin", e); res.status(500).json({ error: "server" }); }
 });
 
-// ── ADMIN: "ver como" ──
 app.post("/rev/admin/impersonate", revAdminAuth, async (req, res) => {
   try {
     const nombre_norm = (req.body.nombre_norm || "").trim().toLowerCase();
