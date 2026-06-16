@@ -32,7 +32,8 @@ app.use(cors());
 app.use(express.json({ limit: "1mb" }));
 
 // keepalive / health (para que Render lo mantenga vivo)
-app.get("/", (_req, res) => res.type("text/plain").send("Sublicuentas Panel API OK"));
+app.get("/", (_req, res) => res.type("text/plain").send("Sublicuentas Panel API OK v2-ia"));
+app.get("/rev/ping", (_req, res) => res.json({ v: "2-ia", gemini: !!process.env.GEMINI_API_KEY, anthropic: !!process.env.ANTHROPIC_API_KEY }));
 app.get("/health", (_req, res) => res.json({ ok: true, ts: Date.now() }));
 
 // ── helpers ──
