@@ -164,4 +164,47 @@ app.post("/rev/admin/impersonate", revAdminAuth, async (req, res) => {
   } catch (e) { console.error("rev/impersonate", e); res.status(500).json({ error: "server" }); }
 });
 
+// ── IA: generar mensajes (Gemini o Claude según la llave configurada) ──
+async function aiGenerate(prompt) {
+  const sys = "Sos un asistente de ventas para un negocio de suscripciones digitales en Honduras (Sublicuentas). Escribí en español hondureño, trato de usted, claro, cálido y profesional. Nunca inventes precios. Devolvé solo el mensaje pedido, sin explicaciones.";
+  if (typeof fetch !== "function") throw new Error("fetch_no_disponible");
+
+  if (process.env.GEMINI_API_KEY) {
+    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ contents: [{ parts: [{ text: sys + "\n\n" + prompt }] }] })
+    });
+    const j = await r.json();
+    const t = j?.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (t) return t.trim();
+    throw new Error(j?.error?.message || "gemini_sin_respuesta");
+  }
+
+  if (process.env.ANTHROPIC_API_KEY) {
+    const r = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-api-key": process.env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01" },
+      body: JSON.stringify({ model: "claude-haiku-4-5-20251001", max_tokens: 600, system: sys, messages: [{ role: "user", content: prompt }] })
+    });
+    const j = await r.json();
+    const t = j?.content?.[0]?.text;
+    if (t) return t.trim();
+    throw new Error(j?.error?.message || "claude_sin_respuesta");
+  }
+
+  throw new Error("no_api_key");
+}
+
+app.post("/rev/ask", revAuth, async (req, res) => {
+  try {
+    const prompt = (req.body.prompt || "").toString().slice(0, 4000);
+    if (!prompt) return res.status(400).json({ error: "falta_prompt" });
+    const text = await aiGenerate(prompt);
+    res.json({ text });
+  } catch (e) {
+    console.error("rev/ask", e.message);
+    res.status(500).json({ error: "ia_error", detail: e.message });
+  }
+});
+
 app.listen(PORT, () => console.log("🌐 Panel API (revendedores) activa en puerto", PORT));
