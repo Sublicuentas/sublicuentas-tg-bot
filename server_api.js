@@ -110,6 +110,25 @@ app.get("/rev/precios", revAuth, async (req, res) => {
   } catch (e) { console.error("rev/precios", e); res.status(500).json({ error: "server" }); }
 });
 
+// ── AVISOS — buzón publicado desde Telegram (/aviso) ──
+app.get("/rev/avisos", revAuth, async (req, res) => {
+  try {
+    const snap = await db.collection("avisos")
+      .where("activo", "!=", false)
+      .orderBy("activo")
+      .orderBy("createdAt", "desc")
+      .limit(10)
+      .get();
+    const lista = snap.docs.map((d) => {
+      const a = d.data();
+      const ts = a.createdAt?._seconds ? a.createdAt._seconds * 1000 :
+                 a.createdAt?.seconds ? a.createdAt.seconds * 1000 : Date.now();
+      return { id: d.id, texto: a.texto || "", autor: a.autor || "Admin", ts };
+    });
+    res.json(lista);
+  } catch (e) { console.error("rev/avisos", e); res.status(500).json({ error: "server" }); }
+});
+
 // ── ADMIN: lista de revendedores con contadores ──
 app.get("/rev/admin/revendedores", revAdminAuth, async (req, res) => {
   try {
