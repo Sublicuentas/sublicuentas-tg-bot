@@ -113,23 +113,64 @@ app.get("/rev/precios", revAuth, async (req, res) => {
 // ── AVISOS — buzón publicado desde Telegram (/aviso) ──
 app.get("/rev/avisos", revAuth, async (req, res) => {
   try {
-    const snap = await db.collection("avisos")
-      .where("activo", "!=", false)
-      .orderBy("activo")
-      .orderBy("createdAt", "desc")
-      .limit(10)
-      .get();
-    const lista = snap.docs.map((d) => {
-      const a = d.data();
-      const ts = a.createdAt?._seconds ? a.createdAt._seconds * 1000 :
-                 a.createdAt?.seconds ? a.createdAt.seconds * 1000 : Date.now();
-      return { id: d.id, texto: a.texto || "", autor: a.autor || "Admin", ts };
-    });
+    // ✅ Sin where+orderBy combinado (evita necesitar índice compuesto en Firestore)
+    const snap = await db.collection("avisos").orderBy("createdAt", "desc").limit(20).get();
+    const lista = snap.docs
+      .map((d) => {
+        const a = d.data();
+        const ts = a.createdAt?._seconds ? a.createdAt._seconds * 1000 :
+                   a.createdAt?.seconds ? a.createdAt.seconds * 1000 : Date.now();
+        return { id: d.id, texto: a.texto || "", autor: a.autor || "Admin", ts, activo: a.activo !== false };
+      })
+      .filter((a) => a.activo)
+      .slice(0, 10);
     res.json(lista);
   } catch (e) { console.error("rev/avisos", e); res.status(500).json({ error: "server" }); }
 });
 
-// ── ADMIN: lista de revendedores con contadores ──
+// ── SUGERENCIAS — buzón del revendedor, llega directo al admin por Telegram ──
+async function getAdminChatIds() {
+  try {
+    const snap = await db.collection("admins").get();
+    const ids = [];
+    snap.forEach((d) => {
+      const data = d.data() || {};
+      if (data.activo !== false && /^\d+$/.test(String(d.id))) ids.push(String(d.id));
+    });
+    if (ids.length) return ids;
+  } catch (_) {}
+  return String(process.env.SUPER_ADMIN || "").split(",").map((s) => s.trim()).filter(Boolean);
+}
+async function sendTelegramMessage(chatId, text) {
+  const token = process.env.BOT_TOKEN;
+  if (!token) return;
+  try {
+    await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: chatId, text, parse_mode: "Markdown" }),
+    });
+  } catch (e) { console.error("sendTelegramMessage", e.message); }
+}
+
+app.post("/rev/sugerencia", revAuth, async (req, res) => {
+  try {
+    const texto = (req.body.texto || "").toString().trim().slice(0, 1000);
+    if (!texto) return res.status(400).json({ error: "falta_texto" });
+    const nombre = req.rev.nombre || req.rev.nombre_norm || "Revendedor";
+
+    await db.collection("sugerencias").add({
+      texto, nombre, nombre_norm: req.rev.nombre_norm || "",
+      createdAt: new Date(),
+    });
+
+    const aviso = `💬 *Nueva sugerencia*\n👤 ${nombre}\n\n${texto}`;
+    const ids = await getAdminChatIds();
+    await Promise.all(ids.map((id) => sendTelegramMessage(id, aviso)));
+
+    res.json({ ok: true });
+  } catch (e) { console.error("rev/sugerencia", e); res.status(500).json({ error: "server" }); }
+});
 app.get("/rev/admin/revendedores", revAdminAuth, async (req, res) => {
   try {
     const [revSnap, cliSnap] = await Promise.all([
