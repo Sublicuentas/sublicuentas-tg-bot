@@ -1964,20 +1964,20 @@ bot.onText(/^\/avisos\s*$/i, async (msg) => {
   if (!(await safeIsAdminLocal(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
 
   try {
-    const snap = await db.collection("avisos")
-      .where("activo", "!=", false)
-      .orderBy("activo")
-      .orderBy("createdAt", "desc")
-      .limit(10)
-      .get();
-
-    if (snap.empty) return bot.sendMessage(chatId, "📭 No hay avisos publicados.");
-
-    let txt = "📌 *AVISOS ACTIVOS*\n\n";
+    const snap = await db.collection("avisos").orderBy("createdAt", "desc").limit(20).get();
+    const activos = [];
     snap.forEach(d => {
       const a = d.data() || {};
+      if (a.activo !== false) activos.push({ id: d.id, ...a });
+    });
+    const top = activos.slice(0, 10);
+
+    if (!top.length) return bot.sendMessage(chatId, "📭 No hay avisos publicados.");
+
+    let txt = "📌 *AVISOS ACTIVOS*\n\n";
+    top.forEach(a => {
       const fecha = a.createdAt?.toDate ? a.createdAt.toDate().toLocaleDateString("es-HN") : "-";
-      txt += `🆔 \`${d.id}\`\n${escMD(a.texto || "")}\n_${escMD(a.autor || "Admin")} · ${fecha}_\n\n`;
+      txt += `🆔 \`${a.id}\`\n${escMD(a.texto || "")}\n_${escMD(a.autor || "Admin")} · ${fecha}_\n\n`;
     });
     txt += "Para borrar uno: `/borraraviso <id>`";
     return bot.sendMessage(chatId, txt, { parse_mode: "Markdown" });
