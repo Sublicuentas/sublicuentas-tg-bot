@@ -1927,6 +1927,83 @@ bot.onText(/\/editar_movimiento\s+([A-Za-z0-9_-]+)/i, async (msg, match) => {
 });
 
 // ===============================
+// BUZÓN DE AVISOS — WEB REVENDEDORES (revendedoreschat.vercel.app)
+// ===============================
+bot.onText(/^\/aviso\s+(.+)/is, async (msg, match) => {
+  if (!hasRuntimeLock()) return;
+  const chatId = msg.chat.id;
+  const userId = msg.from.id;
+  if (!(await safeIsAdminLocal(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+
+  const texto = String(match[1] || "").trim();
+  if (!texto) return bot.sendMessage(chatId, "⚠️ Escriba el texto del aviso.\n\nEj: `/aviso Netflix subió a Lps. 110`", { parse_mode: "Markdown" });
+
+  try {
+    const autor = msg.from?.first_name || "Admin";
+    const ref = await db.collection("avisos").add({
+      texto,
+      autor,
+      autorId: String(userId),
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      activo: true,
+    });
+    return bot.sendMessage(chatId,
+      `✅ *Aviso publicado*\n\n📌 ${escMD(texto)}\n\n_Visible ya en el panel de revendedores._\n🆔 \`${ref.id}\``,
+      { parse_mode: "Markdown" }
+    );
+  } catch (e) {
+    logErr("cmd:aviso", e);
+    return bot.sendMessage(chatId, "❌ Error al publicar el aviso.");
+  }
+});
+
+bot.onText(/^\/avisos\s*$/i, async (msg) => {
+  if (!hasRuntimeLock()) return;
+  const chatId = msg.chat.id;
+  const userId = msg.from.id;
+  if (!(await safeIsAdminLocal(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+
+  try {
+    const snap = await db.collection("avisos")
+      .where("activo", "!=", false)
+      .orderBy("activo")
+      .orderBy("createdAt", "desc")
+      .limit(10)
+      .get();
+
+    if (snap.empty) return bot.sendMessage(chatId, "📭 No hay avisos publicados.");
+
+    let txt = "📌 *AVISOS ACTIVOS*\n\n";
+    snap.forEach(d => {
+      const a = d.data() || {};
+      const fecha = a.createdAt?.toDate ? a.createdAt.toDate().toLocaleDateString("es-HN") : "-";
+      txt += `🆔 \`${d.id}\`\n${escMD(a.texto || "")}\n_${escMD(a.autor || "Admin")} · ${fecha}_\n\n`;
+    });
+    txt += "Para borrar uno: `/borraraviso <id>`";
+    return bot.sendMessage(chatId, txt, { parse_mode: "Markdown" });
+  } catch (e) {
+    logErr("cmd:avisos", e);
+    return bot.sendMessage(chatId, "❌ Error al listar avisos.");
+  }
+});
+
+bot.onText(/^\/borraraviso\s+(\S+)/i, async (msg, match) => {
+  if (!hasRuntimeLock()) return;
+  const chatId = msg.chat.id;
+  const userId = msg.from.id;
+  if (!(await safeIsAdminLocal(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+
+  const id = String(match[1] || "").trim();
+  try {
+    await db.collection("avisos").doc(id).set({ activo: false }, { merge: true });
+    return bot.sendMessage(chatId, "✅ Aviso eliminado del panel de revendedores.");
+  } catch (e) {
+    logErr("cmd:borraraviso", e);
+    return bot.sendMessage(chatId, "❌ No se pudo borrar. Verifique el ID con /avisos.");
+  }
+});
+
+// ===============================
 // IDS / VINCULACIÓN
 // ===============================
 bot.onText(/\/id/i, async (msg) => {
@@ -3627,6 +3704,8 @@ bot.on("message", async (msg) => {
         "editar_movimiento",
         // ✅ Comandos IMAP — no pasar a resolverBusquedaAdmin
         "code", "link", "hogar", "prime", "inbox", "debug",
+        // ✅ Buzón de avisos web revendedores
+        "aviso", "avisos", "borraraviso",
         ...PLATFORM_KEYS,
       ]);
 
@@ -4503,7 +4582,6 @@ console.log("✅ index_06_handlers actualizado");
 // ===============================
 // HTTP KEEPALIVE FINAL
 // ===============================
-/* ⛔ KEEPALIVE DESACTIVADO — ahora el puerto lo abre index_08_api.js
 const PORT = process.env.PORT || 10000;
 
 if (!global.__SUBLICUENTAS_HTTP_SERVER__) {
@@ -4518,4 +4596,3 @@ if (!global.__SUBLICUENTAS_HTTP_SERVER__) {
     })
     .listen(PORT, () => { console.log("🌐 HTTP KEEPALIVE activo en puerto", PORT); });
              }
-*/
