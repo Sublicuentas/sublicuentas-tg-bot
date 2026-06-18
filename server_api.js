@@ -159,14 +159,18 @@ app.post("/rev/sugerencia", revAuth, async (req, res) => {
     if (!texto) return res.status(400).json({ error: "falta_texto" });
     const nombre = req.rev.nombre || req.rev.nombre_norm || "Revendedor";
 
+    const destino = (req.body.destino || "sublicuentas").toString().trim();
+    const CHATS = { sublicuentas: "5728675990", relojes: "411539492" };
+    const quien = destino === "relojes" ? "⌚ Relojes" : "🟣 Sublicuentas";
+
     await db.collection("sugerencias").add({
       texto, nombre, nombre_norm: req.rev.nombre_norm || "",
-      createdAt: new Date(),
+      destino, createdAt: new Date(),
     });
 
-    const aviso = `💬 *Nueva sugerencia*\n👤 ${nombre}\n\n${texto}`;
-    const ids = await getAdminChatIds();
-    await Promise.all(ids.map((id) => sendTelegramMessage(id, aviso)));
+    const aviso = `💬 *Nueva sugerencia* (${quien})\n👤 ${nombre}\n\n${texto}`;
+    const id = CHATS[destino] || CHATS.sublicuentas;
+    await sendTelegramMessage(id, aviso);
 
     res.json({ ok: true });
   } catch (e) { console.error("rev/sugerencia", e); res.status(500).json({ error: "server" }); }
