@@ -1,4 +1,3 @@
-
 /* ════════════════════════════════════════════════════════════════
    server_api.js  ·  API del PANEL DE REVENDEDORES (independiente)
    ────────────────────────────────────────────────────────────────
@@ -44,7 +43,7 @@ app.use(express.json({ limit: "15mb" }));
 
 // keepalive / health (para que Render lo mantenga vivo)
 app.get("/", (_req, res) => res.type("text/plain").send("Sublicuentas Panel API OK v2-ia"));
-app.get("/rev/ping", (_req, res) => res.json({ v: "4-tg-clean", gemini: !!process.env.GEMINI_API_KEY, anthropic: !!process.env.ANTHROPIC_API_KEY, storageBuckets: STORAGE_BUCKET_CANDIDATES }));
+app.get("/rev/ping", (_req, res) => res.json({ v: "5-combos", gemini: !!process.env.GEMINI_API_KEY, anthropic: !!process.env.ANTHROPIC_API_KEY, storageBuckets: STORAGE_BUCKET_CANDIDATES }));
 app.get("/health", (_req, res) => res.json({ ok: true, ts: Date.now() }));
 
 // ── helpers ──
@@ -422,31 +421,77 @@ app.post("/rev/renovar-cliente", revAuth, async (req, res) => {
 });
 
 
-// ── COMPRA NUEVA: socio envía solicitud + comprobante; avisa a Telegram según destino ──
+// ── COMPRA NUEVA / COMBO: socio envía solicitud + comprobante; avisa a Telegram según destino ──
 app.post("/rev/compra", revAuth, async (req, res) => {
   try {
     const b = req.body || {};
     const socio = req.rev.nombre || req.rev.nombre_norm || "Revendedor";
     const destino = destinoInfo(b.destino);
-    const servicio = cleanTg(b.servicio, 120);
-    if (!servicio) return res.status(400).json({ error: "falta_servicio" });
 
+    const productosRaw = Array.isArray(b.productos) && b.productos.length
+      ? b.productos.slice(0, 3)
+      : [{
+          servicio: b.servicio,
+          servicioBase: b.servicioBase,
+          catalogCategory: b.catalogCategory,
+          catalogSub: b.catalogSub,
+          catalogDetalle: b.catalogDetalle,
+          precioCatalogo: b.precioCatalogo,
+          entregaTipo: b.entregaTipo,
+          perfilNombre: b.perfilNombre,
+          perfilApellido: b.perfilApellido,
+          correo: b.correo,
+          detalleServicio: b.detalleServicio,
+          acceso: b.acceso,
+          serial: b.serial,
+          key: b.key,
+        }];
+
+    const productos = productosRaw.map((p) => {
+      const servicio = cleanTg(p.servicio || p.nombre || "", 140);
+      const precioCatalogo = p.precioCatalogo === null || p.precioCatalogo === undefined || p.precioCatalogo === "" ? null : Number(p.precioCatalogo) || 0;
+      const perfilNombre = cleanTg(p.perfilNombre, 80);
+      const perfilApellido = cleanTg(p.perfilApellido, 80);
+      const correo = cleanTg(p.correo, 160);
+      const detalleServicio = cleanTg(p.detalleServicio, 240);
+      const acceso = cleanTg(p.acceso, 220);
+      const serial = cleanTg(p.serial, 220);
+      const key = cleanTg(p.key, 220);
+      return {
+        id: cleanTg(p.id, 90),
+        servicio,
+        servicioBase: cleanTg(p.servicioBase, 100),
+        entregaTipo: cleanTg(p.entregaTipo || "", 60),
+        catalogCategory: cleanTg(p.catalogCategory || "", 120),
+        catalogSub: cleanTg(p.catalogSub || "", 160),
+        catalogDetalle: cleanTg(p.catalogDetalle || "", 500),
+        precioCatalogo,
+        perfilNombre,
+        perfilApellido,
+        perfil: `${perfilNombre} ${perfilApellido}`.trim(),
+        correo,
+        detalleServicio,
+        acceso,
+        serial,
+        key,
+      };
+    }).filter((p) => p.servicio);
+
+    if (!productos.length) return res.status(400).json({ error: "falta_servicio" });
+
+    const comentario = cleanTg(b.comentario, 700);
     const clienteNombre = cleanTg(b.clienteNombre, 80);
     const clienteApellido = cleanTg(b.clienteApellido, 80);
-    const perfilNombre = cleanTg(b.perfilNombre, 80);
-    const perfilApellido = cleanTg(b.perfilApellido, 80);
-    const correo = cleanTg(b.correo, 160);
-    const acceso = cleanTg(b.acceso, 220);
-    const serial = cleanTg(b.serial, 220);
-    const key = cleanTg(b.key, 220);
-    const comentario = cleanTg(b.comentario, 700);
-    const entregaTipo = cleanTg(b.entregaTipo || "", 60);
-    const catalogCategory = cleanTg(b.catalogCategory || "", 120);
-    const catalogSub = cleanTg(b.catalogSub || "", 160);
-    const catalogDetalle = cleanTg(b.catalogDetalle || "", 700);
-    const detalleServicio = cleanTg(b.detalleServicio || "", 240);
-    const precioCatalogo = b.precioCatalogo === null || b.precioCatalogo === undefined || b.precioCatalogo === "" ? null : Number(b.precioCatalogo) || 0;
-    const monto = Number(b.monto) || 0;
+    const subtotalCatalogo = productos.reduce((a, p) => a + (p.precioCatalogo !== null ? Number(p.precioCatalogo || 0) : 0), 0);
+    const conPrecio = productos.filter((p) => p.precioCatalogo !== null).length;
+    const descuentoCombo = b.descuentoCombo !== undefined && b.descuentoCombo !== ""
+      ? Number(b.descuentoCombo) || 0
+      : (conPrecio >= 3 ? 20 : (conPrecio === 2 ? 10 : 0));
+    const totalCombo = Math.max(0, (Number(b.subtotalCatalogo) || subtotalCatalogo) - descuentoCombo);
+    const monto = Number(b.monto) || totalCombo || 0;
+    const servicio = productos.length > 1
+      ? `Combo ${productos.length} plataformas`
+      : productos[0].servicio;
 
     const imagenObj = await uploadPanelImage(b.imagen, "compras");
     const imagenUrl = imagenObj.url || "";
@@ -454,22 +499,27 @@ app.post("/rev/compra", revAuth, async (req, res) => {
     const doc = {
       tipo: "compra",
       servicio,
-      entregaTipo,
-      catalogCategory,
-      catalogSub,
-      catalogDetalle,
-      detalleServicio,
-      precioCatalogo,
+      productos,
+      comboCantidad: productos.length,
+      subtotalCatalogo,
+      descuentoCombo,
+      totalCombo,
+      entregaTipo: productos[0].entregaTipo || "",
+      catalogCategory: productos[0].catalogCategory || "",
+      catalogSub: productos[0].catalogSub || "",
+      catalogDetalle: productos[0].catalogDetalle || "",
+      detalleServicio: productos[0].detalleServicio || "",
+      precioCatalogo: productos[0].precioCatalogo,
       clienteNombre,
       clienteApellido,
       cliente: `${clienteNombre} ${clienteApellido}`.trim(),
-      perfilNombre,
-      perfilApellido,
-      perfil: `${perfilNombre} ${perfilApellido}`.trim(),
-      correo,
-      acceso,
-      serial,
-      key,
+      perfilNombre: productos[0].perfilNombre || "",
+      perfilApellido: productos[0].perfilApellido || "",
+      perfil: productos[0].perfil || "",
+      correo: productos[0].correo || "",
+      acceso: productos[0].acceso || "",
+      serial: productos[0].serial || "",
+      key: productos[0].key || "",
       comentario,
       monto,
       destino: destino.key,
@@ -483,40 +533,44 @@ app.post("/rev/compra", revAuth, async (req, res) => {
     };
     const ref = await db.collection("compras").add(doc);
 
-    const precioTxt = precioCatalogo !== null
-      ? (precioCatalogo ? `Lps. ${precioCatalogo}` : "Por comisión")
-      : "—";
-    const datosCompra = [];
-    if (doc.perfil) datosCompra.push(`Perfil: ${doc.perfil}`);
-    if (correo) datosCompra.push(`Correo: ${correo}`);
-    if (detalleServicio) datosCompra.push(`Detalle: ${detalleServicio}`);
-    if (doc.cliente) datosCompra.push(`Cliente: ${doc.cliente}`);
-    if (acceso) datosCompra.push(`Acceso: ${acceso}`);
-    if (serial) datosCompra.push(`Serial: ${serial}`);
-    if (key) datosCompra.push(`Key: ${key}`);
-    if (!datosCompra.length && entregaTipo) datosCompra.push(`Tipo de entrega: ${entregaTipo}`);
+    const productoLineas = productos.flatMap((p, i) => {
+      const precio = p.precioCatalogo === null ? "Por comisión" : `Lps. ${p.precioCatalogo}`;
+      const datos = [];
+      if (p.perfil) datos.push(`Perfil: ${p.perfil}`);
+      if (p.correo) datos.push(`Correo: ${p.correo}`);
+      if (p.detalleServicio) datos.push(`Detalle: ${p.detalleServicio}`);
+      if (p.acceso) datos.push(`Acceso: ${p.acceso}`);
+      if (p.serial) datos.push(`Serial: ${p.serial}`);
+      if (p.key) datos.push(`Key: ${p.key}`);
+      if (!datos.length && p.entregaTipo) datos.push(`Entrega: ${p.entregaTipo}`);
+      return [
+        `${i + 1}) ${p.servicio} — ${precio}`,
+        ...datos.slice(0, 2).map((x) => `   • ${cleanTg(x, 150)}`),
+      ];
+    });
 
     const capLineas = [
-      `🛒 *COMPRA NUEVA*`,
+      productos.length > 1 ? `🛒 *COMPRA COMBO*` : `🛒 *COMPRA NUEVA*`,
       `━━━━━━━━━━━━━━`,
       `📍 Avisar: ${destino.label}`,
       `👤 Socio: ${cleanTg(socio, 80)}`,
-      `📦 Producto: ${servicio}`,
-      catalogCategory ? `🗂️ Categoría: ${catalogCategory}${catalogSub ? ` · ${catalogSub}` : ""}` : "",
-      `💰 Pago: ${monto ? `Lps. ${monto}` : "—"}${precioCatalogo !== null ? `  |  Catálogo: ${precioTxt}` : ""}`,
-      `📋 Datos:`,
-      ...datosCompra.slice(0, 6).map((x) => `• ${cleanTg(x, 180)}`),
-      comentario ? `📝 Nota: ${cleanTg(comentario, 260)}` : "",
+      `📦 Productos:`,
+      ...productoLineas,
+      ``,
+      productos.length > 1
+        ? `💰 Subtotal: Lps. ${subtotalCatalogo}\n🏷️ Descuento combo: Lps. ${descuentoCombo}\n✅ Total sugerido: Lps. ${totalCombo}\n💵 Pagado: ${monto ? `Lps. ${monto}` : "—"}`
+        : `💵 Pagado: ${monto ? `Lps. ${monto}` : "—"}${productos[0].precioCatalogo !== null ? ` | Catálogo: Lps. ${productos[0].precioCatalogo}` : ""}`,
+      comentario ? `📝 Nota: ${cleanTg(comentario, 220)}` : "",
       (imagenUrl || imagenObj.buffer) ? `📎 Comprobante adjunto` : `⚠️ Sin comprobante`,
       `🆔 Ref: ${ref.id.slice(-6)}`,
-    ].filter(Boolean);
+    ].filter((x) => x !== "");
     const cap = capLineas.join("\n").slice(0, 950);
 
     let ids = await getDestinoChatIds(destino.key);
     if (!ids.length) ids = await getAdminChatIds();
     await Promise.all(ids.map((id) => sendTelegramImageSmart(id, imagenObj, cap)));
 
-    res.json({ ok: true, id: ref.id, imagenUrl, destino: destino.key, destinoLabel: destino.label });
+    res.json({ ok: true, id: ref.id, imagenUrl, destino: destino.key, destinoLabel: destino.label, totalCombo, descuentoCombo });
   } catch (e) {
     console.error("rev/compra", e);
     res.status(e.status || 500).json({ error: e.publicError || "server", detail: e.message });
