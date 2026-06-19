@@ -1,3 +1,4 @@
+
 /* ════════════════════════════════════════════════════════════════
    server_api.js  ·  API del PANEL DE REVENDEDORES (independiente)
    ────────────────────────────────────────────────────────────────
@@ -231,6 +232,45 @@ async function sendTelegramPhoto(chatId, photoUrl, caption) {
   } catch (e) { console.error("sendTelegramPhoto", e.message); }
 }
 
+function cleanTg(v, max = 300) {
+  return (v == null ? "" : String(v)).replace(/[\*_`\[\]]/g, "").trim().slice(0, max);
+}
+function destinoInfo(destinoRaw) {
+  const destino = String(destinoRaw || "sublicuentas").trim().toLowerCase();
+  if (destino === "relojes") return { key: "relojes", label: "⌚ Relojes", fallback: "411539492", env: "RELOJES_CHAT_ID" };
+  return { key: "sublicuentas", label: "🟣 Sublicuentas", fallback: "5728675990", env: "SUBLICUENTAS_CHAT_ID" };
+}
+async function getDestinoChatIds(destinoRaw) {
+  const info = destinoInfo(destinoRaw);
+  const envIds = String(process.env[info.env] || "").split(",").map((s) => s.trim()).filter(Boolean);
+  if (envIds.length) return envIds;
+  if (info.key === "sublicuentas") {
+    const superIds = String(process.env.SUPER_ADMIN || "").split(",").map((s) => s.trim()).filter(Boolean);
+    if (superIds.length) return superIds;
+  }
+  return [info.fallback].filter(Boolean);
+}
+async function uploadPanelImage(imagen, folder = "comprobantes") {
+  if (!imagen) return "";
+  if (!/^data:image\/(jpe?g|png|webp);base64,/.test(imagen)) return "";
+  const m = imagen.match(/^data:(image\/[a-z]+);base64,(.+)$/);
+  if (!m) return "";
+  const contentType = m[1];
+  const buffer = Buffer.from(m[2], "base64");
+  if (buffer.length > 7 * 1024 * 1024) {
+    const err = new Error("imagen_muy_grande");
+    err.status = 413;
+    err.publicError = "imagen_muy_grande";
+    throw err;
+  }
+  const ext = contentType.split("/")[1].replace("jpeg", "jpg");
+  const path = `${folder}/${Date.now()}_${Math.random().toString(36).slice(2, 8)}.${ext}`;
+  const file = admin.storage().bucket(STORAGE_BUCKET).file(path);
+  await file.save(buffer, { contentType, resumable: false, metadata: { cacheControl: "public,max-age=31536000" } });
+  const [url] = await file.getSignedUrl({ action: "read", expires: "2099-12-31" });
+  return url;
+}
+
 // ── Comprobante de renovación: sube la foto + opcionalmente actualiza la fecha del servicio ──
 app.post("/rev/renovacion", revAuth, async (req, res) => {
   try {
@@ -336,6 +376,84 @@ app.post("/rev/renovar-cliente", revAuth, async (req, res) => {
   }
 });
 
+
+// ── COMPRA NUEVA: socio envía solicitud + comprobante; avisa a Telegram según destino ──
+app.post("/rev/compra", revAuth, async (req, res) => {
+  try {
+    const b = req.body || {};
+    const socio = req.rev.nombre || req.rev.nombre_norm || "Revendedor";
+    const destino = destinoInfo(b.destino);
+    const servicio = cleanTg(b.servicio, 120);
+    if (!servicio) return res.status(400).json({ error: "falta_servicio" });
+
+    const clienteNombre = cleanTg(b.clienteNombre, 80);
+    const clienteApellido = cleanTg(b.clienteApellido, 80);
+    const perfilNombre = cleanTg(b.perfilNombre, 80);
+    const perfilApellido = cleanTg(b.perfilApellido, 80);
+    const correo = cleanTg(b.correo, 160);
+    const acceso = cleanTg(b.acceso, 220);
+    const serial = cleanTg(b.serial, 220);
+    const key = cleanTg(b.key, 220);
+    const comentario = cleanTg(b.comentario, 700);
+    const entregaTipo = cleanTg(b.entregaTipo || "", 60);
+    const monto = Number(b.monto) || 0;
+
+    const imagenUrl = await uploadPanelImage(b.imagen, "compras");
+
+    const doc = {
+      tipo: "compra",
+      servicio,
+      entregaTipo,
+      clienteNombre,
+      clienteApellido,
+      cliente: `${clienteNombre} ${clienteApellido}`.trim(),
+      perfilNombre,
+      perfilApellido,
+      perfil: `${perfilNombre} ${perfilApellido}`.trim(),
+      correo,
+      acceso,
+      serial,
+      key,
+      comentario,
+      monto,
+      destino: destino.key,
+      destinoLabel: destino.label,
+      socio,
+      socio_norm: req.rev.nombre_norm || "",
+      imagenUrl,
+      estado: "pendiente",
+      createdAt: new Date(),
+    };
+    const ref = await db.collection("compras").add(doc);
+
+    const lineas = [
+      `🛒 *Nueva compra recibida*`,
+      `📣 Avisar a: ${destino.label}`,
+      `👤 Socio: ${cleanTg(socio, 80)}`,
+      `📦 Servicio: ${servicio}`,
+    ];
+    if (doc.cliente) lineas.push(`🙍 Cliente: ${doc.cliente}`);
+    if (doc.perfil) lineas.push(`👥 Perfil: ${doc.perfil}`);
+    if (correo) lineas.push(`✉️ Correo: ${correo}`);
+    if (acceso) lineas.push(`🔐 Acceso: ${acceso}`);
+    if (serial) lineas.push(`🔑 Serial: ${serial}`);
+    if (key) lineas.push(`🧩 Key: ${key}`);
+    if (monto) lineas.push(`💵 Monto: Lps. ${monto}`);
+    if (comentario) lineas.push(`📝 ${comentario}`);
+    lineas.push(imagenUrl ? `📷 Comprobante adjunto` : `📷 Sin comprobante adjunto`);
+    const cap = lineas.join("\n");
+
+    let ids = await getDestinoChatIds(destino.key);
+    if (!ids.length) ids = await getAdminChatIds();
+    await Promise.all(ids.map((id) => imagenUrl ? sendTelegramPhoto(id, imagenUrl, cap) : sendTelegramMessage(id, cap)));
+
+    res.json({ ok: true, id: ref.id, imagenUrl, destino: destino.key, destinoLabel: destino.label });
+  } catch (e) {
+    console.error("rev/compra", e);
+    res.status(e.status || 500).json({ error: e.publicError || "server", detail: e.message });
+  }
+});
+
 app.post("/rev/sugerencia", revAuth, async (req, res) => {
   try {
     const texto = (req.body.texto || "").toString().trim().slice(0, 1000);
@@ -415,6 +533,42 @@ app.get("/rev/admin/comprobantes", revAdminAuth, async (req, res) => {
     });
     res.json(lista);
   } catch (e) { console.error("rev/admin/comprobantes", e); res.status(500).json({ error: "server" }); }
+});
+
+
+// ── ADMIN: historial de compras nuevas con comprobante para Panel Dios ──
+app.get("/rev/admin/compras", revAdminAuth, async (req, res) => {
+  try {
+    const limit = Math.min(Number(req.query.limit) || 120, 300);
+    const snap = await db.collection("compras").orderBy("createdAt", "desc").limit(limit).get();
+    const lista = snap.docs.map((d) => {
+      const r = d.data() || {};
+      const ts = r.createdAt?._seconds ? r.createdAt._seconds * 1000 :
+                 r.createdAt?.seconds ? r.createdAt.seconds * 1000 :
+                 r.createdAt instanceof Date ? r.createdAt.getTime() : Date.now();
+      return {
+        id: d.id,
+        servicio: r.servicio || "",
+        entregaTipo: r.entregaTipo || "",
+        cliente: r.cliente || `${r.clienteNombre || ""} ${r.clienteApellido || ""}`.trim(),
+        perfil: r.perfil || `${r.perfilNombre || ""} ${r.perfilApellido || ""}`.trim(),
+        correo: r.correo || "",
+        acceso: r.acceso || "",
+        serial: r.serial || "",
+        key: r.key || "",
+        comentario: r.comentario || "",
+        monto: Number(r.monto) || 0,
+        destino: r.destino || "sublicuentas",
+        destinoLabel: r.destinoLabel || destinoInfo(r.destino).label,
+        socio: r.socio || "",
+        socio_norm: r.socio_norm || "",
+        imagenUrl: r.imagenUrl || "",
+        estado: r.estado || "pendiente",
+        ts,
+      };
+    });
+    res.json(lista);
+  } catch (e) { console.error("rev/admin/compras", e); res.status(500).json({ error: "server" }); }
 });
 
 // ── ADMIN: "ver como" ──
