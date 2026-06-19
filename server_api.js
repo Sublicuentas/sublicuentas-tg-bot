@@ -22,6 +22,8 @@ const jwt = require("jsonwebtoken");
 
 // Reusa Firebase ya inicializado en el core (no arranca el bot)
 const { db, PORT } = require("./index_01_core");
+const admin = require("firebase-admin");
+const STORAGE_BUCKET = process.env.STORAGE_BUCKET || `${process.env.FIREBASE_PROJECT_ID}.appspot.com`;
 
 const JWT_SECRET = process.env.JWT_SECRET || "CAMBIAME_EN_RENDER";
 const ADMIN_USER = (process.env.ADMIN_USER || "").trim().toLowerCase();
@@ -29,7 +31,7 @@ const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "";
 
 const app = express();
 app.use(cors());
-app.use(express.json({ limit: "1mb" }));
+app.use(express.json({ limit: "8mb" }));
 
 // keepalive / health (para que Render lo mantenga vivo)
 app.get("/", (_req, res) => res.type("text/plain").send("Sublicuentas Panel API OK v2-ia"));
@@ -64,6 +66,70 @@ function revParseFecha(v) {
   const d = new Date(s); return isNaN(d) ? null : d;
 }
 function revDiasRest(d) { if (!d) return null; const h = new Date(); h.setHours(0, 0, 0, 0); return Math.round((d - h) / 86400000); }
+function revFechaISO(d) {
+  if (!d) return "";
+  const x = new Date(d);
+  x.setHours(12, 0, 0, 0);
+  const y = x.getFullYear();
+  const m = String(x.getMonth() + 1).padStart(2, "0");
+  const day = String(x.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+function revParseFechaInput(v) {
+  const s = (v || "").toString().trim();
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (m) return new Date(+m[1], +m[2] - 1, +m[3], 12, 0, 0, 0);
+  return revParseFecha(s);
+}
+function revCampoFechaServicio(s) {
+  const keys = ["fechaRenovacion", "vencimiento", "vence", "fechaFin"];
+  for (const k of keys) if (s && s[k] != null && s[k] !== "") return k;
+  return "fechaRenovacion";
+}
+function revAddMonths(base, months) {
+  const d = new Date(base || Date.now());
+  d.setHours(12, 0, 0, 0);
+  const day = d.getDate();
+  d.setMonth(d.getMonth() + Number(months || 1));
+  if (d.getDate() !== day) d.setDate(0);
+  return d;
+}
+async function revActualizarFechaCliente({ clienteId, socioNorm, servicioIndex, nuevaFecha, meses }) {
+  const id = (clienteId || "").toString().trim();
+  if (!id) return { actualizado: false };
+  const ref = db.collection("clientes").doc(id);
+  const snap = await ref.get();
+  if (!snap.exists) throw Object.assign(new Error("cliente_no_existe"), { status: 404, publicError: "cliente_no_existe" });
+  const c = snap.data() || {};
+  if ((c.vendedor_norm || "") !== (socioNorm || "")) throw Object.assign(new Error("cliente_no_permitido"), { status: 403, publicError: "cliente_no_permitido" });
+  const servicios = Array.isArray(c.servicios) ? [...c.servicios] : [];
+  const ix = Number(servicioIndex);
+  if (!Number.isInteger(ix) || ix < 0 || ix >= servicios.length) throw Object.assign(new Error("servicio_no_existe"), { status: 400, publicError: "servicio_no_existe" });
+
+  const svc = { ...(servicios[ix] || {}) };
+  const campo = revCampoFechaServicio(svc);
+  const anterior = revParseFecha(svc[campo] || svc.fechaRenovacion || svc.vencimiento || svc.vence || svc.fechaFin);
+  let nf = revParseFechaInput(nuevaFecha);
+  if (!nf && meses) {
+    const base = anterior && revDiasRest(anterior) > 0 ? anterior : new Date();
+    nf = revAddMonths(base, Number(meses));
+  }
+  if (!nf || isNaN(nf)) throw Object.assign(new Error("fecha_invalida"), { status: 400, publicError: "fecha_invalida" });
+
+  svc[campo] = revFechaISO(nf);
+  svc.ultimaRenovacionAt = new Date();
+  servicios[ix] = svc;
+  await ref.update({ servicios, updatedAt: new Date(), ultimaRenovacionAt: new Date() });
+  return {
+    actualizado: true,
+    clienteId: id,
+    servicioIndex: ix,
+    campo,
+    fechaAnterior: anterior ? revFechaISO(anterior) : "",
+    nuevaFecha: revFechaISO(nf),
+    servicio: svc.plataforma || svc.servicio || svc.nombre || svc.cuenta || "Servicio",
+  };
+}
 
 // ── LOGIN (revendedor o admin) ──
 app.post("/rev/login", async (req, res) => {
@@ -153,6 +219,123 @@ async function sendTelegramMessage(chatId, text) {
   } catch (e) { console.error("sendTelegramMessage", e.message); }
 }
 
+async function sendTelegramPhoto(chatId, photoUrl, caption) {
+  const token = process.env.BOT_TOKEN;
+  if (!token) return;
+  try {
+    await fetch(`https://api.telegram.org/bot${token}/sendPhoto`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: chatId, photo: photoUrl, caption, parse_mode: "Markdown" }),
+    });
+  } catch (e) { console.error("sendTelegramPhoto", e.message); }
+}
+
+// ── Comprobante de renovación: sube la foto + opcionalmente actualiza la fecha del servicio ──
+app.post("/rev/renovacion", revAuth, async (req, res) => {
+  try {
+    const { clienteId, cliente, servicio, comentario, quien, monto, imagen, servicioIndex, nuevaFecha, meses } = req.body;
+    const socio = req.rev.nombre || req.rev.nombre_norm || "Revendedor";
+    const com = (comentario || "").toString().trim().slice(0, 600);
+
+    let renovacionFecha = null;
+    if ((nuevaFecha || meses) && clienteId !== undefined && servicioIndex !== undefined) {
+      renovacionFecha = await revActualizarFechaCliente({
+        clienteId,
+        socioNorm: req.rev.nombre_norm || "",
+        servicioIndex,
+        nuevaFecha,
+        meses,
+      });
+    }
+
+    let imagenUrl = "";
+    if (imagen && /^data:image\/(jpe?g|png|webp);base64,/.test(imagen)) {
+      const m = imagen.match(/^data:(image\/[a-z]+);base64,(.+)$/);
+      const contentType = m[1];
+      const buffer = Buffer.from(m[2], "base64");
+      if (buffer.length > 7 * 1024 * 1024) return res.status(413).json({ error: "imagen_muy_grande" });
+      const ext = contentType.split("/")[1].replace("jpeg", "jpg");
+      const path = `renovaciones/${Date.now()}_${Math.random().toString(36).slice(2, 8)}.${ext}`;
+      const file = admin.storage().bucket(STORAGE_BUCKET).file(path);
+      await file.save(buffer, { contentType, resumable: false, metadata: { cacheControl: "public,max-age=31536000" } });
+      const [url] = await file.getSignedUrl({ action: "read", expires: "2099-12-31" });
+      imagenUrl = url;
+    }
+
+    const doc = {
+      clienteId: (clienteId || "").toString(),
+      cliente: (cliente || "").toString().slice(0, 120),
+      servicio: (renovacionFecha?.servicio || servicio || "").toString().slice(0, 120),
+      servicioIndex: Number.isInteger(Number(servicioIndex)) ? Number(servicioIndex) : null,
+      comentario: com,
+      quien: (quien || "").toString().slice(0, 120),
+      monto: Number(monto) || 0,
+      socio,
+      socio_norm: req.rev.nombre_norm || "",
+      imagenUrl,
+      fechaAnterior: renovacionFecha?.fechaAnterior || "",
+      nuevaFecha: renovacionFecha?.nuevaFecha || (nuevaFecha || "").toString().slice(0, 20),
+      renovado: !!renovacionFecha?.actualizado,
+      createdAt: new Date(),
+    };
+    const ref = await db.collection("renovaciones").add(doc);
+
+    const cap = `🧾 *Comprobante de renovación*
+👤 Socio: ${socio}
+🙍 Cliente: ${doc.cliente || "—"}
+📦 ${doc.servicio || "—"}`
+      + (doc.monto ? `
+💵 Lps. ${doc.monto}` : "")
+      + (doc.quien ? `
+🔁 Renovó: ${doc.quien}` : "")
+      + (doc.renovado ? `
+📅 Nueva fecha: ${doc.nuevaFecha}` : "")
+      + (com ? `
+📝 ${com}` : "");
+    const ids = await getAdminChatIds();
+    await Promise.all(ids.map((id) => imagenUrl ? sendTelegramPhoto(id, imagenUrl, cap) : sendTelegramMessage(id, cap)));
+
+    res.json({ ok: true, id: ref.id, imagenUrl, renovado: doc.renovado, nuevaFecha: doc.nuevaFecha });
+  } catch (e) {
+    console.error("rev/renovacion", e);
+    res.status(e.status || 500).json({ error: e.publicError || "server", detail: e.message });
+  }
+});
+
+// ── Renovación directa sin foto: actualiza fecha del servicio del cliente ──
+app.post("/rev/renovar-cliente", revAuth, async (req, res) => {
+  try {
+    const r = await revActualizarFechaCliente({
+      clienteId: req.body.clienteId,
+      socioNorm: req.rev.nombre_norm || "",
+      servicioIndex: req.body.servicioIndex,
+      nuevaFecha: req.body.nuevaFecha,
+      meses: req.body.meses,
+    });
+    await db.collection("renovaciones").add({
+      clienteId: (req.body.clienteId || "").toString(),
+      cliente: (req.body.cliente || "").toString().slice(0, 120),
+      servicio: r.servicio,
+      servicioIndex: r.servicioIndex,
+      comentario: (req.body.comentario || "Renovación directa desde panel").toString().slice(0, 600),
+      quien: (req.body.quien || "Panel socio").toString().slice(0, 120),
+      monto: Number(req.body.monto) || 0,
+      socio: req.rev.nombre || req.rev.nombre_norm || "Revendedor",
+      socio_norm: req.rev.nombre_norm || "",
+      imagenUrl: "",
+      fechaAnterior: r.fechaAnterior || "",
+      nuevaFecha: r.nuevaFecha || "",
+      renovado: true,
+      createdAt: new Date(),
+    });
+    res.json({ ok: true, ...r });
+  } catch (e) {
+    console.error("rev/renovar-cliente", e);
+    res.status(e.status || 500).json({ error: e.publicError || "server", detail: e.message });
+  }
+});
+
 app.post("/rev/sugerencia", revAuth, async (req, res) => {
   try {
     const texto = (req.body.texto || "").toString().trim().slice(0, 1000);
@@ -201,6 +384,37 @@ app.get("/rev/admin/revendedores", revAdminAuth, async (req, res) => {
     }).sort((a, b) => b.clientes - a.clientes);
     res.json(lista);
   } catch (e) { console.error("rev/admin", e); res.status(500).json({ error: "server" }); }
+});
+
+// ── ADMIN: historial de comprobantes con foto para Panel Dios ──
+app.get("/rev/admin/comprobantes", revAdminAuth, async (req, res) => {
+  try {
+    const limit = Math.min(Number(req.query.limit) || 120, 300);
+    const snap = await db.collection("renovaciones").orderBy("createdAt", "desc").limit(limit).get();
+    const lista = snap.docs.map((d) => {
+      const r = d.data() || {};
+      const ts = r.createdAt?._seconds ? r.createdAt._seconds * 1000 :
+                 r.createdAt?.seconds ? r.createdAt.seconds * 1000 :
+                 r.createdAt instanceof Date ? r.createdAt.getTime() : Date.now();
+      return {
+        id: d.id,
+        clienteId: r.clienteId || "",
+        cliente: r.cliente || "",
+        servicio: r.servicio || "",
+        comentario: r.comentario || "",
+        quien: r.quien || "",
+        monto: Number(r.monto) || 0,
+        socio: r.socio || "",
+        socio_norm: r.socio_norm || "",
+        imagenUrl: r.imagenUrl || "",
+        renovado: !!r.renovado,
+        fechaAnterior: r.fechaAnterior || "",
+        nuevaFecha: r.nuevaFecha || "",
+        ts,
+      };
+    });
+    res.json(lista);
+  } catch (e) { console.error("rev/admin/comprobantes", e); res.status(500).json({ error: "server" }); }
 });
 
 // ── ADMIN: "ver como" ──
