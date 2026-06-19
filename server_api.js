@@ -396,6 +396,11 @@ app.post("/rev/compra", revAuth, async (req, res) => {
     const key = cleanTg(b.key, 220);
     const comentario = cleanTg(b.comentario, 700);
     const entregaTipo = cleanTg(b.entregaTipo || "", 60);
+    const catalogCategory = cleanTg(b.catalogCategory || "", 120);
+    const catalogSub = cleanTg(b.catalogSub || "", 160);
+    const catalogDetalle = cleanTg(b.catalogDetalle || "", 700);
+    const detalleServicio = cleanTg(b.detalleServicio || "", 240);
+    const precioCatalogo = b.precioCatalogo === null || b.precioCatalogo === undefined || b.precioCatalogo === "" ? null : Number(b.precioCatalogo) || 0;
     const monto = Number(b.monto) || 0;
 
     const imagenUrl = await uploadPanelImage(b.imagen, "compras");
@@ -404,6 +409,11 @@ app.post("/rev/compra", revAuth, async (req, res) => {
       tipo: "compra",
       servicio,
       entregaTipo,
+      catalogCategory,
+      catalogSub,
+      catalogDetalle,
+      detalleServicio,
+      precioCatalogo,
       clienteNombre,
       clienteApellido,
       cliente: `${clienteNombre} ${clienteApellido}`.trim(),
@@ -432,14 +442,20 @@ app.post("/rev/compra", revAuth, async (req, res) => {
       `👤 Socio: ${cleanTg(socio, 80)}`,
       `📦 Servicio: ${servicio}`,
     ];
+    if (catalogCategory) lineas.push(`🗂️ Catálogo: ${catalogCategory}`);
+    if (catalogSub) lineas.push(`📌 Plan: ${catalogSub}`);
+    if (precioCatalogo !== null) lineas.push(`🏷️ Precio catálogo: ${precioCatalogo ? `Lps. ${precioCatalogo}` : "Por comisión"}`);
+    if (entregaTipo) lineas.push(`⚙️ Tipo: ${entregaTipo}`);
     if (doc.cliente) lineas.push(`🙍 Cliente: ${doc.cliente}`);
     if (doc.perfil) lineas.push(`👥 Perfil: ${doc.perfil}`);
     if (correo) lineas.push(`✉️ Correo: ${correo}`);
+    if (detalleServicio) lineas.push(`🧾 Detalle solicitado: ${detalleServicio}`);
     if (acceso) lineas.push(`🔐 Acceso: ${acceso}`);
     if (serial) lineas.push(`🔑 Serial: ${serial}`);
     if (key) lineas.push(`🧩 Key: ${key}`);
     if (monto) lineas.push(`💵 Monto: Lps. ${monto}`);
     if (comentario) lineas.push(`📝 ${comentario}`);
+    if (catalogDetalle) lineas.push(`ℹ️ Detalle catálogo: ${catalogDetalle}`);
     lineas.push(imagenUrl ? `📷 Comprobante adjunto` : `📷 Sin comprobante adjunto`);
     const cap = lineas.join("\n");
 
@@ -550,6 +566,11 @@ app.get("/rev/admin/compras", revAdminAuth, async (req, res) => {
         id: d.id,
         servicio: r.servicio || "",
         entregaTipo: r.entregaTipo || "",
+        catalogCategory: r.catalogCategory || "",
+        catalogSub: r.catalogSub || "",
+        catalogDetalle: r.catalogDetalle || "",
+        detalleServicio: r.detalleServicio || "",
+        precioCatalogo: r.precioCatalogo === null || r.precioCatalogo === undefined ? null : Number(r.precioCatalogo) || 0,
         cliente: r.cliente || `${r.clienteNombre || ""} ${r.clienteApellido || ""}`.trim(),
         perfil: r.perfil || `${r.perfilNombre || ""} ${r.perfilApellido || ""}`.trim(),
         correo: r.correo || "",
