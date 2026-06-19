@@ -1,3 +1,4 @@
+
 /* ════════════════════════════════════════════════════════════════
    server_api.js  ·  API del PANEL DE REVENDEDORES (independiente)
    ────────────────────────────────────────────────────────────────
@@ -43,7 +44,7 @@ app.use(express.json({ limit: "15mb" }));
 
 // keepalive / health (para que Render lo mantenga vivo)
 app.get("/", (_req, res) => res.type("text/plain").send("Sublicuentas Panel API OK v2-ia"));
-app.get("/rev/ping", (_req, res) => res.json({ v: "3-img-fix", gemini: !!process.env.GEMINI_API_KEY, anthropic: !!process.env.ANTHROPIC_API_KEY, storageBuckets: STORAGE_BUCKET_CANDIDATES }));
+app.get("/rev/ping", (_req, res) => res.json({ v: "4-tg-clean", gemini: !!process.env.GEMINI_API_KEY, anthropic: !!process.env.ANTHROPIC_API_KEY, storageBuckets: STORAGE_BUCKET_CANDIDATES }));
 app.get("/health", (_req, res) => res.json({ ok: true, ts: Date.now() }));
 
 // ── helpers ──
@@ -364,18 +365,19 @@ app.post("/rev/renovacion", revAuth, async (req, res) => {
     };
     const ref = await db.collection("renovaciones").add(doc);
 
-    const cap = `🧾 *Comprobante de renovación*
-👤 Socio: ${socio}
-🙍 Cliente: ${doc.cliente || "—"}
-📦 ${doc.servicio || "—"}`
-      + (doc.monto ? `
-💵 Lps. ${doc.monto}` : "")
-      + (doc.quien ? `
-🔁 Renovó: ${doc.quien}` : "")
-      + (doc.renovado ? `
-📅 Nueva fecha: ${doc.nuevaFecha}` : "")
-      + (com ? `
-📝 ${com}` : "");
+    const cap = [
+      `🧾 *RENOVACIÓN RECIBIDA*`,
+      `━━━━━━━━━━━━━━`,
+      `👤 Socio: ${cleanTg(socio, 80)}`,
+      `🙍 Cliente: ${cleanTg(doc.cliente || "—", 120)}`,
+      `📦 Servicio: ${cleanTg(doc.servicio || "—", 120)}`,
+      doc.renovado ? `📅 Nueva fecha: ${cleanTg(doc.nuevaFecha || "—", 30)}` : "",
+      doc.monto ? `💵 Pago: Lps. ${doc.monto}` : "",
+      doc.quien ? `🔁 Renovó: ${cleanTg(doc.quien, 80)}` : "",
+      com ? `📝 Nota: ${cleanTg(com, 260)}` : "",
+      (imagenUrl || imagenObj.buffer) ? `📎 Comprobante adjunto` : `⚠️ Sin comprobante`,
+      `🆔 Ref: ${ref.id.slice(-6)}`,
+    ].filter(Boolean).join("\n");
     const ids = await getAdminChatIds();
     await Promise.all(ids.map((id) => sendTelegramImageSmart(id, imagenObj, cap)));
 
@@ -481,28 +483,34 @@ app.post("/rev/compra", revAuth, async (req, res) => {
     };
     const ref = await db.collection("compras").add(doc);
 
-    const lineas = [
-      `🛒 *Nueva compra recibida*`,
-      `📣 Avisar a: ${destino.label}`,
+    const precioTxt = precioCatalogo !== null
+      ? (precioCatalogo ? `Lps. ${precioCatalogo}` : "Por comisión")
+      : "—";
+    const datosCompra = [];
+    if (doc.perfil) datosCompra.push(`Perfil: ${doc.perfil}`);
+    if (correo) datosCompra.push(`Correo: ${correo}`);
+    if (detalleServicio) datosCompra.push(`Detalle: ${detalleServicio}`);
+    if (doc.cliente) datosCompra.push(`Cliente: ${doc.cliente}`);
+    if (acceso) datosCompra.push(`Acceso: ${acceso}`);
+    if (serial) datosCompra.push(`Serial: ${serial}`);
+    if (key) datosCompra.push(`Key: ${key}`);
+    if (!datosCompra.length && entregaTipo) datosCompra.push(`Tipo de entrega: ${entregaTipo}`);
+
+    const capLineas = [
+      `🛒 *COMPRA NUEVA*`,
+      `━━━━━━━━━━━━━━`,
+      `📍 Avisar: ${destino.label}`,
       `👤 Socio: ${cleanTg(socio, 80)}`,
-      `📦 Servicio: ${servicio}`,
-    ];
-    if (catalogCategory) lineas.push(`🗂️ Catálogo: ${catalogCategory}`);
-    if (catalogSub) lineas.push(`📌 Plan: ${catalogSub}`);
-    if (precioCatalogo !== null) lineas.push(`🏷️ Precio catálogo: ${precioCatalogo ? `Lps. ${precioCatalogo}` : "Por comisión"}`);
-    if (entregaTipo) lineas.push(`⚙️ Tipo: ${entregaTipo}`);
-    if (doc.cliente) lineas.push(`🙍 Cliente: ${doc.cliente}`);
-    if (doc.perfil) lineas.push(`👥 Perfil: ${doc.perfil}`);
-    if (correo) lineas.push(`✉️ Correo: ${correo}`);
-    if (detalleServicio) lineas.push(`🧾 Detalle solicitado: ${detalleServicio}`);
-    if (acceso) lineas.push(`🔐 Acceso: ${acceso}`);
-    if (serial) lineas.push(`🔑 Serial: ${serial}`);
-    if (key) lineas.push(`🧩 Key: ${key}`);
-    if (monto) lineas.push(`💵 Monto: Lps. ${monto}`);
-    if (comentario) lineas.push(`📝 ${comentario}`);
-    if (catalogDetalle) lineas.push(`ℹ️ Detalle catálogo: ${catalogDetalle}`);
-    lineas.push((imagenUrl || imagenObj.buffer) ? `📷 Comprobante adjunto` : `📷 Sin comprobante adjunto`);
-    const cap = lineas.join("\n");
+      `📦 Producto: ${servicio}`,
+      catalogCategory ? `🗂️ Categoría: ${catalogCategory}${catalogSub ? ` · ${catalogSub}` : ""}` : "",
+      `💰 Pago: ${monto ? `Lps. ${monto}` : "—"}${precioCatalogo !== null ? `  |  Catálogo: ${precioTxt}` : ""}`,
+      `📋 Datos:`,
+      ...datosCompra.slice(0, 6).map((x) => `• ${cleanTg(x, 180)}`),
+      comentario ? `📝 Nota: ${cleanTg(comentario, 260)}` : "",
+      (imagenUrl || imagenObj.buffer) ? `📎 Comprobante adjunto` : `⚠️ Sin comprobante`,
+      `🆔 Ref: ${ref.id.slice(-6)}`,
+    ].filter(Boolean);
+    const cap = capLineas.join("\n").slice(0, 950);
 
     let ids = await getDestinoChatIds(destino.key);
     if (!ids.length) ids = await getAdminChatIds();
