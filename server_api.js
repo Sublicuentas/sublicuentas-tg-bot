@@ -1,4 +1,3 @@
-
 /* ════════════════════════════════════════════════════════════════
    server_api.js  ·  API del PANEL DE REVENDEDORES (independiente)
    ────────────────────────────────────────────────────────────────
@@ -14,6 +13,7 @@
      JWT_SECRET           (una frase larga aleatoria)
      ADMIN_USER           (tu usuario admin)
      ADMIN_PASSWORD       (tu clave admin)
+     STORAGE_BUCKET       (opcional, ej. tu-proyecto.firebasestorage.app o tu-proyecto.appspot.com)
    ════════════════════════════════════════════════════════════════ */
 
 const express = require("express");
@@ -24,7 +24,14 @@ const jwt = require("jsonwebtoken");
 // Reusa Firebase ya inicializado en el core (no arranca el bot)
 const { db, PORT } = require("./index_01_core");
 const admin = require("firebase-admin");
-const STORAGE_BUCKET = process.env.STORAGE_BUCKET || `${process.env.FIREBASE_PROJECT_ID}.appspot.com`;
+const STORAGE_BUCKET_CANDIDATES = Array.from(new Set([
+  process.env.STORAGE_BUCKET,
+  process.env.FIREBASE_STORAGE_BUCKET,
+  process.env.GCLOUD_STORAGE_BUCKET,
+  process.env.FIREBASE_PROJECT_ID ? `${process.env.FIREBASE_PROJECT_ID}.appspot.com` : "",
+  process.env.FIREBASE_PROJECT_ID ? `${process.env.FIREBASE_PROJECT_ID}.firebasestorage.app` : "",
+].map((s) => String(s || "").trim()).filter(Boolean)));
+const STORAGE_BUCKET = STORAGE_BUCKET_CANDIDATES[0] || "";
 
 const JWT_SECRET = process.env.JWT_SECRET || "CAMBIAME_EN_RENDER";
 const ADMIN_USER = (process.env.ADMIN_USER || "").trim().toLowerCase();
@@ -32,11 +39,11 @@ const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "";
 
 const app = express();
 app.use(cors());
-app.use(express.json({ limit: "8mb" }));
+app.use(express.json({ limit: "15mb" }));
 
 // keepalive / health (para que Render lo mantenga vivo)
 app.get("/", (_req, res) => res.type("text/plain").send("Sublicuentas Panel API OK v2-ia"));
-app.get("/rev/ping", (_req, res) => res.json({ v: "2-ia", gemini: !!process.env.GEMINI_API_KEY, anthropic: !!process.env.ANTHROPIC_API_KEY }));
+app.get("/rev/ping", (_req, res) => res.json({ v: "3-img-fix", gemini: !!process.env.GEMINI_API_KEY, anthropic: !!process.env.ANTHROPIC_API_KEY, storageBuckets: STORAGE_BUCKET_CANDIDATES }));
 app.get("/health", (_req, res) => res.json({ ok: true, ts: Date.now() }));
 
 // ── helpers ──
@@ -222,14 +229,39 @@ async function sendTelegramMessage(chatId, text) {
 
 async function sendTelegramPhoto(chatId, photoUrl, caption) {
   const token = process.env.BOT_TOKEN;
-  if (!token) return;
+  if (!token || !photoUrl) return false;
   try {
-    await fetch(`https://api.telegram.org/bot${token}/sendPhoto`, {
+    const r = await fetch(`https://api.telegram.org/bot${token}/sendPhoto`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ chat_id: chatId, photo: photoUrl, caption, parse_mode: "Markdown" }),
     });
-  } catch (e) { console.error("sendTelegramPhoto", e.message); }
+    if (!r.ok) console.error("sendTelegramPhoto", await r.text().catch(() => r.statusText));
+    return r.ok;
+  } catch (e) { console.error("sendTelegramPhoto", e.message); return false; }
+}
+
+async function sendTelegramPhotoBuffer(chatId, imageObj, caption) {
+  const token = process.env.BOT_TOKEN;
+  if (!token || !imageObj?.buffer) return false;
+  try {
+    if (typeof FormData !== "function" || typeof Blob !== "function") return false;
+    const fd = new FormData();
+    fd.append("chat_id", String(chatId));
+    fd.append("caption", caption || "");
+    fd.append("parse_mode", "Markdown");
+    fd.append("photo", new Blob([imageObj.buffer], { type: imageObj.contentType || "image/jpeg" }), imageObj.filename || "comprobante.jpg");
+    const r = await fetch(`https://api.telegram.org/bot${token}/sendPhoto`, { method: "POST", body: fd });
+    if (!r.ok) console.error("sendTelegramPhotoBuffer", await r.text().catch(() => r.statusText));
+    return r.ok;
+  } catch (e) { console.error("sendTelegramPhotoBuffer", e.message); return false; }
+}
+
+async function sendTelegramImageSmart(chatId, imageObj, caption) {
+  if (imageObj?.url && await sendTelegramPhoto(chatId, imageObj.url, caption)) return true;
+  if (imageObj?.buffer && await sendTelegramPhotoBuffer(chatId, imageObj, caption)) return true;
+  await sendTelegramMessage(chatId, caption);
+  return false;
 }
 
 function cleanTg(v, max = 300) {
@@ -250,12 +282,11 @@ async function getDestinoChatIds(destinoRaw) {
   }
   return [info.fallback].filter(Boolean);
 }
-async function uploadPanelImage(imagen, folder = "comprobantes") {
-  if (!imagen) return "";
-  if (!/^data:image\/(jpe?g|png|webp);base64,/.test(imagen)) return "";
-  const m = imagen.match(/^data:(image\/[a-z]+);base64,(.+)$/);
-  if (!m) return "";
-  const contentType = m[1];
+function parsePanelImage(imagen) {
+  if (!imagen) return null;
+  const m = String(imagen).match(/^data:(image\/(?:jpe?g|png|webp));base64,(.+)$/);
+  if (!m) return null;
+  const contentType = m[1].replace("image/jpg", "image/jpeg");
   const buffer = Buffer.from(m[2], "base64");
   if (buffer.length > 7 * 1024 * 1024) {
     const err = new Error("imagen_muy_grande");
@@ -264,11 +295,33 @@ async function uploadPanelImage(imagen, folder = "comprobantes") {
     throw err;
   }
   const ext = contentType.split("/")[1].replace("jpeg", "jpg");
-  const path = `${folder}/${Date.now()}_${Math.random().toString(36).slice(2, 8)}.${ext}`;
-  const file = admin.storage().bucket(STORAGE_BUCKET).file(path);
-  await file.save(buffer, { contentType, resumable: false, metadata: { cacheControl: "public,max-age=31536000" } });
-  const [url] = await file.getSignedUrl({ action: "read", expires: "2099-12-31" });
-  return url;
+  return { contentType, buffer, ext, filename: `comprobante_${Date.now()}.${ext}` };
+}
+
+async function uploadPanelImage(imagen, folder = "comprobantes") {
+  const parsed = parsePanelImage(imagen);
+  if (!parsed) return { url: "", buffer: null, contentType: "", filename: "", storageError: "" };
+
+  const path = `${folder}/${Date.now()}_${Math.random().toString(36).slice(2, 8)}.${parsed.ext}`;
+  let lastError = null;
+  for (const bucketName of STORAGE_BUCKET_CANDIDATES) {
+    try {
+      const file = admin.storage().bucket(bucketName).file(path);
+      await file.save(parsed.buffer, {
+        contentType: parsed.contentType,
+        resumable: false,
+        metadata: { cacheControl: "public,max-age=31536000" },
+      });
+      const [url] = await file.getSignedUrl({ action: "read", expires: "2099-12-31" });
+      return { ...parsed, url, bucketName, storageError: "" };
+    } catch (e) {
+      lastError = e;
+      console.error("uploadPanelImage bucket fail", bucketName, e.message);
+    }
+  }
+
+  // No botamos la compra/renovación si Storage falla: se manda la foto directo a Telegram.
+  return { ...parsed, url: "", bucketName: "", storageError: lastError ? lastError.message : "storage_no_configurado" };
 }
 
 // ── Comprobante de renovación: sube la foto + opcionalmente actualiza la fecha del servicio ──
@@ -289,19 +342,8 @@ app.post("/rev/renovacion", revAuth, async (req, res) => {
       });
     }
 
-    let imagenUrl = "";
-    if (imagen && /^data:image\/(jpe?g|png|webp);base64,/.test(imagen)) {
-      const m = imagen.match(/^data:(image\/[a-z]+);base64,(.+)$/);
-      const contentType = m[1];
-      const buffer = Buffer.from(m[2], "base64");
-      if (buffer.length > 7 * 1024 * 1024) return res.status(413).json({ error: "imagen_muy_grande" });
-      const ext = contentType.split("/")[1].replace("jpeg", "jpg");
-      const path = `renovaciones/${Date.now()}_${Math.random().toString(36).slice(2, 8)}.${ext}`;
-      const file = admin.storage().bucket(STORAGE_BUCKET).file(path);
-      await file.save(buffer, { contentType, resumable: false, metadata: { cacheControl: "public,max-age=31536000" } });
-      const [url] = await file.getSignedUrl({ action: "read", expires: "2099-12-31" });
-      imagenUrl = url;
-    }
+    const imagenObj = await uploadPanelImage(imagen, "renovaciones");
+    const imagenUrl = imagenObj.url || "";
 
     const doc = {
       clienteId: (clienteId || "").toString(),
@@ -314,6 +356,7 @@ app.post("/rev/renovacion", revAuth, async (req, res) => {
       socio,
       socio_norm: req.rev.nombre_norm || "",
       imagenUrl,
+      imagenStorageError: imagenObj.storageError || "",
       fechaAnterior: renovacionFecha?.fechaAnterior || "",
       nuevaFecha: renovacionFecha?.nuevaFecha || (nuevaFecha || "").toString().slice(0, 20),
       renovado: !!renovacionFecha?.actualizado,
@@ -334,7 +377,7 @@ app.post("/rev/renovacion", revAuth, async (req, res) => {
       + (com ? `
 📝 ${com}` : "");
     const ids = await getAdminChatIds();
-    await Promise.all(ids.map((id) => imagenUrl ? sendTelegramPhoto(id, imagenUrl, cap) : sendTelegramMessage(id, cap)));
+    await Promise.all(ids.map((id) => sendTelegramImageSmart(id, imagenObj, cap)));
 
     res.json({ ok: true, id: ref.id, imagenUrl, renovado: doc.renovado, nuevaFecha: doc.nuevaFecha });
   } catch (e) {
@@ -403,7 +446,8 @@ app.post("/rev/compra", revAuth, async (req, res) => {
     const precioCatalogo = b.precioCatalogo === null || b.precioCatalogo === undefined || b.precioCatalogo === "" ? null : Number(b.precioCatalogo) || 0;
     const monto = Number(b.monto) || 0;
 
-    const imagenUrl = await uploadPanelImage(b.imagen, "compras");
+    const imagenObj = await uploadPanelImage(b.imagen, "compras");
+    const imagenUrl = imagenObj.url || "";
 
     const doc = {
       tipo: "compra",
@@ -431,6 +475,7 @@ app.post("/rev/compra", revAuth, async (req, res) => {
       socio,
       socio_norm: req.rev.nombre_norm || "",
       imagenUrl,
+      imagenStorageError: imagenObj.storageError || "",
       estado: "pendiente",
       createdAt: new Date(),
     };
@@ -456,12 +501,12 @@ app.post("/rev/compra", revAuth, async (req, res) => {
     if (monto) lineas.push(`💵 Monto: Lps. ${monto}`);
     if (comentario) lineas.push(`📝 ${comentario}`);
     if (catalogDetalle) lineas.push(`ℹ️ Detalle catálogo: ${catalogDetalle}`);
-    lineas.push(imagenUrl ? `📷 Comprobante adjunto` : `📷 Sin comprobante adjunto`);
+    lineas.push((imagenUrl || imagenObj.buffer) ? `📷 Comprobante adjunto` : `📷 Sin comprobante adjunto`);
     const cap = lineas.join("\n");
 
     let ids = await getDestinoChatIds(destino.key);
     if (!ids.length) ids = await getAdminChatIds();
-    await Promise.all(ids.map((id) => imagenUrl ? sendTelegramPhoto(id, imagenUrl, cap) : sendTelegramMessage(id, cap)));
+    await Promise.all(ids.map((id) => sendTelegramImageSmart(id, imagenObj, cap)));
 
     res.json({ ok: true, id: ref.id, imagenUrl, destino: destino.key, destinoLabel: destino.label });
   } catch (e) {
