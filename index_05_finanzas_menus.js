@@ -392,7 +392,7 @@ async function menuClientes(chatId) {
     [{ text: "📅 Renovaciones del día", callback_data: "menu:renovaciones" }, { text: "👤 Revendedores", callback_data: "rev:lista" }],
     [{ text: "📊 Resumen CRM", callback_data: "cli:crm:resumen" }, { text: "🗂️ TXT por vendedor", callback_data: "cli:txt:vendedores_split" }],
     [{ text: "🟢 TXT vigentes", callback_data: "cli:txt:vigentes" }, { text: "🔴 TXT no vigentes", callback_data: "cli:txt:no_vigentes" }],
-    [{ text: "📄 TXT general", callback_data: "cli:txt:general" }, { text: "📒 Agenda simple", callback_data: "cli:txt:agenda" }],
+    [{ text: "📊 Excel clientes", callback_data: "cli:excel:general" }, { text: "📒 Agenda simple", callback_data: "cli:txt:agenda" }],
     [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
   ]);
 }
