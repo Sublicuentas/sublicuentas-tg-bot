@@ -906,18 +906,26 @@ async function exportarFinanzasRangoExcel(chatId, fechaInicio, fechaFin, _userId
     const { generarReporteExcelPorRango } = require("./index_10_reportes_excel");
     const buffer = await generarReporteExcelPorRango(ini, fin);
     
-    if (!buffer || buffer.length === 0) return bot.sendMessage(chatId, "❌ Error al generar");
+    if (!buffer || buffer.length === 0) {
+      await bot.sendMessage(chatId, "❌ Error al generar el archivo");
+      return menuFinReportes(chatId);
+    }
     
+    // ENVIAR EXCEL
     await bot.sendDocument(chatId, buffer, 
-      { caption: "📊 Finanzas
-✅ Resumen, Ingresos, Egresos, Análisis" }, 
+      { caption: "📊 *Finanzas del ${ini} al ${fin}*\n✅ 5 hojas profesionales con gráficos y filtros" }, 
       { filename: `finanzas_${ini.replace(/\//g, "-")}_${fin.replace(/\//g, "-")}.xlsx`,
         contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }
     );
-    return true;
+    
+    // ✅ VOLVER AL MENÚ DE REPORTES
+    await bot.sendMessage(chatId, "✅ Excel generado correctamente");
+    return menuFinReportes(chatId);
+    
   } catch (e) {
     logErr("exportarFinanzasRangoExcel", e);
-    return bot.sendMessage(chatId, "❌ Error: " + e.message);
+    await bot.sendMessage(chatId, "❌ Error: " + e.message);
+    return menuFinReportes(chatId);
   }
 }
 
