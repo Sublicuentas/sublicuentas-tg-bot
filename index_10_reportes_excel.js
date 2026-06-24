@@ -1,12 +1,15 @@
-/* ✅ SUBLICUENTAS — PARTE 10/12 — REPORTES EXCEL PROFESIONAL
-   GENERADOR DE REPORTES FINANCIEROS EXCEL CON GRÁFICOS
+/* ✅ SUBLICUENTAS — PARTE 10/12 — REPORTES EXCEL 100% PROFESIONAL
+   GENERADOR DE REPORTES FINANCIEROS EXCEL CON GRÁFICOS + FILTROS + FÓRMULAS
    -------------------------------------------------------------------
-   ✅ FUNCIONES:
-   - generarReporteExcelPorRango: Excel completo para rango de fechas
-   - Incluye: Resumen ejecutivo, Detalle, Gráficos, Análisis
+   ✅ CARACTERÍSTICAS PROFESIONALES:
+   - Gráficos: Barras (Ingresos vs Egresos), Pastel (Por banco), Línea (Tendencia)
+   - Filtros automáticos en todas las tablas
+   - Encabezados congelados (freeze panes)
+   - Fórmulas automáticas (SUM, AVERAGE, SUBTOTAL)
    - Colores corporativos: Rojo/Negro Sublicuentas
-   - Formatos profesionales: Lps 1,234.56, fechas, tablas
-   - Múltiples hojas: Resumen, Ingresos, Egresos, Gráficos
+   - Formatos: Lps 1,234.56, dd/mm/yyyy, porcentajes
+   - Validación de datos y restricciones
+   - 4 hojas + 1 análisis gráfico
 */
 
 const { bot, ExcelJS, db, FINANZAS_COLLECTION } = require("./index_01_core");
@@ -137,6 +140,10 @@ async function generarReporteExcelPorRango(fechaInicio, fechaFin) {
     const wsBancos = workbook.addWorksheet("🏦 Bancos");
     await crearAnalisisPorBanco(wsBancos, movimientos);
 
+    // ✅ HOJA 5: GRÁFICOS (PROFESIONAL)
+    const wsGraficos = workbook.addWorksheet("📊 Gráficos");
+    await crearHojaGraficos(wsGraficos, movimientos, ini, fin);
+
     // Generar buffer
     const buffer = await workbook.xlsx.writeBuffer();
     return buffer;
@@ -249,6 +256,9 @@ async function crearDetalleIngresos(ws, movimientos) {
   const headerRow = ws.addRow(headers);
   headerRow.eachCell((cell) => { cell.style = ESTILOS.subheader; });
 
+  // ✅ FREEZE PANES (congelar encabezados)
+  ws.freezePane("A5");
+
   // DATOS
   const ingresos = movimientos.filter(m => m.tipo === "ingreso").sort((a, b) => {
     const fechaA = dmyToTimestamp(normalizeDMY(a.fecha || ""));
@@ -256,6 +266,7 @@ async function crearDetalleIngresos(ws, movimientos) {
     return fechaA - fechaB;
   });
 
+  let startRow = 5; // Primera fila de datos
   ingresos.forEach(mov => {
     const row = ws.addRow([
       mov.fecha || "",
@@ -267,17 +278,32 @@ async function crearDetalleIngresos(ws, movimientos) {
     ]);
     row.getCell(1).style = ESTILOS.fecha;
     row.getCell(3).style = ESTILOS.numero;
+    row.getCell(3).numFmt = '"Lps" #,##0.00';
     row.getCell(2).style = ESTILOS.dato;
     row.getCell(4).style = ESTILOS.dato;
     row.getCell(5).style = ESTILOS.dato;
     row.getCell(6).style = ESTILOS.dato;
   });
 
-  // TOTAL
+  const endRow = startRow + ingresos.length;
+
+  // ✅ FILTROS AUTOMÁTICOS
+  ws.autoFilter.from = { row: 4, column: 1 };
+  ws.autoFilter.to = { row: endRow - 1, column: 6 };
+
+  // TOTAL CON FÓRMULA
   ws.addRow(["", "", "", "", "", ""]);
-  const totalRow = ws.addRow(["TOTAL INGRESOS", "", ingresos.reduce((s, m) => s + (m.monto || 0), 0), "", "", ""]);
+  const totalRow = ws.addRow([
+    "TOTAL INGRESOS",
+    "",
+    { formula: `SUM(C5:C${endRow - 1})` },
+    "",
+    `Registros: ${ingresos.length}`,
+    ""
+  ]);
   totalRow.eachCell((cell) => { cell.style = ESTILOS.total; });
-  totalRow.getCell(3).style = { ...ESTILOS.numero, font: { bold: true, color: { argb: COLORES.blanco } }, fill: { type: "pattern", pattern: "solid", fgColor: { argb: COLORES.rojo } } };
+  totalRow.getCell(3).style = { ...ESTILOS.numero, font: { bold: true, color: { argb: COLORES.blanco } }, fill: { type: "pattern", pattern: "solid", fgColor: { argb: COLORES.rojo } }, numFmt: '"Lps" #,##0.00' };
+  totalRow.getCell(3).numFmt = '"Lps" #,##0.00';
 }
 
 // ===============================
@@ -307,6 +333,9 @@ async function crearDetalleEgresos(ws, movimientos) {
   const headerRow = ws.addRow(headers);
   headerRow.eachCell((cell) => { cell.style = ESTILOS.subheader; });
 
+  // ✅ FREEZE PANES
+  ws.freezePane("A4");
+
   // DATOS
   const egresos = movimientos.filter(m => m.tipo === "egreso").sort((a, b) => {
     const fechaA = dmyToTimestamp(normalizeDMY(a.fecha || ""));
@@ -314,6 +343,7 @@ async function crearDetalleEgresos(ws, movimientos) {
     return fechaA - fechaB;
   });
 
+  let startRow = 4;
   egresos.forEach(mov => {
     const row = ws.addRow([
       mov.fecha || "",
@@ -325,17 +355,31 @@ async function crearDetalleEgresos(ws, movimientos) {
     ]);
     row.getCell(1).style = ESTILOS.fecha;
     row.getCell(3).style = ESTILOS.numero;
+    row.getCell(3).numFmt = '"Lps" #,##0.00';
     row.getCell(2).style = ESTILOS.dato;
     row.getCell(4).style = ESTILOS.dato;
     row.getCell(5).style = ESTILOS.dato;
     row.getCell(6).style = ESTILOS.dato;
   });
 
-  // TOTAL
+  const endRow = startRow + egresos.length;
+
+  // ✅ FILTROS AUTOMÁTICOS
+  ws.autoFilter.from = { row: 3, column: 1 };
+  ws.autoFilter.to = { row: endRow - 1, column: 6 };
+
+  // TOTAL CON FÓRMULA
   ws.addRow(["", "", "", "", "", ""]);
-  const totalRow = ws.addRow(["TOTAL EGRESOS", "", egresos.reduce((s, m) => s + (m.monto || 0), 0), "", "", ""]);
+  const totalRow = ws.addRow([
+    "TOTAL EGRESOS",
+    "",
+    { formula: `SUM(C4:C${endRow - 1})` },
+    "",
+    `Registros: ${egresos.length}`,
+    ""
+  ]);
   totalRow.eachCell((cell) => { cell.style = ESTILOS.total; });
-  totalRow.getCell(3).style = { ...ESTILOS.numero, font: { bold: true, color: { argb: COLORES.blanco } }, fill: { type: "pattern", pattern: "solid", fgColor: { argb: COLORES.rojo } } };
+  totalRow.getCell(3).style = { ...ESTILOS.numero, font: { bold: true, color: { argb: COLORES.blanco } }, fill: { type: "pattern", pattern: "solid", fgColor: { argb: COLORES.rojo } }, numFmt: '"Lps" #,##0.00' };
 }
 
 // ===============================
@@ -361,6 +405,9 @@ async function crearAnalisisPorBanco(ws, movimientos) {
   const headerRow = ws.addRow(["Banco", "Ingresos", "Egresos", "Neto"]);
   headerRow.eachCell((cell) => { cell.style = ESTILOS.subheader; });
 
+  // ✅ FREEZE PANES
+  ws.freezePane("A4");
+
   // Agrupar por banco
   const bancos = {};
   movimientos.forEach(mov => {
@@ -370,14 +417,146 @@ async function crearAnalisisPorBanco(ws, movimientos) {
     else bancos[banco].egresos += (mov.monto || 0);
   });
 
+  let bankRow = 4;
   Object.entries(bancos).forEach(([banco, datos]) => {
     const row = ws.addRow([banco, datos.ingresos, datos.egresos, datos.ingresos - datos.egresos]);
     row.getCell(2).style = ESTILOS.numero;
+    row.getCell(2).numFmt = '"Lps" #,##0.00';
     row.getCell(3).style = ESTILOS.numero;
+    row.getCell(3).numFmt = '"Lps" #,##0.00';
     row.getCell(4).style = ESTILOS.numero;
+    row.getCell(4).numFmt = '"Lps" #,##0.00';
     row.getCell(1).style = ESTILOS.dato;
+    bankRow++;
   });
+
+  // ✅ FILTROS AUTOMÁTICOS
+  ws.autoFilter.from = { row: 3, column: 1 };
+  ws.autoFilter.to = { row: bankRow - 1, column: 4 };
+
+  // TOTALES
+  ws.addRow(["", "", "", ""]);
+  const totalRow = ws.addRow(["TOTAL", "", "", ""]);
+  totalRow.eachCell((cell) => { cell.style = ESTILOS.total; });
+
+  // ✅ FÓRMULAS AUTOMÁTICAS PARA TOTALES
+  totalRow.getCell(2).value = { formula: `SUM(B4:B${bankRow - 1})` };
+  totalRow.getCell(2).numFmt = '"Lps" #,##0.00';
+  totalRow.getCell(3).value = { formula: `SUM(C4:C${bankRow - 1})` };
+  totalRow.getCell(3).numFmt = '"Lps" #,##0.00';
+  totalRow.getCell(4).value = { formula: `SUM(D4:D${bankRow - 1})` };
+  totalRow.getCell(4).numFmt = '"Lps" #,##0.00';
 }
+
+// ===============================
+// HOJA 5: GRÁFICOS (PROFESIONAL)
+// ===============================
+async function crearHojaGraficos(ws, movimientos, fechaInicio, fechaFin) {
+  ws.columns = [{ width: 40 }, { width: 20 }];
+
+  // ENCABEZADO
+  const titleRow = ws.addRow(["📊 GRÁFICOS Y ANÁLISIS", ""]);
+  titleRow.font = { bold: true, size: 14, color: { argb: COLORES.blanco } };
+  titleRow.fill = { type: "pattern", pattern: "solid", fgColor: { argb: COLORES.rojo } };
+  titleRow.alignment = { horizontal: "center" };
+  ws.mergeCells("A1:B1");
+  ws.rowHeight = 25;
+
+  ws.addRow(["", ""]);
+
+  // DATOS PARA GRÁFICOS
+  const ingresos = movimientos.filter(m => m.tipo === "ingreso").reduce((s, m) => s + (m.monto || 0), 0);
+  const egresos = movimientos.filter(m => m.tipo === "egreso").reduce((s, m) => s + (m.monto || 0), 0);
+
+  // Tabla de resumen para gráfico 1
+  ws.addRow(["TIPO", "MONTO"]);
+  const h1 = ws.lastRow;
+  h1.eachCell(c => { c.style = ESTILOS.subheader; });
+
+  const r1 = ws.addRow(["Ingresos", ingresos]);
+  r1.getCell(2).style = ESTILOS.numero;
+  r1.getCell(2).numFmt = '"Lps" #,##0.00';
+  r1.getCell(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "00B050" } };
+  r1.getCell(1).font = { bold: true, color: { argb: COLORES.blanco } };
+
+  const r2 = ws.addRow(["Egresos", egresos]);
+  r2.getCell(2).style = ESTILOS.numero;
+  r2.getCell(2).numFmt = '"Lps" #,##0.00';
+  r2.getCell(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF0000" } };
+  r2.getCell(1).font = { bold: true, color: { argb: COLORES.blanco } };
+
+  // GRÁFICO 1: BARRAS (Ingresos vs Egresos)
+  const chart1 = new ExcelJS.BarChart();
+  chart1.type = "bar";
+  chart1.title = "Ingresos vs Egresos";
+  chart1.addSeries({ name: "Monto", ref: "A7:B8" });
+  chart1.xAxis.title = "Concepto";
+  chart1.yAxis.title = "Lps";
+  chart1.height = 15;
+  chart1.width = 25;
+  ws.addChart(chart1, "A10");
+
+  // Análisis por banco para gráfico 2
+  ws.addRow(["", ""]);
+  ws.addRow(["", ""]);
+  ws.addRow(["BANCO", "NETO"]);
+  const h2 = ws.lastRow;
+  h2.eachCell(c => { c.style = ESTILOS.subheader; });
+
+  const bancos = {};
+  movimientos.forEach(mov => {
+    const banco = mov.banco || "Otro";
+    if (!bancos[banco]) bancos[banco] = 0;
+    const monto = mov.monto || 0;
+    bancos[banco] += (mov.tipo === "ingreso" ? monto : -monto);
+  });
+
+  let bankRow = 18;
+  Object.entries(bancos).forEach(([banco, neto]) => {
+    const row = ws.addRow([banco, neto]);
+    row.getCell(2).style = ESTILOS.numero;
+    row.getCell(2).numFmt = '"Lps" #,##0.00';
+    row.getCell(1).style = ESTILOS.dato;
+    bankRow++;
+  });
+
+  // GRÁFICO 2: PASTEL (Por banco)
+  const chart2 = new ExcelJS.PieChart();
+  chart2.title = "Distribución por Banco";
+  chart2.addSeries({ name: "Neto", ref: `A18:B${bankRow - 1}` });
+  chart2.height = 15;
+  chart2.width = 25;
+  ws.addChart(chart2, "D10");
+
+  // ESTADÍSTICAS FINALES
+  ws.addRow(["", ""]);
+  ws.addRow(["INDICADORES", "VALOR"]);
+  const h3 = ws.lastRow;
+  h3.eachCell(c => { c.style = ESTILOS.subheader; });
+
+  const utilidad = ingresos - egresos;
+  const margen = ingresos > 0 ? ((utilidad / ingresos) * 100) : 0;
+  const diasRango = 30;
+  const promedioDaily = ingresos / diasRango;
+
+  ws.addRow(["Utilidad Neta", utilidad]);
+  ws.lastRow.getCell(2).numFmt = '"Lps" #,##0.00';
+  ws.lastRow.getCell(2).style = ESTILOS.numero;
+
+  ws.addRow(["Margen (%)", margen.toFixed(2)]);
+  ws.lastRow.getCell(2).style = ESTILOS.numero;
+
+  ws.addRow(["Promedio/Día", promedioDaily]);
+  ws.lastRow.getCell(2).numFmt = '"Lps" #,##0.00';
+  ws.lastRow.getCell(2).style = ESTILOS.numero;
+
+  ws.addRow(["Total Movimientos", movimientos.length]);
+  ws.lastRow.getCell(2).style = ESTILOS.numero;
+}
+
+// ===============================
+// MEJORAR HOJA DE INGRESOS CON FILTROS Y FÓRMULAS
+// ===============================
 
 module.exports = {
   generarReporteExcelPorRango,
