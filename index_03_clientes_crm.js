@@ -1293,6 +1293,41 @@ async function enviarMisClientesTXT(chatId, vendedorNombre = "") {
   return enviarTxtComoArchivo(chatId, txt, `mis_clientes_${fileSafeName(vendedorNombre, "vendedor").replace(/\.txt$/i, "")}.txt`);
 }
 
+// ===============================
+// COMANDOS TELEGRAM — DESCARGAR EXCEL CLIENTES
+// ===============================
+const { generarExcelClientesGeneral } = require("./index_11_clientes_excel");
+
+// ✅ Comando: /clientes_excel
+bot.onText(/^\/clientes_excel$/, async (msg) => {
+  const chatId = msg.chat.id;
+  const userId = msg.from.id;
+
+  // Solo admin
+  if (!isAdmin(userId)) {
+    return bot.sendMessage(chatId, "❌ Solo admin puede descargar listado de clientes");
+  }
+
+  try {
+    await bot.sendMessage(chatId, "⏳ Generando Excel de clientes... espera");
+    const buffer = await generarExcelClientesGeneral();
+
+    if (!buffer || buffer.length === 0) {
+      return bot.sendMessage(chatId, "❌ Error al generar el archivo");
+    }
+
+    await bot.sendDocument(chatId, buffer, {}, {
+      filename: `clientes_${Date.now()}.xlsx`,
+      contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    });
+
+    await bot.sendMessage(chatId, `✅ Excel de clientes generado\n👥 Incluye:\n- Resumen general\n- Listado completo (con filtros)\n- Análisis por vendedor`);
+  } catch (e) {
+    logErr("clientes_excel", e);
+    bot.sendMessage(chatId, `❌ Error: ${e.message}`);
+  }
+});
+
 module.exports = {
   humanPlataforma, renderFichaClienteMarkdown, serviciosConIndiceOriginal, dedupeClientes, clienteDuplicado,
   getCliente, buscarPorTelefonoTodos, buscarClienteRobusto,
