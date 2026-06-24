@@ -92,7 +92,25 @@ async function obtenerTodosLosClientes() {
 async function generarExcelClientesGeneral() {
   try {
     const clientes = await obtenerTodosLosClientes();
-    if (!clientes.length) throw new Error("No hay clientes");
+    
+    // ✅ SI NO HAY CLIENTES, CREAR EXCEL VACÍO CON MENSAJE
+    if (!clientes || clientes.length === 0) {
+      const workbook = new ExcelJS.Workbook();
+      const ws = workbook.addWorksheet("⚠️ Sin datos");
+      ws.columns = [{ width: 50 }];
+      
+      const row1 = ws.addRow(["⚠️ SIN CLIENTES REGISTRADOS"]);
+      row1.font = { bold: true, size: 14, color: { argb: COLORES.blanco } };
+      row1.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF9900" } };
+      row1.alignment = { horizontal: "center" };
+      ws.rowHeight = 25;
+      
+      ws.addRow(["No hay clientes registrados en el sistema."]);
+      ws.addRow(["Agrega clientes primero desde el menú Clientes/CRM."]);
+      
+      const buffer = await workbook.xlsx.writeBuffer();
+      return buffer;
+    }
 
     const workbook = new ExcelJS.Workbook();
 
