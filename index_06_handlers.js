@@ -603,6 +603,42 @@ function safeFileNameLocal(v = "", fallback = "archivo") {
   return s || fallback;
 }
 
+
+async function enviarExcelClientesGeneralBot(chatId) {
+  try {
+    await bot.sendMessage(chatId, "⏳ Generando Excel profesional de clientes...");
+    const { generarExcelClientesGeneral } = require("./index_11_clientes_excel");
+    const rawBuffer = await generarExcelClientesGeneral();
+    const buffer = Buffer.isBuffer(rawBuffer) ? rawBuffer : Buffer.from(rawBuffer);
+
+    if (!buffer || !buffer.length) {
+      return bot.sendMessage(chatId, "❌ Error al generar el archivo de clientes.");
+    }
+
+    const fecha = hoyDMY().replace(/\//g, "-");
+    await bot.sendDocument(chatId, buffer,
+      {
+        caption:
+          "📊 Excel CRM Clientes — Nivel Saiyajin\n" +
+          "✅ Resumen\n" +
+          "✅ Clientes vigentes\n" +
+          "✅ Clientes top\n" +
+          "✅ Pagos y servicios\n" +
+          "✅ Vendedores"
+      },
+      {
+        filename: `clientes_sublicuentas_${fecha}.xlsx`,
+        contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      }
+    );
+
+    return bot.sendMessage(chatId, "✅ Excel de clientes generado correctamente.");
+  } catch (e) {
+    logErr("enviarExcelClientesGeneralBot", e?.stack || e?.message || e);
+    return bot.sendMessage(chatId, `❌ Error generando Excel de clientes: ${e?.message || "desconocido"}`);
+  }
+}
+
 function formatearBloqueRenovaciones(rows = [], titulo = "") {
   const items = Array.isArray(rows) ? rows : [];
   let txt = "";
@@ -2900,6 +2936,7 @@ bot.on("callback_query", async (q) => {
         return enviarInventarioPlataforma(chatId, plataforma, 0);
       }
 
+      if (data === "cli:excel:general") return enviarExcelClientesGeneralBot(chatId);
       if (data === "cli:txt:general") return reporteClientesTXTGeneral(chatId);
       if (data === "cli:txt:agenda") return enviarAgendaSimpleClientesTXT(chatId);
       if (data === "cli:txt:vigentes") return enviarClientesPorEstadoTXT(chatId, "vigente");
