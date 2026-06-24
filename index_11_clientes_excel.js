@@ -9,7 +9,13 @@
 */
 
 const { ExcelJS, db } = require("./index_01_core");
-const { logErr } = require("./index_02_utils_roles");
+
+// logErr local (evita problemas de carga circular)
+function logErr(scope = "error", err = "") {
+  try {
+    console.error(`❌ [${scope}]`, err && err.message ? err.message : err);
+  } catch (_) {}
+}
 
 // ===============================
 // CONFIG COLORES
@@ -253,8 +259,7 @@ async function crearListadoClientes(ws, clientes) {
   });
 
   // Agregar filtros automáticos
-  ws.autoFilter.from = "A3";
-  ws.autoFilter.to = `J${clientes.length + 3}`;
+  ws.autoFilter = { from: "A3", to: `J${clientes.length + 3}` };
 }
 
 // ===============================
