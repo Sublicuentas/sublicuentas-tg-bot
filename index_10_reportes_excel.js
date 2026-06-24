@@ -2,30 +2,51 @@
    GENERADOR DE REPORTES FINANCIEROS EXCEL CON GRÁFICOS + FILTROS + FÓRMULAS
    -------------------------------------------------------------------
    ✅ CARACTERÍSTICAS PROFESIONALES:
-   - Gráficos: Barras (Ingresos vs Egresos), Pastel (Por banco), Línea (Tendencia)
+   - Gráficos: Barras (Ingresos vs Egresos), Pastel (Por banco)
    - Filtros automáticos en todas las tablas
    - Encabezados congelados (freeze panes)
-   - Fórmulas automáticas (SUM, AVERAGE, SUBTOTAL)
+   - Fórmulas automáticas (SUM, AVERAGE)
    - Colores corporativos: Rojo/Negro Sublicuentas
-   - Formatos: Lps 1,234.56, dd/mm/yyyy, porcentajes
-   - Validación de datos y restricciones
-   - 4 hojas + 1 análisis gráfico
+   - Formatos: Lps 1,234.56, dd/mm/yyyy
+   - 5 hojas: Resumen, Ingresos, Egresos, Bancos, Gráficos
 */
 
-const { bot, ExcelJS, db, FINANZAS_COLLECTION } = require("./index_01_core");
-const { logErr, moneyLps, hoyDMY } = require("./index_02_utils_roles");
+const { ExcelJS, db } = require("./index_01_core");
+const { logErr, hoyDMY } = require("./index_02_utils_roles");
+const FINANZAS_COLLECTION = "finanzas_movimientos";
 
 // ===============================
-// CONFIG COLORES CORPORATIVOS
+// HELPERS
 // ===============================
+function dmyToDate(dmy = "") {
+  const p = String(dmy || "").match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (!p) return null;
+  return new Date(Number(p[3]), Number(p[2]) - 1, Number(p[1]));
+}
+
+function dmyToTimestamp(dmy = "") {
+  const d = dmyToDate(dmy);
+  return d ? d.getTime() : 0;
+}
+
+function normalizeDMY(s = "") {
+  let v = String(s || "").trim();
+  const m = v.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (m) return `${String(Number(m[1])).padStart(2, "0")}/${String(Number(m[2])).padStart(2, "0")}/${m[3]}`;
+  v = String(v || "").replace(/[\/-]/g, "");
+  const m2 = v.match(/^(\d{1,2})(\d{1,2})(\d{4})$/);
+  if (m2) return `${String(Number(m2[1])).padStart(2, "0")}/${String(Number(m2[2])).padStart(2, "0")}/${m2[3]}`;
+  const m3 = v.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (m3) return `${String(Number(m3[3])).padStart(2, "0")}/${String(Number(m3[2])).padStart(2, "0")}/${m3[1]}`;
+  return "";
+}
+
 const COLORES = {
   rojo: "FF0000",
   negro: "000000",
-  gris_oscuro: "1F1F1F",
-  gris_claro: "E8E8E8",
-  blanco: "FFFFFF",
   verde: "00B050",
   naranja: "FF6600",
+  blanco: "FFFFFF",
 };
 
 const ESTILOS = {
@@ -38,17 +59,7 @@ const ESTILOS = {
   subheader: {
     font: { bold: true, size: 12, color: { argb: COLORES.blanco } },
     fill: { type: "pattern", pattern: "solid", fgColor: { argb: COLORES.negro } },
-    alignment: { horizontal: "left", vertical: "center" },
     border: { top: { style: "thin" }, bottom: { style: "thin" }, left: { style: "thin" }, right: { style: "thin" } },
-  },
-  total: {
-    font: { bold: true, size: 12, color: { argb: COLORES.blanco } },
-    fill: { type: "pattern", pattern: "solid", fgColor: { argb: COLORES.rojo } },
-    border: { top: { style: "medium" }, bottom: { style: "medium" }, left: { style: "thin" }, right: { style: "thin" } },
-  },
-  dato: {
-    border: { top: { style: "thin" }, bottom: { style: "thin" }, left: { style: "thin" }, right: { style: "thin" } },
-    alignment: { horizontal: "left", vertical: "center" },
   },
   numero: {
     numFmt: '"Lps" #,##0.00',
@@ -60,49 +71,24 @@ const ESTILOS = {
     border: { top: { style: "thin" }, bottom: { style: "thin" }, left: { style: "thin" }, right: { style: "thin" } },
     alignment: { horizontal: "center", vertical: "center" },
   },
+  dato: {
+    border: { top: { style: "thin" }, bottom: { style: "thin" }, left: { style: "thin" }, right: { style: "thin" } },
+  },
 };
-
-// ===============================
-// HELPERS
-// ===============================
-function dmyToDate(dmy = "") {
-  const m = String(dmy || "").match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
-  if (!m) return null;
-  return new Date(+m[3], +m[2] - 1, +m[1], 12, 0, 0, 0);
-}
-
-function dmyToTimestamp(dmy = "") {
-  const dt = dmyToDate(dmy);
-  return dt ? dt.getTime() : 0;
-}
-
-function normalizeDMY(s = "") {
-  const v = String(s || "").trim();
-  let m = v.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-  if (m) return `${String(Number(m[1])).padStart(2, "0")}/${String(Number(m[2])).padStart(2, "0")}/${m[3]}`;
-  m = v.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
-  if (m) return `${String(Number(m[3])).padStart(2, "0")}/${String(Number(m[2])).padStart(2, "0")}/${m[1]}`;
-  return "";
-}
 
 async function getMovimientosPorRango(fechaInicio, fechaFin) {
   try {
     const ini = normalizeDMY(fechaInicio);
     const fin = normalizeDMY(fechaFin);
     if (!ini || !fin) return [];
-
     const iniTs = dmyToTimestamp(ini);
-    const finTs = dmyToTimestamp(fin) + 86400000; // +1 día
-
-    const snap = await db.collection(FINANZAS_COLLECTION || "finanzas_movimientos")
+    const finTs = dmyToTimestamp(fin) + 86400000;
+    const snap = await db.collection(FINANZAS_COLLECTION)
       .where("fechaTS", ">=", iniTs)
       .where("fechaTS", "<=", finTs)
       .get();
-
     return snap.docs.map(doc => ({ id: doc.id, ...doc.data() })).sort((a, b) => {
-      const fechaA = dmyToTimestamp(normalizeDMY(a.fecha || ""));
-      const fechaB = dmyToTimestamp(normalizeDMY(b.fecha || ""));
-      return fechaA - fechaB;
+      return dmyToTimestamp(normalizeDMY(a.fecha || "")) - dmyToTimestamp(normalizeDMY(b.fecha || ""));
     });
   } catch (e) {
     logErr("getMovimientosPorRango", e);
@@ -110,63 +96,39 @@ async function getMovimientosPorRango(fechaInicio, fechaFin) {
   }
 }
 
-// ===============================
-// GENERADOR DE EXCEL
-// ===============================
 async function generarReporteExcelPorRango(fechaInicio, fechaFin) {
   try {
     const ini = normalizeDMY(fechaInicio);
     const fin = normalizeDMY(fechaFin);
-    if (!ini || !fin) throw new Error("Fechas inválidas.");
-    if (dmyToMillis(ini) > dmyToMillis(fin)) throw new Error("La fecha inicial no puede ser mayor a la final.");
-    
+    if (!ini || !fin) throw new Error("Fechas inválidas");
+    if (dmyToTimestamp(ini) > dmyToTimestamp(fin)) throw new Error("Fecha inicial mayor que final");
+
     const movimientos = await getMovimientosPorRango(ini, fin);
-    const wb = new ExcelJS.Workbook();
-    wb.creator = "Sublicuentas Bot";
-    wb.created = new Date();
-    
-    const ws = wb.addWorksheet("Finanzas");
-    ws.columns = [
-      { header: "Fecha", key: "fecha", width: 15 },
-      { header: "Tipo", key: "tipo", width: 12 },
-      { header: "Monto", key: "monto", width: 15 },
-      { header: "Plataforma/Motivo", key: "concepto", width: 30 },
-      { header: "Banco/Método", key: "extra", width: 28 },
-      { header: "Detalle", key: "detalle", width: 35 },
-      { header: "ID", key: "id", width: 28 }
-    ];
-    
-    for (const r of movimientos) {
-      ws.addRow({
-        fecha: r.fecha || "",
-        tipo: String(r.tipo || "").toLowerCase() === "egreso" ? "Egreso" : "Ingreso",
-        monto: Number(r.monto || 0),
-        concepto: r.plataforma || r.motivo || "",
-        extra: r.banco || r.metodo || "",
-        detalle: r.detalle || r.descripcion || "",
-        id: r.id || ""
-      });
-    }
-    
-    let ingresos = 0, egresos = 0;
-    for (const r of movimientos) {
-      const monto = Number(r.monto || 0);
-      if (String(r.tipo || "").toLowerCase() === "egreso") egresos += monto;
-      else ingresos += monto;
-    }
-    
-    const resumen = wb.addWorksheet("Resumen");
-    resumen.addRow(["SUBLICUENTAS — REPORTE FINANCIERO"]);
-    resumen.addRow([]);
-    resumen.addRow(["Período", ini + " - " + fin]);
-    resumen.addRow([]);
-    resumen.addRow(["CONCEPTO", "MONTO"]);
-    resumen.addRow(["Total Ingresos", ingresos]);
-    resumen.addRow(["Total Egresos", egresos]);
-    resumen.addRow(["Utilidad Neta", ingresos - egresos]);
-    resumen.addRow(["Movimientos", movimientos.length]);
-    
-    const buffer = await wb.xlsx.writeBuffer();
+    if (!movimientos.length) throw new Error("No hay movimientos en ese rango");
+
+    const workbook = new ExcelJS.Workbook();
+    const wsResumen = workbook.addWorksheet("📊 Resumen");
+    const wsIngresos = workbook.addWorksheet("📈 Ingresos");
+    const wsEgresos = workbook.addWorksheet("📉 Egresos");
+    const wsBancos = workbook.addWorksheet("🏦 Bancos");
+    const wsGraficos = workbook.addWorksheet("📊 Gráficos");
+
+    // ✅ HOJA 1: RESUMEN
+    crearResumen(wsResumen, movimientos, ini, fin);
+
+    // ✅ HOJA 2: INGRESOS CON FILTROS
+    crearIngresos(wsIngresos, movimientos);
+
+    // ✅ HOJA 3: EGRESOS CON FILTROS
+    crearEgresos(wsEgresos, movimientos);
+
+    // ✅ HOJA 4: BANCOS CON ANÁLISIS
+    crearBancos(wsBancos, movimientos);
+
+    // ✅ HOJA 5: GRÁFICOS
+    crearGraficos(wsGraficos, movimientos);
+
+    const buffer = await workbook.xlsx.writeBuffer();
     return buffer;
   } catch (e) {
     logErr("generarReporteExcelPorRango", e);
@@ -174,120 +136,68 @@ async function generarReporteExcelPorRango(fechaInicio, fechaFin) {
   }
 }
 
-// ===============================
-// HOJA 1: RESUMEN EJECUTIVO
-// ===============================
-async function crearResumenEjecutivo(ws, movimientos, fechaInicio, fechaFin) {
-  // Ancho de columnas
-  ws.columns = [
-    { width: 35 },
-    { width: 20 },
-    { width: 20 },
-  ];
-
-  // ENCABEZADO
-  const titleRow = ws.addRow(["SUBLICUENTAS — REPORTE FINANCIERO", "", ""]);
+function crearResumen(ws, movimientos, ini, fin) {
+  ws.columns = [{ width: 35 }, { width: 20 }];
+  
+  const titleRow = ws.addRow(["SUBLICUENTAS — REPORTE FINANCIERO"]);
   titleRow.font = { bold: true, size: 16, color: { argb: COLORES.blanco } };
   titleRow.fill = { type: "pattern", pattern: "solid", fgColor: { argb: COLORES.rojo } };
-  titleRow.alignment = { horizontal: "center", vertical: "center" };
-  ws.mergeCells("A1:C1");
+  ws.mergeCells("A1:B1");
   ws.rowHeight = 25;
 
-  const periodoRow = ws.addRow([`Período: ${fechaInicio} - ${fechaFin}`, "", ""]);
-  periodoRow.alignment = { horizontal: "center" };
-  ws.mergeCells("A2:C2");
+  ws.addRow([`Período: ${ini} - ${fin}`]);
+  ws.addRow([]);
 
-  ws.addRow(["", "", ""]);
-
-  // CÁLCULOS
   const ingresos = movimientos.filter(m => m.tipo === "ingreso").reduce((s, m) => s + (m.monto || 0), 0);
   const egresos = movimientos.filter(m => m.tipo === "egreso").reduce((s, m) => s + (m.monto || 0), 0);
   const utilidad = ingresos - egresos;
   const margen = ingresos > 0 ? ((utilidad / ingresos) * 100).toFixed(2) : 0;
 
-  // TABLA RESUMEN
-  ws.addRow(["CONCEPTO", "MONTO", "PORCENTAJE"]);
-  const headerRow = ws.lastRow;
-  headerRow.eachCell((cell) => {
-    cell.style = ESTILOS.subheader;
-  });
+  const headerRow = ws.addRow(["CONCEPTO", "MONTO"]);
+  headerRow.eachCell(c => { c.style = ESTILOS.subheader; });
 
-  const rowIngresos = ws.addRow(["Total Ingresos", ingresos, (ingresos / ingresos * 100).toFixed(2) + "%"]);
-  rowIngresos.getCell(2).style = { ...ESTILOS.numero };
-  rowIngresos.getCell(3).style = { ...ESTILOS.numero };
+  const rIngresos = ws.addRow(["Total Ingresos", ingresos]);
+  rIngresos.getCell(2).numFmt = '"Lps" #,##0.00';
 
-  const rowEgresos = ws.addRow(["Total Egresos", egresos, (egresos / ingresos * 100).toFixed(2) + "%"]);
-  rowEgresos.getCell(2).style = { ...ESTILOS.numero };
-  rowEgresos.getCell(3).style = { ...ESTILOS.numero };
+  const rEgresos = ws.addRow(["Total Egresos", egresos]);
+  rEgresos.getCell(2).numFmt = '"Lps" #,##0.00';
 
-  ws.addRow(["", "", ""]);
+  ws.addRow([]);
+  const rUtilidad = ws.addRow(["UTILIDAD NETA", utilidad]);
+  rUtilidad.font = { bold: true, color: { argb: COLORES.blanco } };
+  rUtilidad.fill = { type: "pattern", pattern: "solid", fgColor: { argb: COLORES.verde } };
+  rUtilidad.getCell(2).numFmt = '"Lps" #,##0.00';
+  rUtilidad.getCell(2).font = { bold: true, color: { argb: COLORES.blanco } };
+  rUtilidad.getCell(2).fill = { type: "pattern", pattern: "solid", fgColor: { argb: COLORES.verde } };
 
-  const rowUtilidad = ws.addRow(["UTILIDAD NETA", utilidad, margen + "%"]);
-  rowUtilidad.font = { bold: true, color: { argb: COLORES.blanco } };
-  rowUtilidad.fill = { type: "pattern", pattern: "solid", fgColor: { argb: COLORES.verde } };
-  rowUtilidad.getCell(2).style = { ...ESTILOS.numero, font: { bold: true, color: { argb: COLORES.blanco } }, fill: { type: "pattern", pattern: "solid", fgColor: { argb: COLORES.verde } } };
-  rowUtilidad.getCell(3).style = { ...ESTILOS.numero, font: { bold: true, color: { argb: COLORES.blanco } }, fill: { type: "pattern", pattern: "solid", fgColor: { argb: COLORES.verde } } };
-
-  // ESTADÍSTICAS
-  ws.addRow(["", "", ""]);
-  ws.addRow(["ESTADÍSTICAS", "", ""]);
-  const statsHeader = ws.lastRow;
-  statsHeader.eachCell((cell) => { cell.style = ESTILOS.subheader; });
-
-  ws.addRow(["Total movimientos", movimientos.length, ""]);
-  ws.addRow(["Promedio diario", (ingresos / 30).toFixed(2), ""]);
-  ws.addRow(["Mayor entrada", Math.max(...movimientos.filter(m => m.tipo === "ingreso").map(m => m.monto || 0)), ""]);
-  ws.addRow(["Mayor salida", Math.max(...movimientos.filter(m => m.tipo === "egreso").map(m => m.monto || 0)), ""]);
-
-  // Aplicar estilos a datos
-  for (let i = 10; i < ws.rowCount; i++) {
-    const row = ws.getRow(i);
-    row.getCell(1).style = ESTILOS.dato;
-    if (i !== 10) {
-      row.getCell(2).style = ESTILOS.numero;
-      row.getCell(3).style = ESTILOS.numero;
-    }
-  }
+  ws.addRow([]);
+  ws.addRow(["Margen", margen + "%"]);
+  ws.addRow(["Movimientos", movimientos.length]);
 }
 
-// ===============================
-// HOJA 2: INGRESOS DETALLADO
-// ===============================
-async function crearDetalleIngresos(ws, movimientos) {
+function crearIngresos(ws, movimientos) {
   ws.columns = [
-    { width: 12 },
-    { width: 20 },
-    { width: 15 },
-    { width: 15 },
-    { width: 20 },
-    { width: 30 },
+    { width: 12 }, { width: 20 }, { width: 15 }, { width: 15 }, { width: 20 }, { width: 30 }
   ];
 
-  // ENCABEZADO
   const titleRow = ws.addRow(["DETALLE DE INGRESOS", "", "", "", "", ""]);
   titleRow.font = { bold: true, size: 14, color: { argb: COLORES.blanco } };
   titleRow.fill = { type: "pattern", pattern: "solid", fgColor: { argb: COLORES.rojo } };
   ws.mergeCells("A1:F1");
-  ws.rowHeight = 20;
 
   ws.addRow(["", "", "", "", "", ""]);
 
-  // ENCABEZADOS TABLA
   const headers = ["Fecha", "Plataforma", "Monto", "Banco", "Usuario", "Detalle"];
   const headerRow = ws.addRow(headers);
-  headerRow.eachCell((cell) => { cell.style = ESTILOS.subheader; });
+  headerRow.eachCell(c => { c.style = ESTILOS.subheader; });
 
-  // ✅ FREEZE PANES (congelar encabezados)
-  ws.freezePane("A5");
+  ws.freezePane("A4");
 
-  // DATOS
-  const ingresos = movimientos.filter(m => m.tipo === "ingreso").sort((a, b) => {
-    const fechaA = dmyToTimestamp(normalizeDMY(a.fecha || ""));
-    const fechaB = dmyToTimestamp(normalizeDMY(b.fecha || ""));
-    return fechaA - fechaB;
-  });
+  const ingresos = movimientos.filter(m => m.tipo === "ingreso").sort((a, b) => 
+    dmyToTimestamp(normalizeDMY(a.fecha || "")) - dmyToTimestamp(normalizeDMY(b.fecha || ""))
+  );
 
-  let startRow = 5; // Primera fila de datos
+  let startRow = 4;
   ingresos.forEach(mov => {
     const row = ws.addRow([
       mov.fecha || "",
@@ -295,74 +205,50 @@ async function crearDetalleIngresos(ws, movimientos) {
       mov.monto || 0,
       mov.banco || "",
       mov.userName || "",
-      mov.detalle || "",
+      mov.detalle || ""
     ]);
-    row.getCell(1).style = ESTILOS.fecha;
-    row.getCell(3).style = ESTILOS.numero;
+    row.getCell(1).numFmt = "dd/mm/yyyy";
     row.getCell(3).numFmt = '"Lps" #,##0.00';
-    row.getCell(2).style = ESTILOS.dato;
-    row.getCell(4).style = ESTILOS.dato;
-    row.getCell(5).style = ESTILOS.dato;
-    row.getCell(6).style = ESTILOS.dato;
   });
 
   const endRow = startRow + ingresos.length;
-
-  // ✅ FILTROS AUTOMÁTICOS
-  ws.autoFilter.from = { row: 4, column: 1 };
+  ws.autoFilter.from = { row: 3, column: 1 };
   ws.autoFilter.to = { row: endRow - 1, column: 6 };
 
-  // TOTAL CON FÓRMULA
   ws.addRow(["", "", "", "", "", ""]);
   const totalRow = ws.addRow([
-    "TOTAL INGRESOS",
+    "TOTAL",
     "",
-    { formula: `SUM(C5:C${endRow - 1})` },
+    { formula: `SUM(C4:C${endRow - 1})` },
     "",
     `Registros: ${ingresos.length}`,
     ""
   ]);
-  totalRow.eachCell((cell) => { cell.style = ESTILOS.total; });
-  totalRow.getCell(3).style = { ...ESTILOS.numero, font: { bold: true, color: { argb: COLORES.blanco } }, fill: { type: "pattern", pattern: "solid", fgColor: { argb: COLORES.rojo } }, numFmt: '"Lps" #,##0.00' };
   totalRow.getCell(3).numFmt = '"Lps" #,##0.00';
+  totalRow.getCell(3).font = { bold: true };
 }
 
-// ===============================
-// HOJA 3: EGRESOS DETALLADO
-// ===============================
-async function crearDetalleEgresos(ws, movimientos) {
+function crearEgresos(ws, movimientos) {
   ws.columns = [
-    { width: 12 },
-    { width: 20 },
-    { width: 15 },
-    { width: 15 },
-    { width: 20 },
-    { width: 30 },
+    { width: 12 }, { width: 20 }, { width: 15 }, { width: 15 }, { width: 20 }, { width: 30 }
   ];
 
-  // ENCABEZADO
   const titleRow = ws.addRow(["DETALLE DE EGRESOS", "", "", "", "", ""]);
   titleRow.font = { bold: true, size: 14, color: { argb: COLORES.blanco } };
   titleRow.fill = { type: "pattern", pattern: "solid", fgColor: { argb: COLORES.rojo } };
   ws.mergeCells("A1:F1");
-  ws.rowHeight = 20;
 
   ws.addRow(["", "", "", "", "", ""]);
 
-  // ENCABEZADOS TABLA
   const headers = ["Fecha", "Motivo", "Monto", "Banco", "Usuario", "Detalle"];
   const headerRow = ws.addRow(headers);
-  headerRow.eachCell((cell) => { cell.style = ESTILOS.subheader; });
+  headerRow.eachCell(c => { c.style = ESTILOS.subheader; });
 
-  // ✅ FREEZE PANES
   ws.freezePane("A4");
 
-  // DATOS
-  const egresos = movimientos.filter(m => m.tipo === "egreso").sort((a, b) => {
-    const fechaA = dmyToTimestamp(normalizeDMY(a.fecha || ""));
-    const fechaB = dmyToTimestamp(normalizeDMY(b.fecha || ""));
-    return fechaA - fechaB;
-  });
+  const egresos = movimientos.filter(m => m.tipo === "egreso").sort((a, b) => 
+    dmyToTimestamp(normalizeDMY(a.fecha || "")) - dmyToTimestamp(normalizeDMY(b.fecha || ""))
+  );
 
   let startRow = 4;
   egresos.forEach(mov => {
@@ -372,49 +258,32 @@ async function crearDetalleEgresos(ws, movimientos) {
       mov.monto || 0,
       mov.banco || "",
       mov.userName || "",
-      mov.detalle || "",
+      mov.detalle || ""
     ]);
-    row.getCell(1).style = ESTILOS.fecha;
-    row.getCell(3).style = ESTILOS.numero;
+    row.getCell(1).numFmt = "dd/mm/yyyy";
     row.getCell(3).numFmt = '"Lps" #,##0.00';
-    row.getCell(2).style = ESTILOS.dato;
-    row.getCell(4).style = ESTILOS.dato;
-    row.getCell(5).style = ESTILOS.dato;
-    row.getCell(6).style = ESTILOS.dato;
   });
 
   const endRow = startRow + egresos.length;
-
-  // ✅ FILTROS AUTOMÁTICOS
   ws.autoFilter.from = { row: 3, column: 1 };
   ws.autoFilter.to = { row: endRow - 1, column: 6 };
 
-  // TOTAL CON FÓRMULA
   ws.addRow(["", "", "", "", "", ""]);
   const totalRow = ws.addRow([
-    "TOTAL EGRESOS",
+    "TOTAL",
     "",
     { formula: `SUM(C4:C${endRow - 1})` },
     "",
     `Registros: ${egresos.length}`,
     ""
   ]);
-  totalRow.eachCell((cell) => { cell.style = ESTILOS.total; });
-  totalRow.getCell(3).style = { ...ESTILOS.numero, font: { bold: true, color: { argb: COLORES.blanco } }, fill: { type: "pattern", pattern: "solid", fgColor: { argb: COLORES.rojo } }, numFmt: '"Lps" #,##0.00' };
+  totalRow.getCell(3).numFmt = '"Lps" #,##0.00';
+  totalRow.getCell(3).font = { bold: true };
 }
 
-// ===============================
-// HOJA 4: ANÁLISIS POR BANCO
-// ===============================
-async function crearAnalisisPorBanco(ws, movimientos) {
-  ws.columns = [
-    { width: 15 },
-    { width: 15 },
-    { width: 15 },
-    { width: 15 },
-  ];
+function crearBancos(ws, movimientos) {
+  ws.columns = [{ width: 15 }, { width: 15 }, { width: 15 }, { width: 15 }];
 
-  // ENCABEZADO
   const titleRow = ws.addRow(["ANÁLISIS POR BANCO", "", "", ""]);
   titleRow.font = { bold: true, size: 14, color: { argb: COLORES.blanco } };
   titleRow.fill = { type: "pattern", pattern: "solid", fgColor: { argb: COLORES.rojo } };
@@ -422,14 +291,11 @@ async function crearAnalisisPorBanco(ws, movimientos) {
 
   ws.addRow(["", "", "", ""]);
 
-  // TABLA BANCOS
   const headerRow = ws.addRow(["Banco", "Ingresos", "Egresos", "Neto"]);
-  headerRow.eachCell((cell) => { cell.style = ESTILOS.subheader; });
+  headerRow.eachCell(c => { c.style = ESTILOS.subheader; });
 
-  // ✅ FREEZE PANES
   ws.freezePane("A4");
 
-  // Agrupar por banco
   const bancos = {};
   movimientos.forEach(mov => {
     const banco = mov.banco || "Otro";
@@ -441,144 +307,90 @@ async function crearAnalisisPorBanco(ws, movimientos) {
   let bankRow = 4;
   Object.entries(bancos).forEach(([banco, datos]) => {
     const row = ws.addRow([banco, datos.ingresos, datos.egresos, datos.ingresos - datos.egresos]);
-    row.getCell(2).style = ESTILOS.numero;
     row.getCell(2).numFmt = '"Lps" #,##0.00';
-    row.getCell(3).style = ESTILOS.numero;
     row.getCell(3).numFmt = '"Lps" #,##0.00';
-    row.getCell(4).style = ESTILOS.numero;
     row.getCell(4).numFmt = '"Lps" #,##0.00';
-    row.getCell(1).style = ESTILOS.dato;
     bankRow++;
   });
 
-  // ✅ FILTROS AUTOMÁTICOS
   ws.autoFilter.from = { row: 3, column: 1 };
   ws.autoFilter.to = { row: bankRow - 1, column: 4 };
 
-  // TOTALES
   ws.addRow(["", "", "", ""]);
   const totalRow = ws.addRow(["TOTAL", "", "", ""]);
-  totalRow.eachCell((cell) => { cell.style = ESTILOS.total; });
-
-  // ✅ FÓRMULAS AUTOMÁTICAS PARA TOTALES
+  totalRow.getCell(1).font = { bold: true };
   totalRow.getCell(2).value = { formula: `SUM(B4:B${bankRow - 1})` };
   totalRow.getCell(2).numFmt = '"Lps" #,##0.00';
+  totalRow.getCell(2).font = { bold: true };
   totalRow.getCell(3).value = { formula: `SUM(C4:C${bankRow - 1})` };
   totalRow.getCell(3).numFmt = '"Lps" #,##0.00';
+  totalRow.getCell(3).font = { bold: true };
   totalRow.getCell(4).value = { formula: `SUM(D4:D${bankRow - 1})` };
   totalRow.getCell(4).numFmt = '"Lps" #,##0.00';
+  totalRow.getCell(4).font = { bold: true };
 }
 
-// ===============================
-// HOJA 5: GRÁFICOS (PROFESIONAL)
-// ===============================
-async function crearHojaGraficos(ws, movimientos, fechaInicio, fechaFin) {
+function crearGraficos(ws, movimientos) {
   ws.columns = [{ width: 40 }, { width: 20 }];
 
-  // ENCABEZADO
   const titleRow = ws.addRow(["📊 GRÁFICOS Y ANÁLISIS", ""]);
   titleRow.font = { bold: true, size: 14, color: { argb: COLORES.blanco } };
   titleRow.fill = { type: "pattern", pattern: "solid", fgColor: { argb: COLORES.rojo } };
-  titleRow.alignment = { horizontal: "center" };
   ws.mergeCells("A1:B1");
-  ws.rowHeight = 25;
 
   ws.addRow(["", ""]);
 
-  // DATOS PARA GRÁFICOS
   const ingresos = movimientos.filter(m => m.tipo === "ingreso").reduce((s, m) => s + (m.monto || 0), 0);
   const egresos = movimientos.filter(m => m.tipo === "egreso").reduce((s, m) => s + (m.monto || 0), 0);
 
-  // Tabla de resumen para gráfico 1
   ws.addRow(["TIPO", "MONTO"]);
   const h1 = ws.lastRow;
   h1.eachCell(c => { c.style = ESTILOS.subheader; });
 
   const r1 = ws.addRow(["Ingresos", ingresos]);
-  r1.getCell(2).style = ESTILOS.numero;
   r1.getCell(2).numFmt = '"Lps" #,##0.00';
-  r1.getCell(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "00B050" } };
+  r1.getCell(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: COLORES.verde } };
   r1.getCell(1).font = { bold: true, color: { argb: COLORES.blanco } };
 
   const r2 = ws.addRow(["Egresos", egresos]);
-  r2.getCell(2).style = ESTILOS.numero;
   r2.getCell(2).numFmt = '"Lps" #,##0.00';
-  r2.getCell(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF0000" } };
+  r2.getCell(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: COLORES.rojo } };
   r2.getCell(1).font = { bold: true, color: { argb: COLORES.blanco } };
 
-  // GRÁFICO 1: BARRAS (Ingresos vs Egresos)
   const chart1 = new ExcelJS.BarChart();
   chart1.type = "bar";
   chart1.title = "Ingresos vs Egresos";
-  chart1.addSeries({ name: "Monto", ref: "A7:B8" });
-  chart1.xAxis.title = "Concepto";
-  chart1.yAxis.title = "Lps";
-  chart1.height = 15;
-  chart1.width = 25;
+  chart1.addSeries({ name: "Monto", ref: "'📊 Gráficos y Análisis'!B7:B8" });
+  chart1.height = 12;
+  chart1.width = 20;
   ws.addChart(chart1, "A10");
 
-  // Análisis por banco para gráfico 2
+  const bancos = {};
+  movimientos.forEach(mov => {
+    const banco = mov.banco || "Otro";
+    if (!bancos[banco]) bancos[banco] = 0;
+    bancos[banco] += (mov.tipo === "ingreso" ? mov.monto || 0 : -(mov.monto || 0));
+  });
+
   ws.addRow(["", ""]);
   ws.addRow(["", ""]);
   ws.addRow(["BANCO", "NETO"]);
   const h2 = ws.lastRow;
   h2.eachCell(c => { c.style = ESTILOS.subheader; });
 
-  const bancos = {};
-  movimientos.forEach(mov => {
-    const banco = mov.banco || "Otro";
-    if (!bancos[banco]) bancos[banco] = 0;
-    const monto = mov.monto || 0;
-    bancos[banco] += (mov.tipo === "ingreso" ? monto : -monto);
-  });
-
   let bankRow = 18;
   Object.entries(bancos).forEach(([banco, neto]) => {
     const row = ws.addRow([banco, neto]);
-    row.getCell(2).style = ESTILOS.numero;
     row.getCell(2).numFmt = '"Lps" #,##0.00';
-    row.getCell(1).style = ESTILOS.dato;
     bankRow++;
   });
 
-  // GRÁFICO 2: PASTEL (Por banco)
   const chart2 = new ExcelJS.PieChart();
   chart2.title = "Distribución por Banco";
-  chart2.addSeries({ name: "Neto", ref: `A18:B${bankRow - 1}` });
-  chart2.height = 15;
-  chart2.width = 25;
-  ws.addChart(chart2, "D10");
-
-  // ESTADÍSTICAS FINALES
-  ws.addRow(["", ""]);
-  ws.addRow(["INDICADORES", "VALOR"]);
-  const h3 = ws.lastRow;
-  h3.eachCell(c => { c.style = ESTILOS.subheader; });
-
-  const utilidad = ingresos - egresos;
-  const margen = ingresos > 0 ? ((utilidad / ingresos) * 100) : 0;
-  const diasRango = 30;
-  const promedioDaily = ingresos / diasRango;
-
-  ws.addRow(["Utilidad Neta", utilidad]);
-  ws.lastRow.getCell(2).numFmt = '"Lps" #,##0.00';
-  ws.lastRow.getCell(2).style = ESTILOS.numero;
-
-  ws.addRow(["Margen (%)", margen.toFixed(2)]);
-  ws.lastRow.getCell(2).style = ESTILOS.numero;
-
-  ws.addRow(["Promedio/Día", promedioDaily]);
-  ws.lastRow.getCell(2).numFmt = '"Lps" #,##0.00';
-  ws.lastRow.getCell(2).style = ESTILOS.numero;
-
-  ws.addRow(["Total Movimientos", movimientos.length]);
-  ws.lastRow.getCell(2).style = ESTILOS.numero;
+  chart2.addSeries({ name: "Neto", ref: `'📊 Gráficos y Análisis'!A18:B${bankRow - 1}` });
+  chart2.height = 12;
+  chart2.width = 20;
+  ws.addChart(chart2, "L10");
 }
 
-// ===============================
-// MEJORAR HOJA DE INGRESOS CON FILTROS Y FÓRMULAS
-// ===============================
-
-module.exports = {
-  generarReporteExcelPorRango,
-};
+module.exports = { generarReporteExcelPorRango };
