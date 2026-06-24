@@ -900,21 +900,25 @@ async function exportarFinanzasRangoExcel(chatId, fechaInicio, fechaFin, _userId
   const ini = parseFechaFlexible(fechaInicio), fin = parseFechaFlexible(fechaFin);
   if (!ini || !fin) throw new Error("Fechas inválidas.");
   if (dmyToMillis(ini) > dmyToMillis(fin)) throw new Error("La fecha inicial no puede ser mayor a la final.");
-  const rows = (await getMovimientosPorRango(ini, fin)).map((r) => ({ ...r, fecha: extraerFechaMovimiento(r) || r.fecha || "" }));
-  const wb = new ExcelJS.Workbook(); wb.creator = "Sublicuentas Bot"; wb.created = new Date();
-  const ws = wb.addWorksheet("Finanzas");
-  ws.columns = [{ header: "Fecha", key: "fecha", width: 15 }, { header: "Tipo", key: "tipo", width: 12 }, { header: "Monto", key: "monto", width: 15 }, { header: "Plataforma/Motivo", key: "concepto", width: 30 }, { header: "Banco/Método", key: "extra", width: 28 }, { header: "Detalle", key: "detalle", width: 35 }, { header: "ID", key: "id", width: 28 }];
-  for (const r of rows) ws.addRow({ fecha: r.fecha || "", tipo: finTipoLabel(r.tipo), monto: Number(r.monto || 0), concepto: finConceptoLabel(r), extra: humanBanco(r.banco || r.metodo || ""), detalle: r.detalle || r.descripcion || "", id: r.id });
-  decorateFinanzasSheet(ws, rows);
-  let ingresos = 0, egresos = 0;
-  for (const r of rows) { const monto = Number(r.monto || 0); if (String(r.tipo||"").toLowerCase() === "egreso") egresos += monto; else ingresos += monto; }
-  const resumen = wb.addWorksheet("Resumen");
-  decorateResumenSheet(resumen, { fechaInicio: ini, fechaFin: fin, ingresos, egresos, utilidad: ingresos - egresos, movimientos: rows.length });
-  const tempPath = `/tmp/finanzas_${Date.now()}.xlsx`;
-  await wb.xlsx.writeFile(tempPath);
-  await bot.sendDocument(chatId, tempPath, { caption: `📊 Finanzas del ${ini} al ${fin}` });
-  try { fs.unlinkSync(tempPath); } catch (_) {}
-  return true;
+  
+  try {
+    // ✅ USAR NUEVO MÓDULO PROFESIONAL
+    const { generarReporteExcelPorRango } = require("./index_10_reportes_excel");
+    const buffer = await generarReporteExcelPorRango(ini, fin);
+    
+    if (!buffer || buffer.length === 0) return bot.sendMessage(chatId, "❌ Error al generar");
+    
+    await bot.sendDocument(chatId, buffer, 
+      { caption: "📊 Finanzas
+✅ Resumen, Ingresos, Egresos, Análisis" }, 
+      { filename: `finanzas_${ini.replace(/\//g, "-")}_${fin.replace(/\//g, "-")}.xlsx`,
+        contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }
+    );
+    return true;
+  } catch (e) {
+    logErr("exportarFinanzasRangoExcel", e);
+    return bot.sendMessage(chatId, "❌ Error: " + e.message);
+  }
 }
 
 // ===============================
