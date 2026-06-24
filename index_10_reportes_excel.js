@@ -82,35 +82,30 @@ async function getMovimientosPorRango(fechaInicio, fechaFin) {
     const fin = normalizeDMY(fechaFin);
     if (!ini || !fin) return [];
     
-    // ✅ OBTENER TODOS los movimientos
-    const snap = await db.collection(FINANZAS_COLLECTION).get();
-    const todos = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-    
-    // ✅ FILTRAR por rango de fechas EN MEMORIA (funciona con datos viejos y nuevos)
     const iniTs = dmyToTimestamp(ini);
     const finTs = dmyToTimestamp(fin) + 86400000;
     
+    // ✅ OBTENER TODOS sin filtro
+    const snap = await db.collection(FINANZAS_COLLECTION).orderBy("fecha", "desc").limit(10000).get();
+    const todos = snap.docs.map(doc => {
+      const data = doc.data();
+      return { 
+        id: doc.id, 
+        ...data,
+        fecha: data.fecha || "",
+        tipo: data.tipo || "",
+        monto: Number(data.monto || 0)
+      };
+    });
+    
+    // ✅ FILTRAR por rango de fechas EN MEMORIA
     const filtrados = todos.filter(mov => {
-      let ts = 0;
-      
-      // Intentar usar fechaTS si existe
-      if (mov.fechaTS && typeof mov.fechaTS === 'number') {
-        ts = mov.fechaTS;
-      } 
-      // Si no, parsear la fecha string
-      else if (mov.fecha) {
-        ts = dmyToTimestamp(normalizeDMY(mov.fecha || ""));
-      }
-      
+      if (!mov.fecha) return false;
+      const ts = dmyToTimestamp(normalizeDMY(mov.fecha));
       return ts >= iniTs && ts <= finTs;
     });
     
-    // Ordenar por fecha
-    return filtrados.sort((a, b) => {
-      const fechaA = dmyToTimestamp(normalizeDMY(a.fecha || ""));
-      const fechaB = dmyToTimestamp(normalizeDMY(b.fecha || ""));
-      return fechaA - fechaB;
-    });
+    return filtrados;
   } catch (e) {
     logErr("getMovimientosPorRango", e);
     return [];
@@ -125,8 +120,8 @@ async function generarReporteExcelPorRango(fechaInicio, fechaFin) {
     if (dmyToTimestamp(ini) > dmyToTimestamp(fin)) throw new Error("Fecha inicial mayor que final");
 
     const movimientos = await getMovimientosPorRango(ini, fin);
-    if (!movimientos.length) throw new Error("No hay movimientos en ese rango");
-
+    
+    // ✅ GENERAR EXCEL AÚN SI ESTÁ VACÍO
     const workbook = new ExcelJS.Workbook();
     const wsResumen = workbook.addWorksheet("📊 Resumen");
     const wsIngresos = workbook.addWorksheet("📈 Ingresos");
@@ -134,19 +129,10 @@ async function generarReporteExcelPorRango(fechaInicio, fechaFin) {
     const wsBancos = workbook.addWorksheet("🏦 Bancos");
     const wsGraficos = workbook.addWorksheet("📊 Gráficos");
 
-    // ✅ HOJA 1: RESUMEN
     crearResumen(wsResumen, movimientos, ini, fin);
-
-    // ✅ HOJA 2: INGRESOS CON FILTROS
     crearIngresos(wsIngresos, movimientos);
-
-    // ✅ HOJA 3: EGRESOS CON FILTROS
     crearEgresos(wsEgresos, movimientos);
-
-    // ✅ HOJA 4: BANCOS CON ANÁLISIS
     crearBancos(wsBancos, movimientos);
-
-    // ✅ HOJA 5: GRÁFICOS
     crearGraficos(wsGraficos, movimientos);
 
     const buffer = await workbook.xlsx.writeBuffer();
