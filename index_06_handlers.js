@@ -3694,6 +3694,28 @@ bot.on("message", async (msg) => {
         return resolverBusquedaAdmin(chatId, rest);
       }
 
+      if (adminOk && first === "clientes_excel") {
+        try {
+          await bot.sendMessage(chatId, "⏳ Generando Excel de clientes...");
+          const { generarExcelClientesGeneral } = require("./index_11_clientes_excel");
+          const buffer = await generarExcelClientesGeneral();
+          
+          if (!buffer || buffer.length === 0) {
+            return bot.sendMessage(chatId, "❌ Error al generar el archivo");
+          }
+          
+          await bot.sendDocument(chatId, buffer, 
+            { caption: "👥 Listado General de Clientes\n✅ Incluye: Resumen, Listado (con filtros), Análisis" },
+            { filename: `clientes_${Date.now()}.xlsx`,
+              contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }
+          );
+          return bot.sendMessage(chatId, "✅ Excel de clientes generado correctamente");
+        } catch (e) {
+          logErr("cmd_clientes_excel", e);
+          return bot.sendMessage(chatId, "❌ Error: " + e.message);
+        }
+      }
+
       const comandosReservados = new Set([
         "start", "menu", "stock", "buscar", "cliente", "renovaciones", "txt",
         "clientes_txt", "vendedores_txt_split", "reindex_clientes", "fix_duplicados",
@@ -3701,7 +3723,7 @@ bot.on("message", async (msg) => {
         "addvendedor", "delvendedor", "id", "miid", "vincular_vendedor",
         "sincronizar_todo", "addcorreo", "finanzas", "resumen_fecha", "bancos_mes",
         "top_plataformas_mes", "cierre_caja", "cierre_caja_rango", "excel_finanzas",
-        "editar_movimiento",
+        "editar_movimiento", "clientes_excel",
         // ✅ Comandos IMAP — no pasar a resolverBusquedaAdmin
         "code", "link", "hogar", "prime", "inbox", "debug",
         // ✅ Buzón de avisos web revendedores
@@ -4517,31 +4539,7 @@ async function enviarListaRenovacionesVendedor7AM(chatId, vendedorNombre) {
   txt += `👤 *${escMD(vendedorNombre)}* · 👥 *${list.length}* · 💰 *${escMD(total.toFixed(2))} Lps*\n\n`;
   list.forEach((x, i) => {
     txt += `*${i + 1}.* ${iconPlataforma(x.plataforma || "")} ${escMD(x.nombrePerfil || "Sin nombre")}\n`;
-    txt += `   📱 ${escMD(x.telefono || "-")} · 💰 ${escMD(Number(x.precio || 0).toFixed(2))} Lps\n
-      // ✅ COMANDO: /clientes_excel
-      if (t.toLowerCase() === "/clientes_excel") {
-        if (!isAdmin(userId)) return bot.sendMessage(chatId, "❌ Solo admin");
-        try {
-          await bot.sendMessage(chatId, "⏳ Generando Excel...");
-          const { generarExcelClientesGeneral } = require("./index_11_clientes_excel");
-          const buffer = await generarExcelClientesGeneral();
-          
-          if (!buffer || buffer.length === 0) return bot.sendMessage(chatId, "❌ Error");
-          
-          await bot.sendDocument(chatId, buffer, 
-            { caption: "👥 Clientes
-✅ Resumen, Listado (filtros), Análisis" },
-            { filename: `clientes_${Date.now()}.xlsx`, 
-              contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }
-          );
-          await bot.sendMessage(chatId, "✅ Excel generado");
-        } catch (e) {
-          logErr("cmd_clientes_excel", e);
-          bot.sendMessage(chatId, "❌ Error: " + e.message);
-        }
-        return;
-      }
-\n`;
+    txt += `   📱 ${escMD(x.telefono || "-")} · 💰 ${escMD(Number(x.precio || 0).toFixed(2))} Lps\n`;
   });
   const kb = list.slice(0, 20).map((x, i) => [{ text: `${i + 1}) ${(x.nombrePerfil || "Sin nombre").slice(0, 22)} • ${humanPlataforma(x.plataforma || "")}`, callback_data: `cli:view:${x.clientId || x.id || ""}` }]);
   try { await bot.sendMessage(String(chatId), txt, { parse_mode: "Markdown", reply_markup: { inline_keyboard: kb } }); return true; } catch(e) { return false; }
