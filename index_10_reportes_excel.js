@@ -120,7 +120,26 @@ async function generarReporteExcelPorRango(fechaInicio, fechaFin) {
     if (!ini || !fin) throw new Error("Fechas inválidas");
 
     const movimientos = await getMovimientosPorRango(ini, fin);
-    if (!movimientos.length) throw new Error("No hay movimientos en ese rango");
+    
+    // ✅ SI NO HAY DATOS, CREAR EXCEL VACÍO CON MENSAJE
+    if (!movimientos || movimientos.length === 0) {
+      const workbook = new ExcelJS.Workbook();
+      const ws = workbook.addWorksheet("⚠️ Sin datos");
+      ws.columns = [{ width: 50 }];
+      
+      const row1 = ws.addRow(["⚠️ RANGO SIN MOVIMIENTOS"]);
+      row1.font = { bold: true, size: 14, color: { argb: COLORES.blanco } };
+      row1.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF9900" } };
+      row1.alignment = { horizontal: "center" };
+      ws.rowHeight = 25;
+      
+      ws.addRow(["Período: " + ini + " - " + fin]);
+      ws.addRow(["No hay movimientos financieros en este rango de fechas."]);
+      ws.addRow(["Intenta con otro rango o verifica que haya datos registrados."]);
+      
+      const buffer = await workbook.xlsx.writeBuffer();
+      return buffer;
+    }
 
     const workbook = new ExcelJS.Workbook();
 
