@@ -19,7 +19,6 @@ const {
   bot,
   admin,
   db,
-  PORT,
   TZ,
   PLATAFORMAS,
   FINANZAS_COLLECTION,
@@ -4518,7 +4517,31 @@ async function enviarListaRenovacionesVendedor7AM(chatId, vendedorNombre) {
   txt += `👤 *${escMD(vendedorNombre)}* · 👥 *${list.length}* · 💰 *${escMD(total.toFixed(2))} Lps*\n\n`;
   list.forEach((x, i) => {
     txt += `*${i + 1}.* ${iconPlataforma(x.plataforma || "")} ${escMD(x.nombrePerfil || "Sin nombre")}\n`;
-    txt += `   📱 ${escMD(x.telefono || "-")} · 💰 ${escMD(Number(x.precio || 0).toFixed(2))} Lps\n`;
+    txt += `   📱 ${escMD(x.telefono || "-")} · 💰 ${escMD(Number(x.precio || 0).toFixed(2))} Lps\n
+      // ✅ COMANDO: /clientes_excel
+      if (t.toLowerCase() === "/clientes_excel") {
+        if (!isAdmin(userId)) return bot.sendMessage(chatId, "❌ Solo admin");
+        try {
+          await bot.sendMessage(chatId, "⏳ Generando Excel...");
+          const { generarExcelClientesGeneral } = require("./index_11_clientes_excel");
+          const buffer = await generarExcelClientesGeneral();
+          
+          if (!buffer || buffer.length === 0) return bot.sendMessage(chatId, "❌ Error");
+          
+          await bot.sendDocument(chatId, buffer, 
+            { caption: "👥 Clientes
+✅ Resumen, Listado (filtros), Análisis" },
+            { filename: `clientes_${Date.now()}.xlsx`, 
+              contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }
+          );
+          await bot.sendMessage(chatId, "✅ Excel generado");
+        } catch (e) {
+          logErr("cmd_clientes_excel", e);
+          bot.sendMessage(chatId, "❌ Error: " + e.message);
+        }
+        return;
+      }
+\n`;
   });
   const kb = list.slice(0, 20).map((x, i) => [{ text: `${i + 1}) ${(x.nombrePerfil || "Sin nombre").slice(0, 22)} • ${humanPlataforma(x.plataforma || "")}`, callback_data: `cli:view:${x.clientId || x.id || ""}` }]);
   try { await bot.sendMessage(String(chatId), txt, { parse_mode: "Markdown", reply_markup: { inline_keyboard: kb } }); return true; } catch(e) { return false; }
@@ -4555,23 +4578,20 @@ async function enviarTxtRenovacionesDiarias7AM() {
   } catch (e) { logErr("AutoTXT:admins", e); }
 }
 
-// ✅ Proteger timer contra recargas duplicadas
-if (!global.__SUBLICUENTAS_AUTOTXT_TIMER__) {
-  global.__SUBLICUENTAS_AUTOTXT_TIMER__ = setInterval(async () => {
-    if (!hasRuntimeLock()) return;
-    try {
-      const { dmy, hh, mm } = getTimePartsNow();
-      if (hh === 7 && mm === 0) {
-        const dbLast = await getLastRunDB();
-        if (_lastDailyRun === dmy || dbLast === dmy) return;
-        _lastDailyRun = dmy;
-        await setLastRunDB(dmy);
-        await enviarTxtRenovacionesDiarias7AM();
-        console.log(`ℹ️ ✅ AutoTXT 7AM enviado (${dmy}) TZ=${TZ}`);
-      }
-    } catch (e) { logErr("AutoTXT", e); }
-  }, 30 * 1000);
-}
+setInterval(async () => {
+  if (!hasRuntimeLock()) return;
+  try {
+    const { dmy, hh, mm } = getTimePartsNow();
+    if (hh === 7 && mm === 0) {
+      const dbLast = await getLastRunDB();
+      if (_lastDailyRun === dmy || dbLast === dmy) return;
+      _lastDailyRun = dmy;
+      await setLastRunDB(dmy);
+      await enviarTxtRenovacionesDiarias7AM();
+      console.log(`ℹ️ ✅ AutoTXT 7AM enviado (${dmy}) TZ=${TZ}`);
+    }
+  } catch (e) { logErr("AutoTXT", e); }
+}, 30 * 1000);
 
 // ===============================
 // HARDEN
@@ -4586,11 +4606,10 @@ console.log("✅ index_06_handlers actualizado");
 // ===============================
 // HTTP KEEPALIVE FINAL
 // ===============================
-// ✅ PORT ya viene importado de index_01_core
-// Evitar conflicto con index_08_api que también abre servidor
+const PORT = process.env.PORT || 10000;
 
-if (!global.__SUBLICUENTAS_KEEPALIVE_SERVER__) {
-  global.__SUBLICUENTAS_KEEPALIVE_SERVER__ = http
+if (!global.__SUBLICUENTAS_HTTP_SERVER__) {
+  global.__SUBLICUENTAS_HTTP_SERVER__ = http
     .createServer((req, res) => {
       if (req.url === "/health") {
         res.writeHead(200, { "Content-Type": "application/json" });
@@ -4599,7 +4618,5 @@ if (!global.__SUBLICUENTAS_KEEPALIVE_SERVER__) {
       res.writeHead(200, { "Content-Type": "text/plain" });
       res.end("OK");
     })
-    .listen(PORT, () => {
-      console.log(`🌐 HTTP KEEPALIVE activo en puerto ${PORT}`);
-    });
-}
+    .listen(PORT, () => { console.log("🌐 HTTP KEEPALIVE activo en puerto", PORT); });
+             }
