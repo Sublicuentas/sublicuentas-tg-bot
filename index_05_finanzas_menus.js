@@ -930,6 +930,74 @@ async function menuRegistroFinanzas(chatId) { return menuFinRegistro(chatId); }
 async function menuEliminarMovimientoEspecifico(chatId) { return menuFinEliminarTipo(chatId); }
 async function menuReportesFinanzas(chatId) { return menuFinReportes(chatId); }
 
+// ===============================
+// COMANDOS TELEGRAM — DESCARGAR EXCEL
+// ===============================
+// Importar función del nuevo módulo
+const { generarReporteExcelPorRango } = require("./index_10_reportes_excel");
+
+// ✅ Comando: /reportes_excel_rango 01/06/2026 30/06/2026
+bot.onText(/^\/reportes_excel_rango\s+(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})$/, async (msg, match) => {
+  const chatId = msg.chat.id;
+  const userId = msg.from.id;
+  const [, fechaInicio, fechaFin] = match;
+
+  // Solo admin
+  if (!isAdmin(userId)) {
+    return bot.sendMessage(chatId, "❌ Solo admin puede descargar reportes");
+  }
+
+  try {
+    await bot.sendMessage(chatId, "⏳ Generando Excel... espera");
+    const buffer = await generarReporteExcelPorRango(fechaInicio, fechaFin);
+    
+    if (!buffer || buffer.length === 0) {
+      return bot.sendMessage(chatId, "❌ Error al generar el archivo");
+    }
+
+    await bot.sendDocument(chatId, buffer, {}, {
+      filename: `reporte_${fechaInicio.replace(/\//g, "-")}_${fechaFin.replace(/\//g, "-")}.xlsx`,
+      contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    });
+
+    await bot.sendMessage(chatId, `✅ Excel generado\n📊 Período: ${fechaInicio} - ${fechaFin}\n💾 Incluye: Resumen, Ingresos, Egresos, Análisis`);
+  } catch (e) {
+    logErr("reportes_excel_rango", e);
+    bot.sendMessage(chatId, `❌ Error: ${e.message}`);
+  }
+});
+
+// ✅ Comando: /reportes_excel_mes 06/2026
+bot.onText(/^\/reportes_excel_mes\s+(\d{2}\/\d{4})$/, async (msg, match) => {
+  const chatId = msg.chat.id;
+  const userId = msg.from.id;
+  const mesStr = match[1];
+
+  if (!isAdmin(userId)) {
+    return bot.sendMessage(chatId, "❌ Solo admin");
+  }
+
+  try {
+    const [mes, año] = mesStr.split("/");
+    const fechaInicio = `01/${mes}/${año}`;
+    const ultimoDia = new Date(parseInt(año), parseInt(mes), 0).getDate();
+    const fechaFin = `${String(ultimoDia).padStart(2, "0")}/${mes}/${año}`;
+
+    await bot.sendMessage(chatId, "⏳ Generando Excel del mes...");
+    const buffer = await generarReporteExcelPorRango(fechaInicio, fechaFin);
+
+    await bot.sendDocument(chatId, buffer, {}, {
+      filename: `reporte_${año}-${mes}.xlsx`,
+      contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    });
+
+    await bot.sendMessage(chatId, `✅ Reporte de ${mesStr} descargado`);
+  } catch (e) {
+    logErr("reportes_excel_mes", e);
+    bot.sendMessage(chatId, `❌ Error: ${e.message}`);
+  }
+});
+
 module.exports = {
   menuPrincipal, menuVendedor, menuInventario, menuInventarioVideo, menuInventarioMusica,
   menuInventarioIptv, menuInventarioDisenoIA, menuClientes, menuRenovaciones, menuPagos,
