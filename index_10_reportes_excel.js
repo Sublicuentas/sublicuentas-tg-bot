@@ -81,14 +81,35 @@ async function getMovimientosPorRango(fechaInicio, fechaFin) {
     const ini = normalizeDMY(fechaInicio);
     const fin = normalizeDMY(fechaFin);
     if (!ini || !fin) return [];
+    
+    // ✅ OBTENER TODOS los movimientos
+    const snap = await db.collection(FINANZAS_COLLECTION).get();
+    const todos = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    
+    // ✅ FILTRAR por rango de fechas EN MEMORIA (funciona con datos viejos y nuevos)
     const iniTs = dmyToTimestamp(ini);
     const finTs = dmyToTimestamp(fin) + 86400000;
-    const snap = await db.collection(FINANZAS_COLLECTION)
-      .where("fechaTS", ">=", iniTs)
-      .where("fechaTS", "<=", finTs)
-      .get();
-    return snap.docs.map(doc => ({ id: doc.id, ...doc.data() })).sort((a, b) => {
-      return dmyToTimestamp(normalizeDMY(a.fecha || "")) - dmyToTimestamp(normalizeDMY(b.fecha || ""));
+    
+    const filtrados = todos.filter(mov => {
+      let ts = 0;
+      
+      // Intentar usar fechaTS si existe
+      if (mov.fechaTS && typeof mov.fechaTS === 'number') {
+        ts = mov.fechaTS;
+      } 
+      // Si no, parsear la fecha string
+      else if (mov.fecha) {
+        ts = dmyToTimestamp(normalizeDMY(mov.fecha || ""));
+      }
+      
+      return ts >= iniTs && ts <= finTs;
+    });
+    
+    // Ordenar por fecha
+    return filtrados.sort((a, b) => {
+      const fechaA = dmyToTimestamp(normalizeDMY(a.fecha || ""));
+      const fechaB = dmyToTimestamp(normalizeDMY(b.fecha || ""));
+      return fechaA - fechaB;
     });
   } catch (e) {
     logErr("getMovimientosPorRango", e);
