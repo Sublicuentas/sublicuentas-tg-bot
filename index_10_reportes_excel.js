@@ -1,15 +1,21 @@
-/* âœ… SUBLICUENTAS â€” REPORTES EXCEL PROFESIONAL (NIVEL DIOS)
-   100% COMPATIBLE CON ExcelJS â€” SIN funciones inexistentes
+/* ✅ SUBLICUENTAS — REPORTES EXCEL PROFESIONAL (NIVEL DIOS)
+   100% COMPATIBLE CON ExcelJS — SIN funciones inexistentes
    - Barras de datos visuales (data bars con formato condicional)
    - Encabezados congelados (ws.views correcto)
-   - Filtros automÃ¡ticos
-   - FÃ³rmulas dinÃ¡micas SUM
+   - Filtros automáticos
+   - Fórmulas dinámicas SUM
    - Colores corporativos + formato moneda Lps
 */
 
 const { ExcelJS, db } = require("./index_01_core");
-const { logErr } = require("./index_02_utils_roles");
 const FINANZAS_COLLECTION = "finanzas_movimientos";
+
+// logErr local (evita problemas de carga circular)
+function logErr(scope = "error", err = "") {
+  try {
+    console.error(`❌ [${scope}]`, err && err.message ? err.message : err);
+  } catch (_) {}
+}
 
 const C = {
   rojo: "FFD32F2F", rojoOsc: "FFB71C1C", negro: "FF1A1A1A",
@@ -79,7 +85,7 @@ function headerFila(ws, headers) {
 async function generarReporteExcelPorRango(fechaInicio, fechaFin) {
   try {
     const ini = normalizeDMY(fechaInicio), fin = normalizeDMY(fechaFin);
-    if (!ini || !fin) throw new Error("Fechas invÃ¡lidas");
+    if (!ini || !fin) throw new Error("Fechas inválidas");
     if (dmyToTimestamp(ini) > dmyToTimestamp(fin)) throw new Error("Fecha inicial mayor que final");
 
     const movimientos = await getMovimientosPorRango(ini, fin);
@@ -95,18 +101,18 @@ async function generarReporteExcelPorRango(fechaInicio, fechaFin) {
     const margen = totIng > 0 ? (utilidad / totIng) * 100 : 0;
 
     // ========== HOJA 1: RESUMEN ==========
-    const ws1 = wb.addWorksheet("ðŸ“Š Resumen", { views: [{ showGridLines: false }] });
+    const ws1 = wb.addWorksheet("📊 Resumen", { views: [{ showGridLines: false }] });
     ws1.columns = [{ width: 4 }, { width: 30 }, { width: 22 }, { width: 30 }];
 
     ws1.addRow([]);
-    const t1 = ws1.addRow(["", "SUBLICUENTAS â€” REPORTE FINANCIERO"]);
+    const t1 = ws1.addRow(["", "SUBLICUENTAS — REPORTE FINANCIERO"]);
     t1.height = 34;
     t1.getCell(2).font = { bold: true, size: 18, color: { argb: C.blanco } };
     t1.getCell(2).fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.rojo } };
     t1.getCell(2).alignment = { horizontal: "center", vertical: "middle" };
     ws1.mergeCells(t1.number, 2, t1.number, 4);
 
-    const sub1 = ws1.addRow(["", `PerÃ­odo del ${ini} al ${fin}`]);
+    const sub1 = ws1.addRow(["", `Período del ${ini} al ${fin}`]);
     sub1.getCell(2).font = { italic: true, size: 11, color: { argb: C.grisOsc } };
     sub1.getCell(2).alignment = { horizontal: "center" };
     ws1.mergeCells(sub1.number, 2, sub1.number, 4);
@@ -114,11 +120,11 @@ async function generarReporteExcelPorRango(fechaInicio, fechaFin) {
 
     // Tarjetas KPI
     const kpis = [
-      ["ðŸ’° Total Ingresos", totIng, C.verde],
-      ["ðŸ’¸ Total Egresos", totEgr, C.rojo],
-      ["ðŸ“ˆ Utilidad Neta", utilidad, utilidad >= 0 ? C.verde : C.rojoOsc],
-      ["ðŸ“Š Margen", margen / 100, C.azul],
-      ["ðŸ§¾ Movimientos", movimientos.length, C.grisOsc],
+      ["💰 Total Ingresos", totIng, C.verde],
+      ["💸 Total Egresos", totEgr, C.rojo],
+      ["📈 Utilidad Neta", utilidad, utilidad >= 0 ? C.verde : C.rojoOsc],
+      ["📊 Margen", margen / 100, C.azul],
+      ["🧾 Movimientos", movimientos.length, C.grisOsc],
     ];
     kpis.forEach(([label, valor, color], i) => {
       const r = ws1.addRow(["", label, valor]);
@@ -146,7 +152,7 @@ async function generarReporteExcelPorRango(fechaInicio, fechaFin) {
       r.getCell(3).numFmt = '"Lps " #,##0.00'; r.getCell(3).border = BORDE; r.getCell(3).alignment = { horizontal: "right", indent: 1 };
       // Barra visual con bloques
       const pct = Math.round((val / maxVal) * 20);
-      r.getCell(4).value = "â–ˆ".repeat(Math.max(1, pct));
+      r.getCell(4).value = "█".repeat(Math.max(1, pct));
       r.getCell(4).font = { color: { argb: col }, size: 11 };
       r.getCell(4).border = BORDE;
     });
@@ -154,7 +160,7 @@ async function generarReporteExcelPorRango(fechaInicio, fechaFin) {
     ws1.views = [{ state: "frozen", ySplit: 0, showGridLines: false }];
 
     // ========== HOJA 2: INGRESOS ==========
-    const ws2 = wb.addWorksheet("ðŸ“ˆ Ingresos");
+    const ws2 = wb.addWorksheet("📈 Ingresos");
     ws2.columns = [{ width: 13 }, { width: 22 }, { width: 16 }, { width: 18 }, { width: 18 }, { width: 32 }];
     titulo(ws2, "DETALLE DE INGRESOS", 6);
     headerFila(ws2, ["Fecha", "Plataforma", "Monto", "Banco", "Usuario", "Detalle"]);
@@ -181,7 +187,7 @@ async function generarReporteExcelPorRango(fechaInicio, fechaFin) {
     ws2.views = [{ state: "frozen", ySplit: 2 }];
 
     // ========== HOJA 3: EGRESOS ==========
-    const ws3 = wb.addWorksheet("ðŸ“‰ Egresos");
+    const ws3 = wb.addWorksheet("📉 Egresos");
     ws3.columns = [{ width: 13 }, { width: 22 }, { width: 16 }, { width: 18 }, { width: 18 }, { width: 32 }];
     titulo(ws3, "DETALLE DE EGRESOS", 6);
     headerFila(ws3, ["Fecha", "Motivo", "Monto", "Banco", "Usuario", "Detalle"]);
@@ -207,9 +213,9 @@ async function generarReporteExcelPorRango(fechaInicio, fechaFin) {
     ws3.views = [{ state: "frozen", ySplit: 2 }];
 
     // ========== HOJA 4: BANCOS ==========
-    const ws4 = wb.addWorksheet("ðŸ¦ Bancos");
+    const ws4 = wb.addWorksheet("🏦 Bancos");
     ws4.columns = [{ width: 22 }, { width: 18 }, { width: 18 }, { width: 18 }, { width: 16 }];
-    titulo(ws4, "ANÃLISIS POR BANCO", 5);
+    titulo(ws4, "ANÁLISIS POR BANCO", 5);
     headerFila(ws4, ["Banco", "Ingresos", "Egresos", "Neto", "Visual"]);
     const bancos = {};
     movimientos.forEach(m => {
@@ -231,7 +237,7 @@ async function generarReporteExcelPorRango(fechaInicio, fechaFin) {
       r.getCell(4).numFmt = '"Lps " #,##0.00';
       r.getCell(4).font = { bold: true, color: { argb: neto >= 0 ? C.verde : C.rojoOsc } };
       const pct = Math.round((Math.abs(neto) / maxNeto) * 15);
-      r.getCell(5).value = "â–ˆ".repeat(Math.max(1, pct));
+      r.getCell(5).value = "█".repeat(Math.max(1, pct));
       r.getCell(5).font = { color: { argb: neto >= 0 ? C.verde : C.rojo } };
     });
     const ban1 = ws4.rowCount;
@@ -244,7 +250,7 @@ async function generarReporteExcelPorRango(fechaInicio, fechaFin) {
     ws4.views = [{ state: "frozen", ySplit: 2 }];
 
     // ========== HOJA 5: TOP PLATAFORMAS ==========
-    const ws5 = wb.addWorksheet("ðŸ† Top Plataformas");
+    const ws5 = wb.addWorksheet("🏆 Top Plataformas");
     ws5.columns = [{ width: 8 }, { width: 26 }, { width: 18 }, { width: 14 }, { width: 20 }];
     titulo(ws5, "TOP PLATAFORMAS POR INGRESOS", 5);
     headerFila(ws5, ["#", "Plataforma", "Ingresos", "Ventas", "Visual"]);
@@ -258,7 +264,7 @@ async function generarReporteExcelPorRango(fechaInicio, fechaFin) {
     const topPlats = Object.entries(plats).sort((a, b) => b[1].monto - a[1].monto);
     const maxPlat = Math.max(...topPlats.map(([, d]) => d.monto), 1);
     topPlats.forEach(([plat, d], i) => {
-      const medalla = i === 0 ? "ðŸ¥‡" : i === 1 ? "ðŸ¥ˆ" : i === 2 ? "ðŸ¥‰" : `${i + 1}`;
+      const medalla = i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : `${i + 1}`;
       const r = ws5.addRow([medalla, plat, d.monto, d.count, ""]);
       r.eachCell(c => { c.border = BORDE; });
       if (i % 2 === 1) r.eachCell(c => { c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.gris } }; });
@@ -266,7 +272,7 @@ async function generarReporteExcelPorRango(fechaInicio, fechaFin) {
       r.getCell(3).numFmt = '"Lps " #,##0.00';
       r.getCell(4).alignment = { horizontal: "center" };
       const pct = Math.round((d.monto / maxPlat) * 18);
-      r.getCell(5).value = "â–ˆ".repeat(Math.max(1, pct));
+      r.getCell(5).value = "█".repeat(Math.max(1, pct));
       r.getCell(5).font = { color: { argb: C.dorado } };
     });
     ws5.views = [{ state: "frozen", ySplit: 2 }];
