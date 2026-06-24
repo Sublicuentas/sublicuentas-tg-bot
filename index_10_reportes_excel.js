@@ -117,54 +117,56 @@ async function generarReporteExcelPorRango(fechaInicio, fechaFin) {
   try {
     const ini = normalizeDMY(fechaInicio);
     const fin = normalizeDMY(fechaFin);
-    if (!ini || !fin) throw new Error("Fechas inválidas");
-
-    const movimientos = await getMovimientosPorRango(ini, fin);
+    if (!ini || !fin) throw new Error("Fechas inválidas.");
+    if (dmyToMillis(ini) > dmyToMillis(fin)) throw new Error("La fecha inicial no puede ser mayor a la final.");
     
-    // ✅ SI NO HAY DATOS, CREAR EXCEL VACÍO CON MENSAJE
-    if (!movimientos || movimientos.length === 0) {
-      const workbook = new ExcelJS.Workbook();
-      const ws = workbook.addWorksheet("⚠️ Sin datos");
-      ws.columns = [{ width: 50 }];
-      
-      const row1 = ws.addRow(["⚠️ RANGO SIN MOVIMIENTOS"]);
-      row1.font = { bold: true, size: 14, color: { argb: COLORES.blanco } };
-      row1.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF9900" } };
-      row1.alignment = { horizontal: "center" };
-      ws.rowHeight = 25;
-      
-      ws.addRow(["Período: " + ini + " - " + fin]);
-      ws.addRow(["No hay movimientos financieros en este rango de fechas."]);
-      ws.addRow(["Intenta con otro rango o verifica que haya datos registrados."]);
-      
-      const buffer = await workbook.xlsx.writeBuffer();
-      return buffer;
+    const movimientos = await getMovimientosPorRango(ini, fin);
+    const wb = new ExcelJS.Workbook();
+    wb.creator = "Sublicuentas Bot";
+    wb.created = new Date();
+    
+    const ws = wb.addWorksheet("Finanzas");
+    ws.columns = [
+      { header: "Fecha", key: "fecha", width: 15 },
+      { header: "Tipo", key: "tipo", width: 12 },
+      { header: "Monto", key: "monto", width: 15 },
+      { header: "Plataforma/Motivo", key: "concepto", width: 30 },
+      { header: "Banco/Método", key: "extra", width: 28 },
+      { header: "Detalle", key: "detalle", width: 35 },
+      { header: "ID", key: "id", width: 28 }
+    ];
+    
+    for (const r of movimientos) {
+      ws.addRow({
+        fecha: r.fecha || "",
+        tipo: String(r.tipo || "").toLowerCase() === "egreso" ? "Egreso" : "Ingreso",
+        monto: Number(r.monto || 0),
+        concepto: r.plataforma || r.motivo || "",
+        extra: r.banco || r.metodo || "",
+        detalle: r.detalle || r.descripcion || "",
+        id: r.id || ""
+      });
     }
-
-    const workbook = new ExcelJS.Workbook();
-
-    // ✅ HOJA 1: RESUMEN EJECUTIVO
-    const wsResumen = workbook.addWorksheet("📊 Resumen");
-    await crearResumenEjecutivo(wsResumen, movimientos, ini, fin);
-
-    // ✅ HOJA 2: INGRESOS DETALLADO
-    const wsIngresos = workbook.addWorksheet("📈 Ingresos");
-    await crearDetalleIngresos(wsIngresos, movimientos);
-
-    // ✅ HOJA 3: EGRESOS DETALLADO
-    const wsEgresos = workbook.addWorksheet("📉 Egresos");
-    await crearDetalleEgresos(wsEgresos, movimientos);
-
-    // ✅ HOJA 4: ANÁLISIS POR BANCO
-    const wsBancos = workbook.addWorksheet("🏦 Bancos");
-    await crearAnalisisPorBanco(wsBancos, movimientos);
-
-    // ✅ HOJA 5: GRÁFICOS (PROFESIONAL)
-    const wsGraficos = workbook.addWorksheet("📊 Gráficos");
-    await crearHojaGraficos(wsGraficos, movimientos, ini, fin);
-
-    // Generar buffer
-    const buffer = await workbook.xlsx.writeBuffer();
+    
+    let ingresos = 0, egresos = 0;
+    for (const r of movimientos) {
+      const monto = Number(r.monto || 0);
+      if (String(r.tipo || "").toLowerCase() === "egreso") egresos += monto;
+      else ingresos += monto;
+    }
+    
+    const resumen = wb.addWorksheet("Resumen");
+    resumen.addRow(["SUBLICUENTAS — REPORTE FINANCIERO"]);
+    resumen.addRow([]);
+    resumen.addRow(["Período", ini + " - " + fin]);
+    resumen.addRow([]);
+    resumen.addRow(["CONCEPTO", "MONTO"]);
+    resumen.addRow(["Total Ingresos", ingresos]);
+    resumen.addRow(["Total Egresos", egresos]);
+    resumen.addRow(["Utilidad Neta", ingresos - egresos]);
+    resumen.addRow(["Movimientos", movimientos.length]);
+    
+    const buffer = await wb.xlsx.writeBuffer();
     return buffer;
   } catch (e) {
     logErr("generarReporteExcelPorRango", e);
