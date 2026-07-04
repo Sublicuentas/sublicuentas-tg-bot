@@ -220,16 +220,32 @@ function getIdentLabelLocal(plataforma = "") {
   return "Correo";
 }
 
+function requiereClaveLocal(plataforma = "") {
+  const p = normalizarPlataforma(plataforma);
+  const cfg = platMetaLocal(p);
+  if (Object.prototype.hasOwnProperty.call(cfg, "requiereClave")) return cfg.requiereClave === true;
+  return !["canva", "gemini", "chatgpt", "duolingo"].includes(p);
+}
+
+function requierePinLocal(plataforma = "") {
+  const p = normalizarPlataforma(plataforma);
+  const cfg = platMetaLocal(p);
+  if (Object.prototype.hasOwnProperty.call(cfg, "requierePin")) return cfg.requierePin === true;
+  return ["netflix", "vipnetflix", "disneyp", "disneys", "hbomax", "primevideo", "crunchyroll", "universal"].includes(p);
+}
+
 function esSoloCorreoLocal(plataforma = "") {
-  const cfg = platMetaLocal(plataforma);
-  return cfg.requiereCorreo === true && cfg.requiereClave !== true && cfg.requierePin !== true;
+  return !requiereClaveLocal(plataforma) && !requierePinLocal(plataforma);
 }
 
 function getAccessTypeLabelLocal(plataforma = "") {
   const p = normalizarPlataforma(plataforma);
   if (esSoloCorreoLocal(p)) return "Solo correo";
   if (["oleadatv1", "oleadatv3", "iptv1", "iptv3", "iptv4"].includes(p)) return "Usuario + clave";
-  return "Correo + clave";
+  if (requiereClaveLocal(p) && requierePinLocal(p)) return "Correo + clave + PIN";
+  if (requiereClaveLocal(p)) return "Correo + clave";
+  if (requierePinLocal(p)) return "Correo + PIN";
+  return "Correo";
 }
 
 function validateIdentByPlatformLocal(plataforma = "", ident = "") {
@@ -284,6 +300,7 @@ function getTotalPorPlataformaLocal(plat = "") {
     canva: 1,
     gemini: 1,
     chatgpt: 1,
+    duolingo: 1,
   };
   return map[p] || 1;
 }
@@ -2890,6 +2907,7 @@ bot.on("callback_query", async (q) => {
       if (data.startsWith("mail_edit_clave|")) {
         const [, plataforma, accesoEnc] = data.split("|");
         const acceso = decodeURIComponent(accesoEnc || "");
+        if (!requiereClaveLocal(plataforma)) return bot.sendMessage(chatId, "ℹ️ Esta plataforma usa solo correo; no requiere clave.");
         const found = await buscarCorreoInventarioPorPlatCorreo(plataforma, acceso);
         if (!found) return bot.sendMessage(chatId, "❌ La cuenta no existe.");
         const claveActual = found.data?.clave || "Sin clave";
@@ -2974,7 +2992,7 @@ bot.on("callback_query", async (q) => {
         st.servStep = 2;
         st.step = 4;
         wizard.set(String(chatId), st);
-        return bot.sendMessage(chatId, `(Servicio 2/5) ${getIdentLabelLocal(plat)} de la cuenta:`);
+        return bot.sendMessage(chatId, `(Servicio 2/6) ${getIdentLabelLocal(plat)} de la cuenta:`);
       }
 
       if (data.startsWith("wiz:addmore:")) {
@@ -3072,22 +3090,31 @@ bot.on("callback_query", async (q) => {
           ]);
         }
 
-        let platActual = "";
-        if (field === "mail") {
-          const c = await getCliente(clientId);
-          if (!c) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
-          const servicios = Array.isArray(c.servicios) ? c.servicios : [];
-          if (idx < 0 || idx >= servicios.length) return bot.sendMessage(chatId, "⚠️ Servicio inválido.");
-          platActual = normalizarPlataforma(servicios[idx]?.plataforma || "");
-          pending.set(String(chatId), { mode: "cliServEditMail", clientId, idx, plat: platActual });
-        }
+        const c = await getCliente(clientId);
+        if (!c) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
+        const servicios = Array.isArray(c.servicios) ? c.servicios : [];
+        if (idx < 0 || idx >= servicios.length) return bot.sendMessage(chatId, "⚠️ Servicio inválido.");
+        const platActual = normalizarPlataforma(servicios[idx]?.plataforma || "");
 
-        if (field === "pin") pending.set(String(chatId), { mode: "cliServEditPin", clientId, idx });
+        if (field === "mail") pending.set(String(chatId), { mode: "cliServEditMail", clientId, idx, plat: platActual });
+        if (field === "clave") pending.set(String(chatId), { mode: "cliServEditClave", clientId, idx, plat: platActual });
+        if (field === "pin") pending.set(String(chatId), { mode: "cliServEditPin", clientId, idx, plat: platActual });
         if (field === "precio") pending.set(String(chatId), { mode: "cliServEditPrecio", clientId, idx });
         if (field === "fecha") pending.set(String(chatId), { mode: "cliServEditFecha", clientId, idx });
 
-        const titulo = field === "mail" ? `${identIcon(platActual)} *Cambiar ${getIdentLabelLocal(platActual).toLowerCase()}*` : field === "pin" ? "🔐 *Cambiar clave/pin*" : field === "precio" ? "💰 *Cambiar precio*" : "📅 *Cambiar fecha*";
-        const hint = field === "mail" ? `Escriba el nuevo ${getIdentLabelLocal(platActual).toLowerCase()}:` : field === "precio" ? "Escriba el precio (solo número):" : field === "fecha" ? "Escriba dd/mm/yyyy:" : "Escriba el nuevo valor:";
+        const titulo =
+          field === "mail" ? `${identIcon(platActual)} *Cambiar ${getIdentLabelLocal(platActual).toLowerCase()}*` :
+          field === "clave" ? "🔑 *Cambiar clave*" :
+          field === "pin" ? "🔐 *Cambiar PIN*" :
+          field === "precio" ? "💰 *Cambiar precio*" :
+          "📅 *Cambiar fecha*";
+
+        const hint =
+          field === "mail" ? `Escriba el nuevo ${getIdentLabelLocal(platActual).toLowerCase()}:` :
+          field === "clave" ? "Escriba la nueva clave:" :
+          field === "pin" ? "Escriba el nuevo PIN:" :
+          field === "precio" ? "Escriba el precio (solo número):" :
+          "Escriba dd/mm/yyyy:";
 
         return upsertPanel(chatId, `${titulo}\n${hint}`, [[{ text: "⬅️ Cancelar", callback_data: `cli:serv:menu:${clientId}:${idx}` }]]);
       }
@@ -4439,22 +4466,35 @@ bot.on("message", async (msg) => {
         if (!validateIdentByPlatformLocal(p.plat, t)) return bot.sendMessage(chatId, `⚠️ ${label} inválido. Escriba el ${label.toLowerCase()}:`);
         const normalizedMail = normalizeIdentByPlatformLocal(p.plat, t);
         if (esSoloCorreoLocal(p.plat)) {
-          pending.set(String(chatId), { mode: "cliAddServPrecio", clientId: p.clientId, plat: p.plat, mail: normalizedMail, pin: "" });
+          pending.set(String(chatId), { mode: "cliAddServPrecio", clientId: p.clientId, plat: p.plat, mail: normalizedMail, clave: "", pin: "" });
           return bot.sendMessage(chatId, "💰 Precio (solo número, Lps):");
         }
-        pending.set(String(chatId), { mode: "cliAddServPin", clientId: p.clientId, plat: p.plat, mail: normalizedMail });
-        return bot.sendMessage(chatId, "🔐 Escriba la clave/pin:");
+        if (requiereClaveLocal(p.plat)) {
+          pending.set(String(chatId), { mode: "cliAddServClave", clientId: p.clientId, plat: p.plat, mail: normalizedMail });
+          return bot.sendMessage(chatId, "🔑 Escriba la clave de la cuenta:");
+        }
+        pending.set(String(chatId), { mode: "cliAddServPin", clientId: p.clientId, plat: p.plat, mail: normalizedMail, clave: "" });
+        return bot.sendMessage(chatId, "🔐 Escriba el PIN del perfil:");
+      }
+
+      if (p.mode === "cliAddServClave") {
+        if (requierePinLocal(p.plat)) {
+          pending.set(String(chatId), { mode: "cliAddServPin", clientId: p.clientId, plat: p.plat, mail: p.mail, clave: t });
+          return bot.sendMessage(chatId, "🔐 Escriba el PIN del perfil:");
+        }
+        pending.set(String(chatId), { mode: "cliAddServPrecio", clientId: p.clientId, plat: p.plat, mail: p.mail, clave: t, pin: "" });
+        return bot.sendMessage(chatId, "💰 Precio (solo número, Lps):");
       }
 
       if (p.mode === "cliAddServPin") {
-        pending.set(String(chatId), { mode: "cliAddServPrecio", clientId: p.clientId, plat: p.plat, mail: p.mail, pin: t });
+        pending.set(String(chatId), { mode: "cliAddServPrecio", clientId: p.clientId, plat: p.plat, mail: p.mail, clave: p.clave || "", pin: t });
         return bot.sendMessage(chatId, "💰 Precio (solo número, Lps):");
       }
 
       if (p.mode === "cliAddServPrecio") {
         const n = Number(t);
         if (!Number.isFinite(n) || n <= 0) return bot.sendMessage(chatId, "⚠️ Precio inválido. Escriba solo número:");
-        pending.set(String(chatId), { mode: "cliAddServFecha", clientId: p.clientId, plat: p.plat, mail: p.mail, pin: p.pin, precio: n });
+        pending.set(String(chatId), { mode: "cliAddServFecha", clientId: p.clientId, plat: p.plat, mail: p.mail, clave: p.clave || "", pin: p.pin || "", precio: n });
         return bot.sendMessage(chatId, "📅 Fecha renovación (dd/mm/yyyy):");
       }
 
@@ -4463,7 +4503,7 @@ bot.on("message", async (msg) => {
         pending.delete(String(chatId));
       forceNextPanelAtBottom(chatId);
         try {
-          await addServicioTx(String(p.clientId), { plataforma: p.plat, correo: p.mail, pin: p.pin, precio: p.precio, fechaRenovacion: t });
+          await addServicioTx(String(p.clientId), { plataforma: p.plat, correo: p.mail, clave: p.clave || "", pin: p.pin || "", precio: p.precio, fechaRenovacion: t });
         } catch (e) {
           return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo agregar el servicio."}`);
         }
@@ -4476,6 +4516,13 @@ bot.on("message", async (msg) => {
         pending.delete(String(chatId));
       forceNextPanelAtBottom(chatId);
         try { await patchServicio(p.clientId, p.idx, { correo: normalizeIdentByPlatformLocal(p.plat || "", t) }); } catch (e) { return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo actualizar el servicio."}`); }
+        return menuServicio(chatId, p.clientId, p.idx);
+      }
+
+      if (p.mode === "cliServEditClave") {
+        pending.delete(String(chatId));
+      forceNextPanelAtBottom(chatId);
+        try { await patchServicio(p.clientId, p.idx, { clave: t }); } catch (e) { return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo actualizar el servicio."}`); }
         return menuServicio(chatId, p.clientId, p.idx);
       }
 
