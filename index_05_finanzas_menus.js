@@ -56,7 +56,7 @@ function categoryOfPlat(key = "") {
   if (["netflix","vipnetflix","disneyp","disneys","hbomax","primevideo","paramount","crunchyroll","vix","appletv","universal"].includes(k)) return "video";
   if (["spotify","youtube","deezer"].includes(k)) return "musica";
   if (["oleadatv1","oleadatv3","iptv1","iptv3","iptv4"].includes(k)) return "iptv";
-  if (["canva","gemini","chatgpt"].includes(k)) return "diseno_ia";
+  if (["canva","gemini","chatgpt","duolingo"].includes(k)) return "diseno_ia";
   return "video";
 }
 function inventoryLabel(key = "") {
