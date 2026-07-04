@@ -333,6 +333,158 @@ function extraerClaveInventarioLocal(data = {}) {
   return "";
 }
 
+function extraerPinInventarioLocal(data = {}) {
+  const valores = [
+    data.pin,
+    data.pinPerfil,
+    data.pin_perfil,
+    data.perfilPin,
+    data.profilePin,
+    data.profile_pin,
+  ];
+
+  for (const v of valores) {
+    const s = String(v || "").trim();
+    if (!s) continue;
+    const n = normEstadoSyncLocal(s);
+    if (["-", "sin pin", "n/a", "na", "null", "undefined"].includes(n)) continue;
+    return s;
+  }
+  return "";
+}
+
+function getIdentInventarioSyncLocal(data = {}) {
+  return String(data.correo || data.usuario || data.ident || data.email || "").trim();
+}
+
+function syncIdentKeyLocal(value = "") {
+  return String(value || "").trim().toLowerCase();
+}
+
+function pickInventarioMatchLocal(rows = [], plataformaPreferida = "") {
+  const prefer = normalizarPlataforma(plataformaPreferida);
+  const arr = Array.isArray(rows) ? rows.slice() : [];
+  if (!arr.length) return null;
+
+  arr.sort((a, b) => {
+    const aPrefer = normalizarPlataforma(a.plataforma || "") === prefer ? 1 : 0;
+    const bPrefer = normalizarPlataforma(b.plataforma || "") === prefer ? 1 : 0;
+    if (bPrefer !== aPrefer) return bPrefer - aPrefer;
+
+    const aClave = extraerClaveInventarioLocal(a.data || {}) ? 1 : 0;
+    const bClave = extraerClaveInventarioLocal(b.data || {}) ? 1 : 0;
+    if (bClave !== aClave) return bClave - aClave;
+
+    return String(a.id || "").localeCompare(String(b.id || ""), "es", { sensitivity: "base" });
+  });
+
+  return arr[0] || null;
+}
+
+async function buildInventarioClaveIndexLocal() {
+  const byPlatIdent = new Map();
+  const byIdent = new Map();
+
+  try {
+    const snapInv = await db.collection("inventario").get();
+    snapInv.forEach((docInv) => {
+      const data = docInv.data() || {};
+      const plataforma = normalizarPlataforma(data.plataforma || "");
+      const identRaw = getIdentInventarioSyncLocal(data);
+      if (!plataforma || !identRaw) return;
+
+      const identNorm = syncIdentKeyLocal(normalizeIdentByPlatformLocal(plataforma, identRaw));
+      if (!identNorm) return;
+
+      const row = { id: docInv.id, ref: docInv.ref, data, plataforma, ident: identNorm };
+      const key = `${plataforma}__${identNorm}`;
+      const prev = byPlatIdent.get(key);
+      byPlatIdent.set(key, pickInventarioMatchLocal([prev, row].filter(Boolean), plataforma));
+
+      const arr = byIdent.get(identNorm) || [];
+      arr.push(row);
+      byIdent.set(identNorm, arr);
+    });
+  } catch (e) {
+    logErr("buildInventarioClaveIndexLocal", e);
+  }
+
+  return {
+    byPlatIdent,
+    byIdent,
+    findByPlatIdent(plataforma = "", ident = "") {
+      const plat = normalizarPlataforma(plataforma);
+      const key = `${plat}__${syncIdentKeyLocal(normalizeIdentByPlatformLocal(plat, ident))}`;
+      return byPlatIdent.get(key) || null;
+    },
+    findByAnyIdent(ident = "", plataformaPreferida = "") {
+      const key = syncIdentKeyLocal(ident);
+      const rows = byIdent.get(key) || [];
+      return pickInventarioMatchLocal(rows, plataformaPreferida);
+    },
+  };
+}
+
+async function buscarInventarioFlexiblePorServicioLocal(servicio = {}, plataformaObjetivo = "", inventarioIndex = null) {
+  const plat = normalizarPlataforma(plataformaObjetivo || servicio.plataforma || "");
+  const identOriginal = getIdentServicioSyncLocal(servicio);
+  if (!plat || !identOriginal) return null;
+
+  const index = inventarioIndex || await buildInventarioClaveIndexLocal();
+  let inv = index.findByPlatIdent(plat, identOriginal);
+  if (inv) return { ...inv, plataformaCoincidente: plat, match: "plataforma_correo" };
+
+  inv = index.findByAnyIdent(identOriginal, plat);
+  if (!inv) return null;
+
+  return { ...inv, plataformaCoincidente: normalizarPlataforma(inv.plataforma || ""), match: "solo_correo" };
+}
+
+async function sincronizarUnServicioDesdeInventarioLocal(clientId, idx) {
+  const c = await getCliente(clientId);
+  if (!c) throw new Error("Cliente no encontrado.");
+
+  const servicios = Array.isArray(c.servicios) ? c.servicios : [];
+  if (idx < 0 || idx >= servicios.length) throw new Error("Servicio inválido.");
+
+  const actual = servicios[idx] || {};
+  const platActual = normalizarPlataforma(actual.plataforma || "");
+  const ident = getIdentServicioSyncLocal(actual);
+  if (!ident) throw new Error("Este servicio no tiene correo/usuario.");
+
+  const inv = await buscarInventarioFlexiblePorServicioLocal(actual, platActual);
+  if (!inv) throw new Error("No encontré ese correo/usuario en inventario.");
+
+  const platInv = normalizarPlataforma(inv.plataformaCoincidente || inv.plataforma || platActual);
+  const claveInv = extraerClaveInventarioLocal(inv.data || {});
+  const pinInv = extraerPinInventarioLocal(inv.data || {});
+  const patch = { plataforma: platInv };
+
+  if (requiereClaveLocal(platInv)) {
+    if (!claveInv) throw new Error("La cuenta existe en inventario, pero no tiene clave guardada.");
+    patch.clave = claveInv;
+  } else {
+    patch.clave = "";
+  }
+
+  if (requierePinLocal(platInv)) {
+    patch.pin = String(actual.pin || "").trim() || pinInv || "";
+  } else {
+    patch.pin = "";
+  }
+
+  await patchServicio(clientId, idx, patch);
+  return {
+    ok: true,
+    plataformaAnterior: platActual,
+    plataformaNueva: platInv,
+    correo: ident,
+    claveActualizada: !!patch.clave,
+    pinConservado: !!patch.pin,
+    match: inv.match || "",
+  };
+}
+
 async function sincronizarClavesClientesVigentes(chatId) {
   const lockKey = String(chatId || "global");
   if (!global.__SUBLICUENTAS_SYNC_CLAVES_RUNNING__) global.__SUBLICUENTAS_SYNC_CLAVES_RUNNING__ = new Set();
@@ -351,10 +503,12 @@ async function sincronizarClavesClientesVigentes(chatId) {
   let sinInventario = 0;
   let sinClaveInventario = 0;
   let sinCorreo = 0;
+  let plataformasCorregidas = 0;
   const plataformasActualizadas = new Map();
 
   try {
     const snapClientes = await db.collection("clientes").get();
+    const inventarioIndex = await buildInventarioClaveIndexLocal();
     let batch = db.batch();
     let batchOps = 0;
 
@@ -377,7 +531,7 @@ async function sincronizarClavesClientesVigentes(chatId) {
 
       for (const servicioRaw of servicios) {
         const servicio = { ...(servicioRaw || {}) };
-        const plat = normalizarPlataforma(servicio.plataforma || "");
+        let plat = normalizarPlataforma(servicio.plataforma || "");
         serviciosRevisados++;
 
         if (!servicioVigenteParaSyncLocal(servicio)) {
@@ -399,18 +553,19 @@ async function sincronizarClavesClientesVigentes(chatId) {
           continue;
         }
 
-        const ident = normalizeIdentByPlatformLocal(plat, identOriginal);
-        let inv = null;
-        try {
-          inv = await buscarCorreoInventarioPorPlatCorreo(plat, ident);
-        } catch (e) {
-          logErr("sincronizarClavesClientesVigentes:buscarInventario", e);
-        }
-
+        let inv = await buscarInventarioFlexiblePorServicioLocal(servicio, plat, inventarioIndex);
         if (!inv) {
           sinInventario++;
           nuevosServicios.push(servicio);
           continue;
+        }
+
+        const platInv = normalizarPlataforma(inv.plataformaCoincidente || inv.plataforma || plat);
+        if (platInv && platInv !== plat && requiereClaveLocal(platInv)) {
+          servicio.plataforma = platInv;
+          plat = platInv;
+          changed = true;
+          plataformasCorregidas++;
         }
 
         const claveInv = extraerClaveInventarioLocal(inv.data || {});
@@ -418,6 +573,12 @@ async function sincronizarClavesClientesVigentes(chatId) {
           sinClaveInventario++;
           nuevosServicios.push(servicio);
           continue;
+        }
+
+        const pinInv = extraerPinInventarioLocal(inv.data || {});
+        if (requierePinLocal(plat) && !String(servicio.pin || "").trim() && pinInv) {
+          servicio.pin = pinInv;
+          changed = true;
         }
 
         const claveActual = String(servicio.clave || servicio.password || servicio.pass || "").trim();
@@ -2564,11 +2725,51 @@ bot.on("callback_query", async (q) => {
     if (!adminOk && !vendOk) return bot.sendMessage(chatId, "⛔ Acceso denegado");
     if (data === "noop") return;
 
+    if (data.startsWith("sync:clave:serv:")) {
+      if (!adminOk) return bot.sendMessage(chatId, "⛔ Solo ADMIN puede sincronizar claves.");
+      const parts = data.split(":");
+      const clientId = parts[3];
+      const idx = Number(parts[4]);
+      try {
+        const r = await sincronizarUnServicioDesdeInventarioLocal(clientId, idx);
+        let txt = `✅ *Servicio sincronizado*
+
+`;
+        if (r.plataformaAnterior !== r.plataformaNueva) {
+          txt += `📌 Plataforma: *${escMD(humanPlatLabelSyncLocal(r.plataformaAnterior))}* → *${escMD(humanPlatLabelSyncLocal(r.plataformaNueva))}*
+`;
+        } else {
+          txt += `📌 Plataforma: *${escMD(humanPlatLabelSyncLocal(r.plataformaNueva))}*
+`;
+        }
+        txt += `📧 Correo/usuario: ${escMD(r.correo)}
+`;
+        txt += `🔑 Clave: ${r.claveActualizada ? "actualizada" : "sin cambio"}
+`;
+        txt += `🔐 PIN: ${r.pinConservado ? "conservado" : "sin PIN"}`;
+        return upsertPanel(chatId, txt, [
+          [{ text: "⬅️ Volver servicio", callback_data: `cli:serv:menu:${clientId}:${idx}` }],
+          [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
+        ]);
+      } catch (e) {
+        return upsertPanel(chatId, `⚠️ *No se pudo sincronizar este servicio*
+
+${escMD(e.message || "Revise inventario.")}`, [
+          [{ text: "⬅️ Volver servicio", callback_data: `cli:serv:menu:${clientId}:${idx}` }],
+          [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
+        ]);
+      }
+    }
+
     if (data === "sync:claves:ask") {
       if (!adminOk) return bot.sendMessage(chatId, "⛔ Solo ADMIN puede sincronizar claves.");
       return upsertPanel(
         chatId,
-        `🔄 *SINCRONIZAR CLAVES VIGENTES*\n\nEsto revisará todos los clientes vigentes y colocará la clave desde inventario cuando coincida la misma plataforma + correo/usuario.\n\nNo toca PIN. No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo.`,
+        `🔄 *SINCRONIZAR CLAVES VIGENTES*
+
+Esto revisará todos los clientes vigentes y colocará la clave desde inventario. Si el correo existe en inventario con otra plataforma, también corrige la plataforma del servicio.
+
+No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el PIN existente.`,
         [
           [{ text: "✅ Ejecutar sincronización", callback_data: "sync:claves:run" }],
           [{ text: "❌ Cancelar", callback_data: "go:inicio" }],
@@ -3393,8 +3594,50 @@ bot.on("callback_query", async (q) => {
         const clientId = parts[5];
         const idx = Number(parts[6]);
         if (!esPlataformaValida(plat)) return bot.sendMessage(chatId, "⚠️ Plataforma inválida.");
-        try { await patchServicio(clientId, idx, { plataforma: plat }); } catch (e) { return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo cambiar la plataforma."}`); }
-        return menuServicio(chatId, clientId, idx);
+
+        try {
+          const c = await getCliente(clientId);
+          if (!c) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
+          const servicios = Array.isArray(c.servicios) ? c.servicios : [];
+          if (idx < 0 || idx >= servicios.length) return bot.sendMessage(chatId, "⚠️ Servicio inválido.");
+
+          const actual = servicios[idx] || {};
+          const patch = { plataforma: plat };
+          const identActual = getIdentServicioSyncLocal(actual);
+
+          if (esSoloCorreoLocal(plat)) {
+            patch.clave = "";
+            patch.pin = "";
+          } else if (identActual) {
+            const inv = await buscarInventarioFlexiblePorServicioLocal(actual, plat);
+            if (inv && normalizarPlataforma(inv.plataformaCoincidente || inv.plataforma || "") === plat) {
+              const claveInv = extraerClaveInventarioLocal(inv.data || {});
+              const pinInv = extraerPinInventarioLocal(inv.data || {});
+              if (requiereClaveLocal(plat) && claveInv) patch.clave = claveInv;
+              if (requierePinLocal(plat)) patch.pin = String(actual.pin || "").trim() || pinInv || "";
+              if (!requierePinLocal(plat)) patch.pin = "";
+            }
+          }
+
+          await patchServicio(clientId, idx, patch);
+          return menuServicio(chatId, clientId, idx);
+        } catch (e) {
+          const msg = String(e.message || "No se pudo cambiar la plataforma.");
+          if (msg.includes("Clave inválida")) {
+            return upsertPanel(chatId,
+              `⚠️ *No se pudo cambiar la plataforma*
+
+La plataforma seleccionada ocupa clave y este servicio no tiene clave todavía.
+
+Use *🔄 Sincronizar este servicio* o revise que el correo exista en inventario con esa plataforma.`,
+              [
+                [{ text: "🔄 Sincronizar este servicio", callback_data: `sync:clave:serv:${clientId}:${idx}` }],
+                [{ text: "⬅️ Volver servicio", callback_data: `cli:serv:menu:${clientId}:${idx}` }],
+              ]
+            );
+          }
+          return bot.sendMessage(chatId, `⚠️ ${msg}`);
+        }
       }
 
       if (data.startsWith("cli:serv:del:ask:")) {
