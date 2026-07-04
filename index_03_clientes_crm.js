@@ -813,6 +813,7 @@ async function menuServicio(chatId, clientId, idx) {
   if (requiereClaveLocal(s.plataforma || "")) credBtns.push({ text: "🔑 Cambiar clave", callback_data: `cli:serv:edit:clave:${clientId}:${idx}` });
   if (requierePinLocal(s.plataforma || "")) credBtns.push({ text: "🔐 Cambiar PIN", callback_data: `cli:serv:edit:pin:${clientId}:${idx}` });
   if (credBtns.length) kb.push(credBtns);
+  kb.push([{ text: "🔄 Sincronizar este servicio", callback_data: `sync:clave:serv:${clientId}:${idx}` }]);
   kb.push([{ text: "🔄 Sincronizar claves vigentes", callback_data: "sync:claves:ask" }]);
   kb.push([{ text: "💰 Cambiar precio", callback_data: `cli:serv:edit:precio:${clientId}:${idx}` }]);
   kb.push([{ text: "📅 Cambiar fecha renovación", callback_data: `cli:serv:edit:fecha:${clientId}:${idx}` }]);
