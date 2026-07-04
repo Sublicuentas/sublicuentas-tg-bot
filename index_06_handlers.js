@@ -27,6 +27,7 @@ const {
   hardStopBot,
   releaseRuntimeLock,
   getCoreHealth,
+  cacheInvalidatePrefix,
 } = require("./index_01_core");
 
 const {
@@ -273,6 +274,235 @@ function docIdInventarioLocal(ident = "", plataforma = "") {
     .toLowerCase()
     .replace(/[.#$/\[\]\s]+/g, "_");
   return `${p}__${i}`;
+}
+
+function dmyToKeyLocal(dmy = "") {
+  const s = String(dmy || "").trim();
+  const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (!m) return 0;
+  const dd = Number(m[1]);
+  const mm = Number(m[2]);
+  const yyyy = Number(m[3]);
+  if (!Number.isFinite(dd) || !Number.isFinite(mm) || !Number.isFinite(yyyy)) return 0;
+  const dt = new Date(yyyy, mm - 1, dd, 12, 0, 0, 0);
+  if (dt.getFullYear() !== yyyy || dt.getMonth() !== mm - 1 || dt.getDate() !== dd) return 0;
+  return yyyy * 10000 + mm * 100 + dd;
+}
+
+function normEstadoSyncLocal(v = "") {
+  return String(v || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function servicioVigenteParaSyncLocal(servicio = {}) {
+  const estado = normEstadoSyncLocal(servicio.estado || servicio.status || "");
+  if (["cancelado", "inactivo", "eliminado", "no renovo", "no renovo.", "vencido"].includes(estado)) return false;
+
+  const fecha = String(servicio.fechaRenovacion || servicio.renovacion || servicio.fecha || "").trim();
+  const fechaKey = dmyToKeyLocal(fecha);
+  if (!fechaKey) return estado === "activo" || estado === "vigente";
+
+  return fechaKey >= dmyToKeyLocal(hoyDMY());
+}
+
+function getIdentServicioSyncLocal(servicio = {}) {
+  return String(servicio.correo || servicio.usuario || servicio.ident || servicio.email || "").trim();
+}
+
+function extraerClaveInventarioLocal(data = {}) {
+  const valores = [
+    data.clave,
+    data.password,
+    data.pass,
+    data.contrasena,
+    data["contraseña"],
+    data.key,
+  ];
+
+  for (const v of valores) {
+    const s = String(v || "").trim();
+    if (!s) continue;
+    const n = normEstadoSyncLocal(s);
+    if (["-", "sin clave", "sin password", "n/a", "na", "null", "undefined"].includes(n)) continue;
+    return s;
+  }
+  return "";
+}
+
+async function sincronizarClavesClientesVigentes(chatId) {
+  const lockKey = String(chatId || "global");
+  if (!global.__SUBLICUENTAS_SYNC_CLAVES_RUNNING__) global.__SUBLICUENTAS_SYNC_CLAVES_RUNNING__ = new Set();
+  const running = global.__SUBLICUENTAS_SYNC_CLAVES_RUNNING__;
+  if (running.has(lockKey)) {
+    return bot.sendMessage(chatId, "⏳ Ya hay una sincronización de claves en proceso. Espere que termine.");
+  }
+
+  running.add(lockKey);
+  let clientesRevisados = 0;
+  let clientesActualizados = 0;
+  let serviciosRevisados = 0;
+  let serviciosActualizados = 0;
+  let omitidosNoVigentes = 0;
+  let omitidosSoloCorreo = 0;
+  let sinInventario = 0;
+  let sinClaveInventario = 0;
+  let sinCorreo = 0;
+  const plataformasActualizadas = new Map();
+
+  try {
+    const snapClientes = await db.collection("clientes").get();
+    let batch = db.batch();
+    let batchOps = 0;
+
+    async function commitIfNeeded(force = false) {
+      if (!batchOps) return;
+      if (!force && batchOps < 400) return;
+      await batch.commit();
+      batch = db.batch();
+      batchOps = 0;
+    }
+
+    for (const docCli of snapClientes.docs) {
+      clientesRevisados++;
+      const cliente = docCli.data() || {};
+      const servicios = Array.isArray(cliente.servicios) ? cliente.servicios : [];
+      if (!servicios.length) continue;
+
+      let changed = false;
+      const nuevosServicios = [];
+
+      for (const servicioRaw of servicios) {
+        const servicio = { ...(servicioRaw || {}) };
+        const plat = normalizarPlataforma(servicio.plataforma || "");
+        serviciosRevisados++;
+
+        if (!servicioVigenteParaSyncLocal(servicio)) {
+          omitidosNoVigentes++;
+          nuevosServicios.push(servicio);
+          continue;
+        }
+
+        if (!requiereClaveLocal(plat)) {
+          omitidosSoloCorreo++;
+          nuevosServicios.push(servicio);
+          continue;
+        }
+
+        const identOriginal = getIdentServicioSyncLocal(servicio);
+        if (!identOriginal) {
+          sinCorreo++;
+          nuevosServicios.push(servicio);
+          continue;
+        }
+
+        const ident = normalizeIdentByPlatformLocal(plat, identOriginal);
+        let inv = null;
+        try {
+          inv = await buscarCorreoInventarioPorPlatCorreo(plat, ident);
+        } catch (e) {
+          logErr("sincronizarClavesClientesVigentes:buscarInventario", e);
+        }
+
+        if (!inv) {
+          sinInventario++;
+          nuevosServicios.push(servicio);
+          continue;
+        }
+
+        const claveInv = extraerClaveInventarioLocal(inv.data || {});
+        if (!claveInv) {
+          sinClaveInventario++;
+          nuevosServicios.push(servicio);
+          continue;
+        }
+
+        const claveActual = String(servicio.clave || servicio.password || servicio.pass || "").trim();
+        if (claveActual !== claveInv) {
+          servicio.clave = claveInv;
+          delete servicio.password;
+          delete servicio.pass;
+          changed = true;
+          serviciosActualizados++;
+          plataformasActualizadas.set(plat, (plataformasActualizadas.get(plat) || 0) + 1);
+        }
+
+        nuevosServicios.push(servicio);
+      }
+
+      if (changed) {
+        clientesActualizados++;
+        batch.set(docCli.ref, {
+          servicios: nuevosServicios,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        }, { merge: true });
+        batchOps++;
+        try { cacheInvalidatePrefix(`clientes:doc:${docCli.id}`); } catch (_) {}
+        await commitIfNeeded(false);
+      }
+    }
+
+    await commitIfNeeded(true);
+
+    const topPlats = Array.from(plataformasActualizadas.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 8)
+      .map(([plat, total]) => `• ${humanPlatLabelSyncLocal(plat)}: ${total}`)
+      .join("\n");
+
+    let txt = `✅ *Claves sincronizadas*\n\n`;
+    txt += `👥 Clientes revisados: *${clientesRevisados}*\n`;
+    txt += `📝 Clientes actualizados: *${clientesActualizados}*\n`;
+    txt += `🧩 Servicios revisados: *${serviciosRevisados}*\n`;
+    txt += `🔑 Claves colocadas/actualizadas: *${serviciosActualizados}*\n\n`;
+    txt += `ℹ️ No tocados:\n`;
+    txt += `• Vencidos/no vigentes: ${omitidosNoVigentes}\n`;
+    txt += `• Solo correo: ${omitidosSoloCorreo}\n`;
+    txt += `• Sin correo/usuario: ${sinCorreo}\n`;
+    txt += `• No encontrados en inventario: ${sinInventario}\n`;
+    txt += `• Inventario sin clave: ${sinClaveInventario}`;
+    if (topPlats) txt += `\n\n📌 *Por plataforma:*\n${escMD(topPlats)}`;
+
+    return bot.sendMessage(chatId, txt, { parse_mode: "Markdown" });
+  } catch (e) {
+    logErr("sincronizarClavesClientesVigentes", e);
+    return bot.sendMessage(chatId, "⚠️ No se pudo sincronizar claves. Revise los logs del servidor.");
+  } finally {
+    running.delete(lockKey);
+  }
+}
+
+function humanPlatLabelSyncLocal(key = "") {
+  const p = normalizarPlataforma(key);
+  const labels = {
+    netflix: "Netflix Premium",
+    vipnetflix: "Netflix VIP",
+    disneyp: "Disney Premium",
+    disneys: "Disney Standard",
+    hbomax: "HBO Max",
+    primevideo: "Prime Video",
+    paramount: "Paramount+",
+    crunchyroll: "Crunchyroll",
+    vix: "Vix",
+    appletv: "Apple TV",
+    universal: "Universal+",
+    spotify: "Spotify",
+    youtube: "YouTube",
+    deezer: "Deezer",
+    oleadatv1: "Oleada TV (1)",
+    oleadatv3: "Oleada TV (3)",
+    iptv1: "IPTV (1)",
+    iptv3: "IPTV (3)",
+    iptv4: "IPTV (4)",
+    canva: "Canva",
+    gemini: "Gemini",
+    chatgpt: "ChatGPT",
+    duolingo: "Duolingo",
+  };
+  return labels[p] || String(key || "");
 }
 
 function getTotalPorPlataformaLocal(plat = "") {
@@ -1719,6 +1949,26 @@ bot.onText(/\/vendedores_txt_split/i, async (msg) => {
   return reporteClientesSplitPorVendedorTXT(chatId);
 });
 
+bot.onText(/\/sincronizar_claves/i, async (msg) => {
+  if (!hasRuntimeLock()) return;
+
+  const chatId = msg.chat.id;
+  const userId = msg.from.id;
+
+  if (!(await safeIsAdminLocal(userId))) {
+    return bot.sendMessage(chatId, "⛔ Solo ADMIN puede sincronizar claves.");
+  }
+
+  return upsertPanel(
+    chatId,
+    `🔄 *SINCRONIZAR CLAVES VIGENTES*\n\nEsto revisará todos los clientes vigentes y colocará la clave desde inventario cuando coincida la misma plataforma + correo/usuario.\n\nNo toca PIN. No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo.`,
+    [
+      [{ text: "✅ Ejecutar sincronización", callback_data: "sync:claves:run" }],
+      [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
+    ]
+  );
+});
+
 bot.onText(/\/sincronizar_todo/i, async (msg) => {
   if (!hasRuntimeLock()) return;
 
@@ -2313,6 +2563,24 @@ bot.on("callback_query", async (q) => {
 
     if (!adminOk && !vendOk) return bot.sendMessage(chatId, "⛔ Acceso denegado");
     if (data === "noop") return;
+
+    if (data === "sync:claves:ask") {
+      if (!adminOk) return bot.sendMessage(chatId, "⛔ Solo ADMIN puede sincronizar claves.");
+      return upsertPanel(
+        chatId,
+        `🔄 *SINCRONIZAR CLAVES VIGENTES*\n\nEsto revisará todos los clientes vigentes y colocará la clave desde inventario cuando coincida la misma plataforma + correo/usuario.\n\nNo toca PIN. No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo.`,
+        [
+          [{ text: "✅ Ejecutar sincronización", callback_data: "sync:claves:run" }],
+          [{ text: "❌ Cancelar", callback_data: "go:inicio" }],
+        ]
+      );
+    }
+
+    if (data === "sync:claves:run") {
+      if (!adminOk) return bot.sendMessage(chatId, "⛔ Solo ADMIN puede sincronizar claves.");
+      await upsertPanel(chatId, `🔄 *Sincronizando claves vigentes...*\n\nEspere un momento.`, [[{ text: "🏠 Inicio", callback_data: "go:inicio" }]]);
+      return sincronizarClavesClientesVigentes(chatId);
+    }
 
     if (data === "go:inicio") {
       resetChatStateFull(chatId);
@@ -3785,7 +4053,7 @@ bot.on("message", async (msg) => {
         "clientes_txt", "vendedores_txt_split", "reindex_clientes", "fix_duplicados",
         "add", "del", "editclave", "adminadd", "admindel", "adminlist",
         "addvendedor", "delvendedor", "id", "miid", "vincular_vendedor",
-        "sincronizar_todo", "addcorreo", "finanzas", "resumen_fecha", "bancos_mes",
+        "sincronizar_todo", "sincronizar_claves", "addcorreo", "finanzas", "resumen_fecha", "bancos_mes",
         "top_plataformas_mes", "cierre_caja", "cierre_caja_rango", "excel_finanzas",
         "editar_movimiento", "clientes_excel",
         // ✅ Comandos IMAP — no pasar a resolverBusquedaAdmin
