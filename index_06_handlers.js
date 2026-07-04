@@ -3629,9 +3629,10 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
 
 La plataforma seleccionada ocupa clave y este servicio no tiene clave todavía.
 
-Use *🔄 Sincronizar este servicio* o revise que el correo exista en inventario con esa plataforma.`,
+Revise que el correo exista en inventario con esa plataforma o coloque la clave manualmente.`,
               [
-                [{ text: "🔄 Sincronizar este servicio", callback_data: `sync:clave:serv:${clientId}:${idx}` }],
+                [{ text: "🔑 Cambiar clave", callback_data: `cli:serv:edit:clave:${clientId}:${idx}` }],
+                [{ text: "📧 Cambiar correo", callback_data: `cli:serv:edit:mail:${clientId}:${idx}` }],
                 [{ text: "⬅️ Volver servicio", callback_data: `cli:serv:menu:${clientId}:${idx}` }],
               ]
             );
