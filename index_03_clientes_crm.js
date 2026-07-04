@@ -65,10 +65,10 @@ function normTxt(v = "") {
 function humanPlataforma(key = "") {
   const k = normalizarPlataforma(key);
   const map = {
-    netflix:"Netflix", vipnetflix:"VIP Netflix", disneyp:"Disney Premium", disneys:"Disney Standard",
+    netflix:"Netflix Premium", vipnetflix:"Netflix VIP", disneyp:"Disney Premium", disneys:"Disney Standard",
     hbomax:"HBO Max", primevideo:"Prime Video", paramount:"Paramount+", crunchyroll:"Crunchyroll",
     vix:"Vix", appletv:"Apple TV", universal:"Universal+", spotify:"Spotify", youtube:"YouTube",
-    deezer:"Deezer", canva:"Canva", gemini:"Gemini", chatgpt:"ChatGPT",
+    deezer:"Deezer", canva:"Canva", gemini:"Gemini", chatgpt:"ChatGPT", duolingo:"Duolingo",
     oleadatv1:"Oleada TV (1)", oleadatv3:"Oleada TV (3)", iptv1:"IPTV (1)", iptv3:"IPTV (3)", iptv4:"IPTV (4)",
   };
   return map[k] || String(key || "");
@@ -76,7 +76,7 @@ function humanPlataforma(key = "") {
 
 function iconPlataforma(key = "") {
   const k = normalizarPlataforma(key);
-  const map = { netflix:"📺", vipnetflix:"🔥", disneyp:"🏰", disneys:"🎬", hbomax:"🎞️", primevideo:"🎥", paramount:"💿", crunchyroll:"🍥", vix:"📱", appletv:"🍎", universal:"🌍", spotify:"🎵", youtube:"▶️", deezer:"🎧", canva:"🎨", gemini:"✨", chatgpt:"🤖", oleadatv1:"🌊", oleadatv3:"🌊", iptv1:"📡", iptv3:"📡", iptv4:"📡" };
+  const map = { netflix:"📺", vipnetflix:"🔥", disneyp:"🏰", disneys:"🎬", hbomax:"🎞️", primevideo:"🎥", paramount:"💿", crunchyroll:"🍥", vix:"📱", appletv:"🍎", universal:"🌍", spotify:"🎵", youtube:"▶️", deezer:"🎧", canva:"🎨", gemini:"✨", chatgpt:"🤖", duolingo:"🦉", oleadatv1:"🌊", oleadatv3:"🌊", iptv1:"📡", iptv3:"📡", iptv4:"📡" };
   return map[k] || "📦";
 }
 
@@ -85,11 +85,64 @@ function getIdentLabelLocal(plataforma = "") {
   return ["oleadatv1","oleadatv3","iptv1","iptv3","iptv4"].includes(p) ? "Usuario" : "Correo";
 }
 
+function platformConfigLocal(plataforma = "") {
+  const p = normalizarPlataforma(plataforma);
+  if (!p) return {};
+  if (!Array.isArray(PLATAFORMAS) && PLATAFORMAS && PLATAFORMAS[p]) return PLATAFORMAS[p] || {};
+  return {};
+}
+
+function requiereClaveLocal(plataforma = "") {
+  const cfg = platformConfigLocal(plataforma);
+  if (Object.prototype.hasOwnProperty.call(cfg, "requiereClave")) return cfg.requiereClave === true;
+  const p = normalizarPlataforma(plataforma);
+  return !["canva", "gemini", "chatgpt", "duolingo"].includes(p);
+}
+
+function requierePinLocal(plataforma = "") {
+  const cfg = platformConfigLocal(plataforma);
+  if (Object.prototype.hasOwnProperty.call(cfg, "requierePin")) return cfg.requierePin === true;
+  return ["netflix","vipnetflix","disneyp","disneys","hbomax","primevideo","crunchyroll","universal"].includes(normalizarPlataforma(plataforma));
+}
+
+function esSoloCorreoLocal(plataforma = "") {
+  return !requiereClaveLocal(plataforma) && !requierePinLocal(plataforma);
+}
+
 function getAccessTypeLabelLocal(plataforma = "") {
   const p = normalizarPlataforma(plataforma);
-  if (p === "canva") return "Solo correo";
+  if (esSoloCorreoLocal(p)) return "Solo correo";
   if (["oleadatv1","oleadatv3","iptv1","iptv3","iptv4"].includes(p)) return "Usuario + clave";
-  return "Correo + clave";
+  if (requiereClaveLocal(p) && requierePinLocal(p)) return "Correo + clave + PIN";
+  if (requiereClaveLocal(p)) return "Correo + clave";
+  if (requierePinLocal(p)) return "Correo + PIN";
+  return "Correo";
+}
+
+function getClaveServicioLocal(servicio = {}, plataforma = "") {
+  const p = normalizarPlataforma(plataforma || servicio.plataforma || "");
+  const directa = String(servicio.clave || servicio.password || servicio.pass || "").trim();
+  if (directa) return directa;
+  if (requiereClaveLocal(p) && !requierePinLocal(p)) return String(servicio.pin || "").trim();
+  return "";
+}
+
+function getPinServicioLocal(servicio = {}, plataforma = "") {
+  const p = normalizarPlataforma(plataforma || servicio.plataforma || "");
+  if (!requierePinLocal(p)) return "";
+  return String(servicio.pin || "").trim();
+}
+
+function renderCredencialesServicioLocal(servicio = {}, markdown = true, indent = "") {
+  const p = normalizarPlataforma(servicio.plataforma || "");
+  const esc = markdown ? escMD : (v = "") => String(v ?? "");
+  const identLabel = getIdentLabelLocal(p);
+  const identIcon = identLabel === "Usuario" ? "👤" : "📧";
+  let out = "";
+  out += `${indent}${identIcon} ${markdown ? `*${esc(identLabel)}:*` : `${identLabel}:`} ${esc(servicio.correo || "-")}\n`;
+  if (requiereClaveLocal(p)) out += `${indent}🔑 ${markdown ? "*Clave:*" : "Clave:"} ${esc(getClaveServicioLocal(servicio, p) || "-")}\n`;
+  if (requierePinLocal(p)) out += `${indent}🔐 ${markdown ? "*PIN:*" : "PIN:"} ${esc(getPinServicioLocal(servicio, p) || "-")}\n`;
+  return out;
 }
 
 function validateIdentByPlatformLocal(plataforma = "", ident = "") {
@@ -114,7 +167,7 @@ function docIdInventarioLocal(ident = "", plataforma = "") {
 
 function getTotalPorPlataformaLocal(plat = "") {
   const p = normalizarPlataforma(plat);
-  const map = { netflix:5, vipnetflix:1, disneyp:6, disneys:3, hbomax:5, primevideo:5, paramount:5, crunchyroll:5, vix:4, appletv:4, universal:4, spotify:1, youtube:1, deezer:1, oleadatv1:1, oleadatv3:3, iptv1:1, iptv3:3, iptv4:4, canva:1, gemini:1, chatgpt:1 };
+  const map = { netflix:5, vipnetflix:1, disneyp:6, disneys:3, hbomax:5, primevideo:5, paramount:5, crunchyroll:5, vix:4, appletv:4, universal:4, spotify:1, youtube:1, deezer:1, oleadatv1:1, oleadatv3:3, iptv1:1, iptv3:3, iptv4:4, canva:1, gemini:1, chatgpt:1, duolingo:1 };
   return map[p] || 1;
 }
 
@@ -233,7 +286,7 @@ async function getInventarioDoc(plataforma = "", acceso = "") {
   return null;
 }
 
-async function syncServicioEnInventario({ clienteNombre = "", plataforma = "", correo = "", pin = "" }) {
+async function syncServicioEnInventario({ clienteNombre = "", plataforma = "", correo = "", clave = "", pin = "" }) {
   const plat = normalizarPlataforma(plataforma);
   const acceso = normalizeIdentByPlatformLocal(plat, correo);
   const found = await getInventarioDoc(plat, acceso);
@@ -242,18 +295,29 @@ async function syncServicioEnInventario({ clienteNombre = "", plataforma = "", c
   const { ref, data } = found;
   let clientes = Array.isArray(data.clientes) ? data.clientes.slice() : [];
 
-  const yaExiste = clientes.some((x) => normTxt(x?.nombre || "") === normTxt(clienteNombre) && String(x?.pin || "") === String(pin || ""));
-  if (yaExiste) return { ok: true, synced: true, added: false };
+  const pinNorm = String(pin || "").trim();
+  const yaExiste = clientes.some((x) => normTxt(x?.nombre || "") === normTxt(clienteNombre) && String(x?.pin || "") === pinNorm);
+  if (yaExiste) {
+    const patch = { updatedAt: admin.firestore.FieldValue.serverTimestamp() };
+    const claveNorm = String(clave || "").trim();
+    if (claveNorm && requiereClaveLocal(plat) && (!data.clave || String(data.clave || "").toLowerCase() === "sin clave")) patch.clave = claveNorm;
+    if (Object.keys(patch).length > 1) await ref.set(patch, { merge: true });
+    return { ok: true, synced: true, added: false };
+  }
 
   const capacidad = Number(data.capacidad || data.total || getTotalPorPlataformaLocal(plat) || 1);
   if (clientes.length >= capacidad) return { ok: false, reason: "full" };
 
-  clientes.push({ nombre: String(clienteNombre || "").trim(), pin: String(pin || "").trim(), slot: clientes.length + 1 });
+  clientes.push({ nombre: String(clienteNombre || "").trim(), pin: pinNorm, slot: clientes.length + 1 });
   clientes = clientes.map((x, i) => ({ ...x, slot: i + 1 }));
   const ocupados = clientes.length;
   const disponibles = Math.max(0, capacidad - ocupados);
 
-  await ref.set({ clientes, ocupados, disponibles, disp: disponibles, capacidad, estado: disponibles === 0 ? "llena" : "activa", updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+  const patch = { clientes, ocupados, disponibles, disp: disponibles, capacidad, estado: disponibles === 0 ? "llena" : "activa", updatedAt: admin.firestore.FieldValue.serverTimestamp() };
+  const claveNorm = String(clave || "").trim();
+  if (claveNorm && requiereClaveLocal(plat) && (!data.clave || String(data.clave || "").toLowerCase() === "sin clave")) patch.clave = claveNorm;
+
+  await ref.set(patch, { merge: true });
   return { ok: true, synced: true, added: true, ocupados, disponibles, capacidad };
 }
 
@@ -361,8 +425,7 @@ async function generarHistorialTXT(clientId) {
     servicios.forEach((s, i) => {
       const est = getEstadoServicio(s.fechaRenovacion || "");
       txt += `\n${i + 1}) ${humanPlataforma(s.plataforma || "")}\n`;
-      txt += `${getIdentLabelLocal(s.plataforma || "")}: ${s.correo || "-"}\n`;
-      txt += `Clave/PIN: ${s.pin || "-"}\n`;
+      txt += renderCredencialesServicioLocal(s, false, "");
       txt += `Precio: ${Number(s.precio || 0).toFixed(2)} Lps\n`;
       txt += `Renovacion: ${s.fechaRenovacion || "-"}\n`;
       txt += `Estado: ${est.texto}\n`;
@@ -382,6 +445,7 @@ async function generarHistorialTXT(clientId) {
       if (ev.plataforma)          txt += `   Plataforma: ${humanPlataforma(ev.plataforma)}\n`;
       if (ev.correo)              txt += `   Correo/Usuario: ${ev.correo}\n`;
       if (ev.correoAnterior)      txt += `   Correo anterior: ${ev.correoAnterior}\n`;
+      if (ev.clave)               txt += `   Clave: ${ev.clave}\n`;
       if (ev.pin)                 txt += `   PIN: ${ev.pin}\n`;
       if (ev.precio !== undefined && ev.precio !== null)
                                   txt += `   Precio: ${Number(ev.precio || 0).toFixed(2)} Lps\n`;
@@ -550,7 +614,7 @@ async function buscarClienteRobusto(query = "") {
       vendedor, normTxt(x.vendedor_norm || ""),
       ...servicios.flatMap((s) => [
         normTxt(s?.correo || ""), normTxt(s?.plataforma || ""),
-        normTxt(humanPlataforma(s?.plataforma || "")), String(s?.pin || "").trim().toLowerCase(),
+        normTxt(humanPlataforma(s?.plataforma || "")), String(s?.clave || "").trim().toLowerCase(), String(s?.pin || "").trim().toLowerCase(),
       ]),
     ];
 
@@ -585,8 +649,8 @@ function clienteResumenTXT(c = {}) {
     servicios.forEach((s, i) => {
       const est = getEstadoServicio(s.fechaRenovacion || "");
       txt += `\n${i + 1}) ${humanPlataforma(s.plataforma || "")}\n`;
-      txt += `${getIdentLabelLocal(s.plataforma || "")}: ${s.correo || "-"}\n`;
-      txt += `Clave/PIN: ${s.pin || "-"}\nPrecio: ${Number(s.precio || 0).toFixed(2)} Lps\n`;
+      txt += renderCredencialesServicioLocal(s, false, "");
+      txt += `Precio: ${Number(s.precio || 0).toFixed(2)} Lps\n`;
       txt += `Renovacion: ${s.fechaRenovacion || "-"}\nEstado: ${est.texto}\n`;
     });
   }
@@ -614,9 +678,9 @@ function renderFichaClienteMarkdown(c = {}) {
     servicios.forEach((s, i) => {
       const est = getEstadoServicio(s.fechaRenovacion || "");
       txt += `\n\n${i + 1}) ${iconPlataforma(s.plataforma || "")} *${escMD(humanPlataforma(s.plataforma || ""))}*\n`;
-      txt += `${getIdentLabelLocal(s.plataforma || "") === "Usuario" ? "👤" : "📧"} ${escMD(s.correo || "-")}\n`;
-      txt += `🔐 ${escMD(s.pin || "-")}\n💵 ${escMD(`${Number(s.precio || 0).toFixed(2)} Lps`)}\n`;
-      txt += `📅 ${escMD(s.fechaRenovacion || "-")} — ${est.emoji} ${escMD(est.texto)}`;
+      txt += renderCredencialesServicioLocal(s, true, "");
+      txt += `💵 *Precio:* ${escMD(`${Number(s.precio || 0).toFixed(2)} Lps`)}\n`;
+      txt += `📅 *Renovación:* ${escMD(s.fechaRenovacion || "-")} — ${est.emoji} ${escMD(est.texto)}`;
     });
   }
 
@@ -661,8 +725,7 @@ async function enviarFichaClienteVendedor(chatId, clientId, backCb = "vend:clien
     servicios.forEach((s, i) => {
       const est = getEstadoServicio(s.fechaRenovacion || "");
       txt += `*${i + 1}.* *${escMD(humanPlataforma(s.plataforma || ""))}*\n`;
-      txt += `   📧 ${escMD(s.correo || "-")}\n`;
-      txt += `   🔑 ${escMD(s.pin || s.clave || "-")}\n`;
+      txt += renderCredencialesServicioLocal(s, true, "   ");
       txt += `   📅 ${escMD(s.fechaRenovacion || "-")} ${est.emoji}\n`;
       txt += `   💵 ${escMD(Number(s.precio || 0).toFixed(2))} Lps\n\n`;
     });
@@ -732,21 +795,29 @@ async function menuServicio(chatId, clientId, idx) {
 
   const s = servicios[idx] || {};
   const est = getEstadoServicio(s.fechaRenovacion || "");
-  const txt =
+  let txt =
     `🧩 *SERVICIO #${idx + 1}*\n\n` +
-    `${iconPlataforma(s.plataforma || "")} *Plataforma:* ${escMD(humanPlataforma(s.plataforma || ""))}\n` +
-    `${getIdentLabelLocal(s.plataforma || "") === "Usuario" ? "👤" : "📧"} *${escMD(getIdentLabelLocal(s.plataforma || ""))}:* ${escMD(s.correo || "-")}\n` +
-    `🔐 *Clave/PIN:* ${escMD(s.pin || "-")}\n💰 *Precio:* ${escMD(`${Number(s.precio || 0).toFixed(2)} Lps`)}\n` +
-    `📅 *Renovación:* ${escMD(s.fechaRenovacion || "-")}\n📊 *Estado:* ${est.emoji} ${escMD(est.texto)}`;
+    `${iconPlataforma(s.plataforma || "")} *Plataforma:* ${escMD(humanPlataforma(s.plataforma || ""))}\n`;
 
-  return upsertPanel(chatId, txt, [
+  txt += renderCredencialesServicioLocal(s, true, "");
+  txt += `💰 *Precio:* ${escMD(`${Number(s.precio || 0).toFixed(2)} Lps`)}\n`;
+  txt += `📅 *Renovación:* ${escMD(s.fechaRenovacion || "-")}\n📊 *Estado:* ${est.emoji} ${escMD(est.texto)}`;
+
+  const kb = [
     [{ text: "📌 Cambiar plataforma", callback_data: `cli:serv:edit:plat:${clientId}:${idx}` }],
     [{ text: `${getIdentLabelLocal(s.plataforma || "") === "Usuario" ? "👤" : "📧"} Cambiar ${getIdentLabelLocal(s.plataforma || "").toLowerCase()}`, callback_data: `cli:serv:edit:mail:${clientId}:${idx}` }],
-    [{ text: "🔐 Cambiar clave/PIN", callback_data: `cli:serv:edit:pin:${clientId}:${idx}` }, { text: "💰 Cambiar precio", callback_data: `cli:serv:edit:precio:${clientId}:${idx}` }],
-    [{ text: "📅 Cambiar fecha renovación", callback_data: `cli:serv:edit:fecha:${clientId}:${idx}` }],
-    [{ text: "🗑️ Eliminar servicio", callback_data: `cli:serv:del:ask:${clientId}:${idx}` }],
-    [{ text: "⬅️ Volver Servicios",      callback_data: `cli:serv:list:${clientId}` }, { text: "🏠 Inicio", callback_data: "go:inicio" }],
-  ]);
+  ];
+
+  const credBtns = [];
+  if (requiereClaveLocal(s.plataforma || "")) credBtns.push({ text: "🔑 Cambiar clave", callback_data: `cli:serv:edit:clave:${clientId}:${idx}` });
+  if (requierePinLocal(s.plataforma || "")) credBtns.push({ text: "🔐 Cambiar PIN", callback_data: `cli:serv:edit:pin:${clientId}:${idx}` });
+  if (credBtns.length) kb.push(credBtns);
+  kb.push([{ text: "💰 Cambiar precio", callback_data: `cli:serv:edit:precio:${clientId}:${idx}` }]);
+  kb.push([{ text: "📅 Cambiar fecha renovación", callback_data: `cli:serv:edit:fecha:${clientId}:${idx}` }]);
+  kb.push([{ text: "🗑️ Eliminar servicio", callback_data: `cli:serv:del:ask:${clientId}:${idx}` }]);
+  kb.push([{ text: "⬅️ Volver Servicios", callback_data: `cli:serv:list:${clientId}` }, { text: "🏠 Inicio", callback_data: "go:inicio" }]);
+
+  return upsertPanel(chatId, txt, kb);
 }
 
 // ===============================
@@ -768,18 +839,22 @@ async function addServicioTx(clientId, servicio = {}) {
   const ident = normalizeIdentByPlatformLocal(plat, servicio.correo || "");
   if (!validateIdentByPlatformLocal(plat, ident)) throw new Error(`${getIdentLabelLocal(plat)} inválido.`);
 
-  const pin = String(servicio.pin || "").trim();
+  let clave = String(servicio.clave || servicio.password || servicio.pass || "").trim();
+  let pin = String(servicio.pin || "").trim();
+  if (!clave && requiereClaveLocal(plat) && !requierePinLocal(plat) && pin) { clave = pin; pin = ""; }
+
   const precio = Number(servicio.precio || 0);
   const fechaRenovacion = String(servicio.fechaRenovacion || "").trim();
 
-  if (!pin && getAccessTypeLabelLocal(plat) !== "Solo correo") throw new Error("Clave/PIN inválido.");
+  if (requiereClaveLocal(plat) && !clave) throw new Error("Clave inválida.");
+  if (requierePinLocal(plat) && !pin) throw new Error("PIN inválido.");
   if (!Number.isFinite(precio) || precio <= 0) throw new Error("Precio inválido.");
   if (!isFechaDMY(fechaRenovacion)) throw new Error("Fecha de renovación inválida.");
 
-  const sync = await syncServicioEnInventario({ clienteNombre: c.nombrePerfil || "", plataforma: plat, correo: ident, pin });
+  const sync = await syncServicioEnInventario({ clienteNombre: c.nombrePerfil || "", plataforma: plat, correo: ident, clave, pin });
   if (sync.reason === "full") throw new Error("La cuenta en inventario ya está llena.");
 
-  servicios.push({ plataforma: plat, correo: ident, pin, precio, fechaRenovacion });
+  servicios.push({ plataforma: plat, correo: ident, clave, pin, precio, fechaRenovacion });
   await ref.set({ servicios, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
 
   cacheInvalidatePrefix(`clientes:doc:${id}`);
@@ -790,12 +865,13 @@ async function addServicioTx(clientId, servicio = {}) {
     descripcion: `Se agregó ${humanPlataforma(plat)}`,
     plataforma: plat,
     correo: ident,
+    clave,
     pin,
     precio,
     fechaRenovacion,
   });
 
-  return { ok: true, servicio: { plataforma: plat, correo: ident, pin, precio, fechaRenovacion }, sync };
+  return { ok: true, servicio: { plataforma: plat, correo: ident, clave, pin, precio, fechaRenovacion }, sync };
 }
 
 async function patchServicio(clientId, idx, patch = {}) {
@@ -808,7 +884,7 @@ async function patchServicio(clientId, idx, patch = {}) {
   if (idx < 0 || idx >= servicios.length) throw new Error("Servicio inválido.");
 
   const actual = servicios[idx] || {};
-  const previo = { plataforma: actual.plataforma, correo: actual.correo, pin: actual.pin };
+  const previo = { plataforma: actual.plataforma, correo: actual.correo, clave: actual.clave, pin: actual.pin };
   const siguiente = { ...actual, ...patch };
   siguiente.plataforma = normalizarPlataforma(siguiente.plataforma || actual.plataforma || "");
 
@@ -818,6 +894,19 @@ async function patchServicio(clientId, idx, patch = {}) {
     siguiente.correo = normalizeIdentByPlatformLocal(siguiente.plataforma, siguiente.correo || "");
     if (!validateIdentByPlatformLocal(siguiente.plataforma, siguiente.correo)) throw new Error(`${getIdentLabelLocal(siguiente.plataforma)} inválido.`);
   }
+
+  if (Object.prototype.hasOwnProperty.call(siguiente, "clave")) siguiente.clave = String(siguiente.clave || "").trim();
+  if (Object.prototype.hasOwnProperty.call(siguiente, "pin")) siguiente.pin = String(siguiente.pin || "").trim();
+
+  const credencialesTocadas =
+    Object.prototype.hasOwnProperty.call(patch, "plataforma") ||
+    Object.prototype.hasOwnProperty.call(patch, "correo") ||
+    Object.prototype.hasOwnProperty.call(patch, "clave") ||
+    Object.prototype.hasOwnProperty.call(patch, "pin");
+
+  if (credencialesTocadas && requiereClaveLocal(siguiente.plataforma) && !getClaveServicioLocal(siguiente, siguiente.plataforma)) throw new Error("Clave inválida.");
+  if (credencialesTocadas && requierePinLocal(siguiente.plataforma) && !getPinServicioLocal(siguiente, siguiente.plataforma)) throw new Error("PIN inválido.");
+  if (esSoloCorreoLocal(siguiente.plataforma)) { siguiente.clave = ""; siguiente.pin = ""; }
 
   if (Object.prototype.hasOwnProperty.call(siguiente, "precio")) {
     const n = Number(siguiente.precio || 0);
@@ -838,7 +927,9 @@ async function patchServicio(clientId, idx, patch = {}) {
   const cambios = [];
   if (patch.correo && patch.correo !== actual.correo)
     cambios.push(`Correo: ${actual.correo || "-"} → ${patch.correo}`);
-  if (patch.pin && patch.pin !== actual.pin)
+  if (patch.clave !== undefined && patch.clave !== actual.clave)
+    cambios.push(`Clave cambiada`);
+  if (patch.pin !== undefined && patch.pin !== actual.pin)
     cambios.push(`PIN cambiado`);
   if (patch.precio !== undefined && patch.precio !== actual.precio)
     cambios.push(`Precio: ${Number(actual.precio || 0).toFixed(2)} → ${Number(patch.precio || 0).toFixed(2)} Lps`);
@@ -854,6 +945,8 @@ async function patchServicio(clientId, idx, patch = {}) {
       plataforma: siguiente.plataforma,
       correo: siguiente.correo,
       correoAnterior: actual.correo,
+      clave: getClaveServicioLocal(siguiente, siguiente.plataforma),
+      pin: getPinServicioLocal(siguiente, siguiente.plataforma),
       precioAnterior: actual.precio,
       fechaAnterior: actual.fechaRenovacion,
     });
@@ -862,11 +955,12 @@ async function patchServicio(clientId, idx, patch = {}) {
   const cambioInventario =
     normalizarPlataforma(previo.plataforma || "") !== normalizarPlataforma(siguiente.plataforma || "") ||
     String(previo.correo || "") !== String(siguiente.correo || "") ||
-    String(previo.pin || "") !== String(siguiente.pin || "");
+    String(previo.pin || "") !== String(siguiente.pin || "") ||
+    String(previo.clave || "") !== String(siguiente.clave || "");
 
   if (cambioInventario) {
     try { await removeServicioDeInventario({ clienteNombre: c.nombrePerfil || "", ...previo }); } catch (e) { logErr("patchServicio.removeInventario", e); }
-    try { await syncServicioEnInventario({ clienteNombre: c.nombrePerfil || "", plataforma: siguiente.plataforma, correo: siguiente.correo, pin: siguiente.pin }); } catch (e) { logErr("patchServicio.addInventario", e); }
+    try { await syncServicioEnInventario({ clienteNombre: c.nombrePerfil || "", plataforma: siguiente.plataforma, correo: siguiente.correo, clave: getClaveServicioLocal(siguiente, siguiente.plataforma), pin: getPinServicioLocal(siguiente, siguiente.plataforma) }); } catch (e) { logErr("patchServicio.addInventario", e); }
   }
 
   return { ok: true, servicio: siguiente };
@@ -907,7 +1001,8 @@ async function eliminarServicioTx(clientId, idx) {
     descripcion: `Se eliminó ${humanPlataforma(eliminado.plataforma || "")}`,
     plataforma: eliminado.plataforma || "",
     correo: eliminado.correo || "",
-    pin: eliminado.pin || "",
+    clave: getClaveServicioLocal(eliminado, eliminado.plataforma || ""),
+    pin: getPinServicioLocal(eliminado, eliminado.plataforma || ""),
     precio: eliminado.precio || 0,
     fechaRenovacion: eliminado.fechaRenovacion || "",
   });
@@ -1028,7 +1123,10 @@ async function wizardNext(chatId, rawText = "") {
   const t = String(rawText || "").trim();
   if (!t) return bot.sendMessage(chatId, "⚠️ Escriba un valor válido.");
 
-  if (st.step === 1) { st.nombre = t; st.step = 2; wizard.set(String(chatId), st); return bot.sendMessage(chatId, "(2/3) Teléfono del cliente:"); }
+  if (st.step === 1) {
+    st.nombre = t; st.step = 2; wizard.set(String(chatId), st);
+    return bot.sendMessage(chatId, "(2/3) Teléfono del cliente:");
+  }
 
   if (st.step === 2) {
     const tel = onlyDigits(t);
@@ -1050,20 +1148,46 @@ async function wizardNext(chatId, rawText = "") {
     if (st.servStep === 2) {
       if (!validateIdentByPlatformLocal(plat, t)) return bot.sendMessage(chatId, `⚠️ ${getIdentLabelLocal(plat)} inválido.`);
       st.servicio.correo = normalizeIdentByPlatformLocal(plat, t);
-      st.servStep = 3; wizard.set(String(chatId), st);
-      return bot.sendMessage(chatId, "(Servicio 3/5) Clave/PIN:");
+
+      if (requiereClaveLocal(plat)) {
+        st.servStep = 3; wizard.set(String(chatId), st);
+        return bot.sendMessage(chatId, "(Servicio 3/6) Clave de la cuenta:");
+      }
+
+      if (requierePinLocal(plat)) {
+        st.servStep = 4; wizard.set(String(chatId), st);
+        return bot.sendMessage(chatId, "(Servicio 4/6) PIN del perfil:");
+      }
+
+      st.servStep = 5; wizard.set(String(chatId), st);
+      return bot.sendMessage(chatId, "(Servicio 5/6) Precio (solo número, Lps):");
     }
 
-    if (st.servStep === 3) { st.servicio.pin = t; st.servStep = 4; wizard.set(String(chatId), st); return bot.sendMessage(chatId, "(Servicio 4/5) Precio (solo número, Lps):"); }
+    if (st.servStep === 3) {
+      st.servicio.clave = t;
+      if (requierePinLocal(plat)) {
+        st.servStep = 4; wizard.set(String(chatId), st);
+        return bot.sendMessage(chatId, "(Servicio 4/6) PIN del perfil:");
+      }
+
+      st.servStep = 5; wizard.set(String(chatId), st);
+      return bot.sendMessage(chatId, "(Servicio 5/6) Precio (solo número, Lps):");
+    }
 
     if (st.servStep === 4) {
-      const precio = parseMontoNumber(t);
-      if (!Number.isFinite(precio) || precio <= 0) return bot.sendMessage(chatId, "⚠️ Precio inválido. Escriba solo número.");
-      st.servicio.precio = precio; st.servStep = 5; wizard.set(String(chatId), st);
-      return bot.sendMessage(chatId, "(Servicio 5/5) Fecha renovación (dd/mm/yyyy):");
+      st.servicio.pin = t;
+      st.servStep = 5; wizard.set(String(chatId), st);
+      return bot.sendMessage(chatId, "(Servicio 5/6) Precio (solo número, Lps):");
     }
 
     if (st.servStep === 5) {
+      const precio = parseMontoNumber(t);
+      if (!Number.isFinite(precio) || precio <= 0) return bot.sendMessage(chatId, "⚠️ Precio inválido. Escriba solo número.");
+      st.servicio.precio = precio; st.servStep = 6; wizard.set(String(chatId), st);
+      return bot.sendMessage(chatId, "(Servicio 6/6) Fecha renovación (dd/mm/yyyy):");
+    }
+
+    if (st.servStep === 6) {
       if (!isFechaDMY(t)) return bot.sendMessage(chatId, "⚠️ Fecha inválida. Use dd/mm/yyyy.");
       st.servicio.fechaRenovacion = t;
 
@@ -1083,7 +1207,6 @@ async function wizardNext(chatId, rawText = "") {
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         });
 
-        // ✅ Registrar creación del cliente en historial
         await registrarEventoHistorial(clientId, {
           tipo: "cliente_creado",
           descripcion: `Cliente creado por vendedor: ${st.vendedor}`,
@@ -1091,8 +1214,11 @@ async function wizardNext(chatId, rawText = "") {
       }
 
       await addServicioTx(clientId, {
-        plataforma: plat, correo: st.servicio.correo,
-        pin: st.servicio.pin, precio: st.servicio.precio,
+        plataforma: plat,
+        correo: st.servicio.correo,
+        clave: st.servicio.clave || "",
+        pin: st.servicio.pin || "",
+        precio: st.servicio.precio,
         fechaRenovacion: st.servicio.fechaRenovacion,
       });
 
@@ -1137,7 +1263,8 @@ async function obtenerRenovacionesPorFecha(fechaDMY, vendedor = null) {
         vendedor: vendedorCliente || "-",
         plataforma: s.plataforma || "",
         correo: s.correo || "",
-        pin: s.pin || "",
+        clave: getClaveServicioLocal(s, s.plataforma || ""),
+        pin: getPinServicioLocal(s, s.plataforma || ""),
         precio: Number(s.precio || 0),
         fechaRenovacion: s.fechaRenovacion || fecha,
       });
@@ -1172,7 +1299,7 @@ function renovacionesTexto(rows = [], fecha = "", vendedor = null) {
     txt += `${i + 1}. ${iconPlataforma(x.plataforma || "")} *${escMD(x.nombrePerfil || "Sin nombre")}*\n`;
     txt += `   📱 ${escMD(x.telefono || "-")}\n`;
     txt += `   📦 ${escMD(humanPlataforma(x.plataforma || ""))}\n`;
-    txt += `   ${getIdentLabelLocal(x.plataforma || "") === "Usuario" ? "👤" : "📧"} ${escMD(x.correo || "-")}\n`;
+    txt += renderCredencialesServicioLocal(x, true, "   ");
     txt += `   💰 ${escMD(`${Number(x.precio || 0).toFixed(2)} Lps`)}\n`;
     txt += `   🧾 ${escMD(x.vendedor || "-")}\n\n`;
   });
@@ -1195,8 +1322,8 @@ function renovacionesTextoPlano(rows = [], fecha = "", vendedor = null) {
   items.forEach((x, i) => {
     txt += `${i + 1}) ${x.nombrePerfil || "Sin nombre"}\n`;
     txt += `Telefono: ${x.telefono || "-"}\nPlataforma: ${humanPlataforma(x.plataforma || "")}\n`;
-    txt += `${getIdentLabelLocal(x.plataforma || "")}: ${x.correo || "-"}\n`;
-    txt += `Clave/PIN: ${x.pin || "-"}\nPrecio: ${Number(x.precio || 0).toFixed(2)} Lps\nVendedor: ${x.vendedor || "-"}\n\n`;
+    txt += renderCredencialesServicioLocal(x, false, "");
+    txt += `Precio: ${Number(x.precio || 0).toFixed(2)} Lps\nVendedor: ${x.vendedor || "-"}\n\n`;
   });
 
   return txt;
