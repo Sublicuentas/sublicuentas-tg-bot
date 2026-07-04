@@ -1,33 +1,4 @@
-<!doctype html>
-<html lang="es">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>index_01_core.js — Sublicuentas Bot</title>
-<style>
-:root{--bg:#0b1020;--panel:#111827;--line:#263044;--text:#eef2ff;--muted:#9ca3af;--accent:#e2231a;--code:#0f172a;}
-*{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--text);font-family:Arial,Helvetica,sans-serif;line-height:1.45}
-header{position:sticky;top:0;background:linear-gradient(135deg,#e2231a,#8b1110);padding:18px 22px;border-bottom:1px solid #ffffff22;z-index:5}
-h1{font-size:20px;margin:0 0 4px} p{margin:0;color:#ffe4e4}.wrap{max-width:1180px;margin:0 auto;padding:22px}
-.card{background:var(--panel);border:1px solid var(--line);border-radius:18px;overflow:hidden;box-shadow:0 12px 34px #0008}
-.card h2{margin:0;padding:14px 16px;border-bottom:1px solid var(--line);font-size:16px;color:#fff;background:#0f172a}
-pre{margin:0;padding:18px;overflow:auto;background:var(--code);font-family:Consolas,Monaco,'Courier New',monospace;font-size:13px;line-height:1.5;white-space:pre-wrap;word-break:break-word}
-.meta{font-size:13px;color:var(--muted);margin-bottom:14px}.copy{float:right;background:#fff;color:#111;border:0;border-radius:10px;padding:8px 12px;font-weight:700;cursor:pointer}
-</style>
-<script>
-function copyCode(){
-  const code = document.querySelector('pre').innerText;
-  navigator.clipboard.writeText(code).then(()=>alert('Código copiado'));
-}
-</script>
-</head>
-<body>
-<header><h1>Archivo: index_01_core.js</h1><p>Sublicuentas TG Bot — versión actualizada</p></header>
-<div class="wrap">
-  <div class="meta">Este HTML es para visualizar/copiar el código. Para usarlo en Render/GitHub, el archivo real debe conservar extensión <b>.js</b>.</div>
-  <div class="card">
-    <h2>index_01_core.js <button class="copy" onclick="copyCode()">Copiar código</button></h2>
-    <pre>/* ✅ SUBLICUENTAS TG BOT — INDEX 01 CORE v2
+/* ✅ SUBLICUENTAS TG BOT — INDEX 01 CORE v2
    CORE / ENV / FIREBASE / BOT SINGLETON / CONSTANTES / POLLING SAFE / CACHÉ
    --------------------------------------------------------------------------
    ✅ OPTIMIZACIONES v2:
@@ -37,28 +8,28 @@ function copyCode(){
    - Sin cambios en polling ni Firebase init
 */
 
-const TelegramBot = require(&quot;node-telegram-bot-api&quot;);
-const admin = require(&quot;firebase-admin&quot;);
-const ExcelJS = require(&quot;exceljs&quot;);
+const TelegramBot = require("node-telegram-bot-api");
+const admin = require("firebase-admin");
+const ExcelJS = require("exceljs");
 
 // ===============================
 // ENV
 // ===============================
-const BOT_TOKEN = String(process.env.BOT_TOKEN || &quot;&quot;).trim();
-const FIREBASE_PROJECT_ID = String(process.env.FIREBASE_PROJECT_ID || &quot;&quot;).trim();
-const FIREBASE_CLIENT_EMAIL = String(process.env.FIREBASE_CLIENT_EMAIL || &quot;&quot;).trim();
-const FIREBASE_PRIVATE_KEY = String(process.env.FIREBASE_PRIVATE_KEY || &quot;&quot;);
-const SUPER_ADMIN = String(process.env.SUPER_ADMIN || &quot;&quot;).trim();
-const TZ = String(process.env.TZ || &quot;America/Tegucigalpa&quot;).trim();
+const BOT_TOKEN = String(process.env.BOT_TOKEN || "").trim();
+const FIREBASE_PROJECT_ID = String(process.env.FIREBASE_PROJECT_ID || "").trim();
+const FIREBASE_CLIENT_EMAIL = String(process.env.FIREBASE_CLIENT_EMAIL || "").trim();
+const FIREBASE_PRIVATE_KEY = String(process.env.FIREBASE_PRIVATE_KEY || "");
+const SUPER_ADMIN = String(process.env.SUPER_ADMIN || "").trim();
+const TZ = String(process.env.TZ || "America/Tegucigalpa").trim();
 const PORT = Number(process.env.PORT || 10000);
 
 const ENABLE_NETFLIX_LISTENER =
-  String(process.env.ENABLE_NETFLIX_LISTENER || &quot;false&quot;).trim().toLowerCase() === &quot;true&quot;;
-const IMAP_ACCOUNTS_JSON = String(process.env.IMAP_ACCOUNTS_JSON || &quot;[]&quot;).trim();
+  String(process.env.ENABLE_NETFLIX_LISTENER || "false").trim().toLowerCase() === "true";
+const IMAP_ACCOUNTS_JSON = String(process.env.IMAP_ACCOUNTS_JSON || "[]").trim();
 
-if (!BOT_TOKEN) throw new Error(&quot;Falta BOT_TOKEN&quot;);
+if (!BOT_TOKEN) throw new Error("Falta BOT_TOKEN");
 if (!FIREBASE_PROJECT_ID || !FIREBASE_CLIENT_EMAIL || !FIREBASE_PRIVATE_KEY) {
-  throw new Error(&quot;Faltan variables Firebase&quot;);
+  throw new Error("Faltan variables Firebase");
 }
 
 // ===============================
@@ -69,27 +40,27 @@ function safeJsonParse(input, fallback = null) {
 }
 
 function toBool(v, defaultValue = false) {
-  if (typeof v === &quot;boolean&quot;) return v;
-  const s = String(v || &quot;&quot;).trim().toLowerCase();
-  if ([&quot;1&quot;, &quot;true&quot;, &quot;yes&quot;, &quot;si&quot;, &quot;sí&quot;, &quot;on&quot;].includes(s)) return true;
-  if ([&quot;0&quot;, &quot;false&quot;, &quot;no&quot;, &quot;off&quot;].includes(s)) return false;
+  if (typeof v === "boolean") return v;
+  const s = String(v || "").trim().toLowerCase();
+  if (["1", "true", "yes", "si", "sí", "on"].includes(s)) return true;
+  if (["0", "false", "no", "off"].includes(s)) return false;
   return defaultValue;
 }
 
 function sleep(ms = 0) {
-  return new Promise((resolve) =&gt; setTimeout(resolve, Number(ms || 0)));
+  return new Promise((resolve) => setTimeout(resolve, Number(ms || 0)));
 }
 
 function normalizeImapAccount(row = {}) {
   return {
-    name: String(row.name || row.alias || row.id || &quot;&quot;).trim(),
-    user: String(row.user || row.email || &quot;&quot;).trim(),
-    password: String(row.password || row.pass || &quot;&quot;).trim(),
-    host: String(row.host || &quot;imap.gmail.com&quot;).trim(),
+    name: String(row.name || row.alias || row.id || "").trim(),
+    user: String(row.user || row.email || "").trim(),
+    password: String(row.password || row.pass || "").trim(),
+    host: String(row.host || "imap.gmail.com").trim(),
     port: Number(row.port || 993),
     tls: toBool(row.tls, true),
-    label: String(row.label || &quot;&quot;).trim(),
-    provider: String(row.provider || &quot;gmail&quot;).trim(),
+    label: String(row.label || "").trim(),
+    provider: String(row.provider || "gmail").trim(),
     enabled: toBool(row.enabled, true),
   };
 }
@@ -102,7 +73,7 @@ if (!admin.apps.length) {
     credential: admin.credential.cert({
       projectId: FIREBASE_PROJECT_ID,
       clientEmail: FIREBASE_CLIENT_EMAIL,
-      privateKey: FIREBASE_PRIVATE_KEY.replace(/\\n/g, &quot;\n&quot;),
+      privateKey: FIREBASE_PRIVATE_KEY.replace(/\\n/g, "\n"),
     }),
   });
 }
@@ -113,59 +84,59 @@ try { db.settings({ ignoreUndefinedProperties: true }); } catch (_) {}
 // ===============================
 // COLECCIONES
 // ===============================
-const INVENTARIO_COLLECTION = &quot;inventario&quot;;
-const CLIENTES_COLLECTION = &quot;clientes&quot;;
-const REVENDEDORES_COLLECTION = &quot;revendedores&quot;;
-const ADMINS_COLLECTION = &quot;admins&quot;;
-const CONFIG_COLLECTION = &quot;config&quot;;
-const FINANZAS_COLLECTION = &quot;finanzas_movimientos&quot;;
+const INVENTARIO_COLLECTION = "inventario";
+const CLIENTES_COLLECTION = "clientes";
+const REVENDEDORES_COLLECTION = "revendedores";
+const ADMINS_COLLECTION = "admins";
+const CONFIG_COLLECTION = "config";
+const FINANZAS_COLLECTION = "finanzas_movimientos";
 
 // ===============================
 // FINANZAS
 // ===============================
 const FIN_BANCOS = [
-  &quot;Efectivo&quot;, &quot;BAC&quot;, &quot;Ficohsa&quot;, &quot;Banpaís&quot;, &quot;Atlántida&quot;, &quot;Lafise&quot;,
-  &quot;Occidente&quot;, &quot;Davivienda&quot;, &quot;PayPal&quot;, &quot;Binance&quot;, &quot;Tigo Money&quot;,
-  &quot;Transferencia&quot;, &quot;Otro&quot;,
+  "Efectivo", "BAC", "Ficohsa", "Banpaís", "Atlántida", "Lafise",
+  "Occidente", "Davivienda", "PayPal", "Binance", "Tigo Money",
+  "Transferencia", "Otro",
 ];
 
 const FIN_MOTIVOS_EGRESO = [
-  &quot;Compra de cuentas&quot;, &quot;Pago proveedor&quot;, &quot;Publicidad&quot;, &quot;Diseño&quot;,
-  &quot;Comisión vendedor&quot;, &quot;Internet&quot;, &quot;Herramientas&quot;, &quot;Reposición&quot;,
-  &quot;Reembolso&quot;, &quot;Otros&quot;,
+  "Compra de cuentas", "Pago proveedor", "Publicidad", "Diseño",
+  "Comisión vendedor", "Internet", "Herramientas", "Reposición",
+  "Reembolso", "Otros",
 ];
 
 // ===============================
 // PLATAFORMAS
 // ===============================
 const PLATAFORMAS = {
-  netflix:     { key: &quot;netflix&quot;,     nombre: &quot;Netflix Premium&quot;, categoria: &quot;video&quot;,     acceso: &quot;correo_clave_pin&quot;, capacidadDefault: 5,  requiereCorreo: true,  requiereClave: true,  requierePin: true,  permiteUsuario: false },
-  vipnetflix:  { key: &quot;vipnetflix&quot;,  nombre: &quot;Netflix VIP&quot;,     categoria: &quot;video&quot;,     acceso: &quot;correo_clave_pin&quot;, capacidadDefault: 1,  requiereCorreo: true,  requiereClave: true,  requierePin: true,  permiteUsuario: false },
-  disneyp:     { key: &quot;disneyp&quot;,     nombre: &quot;Disney Premium&quot;,  categoria: &quot;video&quot;,     acceso: &quot;correo_clave_pin&quot;, capacidadDefault: 6,  requiereCorreo: true,  requiereClave: true,  requierePin: true,  permiteUsuario: false },
-  disneys:     { key: &quot;disneys&quot;,     nombre: &quot;Disney Standard&quot;, categoria: &quot;video&quot;,     acceso: &quot;correo_clave_pin&quot;, capacidadDefault: 3,  requiereCorreo: true,  requiereClave: true,  requierePin: true,  permiteUsuario: false },
-  hbomax:      { key: &quot;hbomax&quot;,      nombre: &quot;HBO Max&quot;,         categoria: &quot;video&quot;,     acceso: &quot;correo_clave_pin&quot;, capacidadDefault: 5,  requiereCorreo: true,  requiereClave: true,  requierePin: true,  permiteUsuario: false },
-  primevideo:  { key: &quot;primevideo&quot;,  nombre: &quot;Prime Video&quot;,     categoria: &quot;video&quot;,     acceso: &quot;correo_clave_pin&quot;, capacidadDefault: 5,  requiereCorreo: true,  requiereClave: true,  requierePin: true,  permiteUsuario: false },
-  paramount:   { key: &quot;paramount&quot;,   nombre: &quot;Paramount+&quot;,      categoria: &quot;video&quot;,     acceso: &quot;correo_clave&quot;,     capacidadDefault: 5,  requiereCorreo: true,  requiereClave: true,  requierePin: false, permiteUsuario: false },
-  crunchyroll: { key: &quot;crunchyroll&quot;, nombre: &quot;Crunchyroll&quot;,     categoria: &quot;video&quot;,     acceso: &quot;correo_clave_pin&quot;, capacidadDefault: 5,  requiereCorreo: true,  requiereClave: true,  requierePin: true,  permiteUsuario: false },
-  vix:         { key: &quot;vix&quot;,         nombre: &quot;Vix&quot;,             categoria: &quot;video&quot;,     acceso: &quot;correo_clave&quot;,     capacidadDefault: 4,  requiereCorreo: true,  requiereClave: true,  requierePin: false, permiteUsuario: false },
-  appletv:     { key: &quot;appletv&quot;,     nombre: &quot;Apple TV&quot;,        categoria: &quot;video&quot;,     acceso: &quot;correo_clave&quot;,     capacidadDefault: 4,  requiereCorreo: true,  requiereClave: true,  requierePin: false, permiteUsuario: false },
-  universal:   { key: &quot;universal&quot;,   nombre: &quot;Universal+&quot;,      categoria: &quot;video&quot;,     acceso: &quot;correo_clave_pin&quot;, capacidadDefault: 4,  requiereCorreo: true,  requiereClave: true,  requierePin: true,  permiteUsuario: false },
-  spotify:     { key: &quot;spotify&quot;,     nombre: &quot;Spotify&quot;,         categoria: &quot;musica&quot;,    acceso: &quot;correo_clave&quot;,     capacidadDefault: 1,  requiereCorreo: true,  requiereClave: true,  requierePin: false, permiteUsuario: false },
-  youtube:     { key: &quot;youtube&quot;,     nombre: &quot;YouTube&quot;,         categoria: &quot;musica&quot;,    acceso: &quot;correo_clave&quot;,     capacidadDefault: 1,  requiereCorreo: true,  requiereClave: true,  requierePin: false, permiteUsuario: false },
-  deezer:      { key: &quot;deezer&quot;,      nombre: &quot;Deezer&quot;,          categoria: &quot;musica&quot;,    acceso: &quot;correo_clave&quot;,     capacidadDefault: 1,  requiereCorreo: true,  requiereClave: true,  requierePin: false, permiteUsuario: false },
-  oleadatv1:   { key: &quot;oleadatv1&quot;,   nombre: &quot;Oleada 1&quot;,        categoria: &quot;iptv&quot;,      acceso: &quot;usuario_clave&quot;,    capacidadDefault: 1,  requiereCorreo: false, requiereClave: true,  requierePin: false, permiteUsuario: true  },
-  oleadatv3:   { key: &quot;oleadatv3&quot;,   nombre: &quot;Oleada 3&quot;,        categoria: &quot;iptv&quot;,      acceso: &quot;usuario_clave&quot;,    capacidadDefault: 3,  requiereCorreo: false, requiereClave: true,  requierePin: false, permiteUsuario: true  },
-  iptv1:       { key: &quot;iptv1&quot;,       nombre: &quot;IPTV 1&quot;,          categoria: &quot;iptv&quot;,      acceso: &quot;usuario_clave&quot;,    capacidadDefault: 1,  requiereCorreo: false, requiereClave: true,  requierePin: false, permiteUsuario: true  },
-  iptv3:       { key: &quot;iptv3&quot;,       nombre: &quot;IPTV 3&quot;,          categoria: &quot;iptv&quot;,      acceso: &quot;usuario_clave&quot;,    capacidadDefault: 3,  requiereCorreo: false, requiereClave: true,  requierePin: false, permiteUsuario: true  },
-  iptv4:       { key: &quot;iptv4&quot;,       nombre: &quot;IPTV 4&quot;,          categoria: &quot;iptv&quot;,      acceso: &quot;usuario_clave&quot;,    capacidadDefault: 4,  requiereCorreo: false, requiereClave: true,  requierePin: false, permiteUsuario: true  },
-  canva:       { key: &quot;canva&quot;,       nombre: &quot;Canva&quot;,           categoria: &quot;diseno_ia&quot;, acceso: &quot;solo_correo&quot;,      capacidadDefault: 1,  requiereCorreo: true,  requiereClave: false, requierePin: false, permiteUsuario: false },
-  gemini:      { key: &quot;gemini&quot;,      nombre: &quot;Gemini&quot;,          categoria: &quot;diseno_ia&quot;, acceso: &quot;solo_correo&quot;,      capacidadDefault: 1,  requiereCorreo: true,  requiereClave: false, requierePin: false, permiteUsuario: false },
-  chatgpt:     { key: &quot;chatgpt&quot;,     nombre: &quot;ChatGPT&quot;,         categoria: &quot;diseno_ia&quot;, acceso: &quot;solo_correo&quot;,      capacidadDefault: 1,  requiereCorreo: true,  requiereClave: false, requierePin: false, permiteUsuario: false },
-  duolingo:    { key: &quot;duolingo&quot;,    nombre: &quot;Duolingo&quot;,        categoria: &quot;diseno_ia&quot;, acceso: &quot;solo_correo&quot;,      capacidadDefault: 1,  requiereCorreo: true,  requiereClave: false, requierePin: false, permiteUsuario: false },
+  netflix:     { key: "netflix",     nombre: "Netflix Premium", categoria: "video",     acceso: "correo_clave_pin", capacidadDefault: 5,  requiereCorreo: true,  requiereClave: true,  requierePin: true,  permiteUsuario: false },
+  vipnetflix:  { key: "vipnetflix",  nombre: "Netflix VIP",     categoria: "video",     acceso: "correo_clave_pin", capacidadDefault: 1,  requiereCorreo: true,  requiereClave: true,  requierePin: true,  permiteUsuario: false },
+  disneyp:     { key: "disneyp",     nombre: "Disney Premium",  categoria: "video",     acceso: "correo_clave_pin", capacidadDefault: 6,  requiereCorreo: true,  requiereClave: true,  requierePin: true,  permiteUsuario: false },
+  disneys:     { key: "disneys",     nombre: "Disney Standard", categoria: "video",     acceso: "correo_clave_pin", capacidadDefault: 3,  requiereCorreo: true,  requiereClave: true,  requierePin: true,  permiteUsuario: false },
+  hbomax:      { key: "hbomax",      nombre: "HBO Max",         categoria: "video",     acceso: "correo_clave_pin", capacidadDefault: 5,  requiereCorreo: true,  requiereClave: true,  requierePin: true,  permiteUsuario: false },
+  primevideo:  { key: "primevideo",  nombre: "Prime Video",     categoria: "video",     acceso: "correo_clave_pin", capacidadDefault: 5,  requiereCorreo: true,  requiereClave: true,  requierePin: true,  permiteUsuario: false },
+  paramount:   { key: "paramount",   nombre: "Paramount+",      categoria: "video",     acceso: "correo_clave",     capacidadDefault: 5,  requiereCorreo: true,  requiereClave: true,  requierePin: false, permiteUsuario: false },
+  crunchyroll: { key: "crunchyroll", nombre: "Crunchyroll",     categoria: "video",     acceso: "correo_clave_pin", capacidadDefault: 5,  requiereCorreo: true,  requiereClave: true,  requierePin: true,  permiteUsuario: false },
+  vix:         { key: "vix",         nombre: "Vix",             categoria: "video",     acceso: "correo_clave",     capacidadDefault: 4,  requiereCorreo: true,  requiereClave: true,  requierePin: false, permiteUsuario: false },
+  appletv:     { key: "appletv",     nombre: "Apple TV",        categoria: "video",     acceso: "correo_clave",     capacidadDefault: 4,  requiereCorreo: true,  requiereClave: true,  requierePin: false, permiteUsuario: false },
+  universal:   { key: "universal",   nombre: "Universal+",      categoria: "video",     acceso: "correo_clave_pin", capacidadDefault: 4,  requiereCorreo: true,  requiereClave: true,  requierePin: true,  permiteUsuario: false },
+  spotify:     { key: "spotify",     nombre: "Spotify",         categoria: "musica",    acceso: "correo_clave",     capacidadDefault: 1,  requiereCorreo: true,  requiereClave: true,  requierePin: false, permiteUsuario: false },
+  youtube:     { key: "youtube",     nombre: "YouTube",         categoria: "musica",    acceso: "correo_clave",     capacidadDefault: 1,  requiereCorreo: true,  requiereClave: true,  requierePin: false, permiteUsuario: false },
+  deezer:      { key: "deezer",      nombre: "Deezer",          categoria: "musica",    acceso: "correo_clave",     capacidadDefault: 1,  requiereCorreo: true,  requiereClave: true,  requierePin: false, permiteUsuario: false },
+  oleadatv1:   { key: "oleadatv1",   nombre: "Oleada 1",        categoria: "iptv",      acceso: "usuario_clave",    capacidadDefault: 1,  requiereCorreo: false, requiereClave: true,  requierePin: false, permiteUsuario: true  },
+  oleadatv3:   { key: "oleadatv3",   nombre: "Oleada 3",        categoria: "iptv",      acceso: "usuario_clave",    capacidadDefault: 3,  requiereCorreo: false, requiereClave: true,  requierePin: false, permiteUsuario: true  },
+  iptv1:       { key: "iptv1",       nombre: "IPTV 1",          categoria: "iptv",      acceso: "usuario_clave",    capacidadDefault: 1,  requiereCorreo: false, requiereClave: true,  requierePin: false, permiteUsuario: true  },
+  iptv3:       { key: "iptv3",       nombre: "IPTV 3",          categoria: "iptv",      acceso: "usuario_clave",    capacidadDefault: 3,  requiereCorreo: false, requiereClave: true,  requierePin: false, permiteUsuario: true  },
+  iptv4:       { key: "iptv4",       nombre: "IPTV 4",          categoria: "iptv",      acceso: "usuario_clave",    capacidadDefault: 4,  requiereCorreo: false, requiereClave: true,  requierePin: false, permiteUsuario: true  },
+  canva:       { key: "canva",       nombre: "Canva",           categoria: "diseno_ia", acceso: "solo_correo",      capacidadDefault: 1,  requiereCorreo: true,  requiereClave: false, requierePin: false, permiteUsuario: false },
+  gemini:      { key: "gemini",      nombre: "Gemini",          categoria: "diseno_ia", acceso: "solo_correo",      capacidadDefault: 1,  requiereCorreo: true,  requiereClave: false, requierePin: false, permiteUsuario: false },
+  chatgpt:     { key: "chatgpt",     nombre: "ChatGPT",         categoria: "diseno_ia", acceso: "solo_correo",      capacidadDefault: 1,  requiereCorreo: true,  requiereClave: false, requierePin: false, permiteUsuario: false },
+  duolingo:    { key: "duolingo",    nombre: "Duolingo",        categoria: "diseno_ia", acceso: "solo_correo",      capacidadDefault: 1,  requiereCorreo: true,  requiereClave: false, requierePin: false, permiteUsuario: false },
 };
 
 const DEFAULT_TOTALS = Object.fromEntries(
-  Object.entries(PLATAFORMAS).map(([k, v]) =&gt; [k, Number(v.capacidadDefault || 1)])
+  Object.entries(PLATAFORMAS).map(([k, v]) => [k, Number(v.capacidadDefault || 1)])
 );
 
 // ===============================
@@ -174,7 +145,7 @@ const DEFAULT_TOTALS = Object.fromEntries(
 const EMAIL_ACCOUNTS = Array.isArray(safeJsonParse(IMAP_ACCOUNTS_JSON, []))
   ? safeJsonParse(IMAP_ACCOUNTS_JSON, [])
       .map(normalizeImapAccount)
-      .filter((x) =&gt; x.enabled &amp;&amp; (x.user || x.name))
+      .filter((x) => x.enabled && (x.user || x.name))
   : [];
 
 // ===============================
@@ -235,18 +206,18 @@ const CACHE_TTL = {
   default:      120 * 1000,  // 2 minutos
 };
 
-function getCacheTTL(key = &quot;&quot;) {
-  const prefix = String(key || &quot;&quot;).split(&quot;:&quot;)[0];
+function getCacheTTL(key = "") {
+  const prefix = String(key || "").split(":")[0];
   return CACHE_TTL[prefix] || CACHE_TTL.default;
 }
 
 /**
  * Lee del caché. Devuelve null si no existe o expiró.
  */
-function cacheGet(key = &quot;&quot;) {
+function cacheGet(key = "") {
   const entry = CACHE.get(String(key));
   if (!entry) return null;
-  if (Date.now() &gt; entry.expiresAt) {
+  if (Date.now() > entry.expiresAt) {
     CACHE.delete(String(key));
     return null;
   }
@@ -256,7 +227,7 @@ function cacheGet(key = &quot;&quot;) {
 /**
  * Escribe en el caché con TTL automático por prefijo.
  */
-function cacheSet(key = &quot;&quot;, value, ttlMs = null) {
+function cacheSet(key = "", value, ttlMs = null) {
   const ttl = ttlMs != null ? Number(ttlMs) : getCacheTTL(key);
   CACHE.set(String(key), {
     value,
@@ -268,7 +239,7 @@ function cacheSet(key = &quot;&quot;, value, ttlMs = null) {
 /**
  * Invalida todas las entradas cuya clave empiece con prefix.
  */
-function cacheInvalidatePrefix(prefix = &quot;&quot;) {
+function cacheInvalidatePrefix(prefix = "") {
   const p = String(prefix);
   for (const key of CACHE.keys()) {
     if (key.startsWith(p)) CACHE.delete(key);
@@ -278,7 +249,7 @@ function cacheInvalidatePrefix(prefix = &quot;&quot;) {
 /**
  * Invalida una clave exacta.
  */
-function cacheDelete(key = &quot;&quot;) {
+function cacheDelete(key = "") {
   CACHE.delete(String(key));
 }
 
@@ -288,7 +259,7 @@ function cacheDelete(key = &quot;&quot;) {
 function cachePurgeExpired() {
   const now = Date.now();
   for (const [key, entry] of CACHE.entries()) {
-    if (now &gt; entry.expiresAt) CACHE.delete(key);
+    if (now > entry.expiresAt) CACHE.delete(key);
   }
 }
 
@@ -304,21 +275,21 @@ if (!global.__SUBLICUENTAS_CACHE_PURGE__) {
 if (!global.__SUBLICUENTAS_PROCESS_HOOKS__) {
   global.__SUBLICUENTAS_PROCESS_HOOKS__ = true;
 
-  process.on(&quot;unhandledRejection&quot;, (err) =&gt; {
-    console.error(&quot;❌ UNHANDLED_REJECTION:&quot;, err?.stack || err);
+  process.on("unhandledRejection", (err) => {
+    console.error("❌ UNHANDLED_REJECTION:", err?.stack || err);
   });
 
-  process.on(&quot;uncaughtException&quot;, (err) =&gt; {
-    console.error(&quot;❌ UNCAUGHT_EXCEPTION:&quot;, err?.stack || err);
+  process.on("uncaughtException", (err) => {
+    console.error("❌ UNCAUGHT_EXCEPTION:", err?.stack || err);
   });
 
-  process.on(&quot;SIGINT&quot;, async () =&gt; {
-    try { await stopBotPollingSafe(&quot;SIGINT&quot;); } catch (_) {}
+  process.on("SIGINT", async () => {
+    try { await stopBotPollingSafe("SIGINT"); } catch (_) {}
     process.exit(0);
   });
 
-  process.on(&quot;SIGTERM&quot;, async () =&gt; {
-    try { await stopBotPollingSafe(&quot;SIGTERM&quot;); } catch (_) {}
+  process.on("SIGTERM", async () => {
+    try { await stopBotPollingSafe("SIGTERM"); } catch (_) {}
     process.exit(0);
   });
 }
@@ -357,7 +328,7 @@ function getCoreHealth() {
 // ===============================
 // POLLING SAFE
 // ===============================
-async function stopBotPollingSafe(reason = &quot;manual&quot;) {
+async function stopBotPollingSafe(reason = "manual") {
   if (CORE_STATE.isStopping) return;
   CORE_STATE.isStopping = true;
   try {
@@ -369,7 +340,7 @@ async function stopBotPollingSafe(reason = &quot;manual&quot;) {
   }
 }
 
-async function startBotPollingSafe(reason = &quot;manual&quot;) {
+async function startBotPollingSafe(reason = "manual") {
   if (!CORE_STATE.runtimeLock) {
     console.log(`⛔ runtimeLock=false, no se inicia polling (${reason}) [${INSTANCE_ID}]`);
     return;
@@ -379,7 +350,7 @@ async function startBotPollingSafe(reason = &quot;manual&quot;) {
     return global.__SUBLICUENTAS_POLLING_START_PROMISE__;
   }
 
-  global.__SUBLICUENTAS_POLLING_START_PROMISE__ = (async () =&gt; {
+  global.__SUBLICUENTAS_POLLING_START_PROMISE__ = (async () => {
     if (CORE_STATE.isBooting) return;
     CORE_STATE.isBooting = true;
     CORE_STATE.bootCount += 1;
@@ -388,7 +359,7 @@ async function startBotPollingSafe(reason = &quot;manual&quot;) {
       await stopBotPollingSafe(`pre-start:${reason}`);
       try { await bot.deleteWebHook({ drop_pending_updates: true }); } catch (_) {}
       await sleep(1200);
-      await bot.startPolling({ restart: false, params: { timeout: 30, allowed_updates: [&quot;message&quot;,&quot;callback_query&quot;] } });
+      await bot.startPolling({ restart: false, params: { timeout: 30, allowed_updates: ["message","callback_query"] } });
       CORE_STATE.isPolling = true;
       CORE_STATE.lastStartAt = Date.now();
       CORE_STATE.lastPollingError = null;
@@ -396,7 +367,7 @@ async function startBotPollingSafe(reason = &quot;manual&quot;) {
     } catch (err) {
       CORE_STATE.isPolling = false;
       CORE_STATE.lastPollingErrorAt = Date.now();
-      CORE_STATE.lastPollingError = String(err?.message || err || &quot;&quot;);
+      CORE_STATE.lastPollingError = String(err?.message || err || "");
       console.error(`❌ Error iniciando polling (${reason}) [${INSTANCE_ID}]:`, err?.stack || err);
     } finally {
       CORE_STATE.isBooting = false;
@@ -407,7 +378,7 @@ async function startBotPollingSafe(reason = &quot;manual&quot;) {
   return global.__SUBLICUENTAS_POLLING_START_PROMISE__;
 }
 
-async function restartBotPollingSafe(reason = &quot;manual&quot;, waitMs = 4000) {
+async function restartBotPollingSafe(reason = "manual", waitMs = 4000) {
   if (CORE_STATE.isRestarting409) return;
   CORE_STATE.isRestarting409 = true;
   try {
@@ -425,35 +396,35 @@ async function restartBotPollingSafe(reason = &quot;manual&quot;, waitMs = 4000)
 if (!global.__SUBLICUENTAS_BOT_EVENTS__) {
   global.__SUBLICUENTAS_BOT_EVENTS__ = true;
 
-  bot.on(&quot;polling_error&quot;, async (err) =&gt; {
-    const msg = String(err?.message || err || &quot;&quot;);
+  bot.on("polling_error", async (err) => {
+    const msg = String(err?.message || err || "");
     CORE_STATE.lastPollingErrorAt = Date.now();
     CORE_STATE.lastPollingError = msg;
     CORE_STATE.isPolling = false;
     console.error(`❌ polling_error [${INSTANCE_ID}]:`, err?.stack || err);
 
-    if (msg.includes(&quot;409&quot;)) {
+    if (msg.includes("409")) {
       const now = Date.now();
       const elapsed = now - Number(CORE_STATE.lastConflictAt || 0);
-      if (elapsed &gt; 60000) CORE_STATE.conflict409Count = 0;
+      if (elapsed > 60000) CORE_STATE.conflict409Count = 0;
       CORE_STATE.lastConflictAt = now;
       CORE_STATE.conflict409Count += 1;
-      const waitMs = CORE_STATE.conflict409Count &gt;= 3 ? 30000 : 15000;
+      const waitMs = CORE_STATE.conflict409Count >= 3 ? 30000 : 15000;
       console.error(`⚠️ Detectado 409 Conflict. Intento ${CORE_STATE.conflict409Count}. Reintento en ${waitMs}ms [${INSTANCE_ID}]`);
-      try { await restartBotPollingSafe(&quot;409-conflict&quot;, waitMs); } catch (e) {
+      try { await restartBotPollingSafe("409-conflict", waitMs); } catch (e) {
         console.error(`❌ Error reintentando polling [${INSTANCE_ID}]:`, e?.stack || e);
       }
     }
   });
 
-  bot.on(&quot;webhook_error&quot;, (err) =&gt; { console.error(`❌ webhook_error [${INSTANCE_ID}]:`, err?.stack || err); });
-  bot.on(&quot;error&quot;, (err) =&gt; { console.error(`❌ bot_error [${INSTANCE_ID}]:`, err?.stack || err); });
+  bot.on("webhook_error", (err) => { console.error(`❌ webhook_error [${INSTANCE_ID}]:`, err?.stack || err); });
+  bot.on("error", (err) => { console.error(`❌ bot_error [${INSTANCE_ID}]:`, err?.stack || err); });
 }
 
 // ===============================
 // LOGS DE ARRANQUE
 // ===============================
-console.log(&quot;✅ ExcelJS cargado&quot;);
+console.log("✅ ExcelJS cargado");
 console.log(`✅ FIREBASE PROJECT: ${FIREBASE_PROJECT_ID}`);
 console.log(`🌐 HTTP KEEPALIVE activo en puerto ${PORT}`);
 console.log(`📩 Cuentas IMAP cargadas: ${EMAIL_ACCOUNTS.length}`);
@@ -461,9 +432,9 @@ console.log(`🧠 CORE INSTANCE: ${INSTANCE_ID}`);
 console.log(`🗄️ Caché en memoria activo (admins:90s, revendedores:90s, clientes:120s)`);
 
 if (ENABLE_NETFLIX_LISTENER) {
-  console.log(&quot;🚀 Netflix Codes Listener iniciado...&quot;);
+  console.log("🚀 Netflix Codes Listener iniciado...");
 } else {
-  console.log(&quot;ℹ️ Netflix listener desactivado&quot;);
+  console.log("ℹ️ Netflix listener desactivado");
 }
 
 // ===============================
@@ -491,8 +462,3 @@ module.exports = {
   // utils
   safeJsonParse, normalizeImapAccount, sleep,
 };
-</pre>
-  </div>
-</div>
-</body>
-</html>
