@@ -67,7 +67,7 @@ function humanPlataforma(key = "") {
   const map = {
     netflix:"Netflix Premium", vipnetflix:"Netflix VIP", disneyp:"Disney Premium", disneys:"Disney Standard",
     hbomax:"HBO Max", primevideo:"Prime Video", paramount:"Paramount+", crunchyroll:"Crunchyroll",
-    vix:"Vix", appletv:"Apple TV", universal:"Universal+", spotify:"Spotify", youtube:"YouTube",
+    vix:"Vix", appletv:"Apple TV", universal:"Universal+", spotify:"Spotify", youtube:"YouTube", office:"Microsoft 365",
     deezer:"Deezer", canva:"Canva", gemini:"Gemini", chatgpt:"ChatGPT", duolingo:"Duolingo",
     oleadatv1:"Oleada TV (1)", oleadatv3:"Oleada TV (3)", iptv1:"IPTV (1)", iptv3:"IPTV (3)", iptv4:"IPTV (4)",
   };
@@ -76,7 +76,7 @@ function humanPlataforma(key = "") {
 
 function iconPlataforma(key = "") {
   const k = normalizarPlataforma(key);
-  const map = { netflix:"📺", vipnetflix:"🔥", disneyp:"🏰", disneys:"🎬", hbomax:"🎞️", primevideo:"🎥", paramount:"💿", crunchyroll:"🍥", vix:"📱", appletv:"🍎", universal:"🌍", spotify:"🎵", youtube:"▶️", deezer:"🎧", canva:"🎨", gemini:"✨", chatgpt:"🤖", duolingo:"🦉", oleadatv1:"🌊", oleadatv3:"🌊", iptv1:"📡", iptv3:"📡", iptv4:"📡" };
+  const map = { netflix:"📺", vipnetflix:"🔥", disneyp:"🏰", disneys:"🎬", hbomax:"🎞️", primevideo:"🎥", paramount:"💿", crunchyroll:"🍥", vix:"📱", appletv:"🍎", universal:"🌍", spotify:"🎵", youtube:"▶️", office:"📎", deezer:"🎧", canva:"🎨", gemini:"✨", chatgpt:"🤖", duolingo:"🦉", oleadatv1:"🌊", oleadatv3:"🌊", iptv1:"📡", iptv3:"📡", iptv4:"📡" };
   return map[k] || "📦";
 }
 
@@ -102,7 +102,7 @@ function requiereClaveLocal(plataforma = "") {
 function requierePinLocal(plataforma = "") {
   const cfg = platformConfigLocal(plataforma);
   if (Object.prototype.hasOwnProperty.call(cfg, "requierePin")) return cfg.requierePin === true;
-  return ["netflix","vipnetflix","disneyp","disneys","hbomax","primevideo","crunchyroll","universal"].includes(normalizarPlataforma(plataforma));
+  return ["netflix","disneyp","disneys","hbomax","primevideo","crunchyroll","universal"].includes(normalizarPlataforma(plataforma));
 }
 
 function esSoloCorreoLocal(plataforma = "") {
@@ -127,10 +127,35 @@ function getClaveServicioLocal(servicio = {}, plataforma = "") {
   return "";
 }
 
+function extraerPinServicioLocal(servicio = {}) {
+  const valores = [
+    servicio.pin,
+    servicio.pinPerfil,
+    servicio.pin_perfil,
+    servicio.perfilPin,
+    servicio.perfil_pin,
+    servicio.profilePin,
+    servicio.profile_pin,
+    servicio.pinCliente,
+    servicio.pin_cliente,
+    servicio.pinServicio,
+    servicio.pin_servicio,
+  ];
+
+  for (const v of valores) {
+    const s = String(v || "").trim();
+    if (!s) continue;
+    const n = normTxt(s);
+    if (["-", "sin pin", "n/a", "na", "null", "undefined"].includes(n)) continue;
+    return s;
+  }
+  return "";
+}
+
 function getPinServicioLocal(servicio = {}, plataforma = "") {
   const p = normalizarPlataforma(plataforma || servicio.plataforma || "");
   if (!requierePinLocal(p)) return "";
-  return String(servicio.pin || "").trim();
+  return extraerPinServicioLocal(servicio);
 }
 
 function renderCredencialesServicioLocal(servicio = {}, markdown = true, indent = "") {
@@ -167,7 +192,7 @@ function docIdInventarioLocal(ident = "", plataforma = "") {
 
 function getTotalPorPlataformaLocal(plat = "") {
   const p = normalizarPlataforma(plat);
-  const map = { netflix:5, vipnetflix:1, disneyp:6, disneys:3, hbomax:5, primevideo:5, paramount:5, crunchyroll:5, vix:4, appletv:4, universal:4, spotify:1, youtube:1, deezer:1, oleadatv1:1, oleadatv3:3, iptv1:1, iptv3:3, iptv4:4, canva:1, gemini:1, chatgpt:1, duolingo:1 };
+  const map = { netflix:5, vipnetflix:1, disneyp:6, disneys:3, hbomax:5, primevideo:5, paramount:5, crunchyroll:5, vix:4, appletv:4, universal:4, spotify:1, youtube:1, deezer:1, oleadatv1:1, oleadatv3:3, iptv1:1, iptv3:3, iptv4:4, canva:1, gemini:1, chatgpt:1, duolingo:1, office:1 };
   return map[p] || 1;
 }
 
@@ -840,8 +865,9 @@ async function addServicioTx(clientId, servicio = {}) {
   if (!validateIdentByPlatformLocal(plat, ident)) throw new Error(`${getIdentLabelLocal(plat)} inválido.`);
 
   let clave = String(servicio.clave || servicio.password || servicio.pass || "").trim();
-  let pin = String(servicio.pin || "").trim();
+  let pin = extraerPinServicioLocal(servicio);
   if (!clave && requiereClaveLocal(plat) && !requierePinLocal(plat) && pin) { clave = pin; pin = ""; }
+  if (!requierePinLocal(plat)) pin = "";
 
   const precio = Number(servicio.precio || 0);
   const fechaRenovacion = String(servicio.fechaRenovacion || "").trim();
@@ -884,7 +910,7 @@ async function patchServicio(clientId, idx, patch = {}) {
   if (idx < 0 || idx >= servicios.length) throw new Error("Servicio inválido.");
 
   const actual = servicios[idx] || {};
-  const previo = { plataforma: actual.plataforma, correo: actual.correo, clave: actual.clave, pin: actual.pin };
+  const previo = { plataforma: actual.plataforma, correo: actual.correo, clave: actual.clave, pin: getPinServicioLocal(actual, actual.plataforma || "") };
   const siguiente = { ...actual, ...patch };
   siguiente.plataforma = normalizarPlataforma(siguiente.plataforma || actual.plataforma || "");
 
@@ -896,7 +922,14 @@ async function patchServicio(clientId, idx, patch = {}) {
   }
 
   if (Object.prototype.hasOwnProperty.call(siguiente, "clave")) siguiente.clave = String(siguiente.clave || "").trim();
-  if (Object.prototype.hasOwnProperty.call(siguiente, "pin")) siguiente.pin = String(siguiente.pin || "").trim();
+  siguiente.pin = extraerPinServicioLocal(siguiente);
+  if (!requierePinLocal(siguiente.plataforma)) {
+    if (requiereClaveLocal(siguiente.plataforma) && !String(siguiente.clave || "").trim()) {
+      const posibleClave = extraerPinServicioLocal(siguiente);
+      if (posibleClave) siguiente.clave = posibleClave;
+    }
+    siguiente.pin = "";
+  }
 
   const credencialesTocadas =
     Object.prototype.hasOwnProperty.call(patch, "plataforma") ||
