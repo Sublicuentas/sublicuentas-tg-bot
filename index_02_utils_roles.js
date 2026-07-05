@@ -80,7 +80,7 @@ function humanPlataformaFallback(key = "") {
     youtube: "YouTube", deezer: "Deezer", oleadatv1: "OleadaTV (1)",
     oleadatv3: "OleadaTV (3)", iptv1: "IPTV (1)", iptv3: "IPTV (3)",
     iptv4: "IPTV (4)", canva: "Canva", gemini: "Gemini", chatgpt: "ChatGPT",
-    duolingo: "Duolingo",
+    duolingo: "Duolingo", office: "Microsoft 365",
   };
   return map[p] || String(key || "");
 }
@@ -96,7 +96,7 @@ function normalizarPlataforma(v = "") {
     "paramount": "paramount", "paramount plus": "paramount", "paramount+": "paramount",
     "crunchyroll": "crunchyroll", "vix": "vix", "apple tv": "appletv", "appletv": "appletv",
     "universal": "universal", "universal plus": "universal", "universal+": "universal", "spotify": "spotify", "youtube": "youtube",
-    "youtube premium": "youtube", "deezer": "deezer", "oleada": "oleadatv1",
+    "youtube premium": "youtube", "deezer": "deezer", "office": "office", "microsoft": "office", "microsoft 365": "office", "office 365": "office", "m365": "office", "oleada": "oleadatv1",
     "oleadatv": "oleadatv1", "oleadatv 1": "oleadatv1", "oleada 1": "oleadatv1",
     "oleadatv 3": "oleadatv3", "oleada 3": "oleadatv3", "iptv": "iptv1",
     "iptv 1": "iptv1", "iptv 3": "iptv3", "iptv 4": "iptv4",
@@ -112,7 +112,7 @@ function normalizarPlataforma(v = "") {
     primevideo: "primevideo", paramount: "paramount", crunchyroll: "crunchyroll",
     appletv: "appletv", oleadatv1: "oleadatv1", oleada1: "oleadatv1",
     oleadatv3: "oleadatv3", oleada3: "oleadatv3", iptv1: "iptv1",
-    iptv3: "iptv3", iptv4: "iptv4", universal: "universal", duolingo: "duolingo",
+    iptv3: "iptv3", iptv4: "iptv4", universal: "universal", duolingo: "duolingo", office: "office", microsoft365: "office", office365: "office", m365: "office",
   };
 
   return aliasesCompact[s] || s;
