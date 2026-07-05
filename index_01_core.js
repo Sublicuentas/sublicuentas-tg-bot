@@ -111,7 +111,7 @@ const FIN_MOTIVOS_EGRESO = [
 // ===============================
 const PLATAFORMAS = {
   netflix:     { key: "netflix",     nombre: "Netflix Premium", categoria: "video",     acceso: "correo_clave_pin", capacidadDefault: 5,  requiereCorreo: true,  requiereClave: true,  requierePin: true,  permiteUsuario: false },
-  vipnetflix:  { key: "vipnetflix",  nombre: "Netflix VIP",     categoria: "video",     acceso: "correo_clave_pin", capacidadDefault: 1,  requiereCorreo: true,  requiereClave: true,  requierePin: true,  permiteUsuario: false },
+  vipnetflix:  { key: "vipnetflix",  nombre: "Netflix VIP",     categoria: "video",     acceso: "correo_clave",     capacidadDefault: 1,  requiereCorreo: true,  requiereClave: true,  requierePin: false, permiteUsuario: false },
   disneyp:     { key: "disneyp",     nombre: "Disney Premium",  categoria: "video",     acceso: "correo_clave_pin", capacidadDefault: 6,  requiereCorreo: true,  requiereClave: true,  requierePin: true,  permiteUsuario: false },
   disneys:     { key: "disneys",     nombre: "Disney Standard", categoria: "video",     acceso: "correo_clave_pin", capacidadDefault: 3,  requiereCorreo: true,  requiereClave: true,  requierePin: true,  permiteUsuario: false },
   hbomax:      { key: "hbomax",      nombre: "HBO Max",         categoria: "video",     acceso: "correo_clave_pin", capacidadDefault: 5,  requiereCorreo: true,  requiereClave: true,  requierePin: true,  permiteUsuario: false },
@@ -133,6 +133,7 @@ const PLATAFORMAS = {
   gemini:      { key: "gemini",      nombre: "Gemini",          categoria: "diseno_ia", acceso: "solo_correo",      capacidadDefault: 1,  requiereCorreo: true,  requiereClave: false, requierePin: false, permiteUsuario: false },
   chatgpt:     { key: "chatgpt",     nombre: "ChatGPT",         categoria: "diseno_ia", acceso: "solo_correo",      capacidadDefault: 1,  requiereCorreo: true,  requiereClave: false, requierePin: false, permiteUsuario: false },
   duolingo:    { key: "duolingo",    nombre: "Duolingo",        categoria: "diseno_ia", acceso: "solo_correo",      capacidadDefault: 1,  requiereCorreo: true,  requiereClave: false, requierePin: false, permiteUsuario: false },
+  office:      { key: "office",      nombre: "Microsoft 365",   categoria: "diseno_ia", acceso: "correo_clave",     capacidadDefault: 1,  requiereCorreo: true,  requiereClave: true,  requierePin: false, permiteUsuario: false },
 };
 
 const DEFAULT_TOTALS = Object.fromEntries(
