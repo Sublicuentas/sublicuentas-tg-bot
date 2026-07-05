@@ -7,7 +7,6 @@
    - Se respeta correo || usuario en vistas y botones
    - disneys ajustado a capacidad 3
    - ✅ v4: Eliminada línea "Tipo:" innecesaria del panel de cuenta
-   - ✅ v5: Universal+ y Duolingo agregados; PIN separado y plataformas solo correo
 */
 
 const {
@@ -56,6 +55,9 @@ function humanPlatSafe(key = "") {
     appletv: "Apple TV",
     universal: "Universal+",
     spotify: "Spotify",
+    office: "Office",
+    office365: "Office 365",
+    microsoft365: "Microsoft 365",
     youtube: "YouTube",
     deezer: "Deezer",
     oleadatv1: "Oleada 1",
@@ -83,39 +85,37 @@ function isNetflixPlatform(plataforma = "") {
 
 function isSoloCorreoPlatform(plataforma = "") {
   const p = normalizarPlataforma(plataforma);
-  const meta = platMeta(p);
-  if (meta.requiereCorreo === true && meta.requiereClave !== true && meta.requierePin !== true) return true;
   return ["canva", "gemini", "chatgpt", "duolingo"].includes(p);
-}
-
-function requiresClavePlatform(plataforma = "") {
-  const p = normalizarPlataforma(plataforma);
-  if (isSoloCorreoPlatform(p)) return false;
-  const meta = platMeta(p);
-  if (meta.requiereClave === true) return true;
-  if (isUserPlatform(p)) return true;
-  return [
-    "netflix", "vipnetflix", "disneyp", "disneys", "hbomax",
-    "primevideo", "paramount", "crunchyroll", "vix", "appletv",
-    "universal", "spotify", "youtube", "deezer",
-  ].includes(p);
 }
 
 function requiresPinPlatform(plataforma = "") {
   const p = normalizarPlataforma(plataforma);
-  const meta = platMeta(p);
-  if (meta.requierePin === true) return true;
   return [
-    "netflix", "vipnetflix", "disneyp", "disneys", "hbomax",
-    "primevideo", "crunchyroll", "universal",
+    "netflix",
+    "disneyp",
+    "disneys",
+    "hbomax",
+    "primevideo",
+    "crunchyroll",
+    "universal",
   ].includes(p);
 }
 
-function getPinValue(data = {}) {
-  return String(
-    data.pin || data.pinPerfil || data.pin_perfil || data.pin_cliente ||
-    data.perfil_pin || data.profilePin || ""
-  ).trim();
+function requiresClavePlatform(plataforma = "") {
+  return !isSoloCorreoPlatform(plataforma);
+}
+
+function getPinFromAny(data = {}) {
+  const keys = [
+    "pin", "PIN", "pinPerfil", "pin_perfil", "perfilPin", "perfil_pin",
+    "profilePin", "profile_pin", "pinProfile", "pin_profile",
+    "pinCliente", "pin_cliente", "pinCuenta", "pin_cuenta",
+  ];
+  for (const k of keys) {
+    const v = data && data[k];
+    if (v !== undefined && v !== null && String(v).trim()) return String(v).trim();
+  }
+  return "";
 }
 
 function getIdentLabel(plataforma = "") {
@@ -131,8 +131,7 @@ function getAccessTypeLabel(plataforma = "") {
   if (isSoloCorreoPlatform(p)) return "Solo correo";
   if (isUserPlatform(p)) return "Usuario + clave";
   if (requiresPinPlatform(p)) return "Correo + clave + PIN";
-  if (requiresClavePlatform(p)) return "Correo + clave";
-  return "Correo";
+  return "Correo + clave";
 }
 
 function normalizeAccess(plataforma = "", acceso = "") {
@@ -167,6 +166,9 @@ function getCapacidadCorreo(data = {}, plataforma = "") {
     spotify: 1,
     youtube: 1,
     deezer: 1,
+    office: 1,
+    office365: 1,
+    microsoft365: 1,
     oleadatv1: 1,
     oleadatv3: 3,
     iptv1: 1,
@@ -442,7 +444,7 @@ async function enviarInventarioPlataformaEstado(chatId, plataforma = "", filtro 
       txt += `*${start + idx + 1}.* ${filtroNorm === "llenas" ? "[X]" : "[OK]"} ${getIdentIcon(plat)} ${escMD(ident)}\n`;
       txt += `   Perfiles: ${ocupados}/${capacidad} • OK ${disponibles}\n`;
       if (requiresClavePlatform(plat) && r.clave) txt += `   Clave: ${escMD(String(r.clave))}\n`;
-      const pin = getPinValue(r);
+      const pin = getPinFromAny(r);
       if (requiresPinPlatform(plat) && pin) txt += `   PIN: ${escMD(pin)}\n`;
     });
 
@@ -541,15 +543,15 @@ async function mostrarPanelCorreo(chatId, plataforma = "", acceso = "") {
 
   const data = found.data || {};
   const ident = getStoredIdent(data) || String(acceso || "");
-  const clave = String(data.clave || "Sin clave");
-  const pin = getPinValue(data) || "Sin PIN";
+  const clave = String(data.clave || "").trim();
+  const pin = getPinFromAny(data);
   const { capacidad, ocupados, disponibles, estado } = formatCuentaResumen(data, plat);
 
-  // ✅ Panel compacto para que ocupe menos pantalla
+  // Panel compacto para que ocupe menos pantalla
   let txt = ` *${escMD(humanPlatSafe(plat))}*\n`;
   txt += `${getIdentIcon(plat)} ${escMD(ident)}\n`;
-  if (requiresClavePlatform(plat)) txt += `Clave: ${escMD(clave)}\n`;
-  if (requiresPinPlatform(plat)) txt += `PIN: ${escMD(pin)}\n`;
+  if (requiresClavePlatform(plat)) txt += `Clave: ${escMD(clave || "Sin clave")}\n`;
+  if (requiresPinPlatform(plat) && pin) txt += `PIN: ${escMD(pin)}\n`;
   txt += `Perfiles: ${ocupados}/${capacidad} · OK ${disponibles}\n`;
   txt += `${escMD(estado)}`;
 
@@ -565,12 +567,14 @@ async function mostrarPanelCorreo(chatId, plataforma = "", acceso = "") {
     kb.push([{ text: "🔑 Ver códigos Netflix", callback_data: `mail_menu_codigos|${plat}|${encodeURIComponent(ident)}` }]);
   }
 
-  const editRow = [];
   if (requiresClavePlatform(plat)) {
-    editRow.push({ text: "✏️ Editar clave", callback_data: `mail_edit_clave|${plat}|${encodeURIComponent(ident)}` });
+    kb.push([
+      { text: "✏️ Editar clave", callback_data: `mail_edit_clave|${plat}|${encodeURIComponent(ident)}` },
+      { text: "✉️ Editar correo", callback_data: `mail_edit_correo|${plat}|${encodeURIComponent(ident)}` },
+    ]);
+  } else {
+    kb.push([{ text: "✉️ Editar correo", callback_data: `mail_edit_correo|${plat}|${encodeURIComponent(ident)}` }]);
   }
-  editRow.push({ text: "✉️ Editar correo", callback_data: `mail_edit_correo|${plat}|${encodeURIComponent(ident)}` });
-  kb.push(editRow);
 
   kb.push([{ text: "🗑️ Borrar cuenta", callback_data: `mail_delete|${plat}|${encodeURIComponent(ident)}` }]);
 
@@ -612,10 +616,14 @@ async function mostrarMenuClientesCorreo(chatId, plataforma = "", acceso = "") {
         { text: "➕ Agregar cliente", callback_data: `mail_add_cliente|${plat}|${encodeURIComponent(ident)}` },
         { text: "➖ Quitar cliente", callback_data: `mail_del_cliente|${plat}|${encodeURIComponent(ident)}` },
       ],
-      [
-        { text: "🔐 Editar PIN cliente", callback_data: `mail_edit_pin|${plat}|${encodeURIComponent(ident)}` },
-        { text: "👥 Ver clientes", callback_data: `mail_ver_clientes|${plat}|${encodeURIComponent(ident)}` },
-      ],
+      requiresPinPlatform(plat)
+        ? [
+            { text: "🔐 Editar PIN cliente", callback_data: `mail_edit_pin|${plat}|${encodeURIComponent(ident)}` },
+            { text: "👥 Ver clientes", callback_data: `mail_ver_clientes|${plat}|${encodeURIComponent(ident)}` },
+          ]
+        : [
+            { text: "👥 Ver clientes", callback_data: `mail_ver_clientes|${plat}|${encodeURIComponent(ident)}` },
+          ],
       [
         { text: "⬅️ Cuenta", callback_data: `mail_panel|${plat}|${encodeURIComponent(ident)}` },
         { text: "🏠 Inicio", callback_data: "go:inicio" },
@@ -646,15 +654,21 @@ async function responderMenuCodigosNetflix(chatId, plataforma = "", acceso = "")
       { text: "🔐 Login", callback_data: `nf_code|login|${encodeURIComponent(ident)}` },
       { text: "🏠 Código hogar", callback_data: `nf_code|hogar|${encodeURIComponent(ident)}` },
     ],
-    [
+  ];
+
+  if (requiresPinPlatform(plat)) {
+    kb.push([
       { text: "⏱️ Código temporal", callback_data: `nf_code|temporal|${encodeURIComponent(ident)}` },
       { text: "📌 PIN / perfil", callback_data: `nf_code|pin|${encodeURIComponent(ident)}` },
-    ],
-    [
-      { text: "⬅️ Cuenta", callback_data: `mail_panel|${plat}|${encodeURIComponent(ident)}` },
-      { text: "🏠 Inicio", callback_data: "go:inicio" },
-    ],
-  ];
+    ]);
+  } else {
+    kb.push([{ text: "⏱️ Código temporal", callback_data: `nf_code|temporal|${encodeURIComponent(ident)}` }]);
+  }
+
+  kb.push([
+    { text: "⬅️ Cuenta", callback_data: `mail_panel|${plat}|${encodeURIComponent(ident)}` },
+    { text: "🏠 Inicio", callback_data: "go:inicio" },
+  ]);
 
   return upsertPanel(chatId, txt, kb);
 }
@@ -688,7 +702,7 @@ async function responderCodigoNetflix(chatId, acceso = "", tipo = "") {
       ["Código temporal", data.codigo_temporal || data.tempCode || data.temporal || data.codigo || data.code || "No disponible"],
     ],
     pin: [
-      ["PIN", data.pin || data.pin_hogar || data.pin_temporal || "No disponible"],
+      ["PIN", getPinFromAny(data) || data.pin_hogar || data.pin_temporal || "No disponible"],
       ["Perfil", data.perfil || data.profile || "No disponible"],
     ],
   };
