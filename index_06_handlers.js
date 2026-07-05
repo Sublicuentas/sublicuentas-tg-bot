@@ -232,7 +232,7 @@ function requierePinLocal(plataforma = "") {
   const p = normalizarPlataforma(plataforma);
   const cfg = platMetaLocal(p);
   if (Object.prototype.hasOwnProperty.call(cfg, "requierePin")) return cfg.requierePin === true;
-  return ["netflix", "vipnetflix", "disneyp", "disneys", "hbomax", "primevideo", "crunchyroll", "universal"].includes(p);
+  return ["netflix", "disneyp", "disneys", "hbomax", "primevideo", "crunchyroll", "universal"].includes(p);
 }
 
 function esSoloCorreoLocal(plataforma = "") {
@@ -339,8 +339,13 @@ function extraerPinInventarioLocal(data = {}) {
     data.pinPerfil,
     data.pin_perfil,
     data.perfilPin,
+    data.perfil_pin,
     data.profilePin,
     data.profile_pin,
+    data.pinCliente,
+    data.pin_cliente,
+    data.pinServicio,
+    data.pin_servicio,
   ];
 
   for (const v of valores) {
@@ -351,6 +356,10 @@ function extraerPinInventarioLocal(data = {}) {
     return s;
   }
   return "";
+}
+
+function extraerPinServicioLocal(servicio = {}) {
+  return extraerPinInventarioLocal(servicio || {});
 }
 
 function getIdentInventarioSyncLocal(data = {}) {
@@ -468,7 +477,7 @@ async function sincronizarUnServicioDesdeInventarioLocal(clientId, idx) {
   }
 
   if (requierePinLocal(platInv)) {
-    patch.pin = String(actual.pin || "").trim() || pinInv || "";
+    patch.pin = extraerPinServicioLocal(actual) || pinInv || "";
   } else {
     patch.pin = "";
   }
@@ -662,6 +671,7 @@ function humanPlatLabelSyncLocal(key = "") {
     gemini: "Gemini",
     chatgpt: "ChatGPT",
     duolingo: "Duolingo",
+    office: "Microsoft 365",
   };
   return labels[p] || String(key || "");
 }
@@ -692,6 +702,7 @@ function getTotalPorPlataformaLocal(plat = "") {
     gemini: 1,
     chatgpt: 1,
     duolingo: 1,
+    office: 1,
   };
   return map[p] || 1;
 }
@@ -1637,6 +1648,8 @@ function humanPlatAlertLocal(key = "") {
     canva: "Canva",
     gemini: "Gemini",
     chatgpt: "ChatGPT",
+    duolingo: "Duolingo",
+    office: "Microsoft 365",
   };
   return map[k] || String(key || "");
 }
@@ -3614,7 +3627,7 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
               const claveInv = extraerClaveInventarioLocal(inv.data || {});
               const pinInv = extraerPinInventarioLocal(inv.data || {});
               if (requiereClaveLocal(plat) && claveInv) patch.clave = claveInv;
-              if (requierePinLocal(plat)) patch.pin = String(actual.pin || "").trim() || pinInv || "";
+              if (requierePinLocal(plat)) patch.pin = extraerPinServicioLocal(actual) || pinInv || "";
               if (!requierePinLocal(plat)) patch.pin = "";
             }
           }
