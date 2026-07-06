@@ -5036,12 +5036,67 @@ bot.on("message", async (msg) => {
       }
 
       if (p.mode === "cliServEditMail") {
-        const label = getIdentLabelLocal(p.plat || "");
-        if (!validateIdentByPlatformLocal(p.plat || "", t)) return bot.sendMessage(chatId, `⚠️ ${label} inválido.`);
+        const platBase = normalizarPlataforma(p.plat || "");
+        const label = getIdentLabelLocal(platBase);
+        if (!validateIdentByPlatformLocal(platBase, t)) {
+          return bot.sendMessage(chatId, `⚠️ ${label} inválido. Escriba un ${label.toLowerCase()} válido:`);
+        }
+
         pending.delete(String(chatId));
-      forceNextPanelAtBottom(chatId);
-        try { await patchServicio(p.clientId, p.idx, { correo: normalizeIdentByPlatformLocal(p.plat || "", t) }); } catch (e) { return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo actualizar el servicio."}`); }
-        return menuServicio(chatId, p.clientId, p.idx);
+        forceNextPanelAtBottom(chatId);
+
+        try {
+          const c = await getCliente(p.clientId);
+          if (!c) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
+          const servicios = Array.isArray(c.servicios) ? c.servicios : [];
+          if (p.idx < 0 || p.idx >= servicios.length) return bot.sendMessage(chatId, "⚠️ Servicio inválido.");
+
+          const actual = servicios[p.idx] || {};
+          const correoIngresado = normalizeIdentByPlatformLocal(platBase, t);
+          const servicioBusqueda = { ...actual, plataforma: platBase, correo: correoIngresado };
+          const inv = await buscarInventarioFlexiblePorServicioLocal(servicioBusqueda, platBase);
+
+          let patch = { correo: correoIngresado };
+
+          if (inv) {
+            const dataInv = inv.data || {};
+            const platInv = normalizarPlataforma(inv.plataformaCoincidente || inv.plataforma || dataInv.plataforma || platBase);
+            const identInv = getIdentInventarioSyncLocal(dataInv) || correoIngresado;
+            const claveInv = extraerClaveInventarioLocal(dataInv);
+            const pinInv = extraerPinInventarioLocal(dataInv);
+
+            patch.plataforma = platInv;
+            patch.correo = normalizeIdentByPlatformLocal(platInv, identInv);
+
+            if (requiereClaveLocal(platInv)) {
+              patch.clave = claveInv || actual.clave || actual.password || actual.pass || "";
+            } else {
+              patch.clave = "";
+            }
+
+            if (requierePinLocal(platInv)) {
+              patch.pin = extraerPinServicioLocal(actual) || pinInv || "";
+            } else {
+              patch.pin = "";
+            }
+          }
+
+          await patchServicio(p.clientId, p.idx, patch);
+
+          if (inv) {
+            const platFinal = normalizarPlataforma(patch.plataforma || platBase);
+            const msg = platFinal !== platBase
+              ? `✅ Correo actualizado. También corregí la plataforma a *${humanPlatLabelLocal(platFinal)}* y traje los datos del inventario.`
+              : `✅ Correo actualizado y datos sincronizados desde inventario.`;
+            await bot.sendMessage(chatId, msg, { parse_mode: "Markdown" });
+          } else {
+            await bot.sendMessage(chatId, "✅ Correo actualizado. ⚠️ No lo encontré en inventario, revise clave/PIN si aplica.");
+          }
+
+          return menuServicio(chatId, p.clientId, p.idx);
+        } catch (e) {
+          return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo actualizar el servicio."}`);
+        }
       }
 
       if (p.mode === "cliServEditClave") {
