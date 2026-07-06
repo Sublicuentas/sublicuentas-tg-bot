@@ -937,8 +937,21 @@ async function patchServicio(clientId, idx, patch = {}) {
     Object.prototype.hasOwnProperty.call(patch, "clave") ||
     Object.prototype.hasOwnProperty.call(patch, "pin");
 
-  if (credencialesTocadas && requiereClaveLocal(siguiente.plataforma) && !getClaveServicioLocal(siguiente, siguiente.plataforma)) throw new Error("Clave inválida.");
-  if (credencialesTocadas && requierePinLocal(siguiente.plataforma) && !getPinServicioLocal(siguiente, siguiente.plataforma)) throw new Error("PIN inválido.");
+  // En edición no se bloquea el cambio de correo/plataforma por clave o PIN vacío.
+  // La validación estricta queda en addServicioTx; aquí se permite corregir fichas viejas
+  // y luego completar clave/PIN o traerlos desde inventario.
+  const soloCambioCorreo =
+    Object.prototype.hasOwnProperty.call(patch, "correo") &&
+    !Object.prototype.hasOwnProperty.call(patch, "plataforma") &&
+    !Object.prototype.hasOwnProperty.call(patch, "clave") &&
+    !Object.prototype.hasOwnProperty.call(patch, "pin");
+
+  if (!soloCambioCorreo && credencialesTocadas && Object.prototype.hasOwnProperty.call(patch, "clave") && requiereClaveLocal(siguiente.plataforma) && !getClaveServicioLocal(siguiente, siguiente.plataforma)) {
+    throw new Error("Clave inválida.");
+  }
+  if (!soloCambioCorreo && credencialesTocadas && Object.prototype.hasOwnProperty.call(patch, "pin") && requierePinLocal(siguiente.plataforma) && !getPinServicioLocal(siguiente, siguiente.plataforma)) {
+    throw new Error("PIN inválido.");
+  }
   if (esSoloCorreoLocal(siguiente.plataforma)) { siguiente.clave = ""; siguiente.pin = ""; }
 
   if (Object.prototype.hasOwnProperty.call(siguiente, "precio")) {
