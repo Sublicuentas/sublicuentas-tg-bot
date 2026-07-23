@@ -2156,38 +2156,67 @@ bot.onText(/\/sincronizar_todo/i, async (msg) => {
   await bot.sendMessage(chatId, "🔄 *Iniciando sincronización masiva...*", { parse_mode: "Markdown" });
 
   let perfilesEmparejados = 0;
+  let clientesSinCuenta = 0;
   const cuentasAfectadas = new Set();
+  const sinCuenta = [];
 
   try {
+    // ✅ FIX: antes se buscaba el inventario adivinando el ID del documento
+    // ("plataforma__correo"), pero las cuentas creadas desde Sublichat HQ usan
+    // IDs autogenerados por Firestore (db.collection("inventario").add(...)),
+    // así que esa búsqueda por ID casi nunca encontraba nada. Ahora cargamos
+    // TODO el inventario una sola vez y lo indexamos por correo real, igual
+    // que lo hace el backend de Sublichat HQ (renovar.js → ajustarInventario).
+    const snapInv = await db.collection("inventario").get();
+    const invPorCorreo = new Map(); // correoNorm -> [{ ref, data }]
+    snapInv.forEach((d) => {
+      const data = d.data() || {};
+      const correoNorm = String(data.correo || "").trim().toLowerCase();
+      if (!correoNorm) return;
+      if (!invPorCorreo.has(correoNorm)) invPorCorreo.set(correoNorm, []);
+      invPorCorreo.get(correoNorm).push({ ref: d.ref, data });
+    });
+
     const snapClientes = await db.collection("clientes").get();
 
     for (const docCli of snapClientes.docs) {
       const c = docCli.data() || {};
       const servicios = Array.isArray(c.servicios) ? c.servicios : [];
-      const nombreCliente = c.nombrePerfil || "Sin Nombre";
+      const nombreCliente = c.nombrePerfil || c.nombre || "Sin Nombre";
 
       for (const s of servicios) {
         if (!s.correo || !s.plataforma) continue;
 
-        const plat = normalizarPlataforma(s.plataforma);
-        const acceso = normalizeIdentByPlatformLocal(plat, s.correo);
-        const idInv = docIdInventarioLocal(acceso, plat);
+        const correoNorm = String(s.correo).trim().toLowerCase();
+        const candidatos = invPorCorreo.get(correoNorm) || [];
 
-        const refInv = db.collection("inventario").doc(idInv);
-        const docInv = await refInv.get();
+        if (!candidatos.length) {
+          clientesSinCuenta++;
+          sinCuenta.push(`${nombreCliente} — ${s.plataforma} — ${s.correo}`);
+          continue;
+        }
 
-        if (!docInv.exists) continue;
+        // Si el mismo correo quedó duplicado en varias cuentas de inventario,
+        // preferimos la que aún tenga espacio; si todas están llenas, la primera.
+        const elegido = candidatos.find((x) => {
+          const cap = Number(x.data.capacidad || x.data.total || 0);
+          const ocup = Array.isArray(x.data.clientes) ? x.data.clientes.length : 0;
+          return cap === 0 || ocup < cap;
+        }) || candidatos[0];
 
-        const invData = docInv.data() || {};
+        const invData = elegido.data;
         let clientesInv = Array.isArray(invData.clientes) ? invData.clientes.slice() : [];
-        const pinCliente = s.pin || "0000";
+        const pinCliente = s.pin || s.pinPerfil || "0000";
 
         const yaExiste = clientesInv.some(
-          (x) => x.nombre === nombreCliente && x.pin === pinCliente
+          (x) => String(x.nombre || "").trim().toLowerCase() === String(nombreCliente).trim().toLowerCase()
+            && String(x.pin || "") === String(pinCliente)
         );
         if (yaExiste) continue;
 
-        clientesInv.push({ nombre: nombreCliente, pin: pinCliente, slot: clientesInv.length + 1 });
+        const usados = clientesInv.map((x) => Number(x.slot) || 0);
+        let slot = 1; while (usados.includes(slot)) slot++;
+        clientesInv.push({ nombre: nombreCliente, pin: pinCliente, slot });
 
         const capacidad = Number(invData.capacidad || invData.total || 0);
         const ocupados = clientesInv.length;
@@ -2196,19 +2225,28 @@ bot.onText(/\/sincronizar_todo/i, async (msg) => {
           : Math.max(0, Number(invData.disp || 0) - 1);
         const estado = disponibles === 0 ? "llena" : "activa";
 
-        await refInv.set(
+        await elegido.ref.set(
           { clientes: clientesInv, ocupados, disponibles, disp: disponibles, estado, capacidad, updatedAt: admin.firestore.FieldValue.serverTimestamp() },
           { merge: true }
         );
 
+        // Refresca el índice en memoria por si el mismo correo aparece en otro cliente más abajo.
+        elegido.data = { ...invData, clientes: clientesInv, ocupados, disponibles, capacidad };
+
         perfilesEmparejados++;
-        cuentasAfectadas.add(idInv);
+        cuentasAfectadas.add(elegido.ref.id);
       }
+    }
+
+    let resumenFaltantes = "";
+    if (sinCuenta.length) {
+      const muestra = sinCuenta.slice(0, 15).map((x) => `• ${x}`).join("\n");
+      resumenFaltantes = `\n\n⚠️ *${sinCuenta.length} servicio(s) sin cuenta en inventario* (el correo de la ficha no coincide con ninguna cuenta creada en inventario):\n${muestra}${sinCuenta.length > 15 ? `\n…y ${sinCuenta.length - 15} más.` : ""}`;
     }
 
     return bot.sendMessage(
       chatId,
-      `✅ *Sincronización completada con éxito*\n\n👤 Perfiles emparejados: *${perfilesEmparejados}*\n📦 Cuentas actualizadas: *${cuentasAfectadas.size}*\n\n💡 _La base quedó sincronizada._`,
+      `✅ *Sincronización completada con éxito*\n\n👤 Perfiles emparejados: *${perfilesEmparejados}*\n📦 Cuentas actualizadas: *${cuentasAfectadas.size}*${resumenFaltantes}\n\n💡 _La base quedó sincronizada._`,
       { parse_mode: "Markdown" }
     );
   } catch (error) {
