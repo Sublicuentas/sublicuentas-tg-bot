@@ -4575,6 +4575,9 @@ bot.on("message", async (msg) => {
         "sincronizar_todo", "sincronizar_claves", "addcorreo", "finanzas", "resumen_fecha", "bancos_mes",
         "top_plataformas_mes", "cierre_caja", "cierre_caja_rango", "excel_finanzas",
         "editar_movimiento", "clientes_excel",
+        // ✅ Diagnóstico / reparación de colisiones (antes faltaban aquí y por eso
+        // el buscador genérico también los interceptaba y mandaba "Sin resultados").
+        "reparar_colisiones", "buscar_raw",
         // ✅ Comandos IMAP — no pasar a resolverBusquedaAdmin
         "code", "link", "hogar", "prime", "inbox", "debug",
         // ✅ Buzón de avisos web revendedores
