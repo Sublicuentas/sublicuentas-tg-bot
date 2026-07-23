@@ -2275,7 +2275,7 @@ async function detectarColisionesTelefono() {
   snap.forEach((doc) => {
     const c = doc.data() || {};
     const tel = String(c.telefono || "").trim();
-    if (!VENDOR_DEFAULT_PHONES_TG.has(tel)) return;
+    const telDigits = tel.replace(/\D/g, "");
 
     const servicios = Array.isArray(c.servicios) ? c.servicios : [];
     if (!servicios.length) return;
@@ -2288,10 +2288,15 @@ async function detectarColisionesTelefono() {
       grupos.get(key).servicios.push(s);
     });
 
+    // ✅ Ya no exigimos que el teléfono coincida exacto con el default del
+    // vendedor (algunos quedaron con formato distinto): cualquier documento
+    // con más de un nombre de perfil distinto entre sus servicios es
+    // sospechoso de tener clientes mezclados.
     if (grupos.size > 1) {
       colisiones.push({
         docId: doc.id,
         telefonoVendedor: tel,
+        esTelVendedorConocido: VENDOR_DEFAULT_PHONES_TG.has(telDigits),
         vendedor: c.vendedor || "",
         nombreActual: c.nombrePerfil || "",
         grupos: Array.from(grupos.values()),
@@ -2331,7 +2336,7 @@ bot.onText(/\/reparar_colisiones(?:\s+(confirmar))?/i, async (msg, match) => {
     if (!confirmar) {
       let txt = `⚠️ *Encontré ${colisiones.length} documento(s) con clientes mezclados:*\n\n`;
       colisiones.slice(0, 10).forEach((c, i) => {
-        txt += `${i + 1}) doc \`${c.docId}\` — vendedor: ${c.vendedor || "-"}\n`;
+        txt += `${i + 1}) doc \`${c.docId}\` — vendedor: ${c.vendedor || "-"} — tel: ${c.telefonoVendedor || "-"}${c.esTelVendedorConocido ? " (tel. default de vendedor)" : ""}\n`;
         c.grupos.forEach((g) => { txt += `   • ${g.nombre} — ${g.servicios.length} servicio(s)\n`; });
         txt += `\n`;
       });
@@ -2410,6 +2415,67 @@ bot.onText(/\/reparar_colisiones(?:\s+(confirmar))?/i, async (msg, match) => {
   } catch (error) {
     logErr("reparar_colisiones", error);
     return bot.sendMessage(chatId, "⚠️ Ocurrió un error reparando. Revise los logs del servidor.");
+  }
+});
+
+// ===============================
+// ✅ NUEVO: /buscar_raw <texto>
+// Diagnóstico sin ningún filtro inteligente: recorre TODA la colección
+// "clientes" y muestra cualquier documento cuyo contenido (en JSON) incluya
+// el texto buscado. Sirve para confirmar si un cliente existe o no en la
+// base, sin depender de nombre_norm, teléfono, ni ninguna lógica de match.
+// ===============================
+bot.onText(/\/buscar_raw(?:\s+([\s\S]+))?/i, async (msg, match) => {
+  if (!hasRuntimeLock()) return;
+  const chatId = msg.chat.id;
+  const userId = msg.from.id;
+
+  if (!(await safeIsAdminLocal(userId))) {
+    return bot.sendMessage(chatId, "⛔ Solo ADMIN puede usar este diagnóstico.");
+  }
+
+  const q = String((match && match[1]) || "").trim().toLowerCase();
+  if (!q) return bot.sendMessage(chatId, "⚠️ Uso: /buscar_raw texto a buscar");
+
+  await bot.sendMessage(chatId, `🔎 *Buscando "${q}" en TODA la colección clientes (sin filtros)...*`, { parse_mode: "Markdown" });
+
+  try {
+    const snap = await db.collection("clientes").get();
+    const hits = [];
+
+    snap.forEach((doc) => {
+      const raw = JSON.stringify(doc.data() || {}).toLowerCase();
+      if (raw.includes(q)) hits.push(doc);
+    });
+
+    if (!hits.length) {
+      return bot.sendMessage(
+        chatId,
+        `⚠️ No encontré "${q}" en NINGÚN documento de la colección clientes (${snap.size} documentos revisados). No es un problema de búsqueda: ese cliente no existe guardado en Firebase.`
+      );
+    }
+
+    let txt = `✅ *Encontré "${q}" en ${hits.length} documento(s):*\n\n`;
+    hits.slice(0, 8).forEach((doc, i) => {
+      const c = doc.data() || {};
+      const servicios = Array.isArray(c.servicios) ? c.servicios : [];
+      txt += `${i + 1}) doc \`${doc.id}\`\n`;
+      txt += `   nombrePerfil: ${c.nombrePerfil || "-"}\n`;
+      txt += `   telefono: ${c.telefono || "-"}\n`;
+      txt += `   vendedor: ${c.vendedor || "-"}\n`;
+      txt += `   servicios: ${servicios.length}`;
+      if (servicios.length) {
+        const perfiles = [...new Set(servicios.map((s) => String((s && s.perfil) || "").trim()).filter(Boolean))];
+        if (perfiles.length) txt += ` (perfiles: ${perfiles.join(", ")})`;
+      }
+      txt += `\n\n`;
+    });
+    if (hits.length > 8) txt += `…y ${hits.length - 8} documento(s) más.`;
+
+    return bot.sendMessage(chatId, txt, { parse_mode: "Markdown" });
+  } catch (error) {
+    logErr("buscar_raw", error);
+    return bot.sendMessage(chatId, "⚠️ Ocurrió un error buscando. Revise los logs del servidor.");
   }
 });
 
