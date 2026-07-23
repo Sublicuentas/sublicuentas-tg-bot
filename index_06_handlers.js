@@ -2241,13 +2241,15 @@ bot.onText(/\/sincronizar_todo/i, async (msg) => {
     let resumenFaltantes = "";
     if (sinCuenta.length) {
       const muestra = sinCuenta.slice(0, 15).map((x) => `• ${x}`).join("\n");
-      resumenFaltantes = `\n\n⚠️ *${sinCuenta.length} servicio(s) sin cuenta en inventario* (el correo de la ficha no coincide con ninguna cuenta creada en inventario):\n${muestra}${sinCuenta.length > 15 ? `\n…y ${sinCuenta.length - 15} más.` : ""}`;
+      resumenFaltantes = `\n\n⚠️ ${sinCuenta.length} servicio(s) sin cuenta en inventario (el correo de la ficha no coincide con ninguna cuenta creada en inventario):\n${muestra}${sinCuenta.length > 15 ? `\n…y ${sinCuenta.length - 15} más.` : ""}`;
     }
 
+    // ✅ Texto plano: la lista de "sin cuenta" incluye nombres y correos
+    // reales de clientes, que pueden traer símbolos que rompen el Markdown
+    // de Telegram y hacen que el mensaje nunca llegue.
     return bot.sendMessage(
       chatId,
-      `✅ *Sincronización completada con éxito*\n\n👤 Perfiles emparejados: *${perfilesEmparejados}*\n📦 Cuentas actualizadas: *${cuentasAfectadas.size}*${resumenFaltantes}\n\n💡 _La base quedó sincronizada._`,
-      { parse_mode: "Markdown" }
+      `✅ Sincronización completada con éxito\n\n👤 Perfiles emparejados: ${perfilesEmparejados}\n📦 Cuentas actualizadas: ${cuentasAfectadas.size}${resumenFaltantes}\n\n💡 La base quedó sincronizada.`
     );
   } catch (error) {
     logErr("sincronizar_todo", error);
@@ -2329,9 +2331,8 @@ bot.onText(/\/reparar_colisiones(?:\s+(confirmar))?/i, async (msg, match) => {
   await bot.sendMessage(
     chatId,
     confirmar
-      ? "🔧 *Reparando colisiones de teléfono...*"
-      : "🔎 *Revisando documentos con clientes mezclados (no se guarda nada todavía)...*",
-    { parse_mode: "Markdown" }
+      ? "🔧 Reparando colisiones de teléfono..."
+      : "🔎 Revisando documentos con clientes mezclados (no se guarda nada todavía)..."
   );
 
   try {
@@ -2342,15 +2343,18 @@ bot.onText(/\/reparar_colisiones(?:\s+(confirmar))?/i, async (msg, match) => {
     }
 
     if (!confirmar) {
-      let txt = `⚠️ *Encontré ${colisiones.length} documento(s) con clientes mezclados:*\n\n`;
+      // ✅ Texto plano (SIN parse_mode Markdown): los nombres/correos de
+      // clientes son datos reales y pueden traer "_", "*", etc. que rompen
+      // el parser de Telegram y hacen que el mensaje nunca llegue.
+      let txt = `⚠️ Encontré ${colisiones.length} documento(s) con clientes mezclados:\n\n`;
       colisiones.slice(0, 10).forEach((c, i) => {
-        txt += `${i + 1}) doc \`${c.docId}\` — vendedor: ${c.vendedor || "-"} — tel: ${c.telefonoVendedor || "-"}${c.esTelVendedorConocido ? " (tel. default de vendedor)" : ""}\n`;
+        txt += `${i + 1}) doc ${c.docId} — vendedor: ${c.vendedor || "-"} — tel: ${c.telefonoVendedor || "-"}${c.esTelVendedorConocido ? " (tel. default de vendedor)" : ""}\n`;
         c.grupos.forEach((g) => { txt += `   • ${g.nombre} — ${g.servicios.length} servicio(s)\n`; });
         txt += `\n`;
       });
       if (colisiones.length > 10) txt += `…y ${colisiones.length - 10} documento(s) más.\n\n`;
       txt += `Nada se ha modificado todavía. Para separarlos en clientes independientes, envía:\n/reparar_colisiones confirmar`;
-      return bot.sendMessage(chatId, txt, { parse_mode: "Markdown" });
+      return bot.sendMessage(chatId, txt);
     }
 
     let nuevosClientes = 0;
@@ -2417,8 +2421,7 @@ bot.onText(/\/reparar_colisiones(?:\s+(confirmar))?/i, async (msg, match) => {
 
     return bot.sendMessage(
       chatId,
-      `✅ *Reparación completada*\n\n📄 Documentos separados: *${docsReparados}*\n👤 Clientes nuevos recuperados: *${nuevosClientes}*\n\n💡 Ahora corre */sincronizar_todo* para conectarlos con el inventario.`,
-      { parse_mode: "Markdown" }
+      `✅ Reparación completada\n\n📄 Documentos separados: ${docsReparados}\n👤 Clientes nuevos recuperados: ${nuevosClientes}\n\n💡 Ahora corre /sincronizar_todo para conectarlos con el inventario.`
     );
   } catch (error) {
     logErr("reparar_colisiones", error);
@@ -2451,7 +2454,7 @@ bot.onText(/\/buscar_raw(?:\s+([\s\S]+))?/i, async (msg, match) => {
   const q = String((match && match[1]) || "").trim().toLowerCase();
   if (!q) return bot.sendMessage(chatId, "⚠️ Uso: /buscar_raw texto a buscar");
 
-  await bot.sendMessage(chatId, `🔎 *Buscando "${q}" en TODA la colección clientes (sin filtros)...*`, { parse_mode: "Markdown" });
+  await bot.sendMessage(chatId, `🔎 Buscando "${q}" en TODA la colección clientes (sin filtros)...`);
 
   try {
     const snap = await db.collection("clientes").get();
@@ -2469,11 +2472,13 @@ bot.onText(/\/buscar_raw(?:\s+([\s\S]+))?/i, async (msg, match) => {
       );
     }
 
-    let txt = `✅ *Encontré "${q}" en ${hits.length} documento(s):*\n\n`;
+    // ✅ Texto plano: los nombres/correos reales de clientes pueden traer
+    // símbolos que rompen el parser de Markdown de Telegram.
+    let txt = `✅ Encontré "${q}" en ${hits.length} documento(s):\n\n`;
     hits.slice(0, 8).forEach((doc, i) => {
       const c = doc.data() || {};
       const servicios = Array.isArray(c.servicios) ? c.servicios : [];
-      txt += `${i + 1}) doc \`${doc.id}\`\n`;
+      txt += `${i + 1}) doc ${doc.id}\n`;
       txt += `   nombrePerfil: ${c.nombrePerfil || "-"}\n`;
       txt += `   telefono: ${c.telefono || "-"}\n`;
       txt += `   vendedor: ${c.vendedor || "-"}\n`;
@@ -2486,7 +2491,7 @@ bot.onText(/\/buscar_raw(?:\s+([\s\S]+))?/i, async (msg, match) => {
     });
     if (hits.length > 8) txt += `…y ${hits.length - 8} documento(s) más.`;
 
-    return bot.sendMessage(chatId, txt, { parse_mode: "Markdown" });
+    return bot.sendMessage(chatId, txt);
   } catch (error) {
     logErr("buscar_raw", error);
     return bot.sendMessage(chatId, "⚠️ Ocurrió un error buscando. Revise los logs del servidor.");
