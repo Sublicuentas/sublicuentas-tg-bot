@@ -2256,6 +2256,164 @@ bot.onText(/\/sincronizar_todo/i, async (msg) => {
 });
 
 // ===============================
+// ✅ NUEVO: /reparar_colisiones
+// Separa clientes que quedaron mezclados en un mismo documento porque la
+// ficha se guardó con el teléfono por defecto del vendedor (Yami, Jimena,
+// Heber, Abner, Manuel) en vez del teléfono real del cliente. En ese caso,
+// cada cliente nuevo del mismo vendedor pisaba el nombre del anterior en el
+// MISMO documento de Firestore, aunque sus servicios (correo/clave/PIN) se
+// mantuvieron intactos dentro del array "servicios". Aquí los separamos
+// usando el campo "perfil" que cada servicio guarda con el nombre real del
+// cliente al que pertenece.
+// ===============================
+const VENDOR_DEFAULT_PHONES_TG = new Set(["9687724", "88501036", "32174922", "94306551", "87989267"]);
+
+async function detectarColisionesTelefono() {
+  const snap = await db.collection("clientes").get();
+  const colisiones = [];
+
+  snap.forEach((doc) => {
+    const c = doc.data() || {};
+    const tel = String(c.telefono || "").trim();
+    if (!VENDOR_DEFAULT_PHONES_TG.has(tel)) return;
+
+    const servicios = Array.isArray(c.servicios) ? c.servicios : [];
+    if (!servicios.length) return;
+
+    const grupos = new Map(); // nombreNorm -> { nombre, servicios: [] }
+    servicios.forEach((s) => {
+      const nombreServ = String((s && s.perfil) || c.nombrePerfil || "Sin nombre").trim() || "Sin nombre";
+      const key = nombreServ.toLowerCase();
+      if (!grupos.has(key)) grupos.set(key, { nombre: nombreServ, servicios: [] });
+      grupos.get(key).servicios.push(s);
+    });
+
+    if (grupos.size > 1) {
+      colisiones.push({
+        docId: doc.id,
+        telefonoVendedor: tel,
+        vendedor: c.vendedor || "",
+        nombreActual: c.nombrePerfil || "",
+        grupos: Array.from(grupos.values()),
+      });
+    }
+  });
+
+  return colisiones;
+}
+
+bot.onText(/\/reparar_colisiones(?:\s+(confirmar))?/i, async (msg, match) => {
+  if (!hasRuntimeLock()) return;
+  const chatId = msg.chat.id;
+  const userId = msg.from.id;
+
+  if (!(await safeIsAdminLocal(userId))) {
+    return bot.sendMessage(chatId, "⛔ Solo ADMIN puede ejecutar esto.");
+  }
+
+  const confirmar = !!(match && match[1]);
+
+  await bot.sendMessage(
+    chatId,
+    confirmar
+      ? "🔧 *Reparando colisiones de teléfono...*"
+      : "🔎 *Revisando documentos con clientes mezclados (no se guarda nada todavía)...*",
+    { parse_mode: "Markdown" }
+  );
+
+  try {
+    const colisiones = await detectarColisionesTelefono();
+
+    if (!colisiones.length) {
+      return bot.sendMessage(chatId, "✅ No encontré clientes mezclados por teléfono de vendedor.");
+    }
+
+    if (!confirmar) {
+      let txt = `⚠️ *Encontré ${colisiones.length} documento(s) con clientes mezclados:*\n\n`;
+      colisiones.slice(0, 10).forEach((c, i) => {
+        txt += `${i + 1}) doc \`${c.docId}\` — vendedor: ${c.vendedor || "-"}\n`;
+        c.grupos.forEach((g) => { txt += `   • ${g.nombre} — ${g.servicios.length} servicio(s)\n`; });
+        txt += `\n`;
+      });
+      if (colisiones.length > 10) txt += `…y ${colisiones.length - 10} documento(s) más.\n\n`;
+      txt += `Nada se ha modificado todavía. Para separarlos en clientes independientes, envía:\n/reparar_colisiones confirmar`;
+      return bot.sendMessage(chatId, txt, { parse_mode: "Markdown" });
+    }
+
+    let nuevosClientes = 0;
+    let docsReparados = 0;
+
+    for (const col of colisiones) {
+      const docRef = db.collection("clientes").doc(col.docId);
+      const docSnap = await docRef.get();
+      if (!docSnap.exists) continue;
+      const data = docSnap.data() || {};
+      const vendedor = data.vendedor || col.vendedor || "";
+
+      // El grupo que coincide con el nombre que YA tiene el documento se queda
+      // en ese mismo doc (así no se rompe nada que ya apunte a ese ID); el
+      // resto se separa a documentos nuevos, limpios, sin el teléfono del vendedor.
+      const nombreActualNorm = String(data.nombrePerfil || "").trim().toLowerCase();
+      const grupoQueSeQueda = col.grupos.find((g) => g.nombre.toLowerCase() === nombreActualNorm) || col.grupos[0];
+
+      for (const g of col.grupos) {
+        if (g === grupoQueSeQueda) continue;
+
+        const idBase = ("cli-" + g.nombre)
+          .toLowerCase()
+          .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+          .replace(/[^a-z0-9]+/g, "-")
+          .replace(/^-+|-+$/g, "")
+          .slice(0, 80) || ("cli-" + Date.now());
+
+        let nuevoRef = db.collection("clientes").doc(idBase);
+        const existeYa = await nuevoRef.get();
+        if (existeYa.exists) {
+          nuevoRef = db.collection("clientes").doc(`${idBase}-${Date.now().toString().slice(-5)}`);
+        }
+
+        await nuevoRef.set({
+          nombrePerfil: g.nombre,
+          nombre: g.nombre,
+          nombre_norm: g.nombre.toLowerCase(),
+          telefono: "",
+          telefono_norm: "",
+          vendedor,
+          servicios: g.servicios,
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          recuperadoDeColision: col.docId,
+        });
+        nuevosClientes++;
+      }
+
+      await docRef.set(
+        {
+          servicios: grupoQueSeQueda.servicios,
+          nombrePerfil: grupoQueSeQueda.nombre,
+          nombre: grupoQueSeQueda.nombre,
+          nombre_norm: grupoQueSeQueda.nombre.toLowerCase(),
+          telefono: "",
+          telefono_norm: "",
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+      docsReparados++;
+    }
+
+    return bot.sendMessage(
+      chatId,
+      `✅ *Reparación completada*\n\n📄 Documentos separados: *${docsReparados}*\n👤 Clientes nuevos recuperados: *${nuevosClientes}*\n\n💡 Ahora corre */sincronizar_todo* para conectarlos con el inventario.`,
+      { parse_mode: "Markdown" }
+    );
+  } catch (error) {
+    logErr("reparar_colisiones", error);
+    return bot.sendMessage(chatId, "⚠️ Ocurrió un error reparando. Revise los logs del servidor.");
+  }
+});
+
+// ===============================
 // COMANDOS RENOVACIONES
 // ===============================
 bot.onText(/\/renovaciones(?:\s+(.+))?/i, async (msg, match) => {
