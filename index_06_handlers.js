@@ -2269,7 +2269,15 @@ bot.onText(/\/sincronizar_todo/i, async (msg) => {
 const VENDOR_DEFAULT_PHONES_TG = new Set(["9687724", "88501036", "32174922", "94306551", "87989267"]);
 
 async function detectarColisionesTelefono() {
-  const snap = await db.collection("clientes").get();
+  // ✅ Nunca debe quedarse "mudo": si Firestore tarda más de 25s (problema de
+  // red, cuota, o el proceso reiniciándose por un deploy), se corta y avisa
+  // en vez de dejar al admin esperando sin saber qué pasó.
+  const TIMEOUT_MS = 25000;
+  const snap = await Promise.race([
+    db.collection("clientes").get(),
+    new Promise((_, reject) => setTimeout(() => reject(new Error("timeout_firestore_25s")), TIMEOUT_MS)),
+  ]);
+
   const colisiones = [];
 
   snap.forEach((doc) => {
@@ -2414,6 +2422,12 @@ bot.onText(/\/reparar_colisiones(?:\s+(confirmar))?/i, async (msg, match) => {
     );
   } catch (error) {
     logErr("reparar_colisiones", error);
+    if (String(error?.message || "").includes("timeout_firestore_25s")) {
+      return bot.sendMessage(
+        chatId,
+        "⚠️ Firestore no respondió en 25 segundos. Es probable que el bot se haya reiniciado a mitad de un deploy en Render. Revise el dashboard de Render (Logs / Events) para confirmar que el último deploy terminó en 'Live', y vuelva a intentar."
+      );
+    }
     return bot.sendMessage(chatId, "⚠️ Ocurrió un error reparando. Revise los logs del servidor.");
   }
 });
