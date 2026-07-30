@@ -2436,6 +2436,118 @@ bot.onText(/\/reparar_colisiones(?:\s+(confirmar))?/i, async (msg, match) => {
 });
 
 // ===============================
+// ✅ NUEVO: /fix_duplicados (confirmar)
+// El nombre ya estaba reservado en comandosReservados pero nunca se había
+// implementado. Limpia clientes duplicados dentro del arreglo "clientes" de
+// cada cuenta de inventario (ej: mismo nombre repetido con PIN "----" y
+// "0000" por el bug de identidad ya corregido en syncServicioEnInventario /
+// ajustarInventario). Deja UN solo registro por nombre, priorizando el que
+// tenga un PIN real (no vacío, no "0000"), y recalcula ocupados/disponibles.
+// ===============================
+bot.onText(/\/fix_duplicados(?:\s+(confirmar))?/i, async (msg, match) => {
+  if (!hasRuntimeLock()) return;
+  const chatId = msg.chat.id;
+  const userId = msg.from.id;
+
+  if (!(await safeIsAdminLocal(userId))) {
+    return bot.sendMessage(chatId, "⛔ Solo ADMIN puede ejecutar esto.");
+  }
+
+  const confirmar = !!(match && match[1]);
+  await bot.sendMessage(
+    chatId,
+    confirmar
+      ? "🔧 Limpiando clientes duplicados en el inventario..."
+      : "🔎 Revisando cuentas del inventario con clientes duplicados (no se guarda nada todavía)..."
+  );
+
+  try {
+    const snap = await db.collection("inventario").get();
+    const afectadas = [];
+
+    snap.forEach((doc) => {
+      const data = doc.data() || {};
+      const clientes = Array.isArray(data.clientes) ? data.clientes : [];
+      if (clientes.length < 2) return;
+      const porNombre = new Map();
+      for (const c of clientes) {
+        const key = normalizeLooseText(c?.nombre || "");
+        if (!key) continue;
+        if (!porNombre.has(key)) porNombre.set(key, []);
+        porNombre.get(key).push(c);
+      }
+      const grupos = [...porNombre.values()].filter((arr) => arr.length > 1);
+      if (grupos.length) afectadas.push({ ref: doc.ref, data, grupos, totalActual: clientes.length });
+    });
+
+    if (!afectadas.length) {
+      return bot.sendMessage(chatId, "✅ No encontré clientes duplicados en ninguna cuenta del inventario.");
+    }
+
+    if (!confirmar) {
+      let txt = `⚠️ Encontré ${afectadas.length} cuenta(s) del inventario con clientes duplicados:\n\n`;
+      afectadas.slice(0, 15).forEach((a, i) => {
+        const plat = a.data.plataforma || "?";
+        const correo = a.data.correo || a.data.ident || a.ref.id;
+        txt += `${i + 1}) ${plat} — ${correo} (${a.totalActual} perfiles guardados)\n`;
+        a.grupos.forEach((g) => { txt += `   • ${g[0].nombre || "Sin nombre"} × ${g.length}\n`; });
+        txt += `\n`;
+      });
+      if (afectadas.length > 15) txt += `…y ${afectadas.length - 15} cuenta(s) más.\n\n`;
+      txt += `Nada se ha modificado todavía. Se va a dejar 1 solo registro por cliente (el que tenga PIN real, si hay). Para aplicar, envía:\n/fix_duplicados confirmar`;
+      return bot.sendMessage(chatId, txt);
+    }
+
+    let cuentasReparadas = 0;
+    let perfilesEliminados = 0;
+
+    for (const a of afectadas) {
+      const clientes = Array.isArray(a.data.clientes) ? a.data.clientes : [];
+      const porNombre = new Map();
+      const sinNombre = [];
+      for (const c of clientes) {
+        const key = normalizeLooseText(c?.nombre || "");
+        if (!key) { sinNombre.push(c); continue; }
+        if (!porNombre.has(key)) porNombre.set(key, []);
+        porNombre.get(key).push(c);
+      }
+      const limpios = [...sinNombre];
+      for (const grupo of porNombre.values()) {
+        if (grupo.length === 1) { limpios.push(grupo[0]); continue; }
+        const pinValido = (c) => c?.pin && String(c.pin).trim() && String(c.pin).trim() !== "0000";
+        const mejor = grupo.find(pinValido) || grupo.find((c) => c?.pin && String(c.pin).trim()) || grupo[0];
+        limpios.push(mejor);
+        perfilesEliminados += grupo.length - 1;
+      }
+      const clientesFinal = limpios.map((c, i) => ({ ...c, slot: i + 1 }));
+      const capacidad = Number(a.data.capacidad || a.data.total || 0) || clientesFinal.length || 1;
+      const ocupados = clientesFinal.length;
+      const disponibles = Math.max(0, capacidad - ocupados);
+      await a.ref.set(
+        {
+          clientes: clientesFinal,
+          ocupados,
+          disponibles,
+          disp: disponibles,
+          estado: disponibles === 0 ? "llena" : "activa",
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+      cuentasReparadas++;
+    }
+
+    return bot.sendMessage(
+      chatId,
+      `✅ Limpieza completada\n\n📄 Cuentas reparadas: ${cuentasReparadas}\n👤 Perfiles duplicados eliminados: ${perfilesEliminados}`
+    );
+  } catch (error) {
+    logErr("fix_duplicados", error);
+    return bot.sendMessage(chatId, "⚠️ Ocurrió un error limpiando duplicados. Revise los logs del servidor.");
+  }
+});
+
+// ===============================
 // ✅ NUEVO: /buscar_raw <texto>
 // Diagnóstico sin ningún filtro inteligente: recorre TODA la colección
 // "clientes" y muestra cualquier documento cuyo contenido (en JSON) incluya
@@ -4948,6 +5060,17 @@ bot.on("message", async (msg) => {
         const ref = found.ref;
         const correoData = found.data || {};
         let clientes = Array.isArray(correoData.clientes) ? correoData.clientes.slice() : [];
+        // ⚠️ FIX: esta alta manual no revisaba si el nombre ya estaba en la
+        // cuenta, así que agregar de nuevo a alguien que ya estaba creaba un
+        // duplicado. Ahora, si ya existe, se le actualiza el PIN en vez de
+        // crear otro registro.
+        const idxExiste = clientes.findIndex((c) => normalizeLooseText(c?.nombre || "") === normalizeLooseText(p.nombre));
+        if (idxExiste !== -1) {
+          clientes[idxExiste] = { ...clientes[idxExiste], pin: t };
+          await ref.set({ clientes, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+          await bot.sendMessage(chatId, `⚠️ *${escMD(p.nombre)}* ya estaba en esta cuenta — actualicé su PIN a *${escMD(t)}* en vez de duplicarlo.`, { parse_mode: "Markdown" });
+          return mostrarPanelCorreo(chatId, p.plataforma, p.correo);
+        }
         const capacidad = getCapacidadCorreo(correoData, p.plataforma);
         const disponiblesActual = Math.max(0, capacidad - clientes.length);
         if (disponiblesActual <= 0) return bot.sendMessage(chatId, "❌ Esta cuenta ya está llena.");

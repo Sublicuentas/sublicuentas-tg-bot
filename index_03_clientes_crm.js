@@ -321,9 +321,18 @@ async function syncServicioEnInventario({ clienteNombre = "", plataforma = "", c
   let clientes = Array.isArray(data.clientes) ? data.clientes.slice() : [];
 
   const pinNorm = String(pin || "").trim();
-  const yaExiste = clientes.some((x) => normTxt(x?.nombre || "") === normTxt(clienteNombre) && String(x?.pin || "") === pinNorm);
-  if (yaExiste) {
+  // ⚠️ FIX: la identidad del cliente es SOLO el nombre. Antes también se
+  // comparaba el PIN exacto, así que si el PIN llegaba distinto al guardado
+  // (ej: "" vs "0000"), el cliente se consideraba nuevo y se duplicaba en el
+  // arreglo — por eso cada /sincronizar_todo iba dejando copias. Ahora, si ya
+  // existe por nombre, se actualiza su PIN en el mismo registro.
+  const idxExiste = clientes.findIndex((x) => normTxt(x?.nombre || "") === normTxt(clienteNombre));
+  if (idxExiste !== -1) {
     const patch = { updatedAt: admin.firestore.FieldValue.serverTimestamp() };
+    if (pinNorm && String(clientes[idxExiste].pin || "") !== pinNorm) {
+      clientes[idxExiste] = { ...clientes[idxExiste], pin: pinNorm };
+      patch.clientes = clientes;
+    }
     const claveNorm = String(clave || "").trim();
     if (claveNorm && requiereClaveLocal(plat) && (!data.clave || String(data.clave || "").toLowerCase() === "sin clave")) patch.clave = claveNorm;
     if (Object.keys(patch).length > 1) await ref.set(patch, { merge: true });
@@ -354,7 +363,18 @@ async function removeServicioDeInventario({ clienteNombre = "", plataforma = "",
 
   const { ref, data } = found;
   let clientes = Array.isArray(data.clientes) ? data.clientes.slice() : [];
-  const idx = clientes.findIndex((x) => normTxt(x?.nombre || "") === normTxt(clienteNombre) && String(x?.pin || "") === String(pin || ""));
+  // ⚠️ FIX: antes exigía nombre + PIN exactos, así que si el PIN guardado no
+  // coincidía, la eliminación fallaba en silencio (removed:false) y el
+  // cliente parecía "no borrarse" o "volver" en el próximo sync. Ahora intenta
+  // nombre+PIN primero (más preciso), y si no hay match cae a nombre solo.
+  const pinFiltro = String(pin || "").trim();
+  let idx = -1;
+  if (pinFiltro) {
+    idx = clientes.findIndex((x) => normTxt(x?.nombre || "") === normTxt(clienteNombre) && String(x?.pin || "") === pinFiltro);
+  }
+  if (idx === -1) {
+    idx = clientes.findIndex((x) => normTxt(x?.nombre || "") === normTxt(clienteNombre));
+  }
   if (idx === -1) return { ok: true, removed: false };
 
   clientes.splice(idx, 1);
