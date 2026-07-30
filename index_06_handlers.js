@@ -4363,7 +4363,7 @@ Revise que el correo exista en inventario con esa plataforma o coloque la clave 
       });
       const kb = list.slice(0, 20).map((x, i) => [{
         text: `${i + 1}) ${(x.nombrePerfil || "Sin nombre").slice(0, 22)} • ${humanPlataforma(x.plataforma || "")}`,
-        callback_data: `cli:view:${x.clientId || x.id || ""}`,
+        callback_data: `vend:cli:${x.clientId || x.id || ""}`,
       }]);
       kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
       return upsertPanel(chatId, txt, kb);
@@ -4386,7 +4386,7 @@ Revise que el correo exista en inventario con esa plataforma o coloque la clave 
       });
       const kb = list.slice(0, 20).map((x, i) => [{
         text: `${i + 1}) ${(x.nombrePerfil || "Sin nombre").slice(0, 22)} • ${humanPlataforma(x.plataforma || "")}`,
-        callback_data: `cli:view:${x.clientId || x.id || ""}`,
+        callback_data: `vend:cli:${x.clientId || x.id || ""}`,
       }]);
       kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
       return upsertPanel(chatId, txt, kb);
@@ -4471,7 +4471,7 @@ Revise que el correo exista en inventario con esa plataforma o coloque la clave 
       });
       const kb = misVencidos.slice(0, 20).map((x, i) => [{
         text: `${i + 1}) ${(x.nombrePerfil || "Sin nombre").slice(0, 24)} • ${x.atrasoDias}d`,
-        callback_data: `cli:view:${x.clientId}`,
+        callback_data: `vend:cli:${x.clientId}`,
       }]);
       kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
       return upsertPanel(chatId, txt, kb);
@@ -5489,7 +5489,7 @@ async function enviarListaRenovacionesVendedor7AM(chatId, vendedorNombre) {
     txt += `*${i + 1}.* ${iconPlataforma(x.plataforma || "")} ${escMD(x.nombrePerfil || "Sin nombre")}\n`;
     txt += `   📱 ${escMD(x.telefono || "-")} · 💰 ${escMD(Number(x.precio || 0).toFixed(2))} Lps\n`;
   });
-  const kb = list.slice(0, 20).map((x, i) => [{ text: `${i + 1}) ${(x.nombrePerfil || "Sin nombre").slice(0, 22)} • ${humanPlataforma(x.plataforma || "")}`, callback_data: `cli:view:${x.clientId || x.id || ""}` }]);
+  const kb = list.slice(0, 20).map((x, i) => [{ text: `${i + 1}) ${(x.nombrePerfil || "Sin nombre").slice(0, 22)} • ${humanPlataforma(x.plataforma || "")}`, callback_data: `vend:cli:${x.clientId || x.id || ""}` }]);
   try { await bot.sendMessage(String(chatId), txt, { parse_mode: "Markdown", reply_markup: { inline_keyboard: kb } }); return true; } catch(e) { return false; }
 }
 

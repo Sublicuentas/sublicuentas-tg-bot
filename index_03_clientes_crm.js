@@ -510,15 +510,20 @@ async function getCliente(clientId) {
   const id = String(clientId || "").trim();
   if (!id) return null;
 
+  // ⚠️ TTL corto a propósito (no el de 5 min por defecto del prefijo "clientes").
+  // Sublichat HQ (panel web en Vercel) escribe renovaciones directo en Firestore
+  // desde OTRO proceso — no tiene forma de avisarle a este bot que invalide su
+  // caché en memoria. Con 5 min, el bot seguía mostrando la fecha vieja y
+  // renovando sobre datos obsoletos aunque el panel ya hubiera guardado el cambio.
   const cacheKey = `clientes:doc:${id}`;
   const cached = cacheGet(cacheKey);
   if (cached !== null) return cached === "__null__" ? null : cached;
 
   const doc = await db.collection(CLIENTES_COLLECTION).doc(id).get();
-  if (!doc.exists) { cacheSet(cacheKey, "__null__"); return null; }
+  if (!doc.exists) { cacheSet(cacheKey, "__null__", 10 * 1000); return null; }
 
   const result = { id: doc.id, ...(doc.data() || {}) };
-  cacheSet(cacheKey, result);
+  cacheSet(cacheKey, result, 10 * 1000);
   return result;
 }
 
