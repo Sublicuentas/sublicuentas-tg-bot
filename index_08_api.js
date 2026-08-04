@@ -18,8 +18,8 @@
    
    ✅ v2 CAMBIOS:
    - Usa módulo compartido index_09_api_auth (elimina duplicación)
-   - Detecta si handlers.js ya abrió HTTP KEEPALIVE
-   - NO hay conflicto de puertos
+   - Unifica KEEPALIVE, /api y /rev en un solo servidor Express
+   - Evita el conflicto de puertos con handlers.js
    - Panel revendedores montado en /rev (mismo puerto, rutas diferentes)
 */
 
@@ -402,18 +402,13 @@ app.post("/rev/admin/impersonate", revAdminAuth, async (req, res) => {
 app.use("/api", (_req, res) => fail(res, 404, "Ruta no encontrada"));
 
 // ===============================
-// ARRANQUE — abre puerto SOLO si handlers NO lo hizo
+// ARRANQUE — un único servidor HTTP para health, /api y /rev
 // ===============================
-// ✅ handlers.js abre HTTP KEEPALIVE en global.__SUBLICUENTAS_KEEPALIVE_SERVER__
-// Si existe, esta API se monta en app.listen pero SOLO si no hay conflicto
-
-if (!global.__SUBLICUENTAS_KEEPALIVE_SERVER__ && !global.__SUBLICUENTAS_API_SERVER__) {
+if (!global.__SUBLICUENTAS_API_SERVER__) {
   global.__SUBLICUENTAS_API_SERVER__ = app.listen(PORT, () => {
     console.log("🌐 API REST Sublicuentas activa en puerto", PORT);
     if (!API_TOKEN) console.warn("⚠️ Falta API_ADMIN_TOKEN — la API rechazará todo hasta configurarlo.");
   });
-} else if (!global.__SUBLICUENTAS_API_SERVER__) {
-  console.log("ℹ️ HTTP KEEPALIVE ya activo (handlers.js). API monta en mismo puerto.");
 }
 
 module.exports = { app };

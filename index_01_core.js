@@ -427,7 +427,7 @@ if (!global.__SUBLICUENTAS_BOT_EVENTS__) {
 // ===============================
 console.log("✅ ExcelJS cargado");
 console.log(`✅ FIREBASE PROJECT: ${FIREBASE_PROJECT_ID}`);
-console.log(`🌐 HTTP KEEPALIVE activo en puerto ${PORT}`);
+console.log(`🌐 Puerto HTTP configurado: ${PORT}`);
 console.log(`📩 Cuentas IMAP cargadas: ${EMAIL_ACCOUNTS.length}`);
 console.log(`🧠 CORE INSTANCE: ${INSTANCE_ID}`);
 console.log(`🗄️ Caché en memoria activo (admins:90s, revendedores:90s, clientes:120s)`);

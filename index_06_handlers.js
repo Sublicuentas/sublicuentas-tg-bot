@@ -1,5 +1,5 @@
 /* ✅ SUBLICUENTAS TG BOT — PARTE 6/6 FINAL OPTIMIZADA
-   HANDLERS / COMANDOS / CALLBACKS / MESSAGE / AUTOTXT / HARDEN / HTTP
+   HANDLERS / COMANDOS / CALLBACKS / MESSAGE / AUTOTXT / HARDEN
    -------------------------------------------------------------------
    ✅ MEJORAS INCLUIDAS:
    - BÚSQUEDA: texto libre activa búsqueda directa para admins
@@ -13,7 +13,6 @@
    - COMANDOS SIN SLASH: Atajos de texto directo
 */
 
-const http = require("http");
 
 const {
   bot,
@@ -26,7 +25,6 @@ const {
   SUPER_ADMIN,
   hardStopBot,
   releaseRuntimeLock,
-  getCoreHealth,
   cacheInvalidatePrefix,
 } = require("./index_01_core");
 
@@ -5672,20 +5670,5 @@ process.on("SIGTERM", async () => { try { hardStopBot(); releaseRuntimeLock(); }
 
 console.log("✅ index_06_handlers actualizado");
 
-// ===============================
-// HTTP KEEPALIVE FINAL
-// ===============================
-const PORT = process.env.PORT || 10000;
-
-if (!global.__SUBLICUENTAS_HTTP_SERVER__) {
-  global.__SUBLICUENTAS_HTTP_SERVER__ = http
-    .createServer((req, res) => {
-      if (req.url === "/health") {
-        res.writeHead(200, { "Content-Type": "application/json" });
-        return res.end(JSON.stringify(getCoreHealth()));
-      }
-      res.writeHead(200, { "Content-Type": "text/plain" });
-      res.end("OK");
-    })
-    .listen(PORT, () => { console.log("🌐 HTTP KEEPALIVE activo en puerto", PORT); });
-             }
+// El servidor HTTP y /health los abre index_08_api.js en el mismo Express.
+// Así el bot no intenta ocupar PORT dos veces y las rutas /api y /rev quedan activas.
