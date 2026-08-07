@@ -119,16 +119,68 @@ function getAccessTypeLabelLocal(plataforma = "") {
   return "Correo";
 }
 
+function recordIdLocal(prefix = "id") {
+  return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function perfilesServicioLocal(servicio = {}, titular = "") {
+  const lista = Array.isArray(servicio.perfiles) && servicio.perfiles.length
+    ? servicio.perfiles
+    : [{
+        perfilId: servicio.perfilId || "",
+        nombre: servicio.nombrePerfil || servicio.perfil || titular || "Cliente",
+        perfil: servicio.perfil || servicio.nombrePerfil || titular || "",
+        correo: servicio.correo || "",
+        clave: servicio.clave || servicio.password || servicio.pass || "",
+        pin: servicio.pinPerfil || servicio.pin_perfil || servicio.perfilPin || servicio.pin || ""
+      }];
+  return lista.map((p, index) => {
+    const nombre = String(p?.nombre || p?.nombrePerfil || p?.cliente || p?.perfil || titular || `Perfil ${index + 1}`).trim();
+    return {
+      perfilId: String(p?.perfilId || p?.id || ""),
+      nombre,
+      perfil: String(p?.perfil || p?.nombrePerfil || p?.nombre || nombre).trim(),
+      correo: String(p?.correo ?? servicio.correo ?? "").trim(),
+      clave: String(p?.clave ?? p?.password ?? p?.pass ?? servicio.clave ?? servicio.password ?? servicio.pass ?? "").trim(),
+      pin: String(p?.pinPerfil ?? p?.pin_perfil ?? p?.perfilPin ?? p?.pin ?? (index === 0 ? (servicio.pinPerfil ?? servicio.pin_perfil ?? servicio.perfilPin ?? servicio.pin ?? "") : "")).trim()
+    };
+  });
+}
+
+function cantidadPerfilesServicioLocal(servicio = {}, titular = "") {
+  return perfilesServicioLocal(servicio, titular).length;
+}
+
+function servicioParaPerfilLocal(servicio = {}, perfil = {}, titular = "") {
+  const p = perfil || {};
+  return {
+    ...servicio,
+    nombrePerfil: p.nombre || titular || servicio.nombrePerfil || "",
+    perfil: p.perfil || p.nombre || servicio.perfil || "",
+    correo: p.correo ?? servicio.correo ?? "",
+    clave: p.clave ?? servicio.clave ?? "",
+    pin: p.pin ?? "",
+    pinPerfil: p.pin ?? "",
+    perfiles: undefined
+  };
+}
+
 function getClaveServicioLocal(servicio = {}, plataforma = "") {
   const p = normalizarPlataforma(plataforma || servicio.plataforma || "");
-  const directa = String(servicio.clave || servicio.password || servicio.pass || "").trim();
+  const principal = Array.isArray(servicio.perfiles) && servicio.perfiles.length ? servicio.perfiles[0] || {} : {};
+  const directa = String(principal.clave || principal.password || principal.pass || servicio.clave || servicio.password || servicio.pass || "").trim();
   if (directa) return directa;
   if (requiereClaveLocal(p) && !requierePinLocal(p)) return String(servicio.pin || "").trim();
   return "";
 }
 
 function extraerPinServicioLocal(servicio = {}) {
+  const principal = Array.isArray(servicio.perfiles) && servicio.perfiles.length ? servicio.perfiles[0] || {} : {};
   const valores = [
+    principal.pinPerfil,
+    principal.pin_perfil,
+    principal.perfilPin,
+    principal.pin,
     servicio.pin,
     servicio.pinPerfil,
     servicio.pin_perfil,
@@ -161,12 +213,27 @@ function getPinServicioLocal(servicio = {}, plataforma = "") {
 function renderCredencialesServicioLocal(servicio = {}, markdown = true, indent = "") {
   const p = normalizarPlataforma(servicio.plataforma || "");
   const esc = markdown ? escMD : (v = "") => String(v ?? "");
+  const perfiles = perfilesServicioLocal(servicio, servicio.nombrePerfil || servicio.titular || "");
+  if (perfiles.length > 1) {
+    let multi = `${indent}👥 ${markdown ? "*Perfiles incluidos:*" : "Perfiles incluidos:"} ${perfiles.length}\n`;
+    perfiles.forEach((perfil, index) => {
+      const individual = servicioParaPerfilLocal(servicio, perfil, servicio.nombrePerfil || servicio.titular || "");
+      multi += `${indent}${index + 1}. ${markdown ? `*${esc(perfil.nombre || `Perfil ${index + 1}`)}*` : (perfil.nombre || `Perfil ${index + 1}`)}\n`;
+      const identLabel = getIdentLabelLocal(p);
+      const identIcon = identLabel === "Usuario" ? "👤" : "📧";
+      multi += `${indent}   ${identIcon} ${markdown ? `*${esc(identLabel)}:*` : `${identLabel}:`} ${esc(individual.correo || "-")}\n`;
+      if (requiereClaveLocal(p)) multi += `${indent}   🔑 ${markdown ? "*Clave:*" : "Clave:"} ${esc(getClaveServicioLocal(individual, p) || "-")}\n`;
+      if (requierePinLocal(p)) multi += `${indent}   🔐 ${markdown ? "*PIN:*" : "PIN:"} ${esc(getPinServicioLocal(individual, p) || "-")}\n`;
+    });
+    return multi;
+  }
+  const individual = servicioParaPerfilLocal(servicio, perfiles[0] || {}, servicio.nombrePerfil || servicio.titular || "");
   const identLabel = getIdentLabelLocal(p);
   const identIcon = identLabel === "Usuario" ? "👤" : "📧";
   let out = "";
-  out += `${indent}${identIcon} ${markdown ? `*${esc(identLabel)}:*` : `${identLabel}:`} ${esc(servicio.correo || "-")}\n`;
-  if (requiereClaveLocal(p)) out += `${indent}🔑 ${markdown ? "*Clave:*" : "Clave:"} ${esc(getClaveServicioLocal(servicio, p) || "-")}\n`;
-  if (requierePinLocal(p)) out += `${indent}🔐 ${markdown ? "*PIN:*" : "PIN:"} ${esc(getPinServicioLocal(servicio, p) || "-")}\n`;
+  out += `${indent}${identIcon} ${markdown ? `*${esc(identLabel)}:*` : `${identLabel}:`} ${esc(individual.correo || "-")}\n`;
+  if (requiereClaveLocal(p)) out += `${indent}🔑 ${markdown ? "*Clave:*" : "Clave:"} ${esc(getClaveServicioLocal(individual, p) || "-")}\n`;
+  if (requierePinLocal(p)) out += `${indent}🔐 ${markdown ? "*PIN:*" : "PIN:"} ${esc(getPinServicioLocal(individual, p) || "-")}\n`;
   return out;
 }
 
@@ -250,6 +317,7 @@ function resumenGeneralCliente(servicios = []) {
     total, proxima: proxima || "Sin fecha",
     estadoEmoji: worst.emoji, estadoTexto: rows.length ? worst.texto : "Sin servicios",
     activos: rows.length,
+    perfiles: rows.reduce((sum, s) => sum + cantidadPerfilesServicioLocal(s), 0),
   };
 }
 
@@ -387,6 +455,91 @@ async function removeServicioDeInventario({ clienteNombre = "", plataforma = "",
   return { ok: true, removed: true };
 }
 
+function normalizarCompraLocal(servicio = {}, titular = "", anterior = {}) {
+  const plat = normalizarPlataforma(servicio.plataforma || anterior.plataforma || "");
+  const tienePerfiles = Array.isArray(servicio.perfiles);
+  let base;
+  if (tienePerfiles && servicio.perfiles.length) base = servicio.perfiles;
+  else if (!tienePerfiles && Array.isArray(anterior.perfiles) && anterior.perfiles.length) base = anterior.perfiles;
+  else base = perfilesServicioLocal({ ...anterior, ...servicio }, titular);
+  const prev = perfilesServicioLocal(anterior, titular);
+  const perfiles = base.map((raw = {}, index) => {
+    const previo = prev.find((p) => p.perfilId && p.perfilId === String(raw.perfilId || raw.id || "")) || prev[index] || {};
+    const nombre = String(raw.nombre || raw.nombrePerfil || raw.cliente || raw.perfil || previo.nombre || titular || `Perfil ${index + 1}`).trim();
+    const correoTop = index === 0 && servicio.correo != null ? servicio.correo : undefined;
+    const claveTop = index === 0 && servicio.clave != null ? servicio.clave : undefined;
+    const pinTop = index === 0 && (servicio.pin != null || servicio.pinPerfil != null) ? (servicio.pinPerfil ?? servicio.pin) : undefined;
+    return {
+      perfilId: String(raw.perfilId || raw.id || previo.perfilId || recordIdLocal("perfil")),
+      nombre,
+      perfil: String(raw.perfil || raw.nombrePerfil || raw.nombre || previo.perfil || nombre).trim(),
+      correo: normalizeIdentByPlatformLocal(plat, raw.correo ?? correoTop ?? previo.correo ?? servicio.correo ?? anterior.correo ?? ""),
+      clave: requiereClaveLocal(plat) ? String(raw.clave ?? raw.password ?? raw.pass ?? claveTop ?? previo.clave ?? servicio.clave ?? anterior.clave ?? "").trim() : "",
+      pin: requierePinLocal(plat) ? String(raw.pinPerfil ?? raw.pin_perfil ?? raw.perfilPin ?? raw.pin ?? pinTop ?? previo.pin ?? "").trim() : ""
+    };
+  });
+  const principal = perfiles[0] || {};
+  return {
+    ...anterior,
+    ...servicio,
+    compraId: String(servicio.compraId || anterior.compraId || recordIdLocal("compra")),
+    modalidad: perfiles.length > 1 ? "multiperfil" : "individual",
+    plataforma: plat,
+    correo: principal.correo || "",
+    clave: principal.clave || "",
+    pin: principal.pin || "",
+    perfil: principal.perfil || principal.nombre || titular || "",
+    perfiles
+  };
+}
+
+function validarCompraLocal(compra = {}) {
+  const plat = normalizarPlataforma(compra.plataforma || "");
+  if (!esPlataformaValida(plat)) throw new Error("Plataforma inválida.");
+  const perfiles = perfilesServicioLocal(compra, "");
+  if (!perfiles.length) throw new Error("Agregue al menos un perfil.");
+  perfiles.forEach((p, index) => {
+    if (!String(p.nombre || "").trim()) throw new Error(`Falta el nombre del perfil ${index + 1}.`);
+    if (!validateIdentByPlatformLocal(plat, p.correo || "")) throw new Error(`${getIdentLabelLocal(plat)} inválido en ${p.nombre || `perfil ${index + 1}`}.`);
+    if (requiereClaveLocal(plat) && !String(p.clave || "").trim()) throw new Error(`Falta la clave de ${p.nombre || `perfil ${index + 1}`}.`);
+    if (requierePinLocal(plat) && !String(p.pin || "").trim()) throw new Error(`Falta el PIN individual de ${p.nombre || `perfil ${index + 1}`}.`);
+  });
+}
+
+async function sincronizarCompraInventarioLocal(anterior, nuevo, titular = "") {
+  const antes = anterior ? perfilesServicioLocal(anterior, titular) : [];
+  const despues = nuevo ? perfilesServicioLocal(nuevo, titular) : [];
+  const platAntes = normalizarPlataforma(anterior?.plataforma || nuevo?.plataforma || "");
+  const platNuevo = normalizarPlataforma(nuevo?.plataforma || anterior?.plataforma || "");
+  const key = (p, plat) => `${plat}|${normalizeIdentByPlatformLocal(plat, p.correo || "")}|${normTxt(p.nombre || "")}`;
+  const nuevas = new Set(despues.map((p) => key(p, platNuevo)));
+  const removidos = [];
+  const agregados = [];
+
+  try {
+    for (const p of antes) {
+      if (!nuevas.has(key(p, platAntes))) {
+        const result = await removeServicioDeInventario({ clienteNombre: p.nombre || titular, plataforma: platAntes, correo: p.correo, pin: p.pin });
+        if (result?.removed) removidos.push(p);
+      }
+    }
+    for (const p of despues) {
+      const result = await syncServicioEnInventario({ clienteNombre: p.nombre || titular, plataforma: platNuevo, correo: p.correo, clave: p.clave, pin: p.pin });
+      if (result?.reason === "full") throw new Error(`La cuenta de ${p.nombre || "ese perfil"} ya está llena.`);
+      if (result?.added) agregados.push(p);
+    }
+    return { ok: true, perfiles: despues.length, agregados: agregados.length, removidos: removidos.length };
+  } catch (error) {
+    for (const p of agregados) {
+      try { await removeServicioDeInventario({ clienteNombre: p.nombre || titular, plataforma: platNuevo, correo: p.correo, pin: p.pin }); } catch (_) {}
+    }
+    for (const p of removidos) {
+      try { await syncServicioEnInventario({ clienteNombre: p.nombre || titular, plataforma: platAntes, correo: p.correo, clave: p.clave, pin: p.pin }); } catch (_) {}
+    }
+    throw error;
+  }
+}
+
 // ===============================
 // ✅ HISTORIAL REAL DE CLIENTE
 // ===============================
@@ -458,10 +611,11 @@ async function generarHistorialTXT(clientId) {
   txt += `Estado actual: ${resumen.estadoTexto}\n`;
   txt += `Total mensual actual: ${Number(resumen.total || 0).toFixed(2)} Lps\n`;
   txt += `Proxima renovacion: ${resumen.proxima}\n`;
-  txt += `Servicios activos: ${servicios.length}\n\n`;
+  txt += `Compras activas: ${servicios.length}\n`;
+  txt += `Perfiles activos: ${resumen.perfiles}\n\n`;
 
   txt += "============================\n";
-  txt += "SERVICIOS ACTUALES\n";
+  txt += "COMPRAS / SERVICIOS ACTUALES\n";
   txt += "============================\n";
 
   if (!servicios.length) {
@@ -665,6 +819,7 @@ async function buscarClienteRobusto(query = "") {
       ...servicios.flatMap((s) => [
         normTxt(s?.correo || ""), normTxt(s?.plataforma || ""),
         normTxt(humanPlataforma(s?.plataforma || "")), String(s?.clave || "").trim().toLowerCase(), String(s?.pin || "").trim().toLowerCase(),
+        ...perfilesServicioLocal(s, x.nombrePerfil || "").flatMap((p) => [normTxt(p.nombre), normTxt(p.perfil), normTxt(p.correo), String(p.clave || "").toLowerCase(), String(p.pin || "").toLowerCase()]),
       ]),
     ];
 
@@ -691,7 +846,7 @@ function clienteResumenTXT(c = {}) {
   let txt = "CRM CLIENTE\n";
   txt += `Nombre: ${nombre}\nTelefono: ${telefono}\nVendedor: ${vendedor}\n`;
   txt += `Estado general: ${resumen.estadoTexto}\nTotal mensual: ${Number(resumen.total || 0).toFixed(2)} Lps\n`;
-  txt += `Proxima renovacion: ${resumen.proxima}\nServicios activos: ${servicios.length}\n\nSERVICIOS\n`;
+  txt += `Proxima renovacion: ${resumen.proxima}\nCompras activas: ${servicios.length}\nPerfiles activos: ${resumen.perfiles}\n\nCOMPRAS / SERVICIOS\n`;
 
   if (!servicios.length) {
     txt += "(sin servicios)\n";
@@ -720,7 +875,7 @@ function renderFichaClienteMarkdown(c = {}) {
   txt += `📊 *Estado general:* ${resumen.estadoEmoji} ${escMD(resumen.estadoTexto)}\n`;
   txt += `💰 *Total mensual:* ${escMD(`${Number(resumen.total || 0).toFixed(2)} Lps`)}\n`;
   txt += `📅 *Próxima renovación:* ${escMD(resumen.proxima)}\n`;
-  txt += `🧩 *Servicios activos:* ${escMD(String(servicios.length))}\n\n*SERVICIOS*\n`;
+  txt += `🛒 *Compras activas:* ${escMD(String(servicios.length))}\n👥 *Perfiles activos:* ${escMD(String(resumen.perfiles))}\n\n*COMPRAS / SERVICIOS*\n`;
 
   if (!servicios.length) {
     txt += `\n_Sin servicios registrados._`;
@@ -828,7 +983,7 @@ async function menuListaServicios(chatId, clientId) {
     ]);
   }
 
-  const kb = servicios.map((s, i) => [{ text: safeBtnLabel(`${i + 1}) ${humanPlataforma(s.plataforma || "")} • ${s.correo || "-"}`), callback_data: `cli:serv:menu:${clientId}:${s.idxOriginal}` }]);
+  const kb = servicios.map((s, i) => [{ text: safeBtnLabel(`${i + 1}) ${humanPlataforma(s.plataforma || "")} • ${cantidadPerfilesServicioLocal(s, c.nombrePerfil || "")} perfil(es)`), callback_data: `cli:serv:menu:${clientId}:${s.idxOriginal}` }]);
   kb.push([{ text: "➕ Agregar servicio", callback_data: `cli:serv:add:${clientId}` }]);
   kb.push([{ text: "⬅️ Volver Ficha",   callback_data: `cli:view:${clientId}` }]);
   kb.push([{ text: "🏠 Inicio",          callback_data: "go:inicio" }]);
@@ -850,12 +1005,15 @@ async function menuServicio(chatId, clientId, idx) {
     `${iconPlataforma(s.plataforma || "")} *Plataforma:* ${escMD(humanPlataforma(s.plataforma || ""))}\n`;
 
   txt += renderCredencialesServicioLocal(s, true, "");
+  txt += `🛒 *Compra:* ${cantidadPerfilesServicioLocal(s, c.nombrePerfil || "")} perfil(es) · un solo precio\n`;
   txt += `💰 *Precio:* ${escMD(`${Number(s.precio || 0).toFixed(2)} Lps`)}\n`;
   txt += `📅 *Renovación:* ${escMD(s.fechaRenovacion || "-")}\n📊 *Estado:* ${est.emoji} ${escMD(est.texto)}`;
 
   const kb = [
+    [{ text: "👥 Gestionar perfiles", callback_data: `cli:prof:list:${clientId}:${idx}` }],
+    [{ text: "➕ Añadir perfil a esta compra", callback_data: `cli:prof:add:${clientId}:${idx}` }],
     [{ text: "📌 Cambiar plataforma", callback_data: `cli:serv:edit:plat:${clientId}:${idx}` }],
-    [{ text: `${getIdentLabelLocal(s.plataforma || "") === "Usuario" ? "👤" : "📧"} Cambiar ${getIdentLabelLocal(s.plataforma || "").toLowerCase()}`, callback_data: `cli:serv:edit:mail:${clientId}:${idx}` }],
+    [{ text: `${getIdentLabelLocal(s.plataforma || "") === "Usuario" ? "👤" : "📧"} Cambiar acceso del perfil 1`, callback_data: `cli:serv:edit:mail:${clientId}:${idx}` }],
   ];
 
   const credBtns = [];
@@ -864,9 +1022,51 @@ async function menuServicio(chatId, clientId, idx) {
   if (credBtns.length) kb.push(credBtns);
   kb.push([{ text: "💰 Cambiar precio", callback_data: `cli:serv:edit:precio:${clientId}:${idx}` }]);
   kb.push([{ text: "📅 Cambiar fecha renovación", callback_data: `cli:serv:edit:fecha:${clientId}:${idx}` }]);
-  kb.push([{ text: "🗑️ Eliminar servicio", callback_data: `cli:serv:del:ask:${clientId}:${idx}` }]);
+  kb.push([{ text: "🗑️ Eliminar compra completa", callback_data: `cli:serv:del:ask:${clientId}:${idx}` }]);
   kb.push([{ text: "⬅️ Volver Servicios", callback_data: `cli:serv:list:${clientId}` }, { text: "🏠 Inicio", callback_data: "go:inicio" }]);
 
+  return upsertPanel(chatId, txt, kb);
+}
+
+async function menuListaPerfilesServicio(chatId, clientId, idx) {
+  const c = await getCliente(clientId);
+  if (!c) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
+  const servicios = Array.isArray(c.servicios) ? c.servicios : [];
+  if (idx < 0 || idx >= servicios.length) return bot.sendMessage(chatId, "⚠️ Servicio inválido.");
+  const s = servicios[idx] || {};
+  const perfiles = perfilesServicioLocal(s, c.nombrePerfil || "");
+  const kb = perfiles.map((p, pidx) => [{
+    text: safeBtnLabel(`${pidx + 1}) ${p.nombre || "Perfil"} • ${p.correo || "sin acceso"}`),
+    callback_data: `cli:prof:menu:${clientId}:${idx}:${pidx}`
+  }]);
+  kb.push([{ text: "➕ Añadir otro perfil", callback_data: `cli:prof:add:${clientId}:${idx}` }]);
+  kb.push([{ text: "⬅️ Volver compra", callback_data: `cli:serv:menu:${clientId}:${idx}` }]);
+  return upsertPanel(chatId,
+    `👥 *PERFILES DE LA COMPRA*\n\n👤 Titular: *${escMD(c.nombrePerfil || "Cliente")}*\n📦 ${escMD(humanPlataforma(s.plataforma || ""))}\n💰 Un solo precio: *${escMD(Number(s.precio || 0).toFixed(2))} Lps*\n📅 Una sola renovación: *${escMD(s.fechaRenovacion || "-")}*\n\nSeleccione un perfil:`,
+    kb
+  );
+}
+
+async function menuPerfilServicio(chatId, clientId, idx, perfilIndex) {
+  const c = await getCliente(clientId);
+  if (!c) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
+  const s = Array.isArray(c.servicios) ? c.servicios[idx] : null;
+  if (!s) return bot.sendMessage(chatId, "⚠️ Servicio inválido.");
+  const perfiles = perfilesServicioLocal(s, c.nombrePerfil || "");
+  const p = perfiles[perfilIndex];
+  if (!p) return bot.sendMessage(chatId, "⚠️ Perfil inválido.");
+  const individual = servicioParaPerfilLocal(s, p, c.nombrePerfil || "");
+  let txt = `👤 *PERFIL ${perfilIndex + 1} DE ${perfiles.length}*\n\n🙍 *Nombre:* ${escMD(p.nombre || "-")}\n📦 *Plataforma:* ${escMD(humanPlataforma(s.plataforma || ""))}\n`;
+  txt += renderCredencialesServicioLocal(individual, true, "");
+  txt += `\n💰 _El precio pertenece a toda la compra: ${escMD(Number(s.precio || 0).toFixed(2))} Lps._`;
+  const kb = [
+    [{ text: "👤 Cambiar nombre", callback_data: `cli:prof:edit:name:${clientId}:${idx}:${perfilIndex}` }],
+    [{ text: `📧 Cambiar ${getIdentLabelLocal(s.plataforma || "").toLowerCase()}`, callback_data: `cli:prof:edit:mail:${clientId}:${idx}:${perfilIndex}` }]
+  ];
+  if (requiereClaveLocal(s.plataforma || "")) kb.push([{ text: "🔑 Cambiar clave", callback_data: `cli:prof:edit:key:${clientId}:${idx}:${perfilIndex}` }]);
+  if (requierePinLocal(s.plataforma || "")) kb.push([{ text: "🔐 Cambiar PIN individual", callback_data: `cli:prof:edit:pin:${clientId}:${idx}:${perfilIndex}` }]);
+  if (perfiles.length > 1) kb.push([{ text: "🗑️ Quitar este perfil", callback_data: `cli:prof:del:ask:${clientId}:${idx}:${perfilIndex}` }]);
+  kb.push([{ text: "⬅️ Volver perfiles", callback_data: `cli:prof:list:${clientId}:${idx}` }]);
   return upsertPanel(chatId, txt, kb);
 }
 
@@ -883,29 +1083,20 @@ async function addServicioTx(clientId, servicio = {}) {
 
   const c = doc.data() || {};
   const servicios = Array.isArray(c.servicios) ? c.servicios.slice() : [];
-  const plat = normalizarPlataforma(servicio.plataforma || "");
-  if (!esPlataformaValida(plat)) throw new Error("Plataforma inválida.");
-
-  const ident = normalizeIdentByPlatformLocal(plat, servicio.correo || "");
-  if (!validateIdentByPlatformLocal(plat, ident)) throw new Error(`${getIdentLabelLocal(plat)} inválido.`);
-
-  let clave = String(servicio.clave || servicio.password || servicio.pass || "").trim();
-  let pin = extraerPinServicioLocal(servicio);
-  if (!clave && requiereClaveLocal(plat) && !requierePinLocal(plat) && pin) { clave = pin; pin = ""; }
-  if (!requierePinLocal(plat)) pin = "";
-
+  const compra = normalizarCompraLocal(servicio, c.nombrePerfil || "", {});
+  const plat = compra.plataforma;
   const precio = Number(servicio.precio || 0);
   const fechaRenovacion = String(servicio.fechaRenovacion || "").trim();
-
-  if (requiereClaveLocal(plat) && !clave) throw new Error("Clave inválida.");
-  if (requierePinLocal(plat) && !pin) throw new Error("PIN inválido.");
   if (!Number.isFinite(precio) || precio <= 0) throw new Error("Precio inválido.");
   if (!isFechaDMY(fechaRenovacion)) throw new Error("Fecha de renovación inválida.");
+  compra.precio = precio;
+  compra.fechaRenovacion = fechaRenovacion;
+  validarCompraLocal(compra);
 
-  const sync = await syncServicioEnInventario({ clienteNombre: c.nombrePerfil || "", plataforma: plat, correo: ident, clave, pin });
-  if (sync.reason === "full") throw new Error("La cuenta en inventario ya está llena.");
+  const sync = await sincronizarCompraInventarioLocal(null, compra, c.nombrePerfil || "");
 
-  servicios.push({ plataforma: plat, correo: ident, clave, pin, precio, fechaRenovacion });
+  const servicioIndex = servicios.length;
+  servicios.push(compra);
   await ref.set({ servicios, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
 
   cacheInvalidatePrefix(`clientes:doc:${id}`);
@@ -913,16 +1104,16 @@ async function addServicioTx(clientId, servicio = {}) {
   // ✅ Registrar en historial
   await registrarEventoHistorial(id, {
     tipo: "servicio_agregado",
-    descripcion: `Se agregó ${humanPlataforma(plat)}`,
+    descripcion: `Se agregó ${humanPlataforma(plat)} con ${compra.perfiles.length} perfil(es) y un solo precio`,
     plataforma: plat,
-    correo: ident,
-    clave,
-    pin,
+    correo: compra.correo,
+    clave: compra.clave,
+    pin: compra.pin,
     precio,
     fechaRenovacion,
   });
 
-  return { ok: true, servicio: { plataforma: plat, correo: ident, clave, pin, precio, fechaRenovacion }, sync };
+  return { ok: true, servicio: compra, servicioIndex, totalPerfiles: compra.perfiles.length, sync };
 }
 
 async function patchServicio(clientId, idx, patch = {}) {
@@ -935,58 +1126,34 @@ async function patchServicio(clientId, idx, patch = {}) {
   if (idx < 0 || idx >= servicios.length) throw new Error("Servicio inválido.");
 
   const actual = servicios[idx] || {};
-  const previo = { plataforma: actual.plataforma, correo: actual.correo, clave: actual.clave, pin: getPinServicioLocal(actual, actual.plataforma || "") };
-  const siguiente = { ...actual, ...patch };
-  siguiente.plataforma = normalizarPlataforma(siguiente.plataforma || actual.plataforma || "");
-
-  if (!esPlataformaValida(siguiente.plataforma)) throw new Error("Plataforma inválida.");
-
-  if (Object.prototype.hasOwnProperty.call(siguiente, "correo")) {
-    siguiente.correo = normalizeIdentByPlatformLocal(siguiente.plataforma, siguiente.correo || "");
-    if (!validateIdentByPlatformLocal(siguiente.plataforma, siguiente.correo)) throw new Error(`${getIdentLabelLocal(siguiente.plataforma)} inválido.`);
-  }
-
-  if (Object.prototype.hasOwnProperty.call(siguiente, "clave")) siguiente.clave = String(siguiente.clave || "").trim();
-  siguiente.pin = extraerPinServicioLocal(siguiente);
-  if (!requierePinLocal(siguiente.plataforma)) {
-    if (requiereClaveLocal(siguiente.plataforma) && !String(siguiente.clave || "").trim()) {
-      const posibleClave = extraerPinServicioLocal(siguiente);
-      if (posibleClave) siguiente.clave = posibleClave;
-    }
-    siguiente.pin = "";
-  }
-
-  const credencialesTocadas =
-    Object.prototype.hasOwnProperty.call(patch, "plataforma") ||
-    Object.prototype.hasOwnProperty.call(patch, "correo") ||
-    Object.prototype.hasOwnProperty.call(patch, "clave") ||
-    Object.prototype.hasOwnProperty.call(patch, "pin");
-
-  // En edición no se bloquea el cambio de correo/plataforma por clave o PIN vacío.
-  // La validación estricta queda en addServicioTx; aquí se permite corregir fichas viejas
-  // y luego completar clave/PIN o traerlos desde inventario.
-  const soloCambioCorreo =
-    Object.prototype.hasOwnProperty.call(patch, "correo") &&
-    !Object.prototype.hasOwnProperty.call(patch, "plataforma") &&
-    !Object.prototype.hasOwnProperty.call(patch, "clave") &&
-    !Object.prototype.hasOwnProperty.call(patch, "pin");
-
-  if (!soloCambioCorreo && credencialesTocadas && Object.prototype.hasOwnProperty.call(patch, "clave") && requiereClaveLocal(siguiente.plataforma) && !getClaveServicioLocal(siguiente, siguiente.plataforma)) {
-    throw new Error("Clave inválida.");
-  }
-  if (!soloCambioCorreo && credencialesTocadas && Object.prototype.hasOwnProperty.call(patch, "pin") && requierePinLocal(siguiente.plataforma) && !getPinServicioLocal(siguiente, siguiente.plataforma)) {
-    throw new Error("PIN inválido.");
-  }
-  if (esSoloCorreoLocal(siguiente.plataforma)) { siguiente.clave = ""; siguiente.pin = ""; }
-
-  if (Object.prototype.hasOwnProperty.call(siguiente, "precio")) {
-    const n = Number(siguiente.precio || 0);
+  if (Object.prototype.hasOwnProperty.call(patch, "precio")) {
+    const n = Number(patch.precio || 0);
     if (!Number.isFinite(n) || n <= 0) throw new Error("Precio inválido.");
-    siguiente.precio = n;
+    patch.precio = n;
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "fechaRenovacion")) {
+    if (!isFechaDMY(String(patch.fechaRenovacion || ""))) throw new Error("Fecha inválida.");
   }
 
-  if (Object.prototype.hasOwnProperty.call(siguiente, "fechaRenovacion")) {
-    if (!isFechaDMY(String(siguiente.fechaRenovacion || ""))) throw new Error("Fecha inválida.");
+  const entrada = { ...actual, ...patch };
+  if (Array.isArray(actual.perfiles) && actual.perfiles.length && !Object.prototype.hasOwnProperty.call(patch, "perfiles")) {
+    entrada.perfiles = actual.perfiles.map((p) => ({ ...(p || {}) }));
+    const principal = entrada.perfiles[0];
+    if (Object.prototype.hasOwnProperty.call(patch, "correo")) principal.correo = patch.correo;
+    if (Object.prototype.hasOwnProperty.call(patch, "clave")) principal.clave = patch.clave;
+    if (Object.prototype.hasOwnProperty.call(patch, "pin") || Object.prototype.hasOwnProperty.call(patch, "pinPerfil")) principal.pin = patch.pinPerfil ?? patch.pin ?? "";
+  }
+  const siguiente = normalizarCompraLocal(entrada, c.nombrePerfil || "", actual);
+  if (!esPlataformaValida(siguiente.plataforma)) throw new Error("Plataforma inválida.");
+  const credencialesTocadas = ["plataforma", "correo", "clave", "pin", "pinPerfil", "perfiles"].some((k) => Object.prototype.hasOwnProperty.call(patch, k));
+  if (credencialesTocadas) validarCompraLocal(siguiente);
+
+  const firma = (servicio) => JSON.stringify({
+    plataforma: normalizarPlataforma(servicio?.plataforma || ""),
+    perfiles: perfilesServicioLocal(servicio, c.nombrePerfil || "").map((p) => ({ nombre: normTxt(p.nombre), correo: p.correo, clave: p.clave, pin: p.pin }))
+  });
+  if (firma(actual) !== firma(siguiente)) {
+    await sincronizarCompraInventarioLocal(actual, siguiente, c.nombrePerfil || "");
   }
 
   servicios[idx] = siguiente;
@@ -1023,18 +1190,134 @@ async function patchServicio(clientId, idx, patch = {}) {
     });
   }
 
-  const cambioInventario =
-    normalizarPlataforma(previo.plataforma || "") !== normalizarPlataforma(siguiente.plataforma || "") ||
-    String(previo.correo || "") !== String(siguiente.correo || "") ||
-    String(previo.pin || "") !== String(siguiente.pin || "") ||
-    String(previo.clave || "") !== String(siguiente.clave || "");
-
-  if (cambioInventario) {
-    try { await removeServicioDeInventario({ clienteNombre: c.nombrePerfil || "", ...previo }); } catch (e) { logErr("patchServicio.removeInventario", e); }
-    try { await syncServicioEnInventario({ clienteNombre: c.nombrePerfil || "", plataforma: siguiente.plataforma, correo: siguiente.correo, clave: getClaveServicioLocal(siguiente, siguiente.plataforma), pin: getPinServicioLocal(siguiente, siguiente.plataforma) }); } catch (e) { logErr("patchServicio.addInventario", e); }
-  }
-
   return { ok: true, servicio: siguiente };
+}
+
+async function addPerfilTx(clientId, idx, perfil = {}) {
+  const id = String(clientId || "").trim();
+  const ref = db.collection(CLIENTES_COLLECTION).doc(id);
+  const doc = await ref.get();
+  if (!doc.exists) throw new Error("Cliente no encontrado.");
+  const c = doc.data() || {};
+  const servicios = Array.isArray(c.servicios) ? c.servicios.slice() : [];
+  if (idx < 0 || idx >= servicios.length) throw new Error("Servicio inválido.");
+  const actual = servicios[idx] || {};
+  const perfiles = perfilesServicioLocal(actual, c.nombrePerfil || "");
+  perfiles.push({
+    perfilId: perfil.perfilId || recordIdLocal("perfil"),
+    nombre: String(perfil.nombre || perfil.perfil || "").trim(),
+    perfil: String(perfil.perfil || perfil.nombre || "").trim(),
+    correo: perfil.correo || "", clave: perfil.clave || "", pin: perfil.pinPerfil ?? perfil.pin ?? ""
+  });
+  const siguiente = normalizarCompraLocal({ ...actual, perfiles }, c.nombrePerfil || "", actual);
+  validarCompraLocal(siguiente);
+  await sincronizarCompraInventarioLocal(actual, siguiente, c.nombrePerfil || "");
+  servicios[idx] = siguiente;
+  await ref.set({ servicios, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+  cacheInvalidatePrefix(`clientes:doc:${id}`);
+  await registrarEventoHistorial(id, {
+    tipo: "perfil_agregado", descripcion: `Se añadió ${perfil.nombre || "un perfil"} a la compra ${humanPlataforma(actual.plataforma || "")}`,
+    plataforma: actual.plataforma || "", correo: perfil.correo || "", pin: perfil.pinPerfil ?? perfil.pin ?? ""
+  });
+  return { ok: true, servicio: siguiente, perfilIndex: siguiente.perfiles.length - 1 };
+}
+
+async function patchPerfilTx(clientId, idx, perfilIndex, patch = {}) {
+  const id = String(clientId || "").trim();
+  const ref = db.collection(CLIENTES_COLLECTION).doc(id);
+  const doc = await ref.get();
+  if (!doc.exists) throw new Error("Cliente no encontrado.");
+  const c = doc.data() || {};
+  const servicios = Array.isArray(c.servicios) ? c.servicios.slice() : [];
+  if (idx < 0 || idx >= servicios.length) throw new Error("Servicio inválido.");
+  const actual = servicios[idx] || {};
+  const perfiles = perfilesServicioLocal(actual, c.nombrePerfil || "");
+  if (perfilIndex < 0 || perfilIndex >= perfiles.length) throw new Error("Perfil inválido.");
+  perfiles[perfilIndex] = { ...perfiles[perfilIndex], ...patch };
+  if (patch.nombre != null && patch.perfil == null) perfiles[perfilIndex].perfil = patch.nombre;
+  const siguiente = normalizarCompraLocal({ ...actual, perfiles }, c.nombrePerfil || "", actual);
+  validarCompraLocal(siguiente);
+  await sincronizarCompraInventarioLocal(actual, siguiente, c.nombrePerfil || "");
+  servicios[idx] = siguiente;
+  await ref.set({ servicios, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+  cacheInvalidatePrefix(`clientes:doc:${id}`);
+  await registrarEventoHistorial(id, {
+    tipo: "perfil_editado", descripcion: `Se editó el perfil ${siguiente.perfiles[perfilIndex]?.nombre || perfilIndex + 1} de ${humanPlataforma(actual.plataforma || "")}`,
+    plataforma: actual.plataforma || "", correo: siguiente.perfiles[perfilIndex]?.correo || "", pin: siguiente.perfiles[perfilIndex]?.pin || ""
+  });
+  return { ok: true, servicio: siguiente, perfilIndex };
+}
+
+async function eliminarPerfilTx(clientId, idx, perfilIndex) {
+  const id = String(clientId || "").trim();
+  const ref = db.collection(CLIENTES_COLLECTION).doc(id);
+  const doc = await ref.get();
+  if (!doc.exists) throw new Error("Cliente no encontrado.");
+  const c = doc.data() || {};
+  const servicios = Array.isArray(c.servicios) ? c.servicios.slice() : [];
+  if (idx < 0 || idx >= servicios.length) throw new Error("Servicio inválido.");
+  const actual = servicios[idx] || {};
+  const perfiles = perfilesServicioLocal(actual, c.nombrePerfil || "");
+  if (perfiles.length <= 1) throw new Error("Es el único perfil. Para quitarlo, elimine la compra completa.");
+  if (perfilIndex < 0 || perfilIndex >= perfiles.length) throw new Error("Perfil inválido.");
+  const eliminado = perfiles.splice(perfilIndex, 1)[0];
+  const siguiente = normalizarCompraLocal({ ...actual, perfiles }, c.nombrePerfil || "", actual);
+  await sincronizarCompraInventarioLocal(actual, siguiente, c.nombrePerfil || "");
+  servicios[idx] = siguiente;
+  await ref.set({ servicios, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+  cacheInvalidatePrefix(`clientes:doc:${id}`);
+  await registrarEventoHistorial(id, {
+    tipo: "perfil_eliminado", descripcion: `Se quitó ${eliminado.nombre || "un perfil"} de la compra ${humanPlataforma(actual.plataforma || "")}`,
+    plataforma: actual.plataforma || "", correo: eliminado.correo || "", pin: eliminado.pin || ""
+  });
+  return { ok: true, servicio: siguiente, eliminado };
+}
+
+async function sincronizarCuentaEnComprasTx({ plataforma = "", correo = "", nuevaClave, nuevoCorreo } = {}) {
+  const plat = normalizarPlataforma(plataforma);
+  const acceso = normalizeIdentByPlatformLocal(plat, correo);
+  const snap = await db.collection(CLIENTES_COLLECTION).get();
+  let perfilesActualizados = 0, documentosActualizados = 0, operaciones = 0;
+  let batch = db.batch();
+  for (const doc of snap.docs) {
+    const data = doc.data() || {};
+    const servicios = Array.isArray(data.servicios) ? data.servicios : [];
+    let changed = false;
+    const next = servicios.map((servicio) => {
+      if (normalizarPlataforma(servicio?.plataforma || "") !== plat) return servicio;
+      const perfiles = Array.isArray(servicio?.perfiles) && servicio.perfiles.length ? servicio.perfiles : null;
+      if (!perfiles) {
+        if (normalizeIdentByPlatformLocal(plat, servicio?.correo || "") !== acceso) return servicio;
+        const copy = { ...servicio };
+        if (nuevoCorreo != null) copy.correo = normalizeIdentByPlatformLocal(plat, nuevoCorreo);
+        if (nuevaClave != null) copy.clave = String(nuevaClave || "").trim();
+        perfilesActualizados++;changed = true;return copy;
+      }
+      let localChanged = false;
+      const nextProfiles = perfiles.map((perfil) => {
+        if (normalizeIdentByPlatformLocal(plat, perfil?.correo ?? servicio?.correo ?? "") !== acceso) return perfil;
+        const copy = { ...(perfil || {}) };
+        if (nuevoCorreo != null) copy.correo = normalizeIdentByPlatformLocal(plat, nuevoCorreo);
+        if (nuevaClave != null) copy.clave = String(nuevaClave || "").trim();
+        perfilesActualizados++;localChanged = true;return copy;
+      });
+      if (!localChanged) return servicio;
+      changed = true;
+      const copy = { ...servicio, perfiles: nextProfiles };
+      const principal = nextProfiles[0] || {};
+      copy.correo = principal.correo || copy.correo || "";
+      copy.clave = principal.clave != null ? principal.clave : copy.clave || "";
+      return copy;
+    });
+    if (changed) {
+      batch.set(doc.ref, { servicios: next, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+      documentosActualizados++;operaciones++;
+      cacheInvalidatePrefix(`clientes:doc:${doc.id}`);
+      if (operaciones >= 400) { await batch.commit();batch = db.batch();operaciones = 0; }
+    }
+  }
+  if (operaciones) await batch.commit();
+  return { ok: true, perfilesActualizados, documentosActualizados };
 }
 
 // ===============================
@@ -1051,25 +1334,16 @@ async function eliminarServicioTx(clientId, idx) {
   if (idx < 0 || idx >= servicios.length) throw new Error("Servicio inválido.");
 
   const eliminado = servicios[idx];
+  await sincronizarCompraInventarioLocal(eliminado, null, c.nombrePerfil || "");
   servicios.splice(idx, 1);
 
   await ref.set({ servicios, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
   cacheInvalidatePrefix(`clientes:doc:${id}`);
 
-  // Liberar slot en inventario
-  try {
-    await removeServicioDeInventario({
-      clienteNombre: c.nombrePerfil || "",
-      plataforma: eliminado.plataforma || "",
-      correo: eliminado.correo || "",
-      pin: eliminado.pin || "",
-    });
-  } catch (e) { logErr("eliminarServicioTx.removeInventario", e); }
-
   // ✅ Registrar en historial
   await registrarEventoHistorial(id, {
     tipo: "servicio_eliminado",
-    descripcion: `Se eliminó ${humanPlataforma(eliminado.plataforma || "")}`,
+    descripcion: `Se eliminó ${humanPlataforma(eliminado.plataforma || "")} con ${cantidadPerfilesServicioLocal(eliminado, c.nombrePerfil || "")} perfil(es)`,
     plataforma: eliminado.plataforma || "",
     correo: eliminado.correo || "",
     clave: getClaveServicioLocal(eliminado, eliminado.plataforma || ""),
@@ -1098,7 +1372,7 @@ async function menuListaRenovacion(chatId, clientId) {
   }
 
   const kb = servicios.map((s) => [{
-    text: safeBtnLabel(`${iconPlataforma(s.plataforma || "")} ${humanPlataforma(s.plataforma || "")} — ${s.fechaRenovacion || "sin fecha"}`),
+    text: safeBtnLabel(`${iconPlataforma(s.plataforma || "")} ${humanPlataforma(s.plataforma || "")} · ${cantidadPerfilesServicioLocal(s, c.nombrePerfil || "")} perfil(es) — ${s.fechaRenovacion || "sin fecha"}`),
     callback_data: `cli:ren:one:${clientId}:${s.idxOriginal}`,
   }]);
   kb.push([
@@ -1132,7 +1406,7 @@ async function menuRenovacionServicio(chatId, clientId, idx) {
     `🔄 *GESTIONAR RENOVACIÓN*\n\n` +
     `👤 *${escMD(c.nombrePerfil || "Cliente")}*\n` +
     `${iconPlataforma(s.plataforma || "")} *${escMD(humanPlataforma(s.plataforma || ""))}*\n` +
-    `${getIdentLabelLocal(s.plataforma || "") === "Usuario" ? "👤" : "📧"} ${escMD(s.correo || "-")}\n` +
+    renderCredencialesServicioLocal(s, true, "") +
     `💰 ${escMD(`${Number(s.precio || 0).toFixed(2)} Lps`)}\n` +
     `📅 Vence: ${escMD(s.fechaRenovacion || "-")} — ${est.emoji} ${escMD(est.texto)}\n\n` +
     `¿Qué pasó con este servicio?`;
@@ -1159,12 +1433,14 @@ async function enviarPanelRenovacionesConAcciones(chatId, fecha, rows = []) {
 
   let total = 0;
   rows.forEach((x) => { total += Number(x.precio || 0); });
+  const totalPerfiles = rows.reduce((sum, x) => sum + Number(x.cantidadPerfiles || cantidadPerfilesServicioLocal(x, x.nombrePerfil || "")), 0);
 
   let txt =
     `📅 *RENOVACIONES DEL ${escMD(fecha)}*\n\n` +
-    `*Total perfiles:* ${rows.length}\n` +
+    `*Compras a renovar:* ${rows.length}\n` +
+    `*Perfiles incluidos:* ${totalPerfiles}\n` +
     `*Total esperado:* ${escMD(`${total.toFixed(2)} Lps`)}\n\n` +
-    `Seleccione un perfil para gestionar su renovación:`;
+    `Seleccione una compra para gestionar su renovación:`;
 
   const kb = rows.slice(0, 20).map((x, i) => [{
     text: safeBtnLabel(`${i + 1}. ${iconPlataforma(x.plataforma || "")} ${x.nombrePerfil || "Sin nombre"} — ${humanPlataforma(x.plataforma || "")}`),
@@ -1284,21 +1560,26 @@ async function wizardNext(chatId, rawText = "") {
         });
       }
 
-      await addServicioTx(clientId, {
+      const guardado = await addServicioTx(clientId, {
         plataforma: plat,
         correo: st.servicio.correo,
         clave: st.servicio.clave || "",
         pin: st.servicio.pin || "",
+        perfiles: [{
+          nombre: st.nombre, perfil: st.nombre, correo: st.servicio.correo,
+          clave: st.servicio.clave || "", pin: st.servicio.pin || ""
+        }],
         precio: st.servicio.precio,
         fechaRenovacion: st.servicio.fechaRenovacion,
       });
 
       wizard.set(String(chatId), { step: 4, clientId, nombre: st.nombre, telefono: st.telefono, vendedor: st.vendedor, servicio: {}, servStep: 1 });
 
-      return bot.sendMessage(chatId, "✅ *Servicio guardado correctamente*\n\nSeleccione qué desea hacer ahora:", {
+      return bot.sendMessage(chatId, "✅ *Compra guardada correctamente*\n\nTiene un solo precio y una sola fecha. Si esta compra incluye a otra persona (por ejemplo, una promoción 2x1), añádala como perfil aquí:", {
         parse_mode: "Markdown",
         reply_markup: { inline_keyboard: [
-          [{ text: "➕ Agregar otra", callback_data: `wiz:addmore:${clientId}` }],
+          [{ text: "👥 Añadir otro perfil a esta compra", callback_data: `cli:prof:add:${clientId}:${guardado.servicioIndex}` }],
+          [{ text: "➕ Agregar otro servicio distinto", callback_data: `wiz:addmore:${clientId}` }],
           [{ text: "✅ Finalizar",    callback_data: `wiz:finish:${clientId}` }],
           [{ text: "🏠 Inicio",       callback_data: "go:inicio" }],
         ]},
@@ -1336,6 +1617,8 @@ async function obtenerRenovacionesPorFecha(fechaDMY, vendedor = null) {
         correo: s.correo || "",
         clave: getClaveServicioLocal(s, s.plataforma || ""),
         pin: getPinServicioLocal(s, s.plataforma || ""),
+        perfiles: perfilesServicioLocal(s, c.nombrePerfil || ""),
+        cantidadPerfiles: cantidadPerfilesServicioLocal(s, c.nombrePerfil || ""),
         precio: Number(s.precio || 0),
         fechaRenovacion: s.fechaRenovacion || fecha,
       });
@@ -1363,7 +1646,9 @@ function renovacionesTexto(rows = [], fecha = "", vendedor = null) {
   let total = 0;
   items.forEach((x) => { total += Number(x.precio || 0); });
 
-  txt += `*Total perfiles:* ${escMD(String(items.length))}\n`;
+  const totalPerfiles = items.reduce((sum, x) => sum + Number(x.cantidadPerfiles || cantidadPerfilesServicioLocal(x, x.nombrePerfil || "")), 0);
+  txt += `*Compras a renovar:* ${escMD(String(items.length))}\n`;
+  txt += `*Perfiles incluidos:* ${escMD(String(totalPerfiles))}\n`;
   txt += `*Total esperado:* ${escMD(`${total.toFixed(2)} Lps`)}\n\n`;
 
   items.forEach((x, i) => {
@@ -1388,7 +1673,8 @@ function renovacionesTextoPlano(rows = [], fecha = "", vendedor = null) {
   let total = 0;
   items.forEach((x) => { total += Number(x.precio || 0); });
 
-  txt += `Total perfiles: ${items.length}\nTotal esperado: ${total.toFixed(2)} Lps\n\n`;
+  const totalPerfiles = items.reduce((sum, x) => sum + Number(x.cantidadPerfiles || cantidadPerfilesServicioLocal(x, x.nombrePerfil || "")), 0);
+  txt += `Compras a renovar: ${items.length}\nPerfiles incluidos: ${totalPerfiles}\nTotal esperado: ${total.toFixed(2)} Lps\n\n`;
 
   items.forEach((x, i) => {
     txt += `${i + 1}) ${x.nombrePerfil || "Sin nombre"}\n`;
@@ -1531,7 +1817,8 @@ module.exports = {
   getCliente, buscarPorTelefonoTodos, buscarClienteRobusto,
   enviarFichaCliente, enviarFichaClienteVendedor, enviarListaResultadosClientes, menuEditarCliente,
   menuListaServicios, menuServicio,
-  patchServicio, addServicioTx, eliminarServicioTx, removeServicioDeInventario,
+  menuListaPerfilesServicio, menuPerfilServicio,
+  patchServicio, addServicioTx, addPerfilTx, patchPerfilTx, eliminarPerfilTx, eliminarServicioTx, removeServicioDeInventario, sincronizarCuentaEnComprasTx,
   menuListaRenovacion, menuRenovacionServicio, enviarPanelRenovacionesConAcciones,
   kbPlataformasWiz, wizardStart, wizardNext,
   clienteResumenTXT, reporteClientesTXTGeneral, reporteClientesSplitPorVendedorTXT,
@@ -1539,4 +1826,5 @@ module.exports = {
   generarHistorialTXT, getHistorialCliente, registrarEventoHistorial,
   enviarMisClientes, enviarMisClientesTXT,
   obtenerRenovacionesPorFecha, renovacionesTexto, enviarTXT, enviarTXTATodosHoy,
+  perfilesServicioLocal, cantidadPerfilesServicioLocal,
 };

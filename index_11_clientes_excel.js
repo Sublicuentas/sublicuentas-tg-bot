@@ -194,22 +194,24 @@ function buildServiceRows(clientes = []) {
 
     c.servicios.forEach((s, idx) => {
       const fecha = s.fechaRenovacion || s.vencimiento || s.vence || s.fechaFin || "";
-      out.push({
-        clienteId: c.id,
-        servicioIndex: idx,
+      const perfiles = Array.isArray(s.perfiles) && s.perfiles.length ? s.perfiles : [{
+        nombre: s.nombrePerfil || s.perfil || c.nombre, perfil: s.perfil || s.nombrePerfil || c.nombre,
+        correo: s.correo || s.usuario || s.ident || s.email || "",
+        pin: s.pinPerfil || s.pin_perfil || s.perfilPin || s.pin || ""
+      }];
+      perfiles.forEach((p, perfilIndex) => out.push({
+        clienteId: c.id, servicioIndex: idx, perfilIndex,
         nombre: c.nombre,
+        perfil: safe(p.nombre || p.nombrePerfil || p.perfil || c.nombre),
         telefono: c.telefono,
         vendedor: c.vendedor,
         plataforma: plataformaLabel(s.plataforma || s.servicio || s.nombre || ""),
-        correo: safe(s.correo || s.usuario || s.ident || s.email || ""),
-        pin: safe(s.pin || s.perfil || s.clavePerfil || ""),
-        precio: num(s.precio || s.monto || s.total),
-        fecha,
-        fechaDate: toDate(fecha),
-        dias: daysFromToday(fecha),
-        estado: estadoServicio(fecha),
+        correo: safe(p.correo || s.correo || s.usuario || s.ident || s.email || ""),
+        pin: safe(p.pinPerfil || p.pin_perfil || p.perfilPin || p.pin || (perfilIndex === 0 ? (s.pinPerfil || s.pin || s.perfil || s.clavePerfil || "") : "")),
+        precio: perfilIndex === 0 ? num(s.precio || s.monto || s.total) : 0,
+        fecha, fechaDate: toDate(fecha), dias: daysFromToday(fecha), estado: estadoServicio(fecha),
         fechaContratacion: toDate(s.fechaContratacion || s.fechaInicio || s.createdAt) || c.fechaContratacion,
-      });
+      }));
     });
   });
   return out;
@@ -424,13 +426,13 @@ async function crearClientesTop(ws, clientes) {
 
 async function crearPagosServicios(ws, servicios) {
   ws.columns = [
-    { width: 5 }, { width: 26 }, { width: 17 }, { width: 22 }, { width: 20 }, { width: 30 }, { width: 12 }, { width: 14 }, { width: 15 }, { width: 12 }, { width: 16 }, { width: 18 },
+    { width: 5 }, { width: 24 }, { width: 22 }, { width: 17 }, { width: 20 }, { width: 20 }, { width: 30 }, { width: 12 }, { width: 14 }, { width: 15 }, { width: 12 }, { width: 16 }, { width: 18 },
   ];
-  setTitle(ws, "PAGOS Y SERVICIOS", 12);
-  setSubTitle(ws, "Detalle operativo: nombre, número, vendedor, servicio, acceso, pago y vencimiento", 12);
+  setTitle(ws, "PAGOS Y SERVICIOS", 13);
+  setSubTitle(ws, "Una fila por perfil; el pago aparece una sola vez por compra", 13);
   ws.addRow([]);
   const headerNo = ws.rowCount + 1;
-  const header = ws.addRow(["#", "Nombre", "Número", "Vendedor", "Plataforma", "Correo / usuario", "PIN", "Pago", "Vence", "Días", "Estado", "Contratación"]);
+  const header = ws.addRow(["#", "Titular", "Perfil", "Número", "Vendedor", "Plataforma", "Correo / usuario", "PIN", "Pago compra", "Vence", "Días", "Estado", "Contratación"]);
   styleHeader(header);
 
   const rows = servicios.slice().sort((a, b) => {
@@ -440,20 +442,20 @@ async function crearPagosServicios(ws, servicios) {
   });
   rows.forEach((s, i) => {
     const r = ws.addRow([
-      i + 1, s.nombre, s.telefono, s.vendedor, s.plataforma, s.correo, s.pin, s.precio,
+      i + 1, s.nombre, s.perfil || s.nombre, s.telefono, s.vendedor, s.plataforma, s.correo, s.pin, s.precio,
       excelDate(s.fecha), s.dias == null ? "" : s.dias, s.estado, excelDate(s.fechaContratacion),
     ]);
     styleBodyRow(r, i % 2 === 1);
-    applyCurrency(r.getCell(8));
-    r.getCell(9).numFmt = DATE_FMT;
-    r.getCell(12).numFmt = DATE_FMT;
-    statusStyle(r.getCell(11), s.estado);
+    applyCurrency(r.getCell(9));
+    r.getCell(10).numFmt = DATE_FMT;
+    r.getCell(13).numFmt = DATE_FMT;
+    statusStyle(r.getCell(12), s.estado);
   });
-  addTableFilter(ws, headerNo, ws.rowCount, "L");
+  addTableFilter(ws, headerNo, ws.rowCount, "M");
 
   try {
     ws.addConditionalFormatting({
-      ref: `H${headerNo + 1}:H${Math.max(headerNo + 1, ws.rowCount)}`,
+      ref: `I${headerNo + 1}:I${Math.max(headerNo + 1, ws.rowCount)}`,
       rules: [{ type: "dataBar", cfvo: [{ type: "min" }, { type: "max" }], color: C.verde.replace(/^FF/, "") }],
     });
   } catch (_) {}

@@ -82,14 +82,22 @@ const {
   menuEditarCliente,
   menuListaServicios,
   menuServicio,
+  menuListaPerfilesServicio,
+  menuPerfilServicio,
   patchServicio,
   addServicioTx,
+  addPerfilTx,
+  patchPerfilTx,
+  eliminarPerfilTx,
   eliminarServicioTx,
+  sincronizarCuentaEnComprasTx,
   menuListaRenovacion,
   menuRenovacionServicio,
   enviarPanelRenovacionesConAcciones,
   serviciosConIndiceOriginal,
   clienteDuplicado,
+  perfilesServicioLocal,
+  cantidadPerfilesServicioLocal,
 } = require("./index_03_clientes_crm");
 
 const {
@@ -3919,6 +3927,11 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
         const clientId = data.split(":")[3];
         const c2 = await getCliente(clientId);
         const nombre = c2?.nombrePerfil || "Cliente";
+        const compras = Array.isArray(c2?.servicios) ? c2.servicios : [];
+        for (let i = compras.length - 1; i >= 0; i--) {
+          try { await eliminarServicioTx(clientId, i); }
+          catch (e) { return bot.sendMessage(chatId, `⚠️ No se borró el cliente porque no pude liberar todos sus perfiles: ${e.message || "revise Bodega"}`); }
+        }
         const batch = db.batch();
         batch.delete(db.collection("clientes").doc(clientId));
         const histSnap = await db.collection("historial_clientes").where("clientId", "==", clientId).get();
@@ -3932,6 +3945,50 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
 
       if (data.startsWith("cli:serv:list:")) return menuListaServicios(chatId, data.split(":")[3]);
       if (data.startsWith("cli:serv:menu:")) return menuServicio(chatId, data.split(":")[3], Number(data.split(":")[4]));
+
+      if (data.startsWith("cli:prof:list:")) {
+        const parts = data.split(":");
+        return menuListaPerfilesServicio(chatId, parts[3], Number(parts[4]));
+      }
+      if (data.startsWith("cli:prof:menu:")) {
+        const parts = data.split(":");
+        return menuPerfilServicio(chatId, parts[3], Number(parts[4]), Number(parts[5]));
+      }
+      if (data.startsWith("cli:prof:add:")) {
+        const parts = data.split(":");
+        const clientId = parts[3], idx = Number(parts[4]);
+        wizard.delete(String(chatId));
+        pending.set(String(chatId), { mode: "cliProfAddName", clientId, idx });
+        return upsertPanel(chatId,
+          "👥 *AÑADIR PERFIL A LA MISMA COMPRA*\n\nEscriba el nombre de la persona o perfil. El precio y la fecha no se pedirán otra vez porque pertenecen a toda la compra:",
+          [[{ text: "⬅️ Cancelar", callback_data: `cli:serv:menu:${clientId}:${idx}` }]]
+        );
+      }
+      if (data.startsWith("cli:prof:edit:")) {
+        const parts = data.split(":");
+        const field = parts[3], clientId = parts[4], idx = Number(parts[5]), perfilIndex = Number(parts[6]);
+        const labels = { name: "👤 Escriba el nuevo nombre del perfil:", mail: "📧 Escriba el nuevo correo/usuario:", key: "🔑 Escriba la nueva clave:", pin: "🔐 Escriba el nuevo PIN individual:" };
+        if (!labels[field]) return bot.sendMessage(chatId, "⚠️ Opción inválida.");
+        pending.set(String(chatId), { mode: "cliProfEdit", field, clientId, idx, perfilIndex });
+        return upsertPanel(chatId, labels[field], [[{ text: "⬅️ Cancelar", callback_data: `cli:prof:menu:${clientId}:${idx}:${perfilIndex}` }]]);
+      }
+      if (data.startsWith("cli:prof:del:ask:")) {
+        const parts = data.split(":");
+        const clientId = parts[4], idx = Number(parts[5]), perfilIndex = Number(parts[6]);
+        return upsertPanel(chatId,
+          "🗑️ *QUITAR PERFIL*\n\nSe quitará solo esta persona y se liberará su cupo. La compra, el precio, la renovación y los demás perfiles se conservarán. ¿Confirma?",
+          [[{ text: "✅ Sí, quitar perfil", callback_data: `cli:prof:del:ok:${clientId}:${idx}:${perfilIndex}` }],[{ text: "❌ Cancelar", callback_data: `cli:prof:menu:${clientId}:${idx}:${perfilIndex}` }]]
+        );
+      }
+      if (data.startsWith("cli:prof:del:ok:")) {
+        const parts = data.split(":");
+        const clientId = parts[4], idx = Number(parts[5]), perfilIndex = Number(parts[6]);
+        try {
+          await eliminarPerfilTx(clientId, idx, perfilIndex);
+          await bot.sendMessage(chatId, "✅ Perfil retirado. La compra conserva un solo precio y una sola renovación.");
+          return menuListaPerfilesServicio(chatId, clientId, idx);
+        } catch (e) { return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo quitar el perfil."}`); }
+      }
 
       if (data.startsWith("cli:serv:add:")) {
         const clientId = data.split(":")[3];
@@ -4049,7 +4106,7 @@ Revise que el correo exista en inventario con esa plataforma o coloque la clave 
         const parts = data.split(":");
         const clientId = parts[4];
         const idx = Number(parts[5]);
-        return upsertPanel(chatId, "🗑️ *Eliminar perfil*\nConfirmar borrado de este servicio?", [
+        return upsertPanel(chatId, "🗑️ *Eliminar compra completa*\n\nSe quitarán todos los perfiles incluidos, se liberarán sus cupos y se eliminará el precio/renovación de este servicio. ¿Confirma?", [
           [{ text: "✅ Confirmar", callback_data: `cli:serv:del:ok:${clientId}:${idx}` }],
           [{ text: "⬅️ Cancelar", callback_data: `cli:serv:menu:${clientId}:${idx}` }],
         ]);
@@ -4059,34 +4116,11 @@ Revise que el correo exista en inventario con esa plataforma o coloque la clave 
         const parts = data.split(":");
         const clientId = parts[4];
         const idx = Number(parts[5]);
-        const ref = db.collection("clientes").doc(String(clientId));
-        const doc = await ref.get();
-        if (!doc.exists) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
-        const c = doc.data() || {};
-        const servicios = Array.isArray(c.servicios) ? c.servicios : [];
-        if (idx < 0 || idx >= servicios.length) return bot.sendMessage(chatId, "⚠️ Servicio inválido.");
-        const servicioABorrar = servicios[idx];
-        const plat = normalizarPlataforma(servicioABorrar.plataforma);
-        const acceso = normalizeIdentByPlatformLocal(plat, servicioABorrar.correo || "");
-        const nombreCliente = c.nombrePerfil || "";
-        const refInv = db.collection("inventario").doc(docIdInventarioLocal(acceso, plat));
-        const docInv = await refInv.get();
-        if (docInv.exists) {
-          const invData = docInv.data() || {};
-          let clientesInv = Array.isArray(invData.clientes) ? invData.clientes.slice() : [];
-          const indexInv = clientesInv.findIndex((cl) => cl.nombre === nombreCliente && cl.pin === servicioABorrar.pin);
-          if (indexInv !== -1) {
-            clientesInv.splice(indexInv, 1);
-            clientesInv = clientesInv.map((cl, i) => ({ ...cl, slot: i + 1 }));
-            const capacidad = Number(invData.capacidad || invData.total || 0);
-            const ocupados = clientesInv.length;
-            const disponibles = capacidad > 0 ? Math.max(0, capacidad - ocupados) : Number(invData.disp || 0) + 1;
-            await refInv.set({ clientes: clientesInv, ocupados, disponibles, disp: disponibles, estado: disponibles === 0 ? "llena" : "activa", capacidad, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
-          }
-        }
-        servicios.splice(idx, 1);
-        await ref.set({ servicios, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
-        if (servicios.length) return menuListaServicios(chatId, clientId);
+        try { await eliminarServicioTx(clientId, idx); }
+        catch (e) { return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo eliminar la compra."}`); }
+        const actualizado = await getCliente(clientId);
+        const restantes = Array.isArray(actualizado?.servicios) ? actualizado.servicios : [];
+        if (restantes.length) return menuListaServicios(chatId, clientId);
         return enviarFichaCliente(chatId, clientId);
       }
 
@@ -5272,6 +5306,8 @@ bot.on("message", async (msg) => {
         const doc = await ref.get();
         if (!doc.exists) return bot.sendMessage(chatId, "⚠️ Esa cuenta no existe en inventario.");
         await ref.set({ clave: t, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        const sync = await sincronizarCuentaEnComprasTx({ plataforma: plat, correo: acceso, nuevaClave: t });
+        if (sync.perfilesActualizados) await bot.sendMessage(chatId, `✅ Clave actualizada también en ${sync.perfilesActualizados} perfil(es) del CRM.`);
         pending.set(String(chatId), { mode: "invSubmenuCtx", plat, correo: acceso });
         return enviarSubmenuInventario(chatId, plat, acceso);
       }
@@ -5389,6 +5425,72 @@ bot.on("message", async (msg) => {
         await ref.set({ vendedor: t, vendedor_norm: String(t || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().replace(/\s+/g, " "), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
         { const { cacheInvalidatePrefix: cIPv } = require("./index_01_core"); cIPv(`clientes:doc:${p.clientId}`); }
         return menuEditarCliente(chatId, p.clientId);
+      }
+
+      if (p.mode === "cliProfAddName") {
+        const c = await getCliente(p.clientId);
+        const s = c && Array.isArray(c.servicios) ? c.servicios[p.idx] : null;
+        if (!s) { pending.delete(String(chatId)); return bot.sendMessage(chatId, "⚠️ La compra ya no existe."); }
+        const plat = normalizarPlataforma(s.plataforma || "");
+        pending.set(String(chatId), { ...p, mode: "cliProfAddMail", plat, nombre: t });
+        return bot.sendMessage(chatId, `${identIcon(plat)} Escriba el ${getIdentLabelLocal(plat).toLowerCase()} donde quedará el perfil de ${t}:`);
+      }
+
+      if (p.mode === "cliProfAddMail") {
+        if (!validateIdentByPlatformLocal(p.plat, t)) return bot.sendMessage(chatId, `⚠️ ${getIdentLabelLocal(p.plat)} inválido. Intente otra vez:`);
+        const mail = normalizeIdentByPlatformLocal(p.plat, t);
+        if (requiereClaveLocal(p.plat)) {
+          pending.set(String(chatId), { ...p, mode: "cliProfAddKey", mail });
+          return bot.sendMessage(chatId, "🔑 Escriba la clave de esa cuenta:");
+        }
+        if (requierePinLocal(p.plat)) {
+          pending.set(String(chatId), { ...p, mode: "cliProfAddPin", mail, clave: "" });
+          return bot.sendMessage(chatId, "🔐 Escriba el PIN individual de este perfil:");
+        }
+        pending.delete(String(chatId));forceNextPanelAtBottom(chatId);
+        try { await addPerfilTx(p.clientId, p.idx, { nombre: p.nombre, perfil: p.nombre, correo: mail, clave: "", pin: "" }); }
+        catch (e) { return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo añadir el perfil."}`); }
+        await bot.sendMessage(chatId, "✅ Perfil añadido a la misma compra. No se creó otro precio ni otra renovación.");
+        return menuListaPerfilesServicio(chatId, p.clientId, p.idx);
+      }
+
+      if (p.mode === "cliProfAddKey") {
+        if (requierePinLocal(p.plat)) {
+          pending.set(String(chatId), { ...p, mode: "cliProfAddPin", clave: t });
+          return bot.sendMessage(chatId, "🔐 Escriba el PIN individual de este perfil:");
+        }
+        pending.delete(String(chatId));forceNextPanelAtBottom(chatId);
+        try { await addPerfilTx(p.clientId, p.idx, { nombre: p.nombre, perfil: p.nombre, correo: p.mail, clave: t, pin: "" }); }
+        catch (e) { return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo añadir el perfil."}`); }
+        await bot.sendMessage(chatId, "✅ Perfil añadido a la misma compra. No se creó otro precio ni otra renovación.");
+        return menuListaPerfilesServicio(chatId, p.clientId, p.idx);
+      }
+
+      if (p.mode === "cliProfAddPin") {
+        pending.delete(String(chatId));forceNextPanelAtBottom(chatId);
+        try { await addPerfilTx(p.clientId, p.idx, { nombre: p.nombre, perfil: p.nombre, correo: p.mail, clave: p.clave || "", pin: t }); }
+        catch (e) { return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo añadir el perfil."}`); }
+        await bot.sendMessage(chatId, "✅ Perfil añadido a la misma compra con su PIN individual. El precio y la fecha siguen únicos.");
+        return menuListaPerfilesServicio(chatId, p.clientId, p.idx);
+      }
+
+      if (p.mode === "cliProfEdit") {
+        const c = await getCliente(p.clientId);
+        const s = c && Array.isArray(c.servicios) ? c.servicios[p.idx] : null;
+        if (!s) { pending.delete(String(chatId)); return bot.sendMessage(chatId, "⚠️ La compra ya no existe."); }
+        const plat = normalizarPlataforma(s.plataforma || "");
+        const patch = {};
+        if (p.field === "name") { patch.nombre = t; patch.perfil = t; }
+        else if (p.field === "mail") {
+          if (!validateIdentByPlatformLocal(plat, t)) return bot.sendMessage(chatId, `⚠️ ${getIdentLabelLocal(plat)} inválido. Intente otra vez:`);
+          patch.correo = normalizeIdentByPlatformLocal(plat, t);
+        } else if (p.field === "key") patch.clave = t;
+        else if (p.field === "pin") patch.pin = t;
+        pending.delete(String(chatId));forceNextPanelAtBottom(chatId);
+        try { await patchPerfilTx(p.clientId, p.idx, p.perfilIndex, patch); }
+        catch (e) { return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo editar el perfil."}`); }
+        await bot.sendMessage(chatId, "✅ Perfil actualizado dentro de la misma compra.");
+        return menuPerfilServicio(chatId, p.clientId, p.idx, p.perfilIndex);
       }
 
       if (p.mode === "cliAddServMail") {
