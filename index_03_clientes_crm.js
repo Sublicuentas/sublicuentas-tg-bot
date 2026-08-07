@@ -469,25 +469,28 @@ function normalizarCompraLocal(servicio = {}, titular = "", anterior = {}) {
     const correoTop = index === 0 && servicio.correo != null ? servicio.correo : undefined;
     const claveTop = index === 0 && servicio.clave != null ? servicio.clave : undefined;
     const pinTop = index === 0 && (servicio.pin != null || servicio.pinPerfil != null) ? (servicio.pinPerfil ?? servicio.pin) : undefined;
-    return {
+    const perfilGuardado = {
       perfilId: String(raw.perfilId || raw.id || previo.perfilId || recordIdLocal("perfil")),
       nombre,
       perfil: String(raw.perfil || raw.nombrePerfil || raw.nombre || previo.perfil || nombre).trim(),
       correo: normalizeIdentByPlatformLocal(plat, raw.correo ?? correoTop ?? previo.correo ?? servicio.correo ?? anterior.correo ?? ""),
-      clave: requiereClaveLocal(plat) ? String(raw.clave ?? raw.password ?? raw.pass ?? claveTop ?? previo.clave ?? servicio.clave ?? anterior.clave ?? "").trim() : "",
-      pin: requierePinLocal(plat) ? String(raw.pinPerfil ?? raw.pin_perfil ?? raw.perfilPin ?? raw.pin ?? pinTop ?? previo.pin ?? "").trim() : ""
+      clave: requiereClaveLocal(plat) ? String(raw.clave ?? raw.password ?? raw.pass ?? claveTop ?? previo.clave ?? servicio.clave ?? anterior.clave ?? "").trim() : ""
     };
+    const pinPerfil = requierePinLocal(plat) ? String(raw.pinPerfil ?? raw.pin_perfil ?? raw.perfilPin ?? raw.pin ?? pinTop ?? previo.pin ?? "").trim() : "";
+    if (pinPerfil) perfilGuardado.pinPerfil = pinPerfil;
+    return perfilGuardado;
   });
   const principal = perfiles[0] || {};
   return {
     ...anterior,
     ...servicio,
+    schemaVersion: 2,
     compraId: String(servicio.compraId || anterior.compraId || recordIdLocal("compra")),
     modalidad: perfiles.length > 1 ? "multiperfil" : "individual",
     plataforma: plat,
     correo: principal.correo || "",
     clave: principal.clave || "",
-    pin: principal.pin || "",
+    pin: principal.pinPerfil || principal.pin || "",
     perfil: principal.perfil || principal.nombre || titular || "",
     perfiles
   };
@@ -1141,7 +1144,10 @@ async function patchServicio(clientId, idx, patch = {}) {
     const principal = entrada.perfiles[0];
     if (Object.prototype.hasOwnProperty.call(patch, "correo")) principal.correo = patch.correo;
     if (Object.prototype.hasOwnProperty.call(patch, "clave")) principal.clave = patch.clave;
-    if (Object.prototype.hasOwnProperty.call(patch, "pin") || Object.prototype.hasOwnProperty.call(patch, "pinPerfil")) principal.pin = patch.pinPerfil ?? patch.pin ?? "";
+    if (Object.prototype.hasOwnProperty.call(patch, "pin") || Object.prototype.hasOwnProperty.call(patch, "pinPerfil")) {
+      principal.pinPerfil = patch.pinPerfil ?? patch.pin ?? "";
+      delete principal.pin;
+    }
   }
   const siguiente = normalizarCompraLocal(entrada, c.nombrePerfil || "", actual);
   if (!esPlataformaValida(siguiente.plataforma)) throw new Error("Plataforma inválida.");
@@ -1243,7 +1249,7 @@ async function patchPerfilTx(clientId, idx, perfilIndex, patch = {}) {
   cacheInvalidatePrefix(`clientes:doc:${id}`);
   await registrarEventoHistorial(id, {
     tipo: "perfil_editado", descripcion: `Se editó el perfil ${siguiente.perfiles[perfilIndex]?.nombre || perfilIndex + 1} de ${humanPlataforma(actual.plataforma || "")}`,
-    plataforma: actual.plataforma || "", correo: siguiente.perfiles[perfilIndex]?.correo || "", pin: siguiente.perfiles[perfilIndex]?.pin || ""
+    plataforma: actual.plataforma || "", correo: siguiente.perfiles[perfilIndex]?.correo || "", pin: siguiente.perfiles[perfilIndex]?.pinPerfil || siguiente.perfiles[perfilIndex]?.pin || ""
   });
   return { ok: true, servicio: siguiente, perfilIndex };
 }
