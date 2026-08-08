@@ -782,30 +782,53 @@ async function buscarClienteRobusto(query = "") {
   if (!qNorm && !qDigits) return [];
 
   const out = new Map();
+  // ⚠️ FIX: antes, si "vendedor_norm" tenía coincidencia EXACTA (ej. buscar
+  // "Yami" calzaba con el vendedor "Yami"), la función devolvía esos
+  // resultados de una vez y JAMÁS revisaba si el nombre del cliente también
+  // contenía "Yami" (como "Yami Hernandez") — por eso el cliente buscado no
+  // aparecía y solo salían otros clientes de ese vendedor. Ahora se rastrea
+  // aparte si hubo coincidencia real por nombre o teléfono; si lo único que
+  // hubo fue por vendedor, igual se hace el barrido completo para no perderse
+  // coincidencias de nombre.
+  const nombreOTelefonoHits = new Set();
 
   const jobs = [];
 
   if (qDigits && qDigits.length >= 7) {
-    jobs.push(
-      db.collection(CLIENTES_COLLECTION).where("telefono_norm", "==", qDigits).limit(10).get(),
-    );
+    jobs.push({
+      tipo: "telefono",
+      promise: db.collection(CLIENTES_COLLECTION).where("telefono_norm", "==", qDigits).limit(10).get(),
+    });
   }
 
   if (qNorm && qNorm.length >= 2) {
-    jobs.push(
-      db.collection(CLIENTES_COLLECTION).where("nombre_norm", "==", qNorm).limit(10).get(),
-      db.collection(CLIENTES_COLLECTION).where("vendedor_norm", "==", qNorm).limit(10).get(),
-    );
+    jobs.push({
+      // Antes era coincidencia EXACTA ("=="), así que "Yami" nunca calzaba
+      // con "Yami Hernandez". Ahora es por PREFIJO: cualquier nombre que
+      // EMPIECE con lo escrito entra, usando el índice de Firestore.
+      tipo: "nombre",
+      promise: db.collection(CLIENTES_COLLECTION)
+        .where("nombre_norm", ">=", qNorm)
+        .where("nombre_norm", "<", `${qNorm}\uf8ff`)
+        .limit(15).get(),
+    });
+    jobs.push({
+      tipo: "vendedor",
+      promise: db.collection(CLIENTES_COLLECTION).where("vendedor_norm", "==", qNorm).limit(10).get(),
+    });
   }
 
-  const settled = await Promise.allSettled(jobs);
-  for (const item of settled) {
-    if (item.status === "fulfilled") {
-      item.value.forEach((d) => { if (!out.has(d.id)) out.set(d.id, { id: d.id, ...(d.data() || {}) }); });
-    }
-  }
+  const settled = await Promise.allSettled(jobs.map((j) => j.promise));
+  settled.forEach((item, i) => {
+    if (item.status !== "fulfilled") return;
+    const tipo = jobs[i].tipo;
+    item.value.forEach((d) => {
+      if (!out.has(d.id)) out.set(d.id, { id: d.id, ...(d.data() || {}) });
+      if (tipo === "nombre" || tipo === "telefono") nombreOTelefonoHits.add(d.id);
+    });
+  });
 
-  if (out.size > 0) return Array.from(out.values()).slice(0, 30);
+  if (nombreOTelefonoHits.size > 0) return Array.from(out.values()).slice(0, 30);
 
   const snap = await db.collection(CLIENTES_COLLECTION).get();
 
