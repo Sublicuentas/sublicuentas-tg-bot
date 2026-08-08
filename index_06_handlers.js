@@ -5145,29 +5145,39 @@ bot.on("message", async (msg) => {
         pending.delete(String(chatId));
       forceNextPanelAtBottom(chatId);
 
+        // ⚠️ FIX: antes, si la cuenta no existía o el correo nuevo ya estaba
+        // en uso, el bot solo mandaba el texto del error y el botón "Editar
+        // correo" quedaba sin forma de volver a aparecer. Ahora siempre se
+        // reabre el panel de la cuenta para poder reintentar.
         const found = await buscarCorreoInventarioPorPlatCorreo(p.plataforma, p.correo);
-        if (!found) return bot.sendMessage(chatId, "❌ La cuenta no existe.");
+        if (!found) { await bot.sendMessage(chatId, "❌ La cuenta no existe."); return mostrarListaCorreosPlataforma(chatId, p.plataforma); }
 
-        const nuevoCorreo = normalizeIdentByPlatformLocal(p.plataforma, t);
-        const nuevaRef = db.collection("inventario").doc(docIdInventarioLocal(nuevoCorreo, p.plataforma));
-        const nuevaDoc = await nuevaRef.get();
+        try {
+          const nuevoCorreo = normalizeIdentByPlatformLocal(p.plataforma, t);
+          const nuevaRef = db.collection("inventario").doc(docIdInventarioLocal(nuevoCorreo, p.plataforma));
+          const nuevaDoc = await nuevaRef.get();
 
-        if (nuevaDoc.exists && nuevaRef.id !== found.ref.id) {
-          return bot.sendMessage(chatId, "⚠️ Ya existe una cuenta con ese correo en esta plataforma.");
+          if (nuevaDoc.exists && nuevaRef.id !== found.ref.id) {
+            await bot.sendMessage(chatId, "⚠️ Ya existe una cuenta con ese correo en esta plataforma.");
+            return mostrarPanelCorreo(chatId, p.plataforma, p.correo);
+          }
+
+          const dataCuenta = { ...(found.data || {}) };
+          dataCuenta.correo = nuevoCorreo;
+          dataCuenta.ident = nuevoCorreo;
+          dataCuenta.updatedAt = admin.firestore.FieldValue.serverTimestamp();
+
+          await nuevaRef.set(dataCuenta, { merge: true });
+          if (nuevaRef.id !== found.ref.id) {
+            await found.ref.delete();
+          }
+
+          await bot.sendMessage(chatId, "✅ Correo de la cuenta actualizado.");
+          return mostrarPanelCorreo(chatId, p.plataforma, nuevoCorreo);
+        } catch (e) {
+          await bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo actualizar el correo."}`);
+          return mostrarPanelCorreo(chatId, p.plataforma, p.correo);
         }
-
-        const dataCuenta = { ...(found.data || {}) };
-        dataCuenta.correo = nuevoCorreo;
-        dataCuenta.ident = nuevoCorreo;
-        dataCuenta.updatedAt = admin.firestore.FieldValue.serverTimestamp();
-
-        await nuevaRef.set(dataCuenta, { merge: true });
-        if (nuevaRef.id !== found.ref.id) {
-          await found.ref.delete();
-        }
-
-        await bot.sendMessage(chatId, "✅ Correo de la cuenta actualizado.");
-        return mostrarPanelCorreo(chatId, p.plataforma, nuevoCorreo);
       }
 
       // ✅ AGREGAR REVENDEDOR — paso 1: nombre
@@ -5449,7 +5459,7 @@ bot.on("message", async (msg) => {
         }
         pending.delete(String(chatId));forceNextPanelAtBottom(chatId);
         try { await addPerfilTx(p.clientId, p.idx, { nombre: p.nombre, perfil: p.nombre, correo: mail, clave: "", pin: "" }); }
-        catch (e) { return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo añadir el perfil."}`); }
+        catch (e) { await bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo añadir el perfil."}`); return menuListaPerfilesServicio(chatId, p.clientId, p.idx); }
         await bot.sendMessage(chatId, "✅ Perfil añadido a la misma compra. No se creó otro precio ni otra renovación.");
         return menuListaPerfilesServicio(chatId, p.clientId, p.idx);
       }
@@ -5461,7 +5471,7 @@ bot.on("message", async (msg) => {
         }
         pending.delete(String(chatId));forceNextPanelAtBottom(chatId);
         try { await addPerfilTx(p.clientId, p.idx, { nombre: p.nombre, perfil: p.nombre, correo: p.mail, clave: t, pin: "" }); }
-        catch (e) { return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo añadir el perfil."}`); }
+        catch (e) { await bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo añadir el perfil."}`); return menuListaPerfilesServicio(chatId, p.clientId, p.idx); }
         await bot.sendMessage(chatId, "✅ Perfil añadido a la misma compra. No se creó otro precio ni otra renovación.");
         return menuListaPerfilesServicio(chatId, p.clientId, p.idx);
       }
@@ -5469,7 +5479,7 @@ bot.on("message", async (msg) => {
       if (p.mode === "cliProfAddPin") {
         pending.delete(String(chatId));forceNextPanelAtBottom(chatId);
         try { await addPerfilTx(p.clientId, p.idx, { nombre: p.nombre, perfil: p.nombre, correo: p.mail, clave: p.clave || "", pin: t }); }
-        catch (e) { return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo añadir el perfil."}`); }
+        catch (e) { await bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo añadir el perfil."}`); return menuListaPerfilesServicio(chatId, p.clientId, p.idx); }
         await bot.sendMessage(chatId, "✅ Perfil añadido a la misma compra con su PIN individual. El precio y la fecha siguen únicos.");
         return menuListaPerfilesServicio(chatId, p.clientId, p.idx);
       }
@@ -5488,7 +5498,7 @@ bot.on("message", async (msg) => {
         else if (p.field === "pin") patch.pin = t;
         pending.delete(String(chatId));forceNextPanelAtBottom(chatId);
         try { await patchPerfilTx(p.clientId, p.idx, p.perfilIndex, patch); }
-        catch (e) { return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo editar el perfil."}`); }
+        catch (e) { await bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo editar el perfil."}`); return menuPerfilServicio(chatId, p.clientId, p.idx, p.perfilIndex); }
         await bot.sendMessage(chatId, "✅ Perfil actualizado dentro de la misma compra.");
         return menuPerfilServicio(chatId, p.clientId, p.idx, p.perfilIndex);
       }
@@ -5537,7 +5547,8 @@ bot.on("message", async (msg) => {
         try {
           await addServicioTx(String(p.clientId), { plataforma: p.plat, correo: p.mail, clave: p.clave || "", pin: p.pin || "", precio: p.precio, fechaRenovacion: t });
         } catch (e) {
-          return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo agregar el servicio."}`);
+          await bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo agregar el servicio."}`);
+          return enviarFichaCliente(chatId, p.clientId);
         }
         return enviarFichaCliente(chatId, p.clientId);
       }
@@ -5602,21 +5613,29 @@ bot.on("message", async (msg) => {
 
           return menuServicio(chatId, p.clientId, p.idx);
         } catch (e) {
-          return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo actualizar el servicio."}`);
+          // ⚠️ FIX: antes esto dejaba al usuario sin panel (solo el texto del
+          // error), y el botón "Cambiar correo"/"Cambiar acceso" desaparecía
+          // hasta que la persona supiera que debía tocar "Cancelar" en un
+          // mensaje anterior. Ahora se reabre el mismo menú del servicio para
+          // que el botón siga disponible y pueda reintentar de una vez.
+          await bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo actualizar el servicio."}`);
+          return menuServicio(chatId, p.clientId, p.idx);
         }
       }
 
       if (p.mode === "cliServEditClave") {
         pending.delete(String(chatId));
       forceNextPanelAtBottom(chatId);
-        try { await patchServicio(p.clientId, p.idx, { clave: t }); } catch (e) { return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo actualizar el servicio."}`); }
+        try { await patchServicio(p.clientId, p.idx, { clave: t }); }
+        catch (e) { await bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo actualizar el servicio."}`); return menuServicio(chatId, p.clientId, p.idx); }
         return menuServicio(chatId, p.clientId, p.idx);
       }
 
       if (p.mode === "cliServEditPin") {
         pending.delete(String(chatId));
       forceNextPanelAtBottom(chatId);
-        try { await patchServicio(p.clientId, p.idx, { pin: t }); } catch (e) { return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo actualizar el servicio."}`); }
+        try { await patchServicio(p.clientId, p.idx, { pin: t }); }
+        catch (e) { await bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo actualizar el servicio."}`); return menuServicio(chatId, p.clientId, p.idx); }
         return menuServicio(chatId, p.clientId, p.idx);
       }
 
@@ -5625,7 +5644,8 @@ bot.on("message", async (msg) => {
         if (!Number.isFinite(n) || n <= 0) return bot.sendMessage(chatId, "⚠️ Precio inválido.");
         pending.delete(String(chatId));
       forceNextPanelAtBottom(chatId);
-        try { await patchServicio(p.clientId, p.idx, { precio: n }); } catch (e) { return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo actualizar el servicio."}`); }
+        try { await patchServicio(p.clientId, p.idx, { precio: n }); }
+        catch (e) { await bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo actualizar el servicio."}`); return menuServicio(chatId, p.clientId, p.idx); }
         return menuServicio(chatId, p.clientId, p.idx);
       }
 
@@ -5633,7 +5653,8 @@ bot.on("message", async (msg) => {
         if (!isFechaDMY(t)) return bot.sendMessage(chatId, "⚠️ Formato inválido. Use dd/mm/yyyy");
         pending.delete(String(chatId));
       forceNextPanelAtBottom(chatId);
-        try { await patchServicio(p.clientId, p.idx, { fechaRenovacion: t }); } catch (e) { return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo actualizar el servicio."}`); }
+        try { await patchServicio(p.clientId, p.idx, { fechaRenovacion: t }); }
+        catch (e) { await bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo actualizar el servicio."}`); return menuServicio(chatId, p.clientId, p.idx); }
         return menuServicio(chatId, p.clientId, p.idx);
       }
 
