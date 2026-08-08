@@ -1012,11 +1012,23 @@ async function menuServicio(chatId, clientId, idx) {
   txt += `💰 *Precio:* ${escMD(`${Number(s.precio || 0).toFixed(2)} Lps`)}\n`;
   txt += `📅 *Renovación:* ${escMD(s.fechaRenovacion || "-")}\n📊 *Estado:* ${est.emoji} ${escMD(est.texto)}`;
 
+  const totalPerfiles = cantidadPerfilesServicioLocal(s, c.nombrePerfil || "");
+  const identLabel = getIdentLabelLocal(s.plataforma || "");
+  const identIcon = identLabel === "Usuario" ? "👤" : "📧";
+  // ⚠️ FIX: antes decía siempre "Cambiar acceso del perfil 1", incluso en
+  // compras de un solo cliente (sin 2x1), lo que hacía parecer que "editar
+  // correo" había desaparecido. Ahora, si la compra es de 1 solo perfil dice
+  // directamente "Cambiar correo/usuario"; solo menciona "del perfil 1" cuando
+  // de verdad hay más de un perfil en la misma ficha (2x1).
+  const accesoLabel = totalPerfiles > 1
+    ? `${identIcon} Cambiar acceso del perfil 1 de ${totalPerfiles}`
+    : `${identIcon} Cambiar ${identLabel.toLowerCase()}`;
+
   const kb = [
     [{ text: "👥 Gestionar perfiles", callback_data: `cli:prof:list:${clientId}:${idx}` }],
     [{ text: "➕ Añadir perfil a esta compra", callback_data: `cli:prof:add:${clientId}:${idx}` }],
     [{ text: "📌 Cambiar plataforma", callback_data: `cli:serv:edit:plat:${clientId}:${idx}` }],
-    [{ text: `${getIdentLabelLocal(s.plataforma || "") === "Usuario" ? "👤" : "📧"} Cambiar acceso del perfil 1`, callback_data: `cli:serv:edit:mail:${clientId}:${idx}` }],
+    [{ text: accesoLabel, callback_data: `cli:serv:edit:mail:${clientId}:${idx}` }],
   ];
 
   const credBtns = [];
