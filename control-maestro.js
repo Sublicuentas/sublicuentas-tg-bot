@@ -4,13 +4,13 @@
   const API='/api/importar';
   const INVENTORY_API='/api/inventario';
   const RENEW_API='/api/renovar';
-  const BUILD='CONTROL-MAESTRO-MENOS-TEXTO-20260808-25';
+  const BUILD='CONTROL-MAESTRO-NOTA-LOCAL-Y-COLOR-POR-AVANCE-20260808-26';
   let accountSearchTimer=null,clientSearchTimer=null;
   const state={
     booted:false,installed:false,loading:false,busy:false,status:'',statusType:'',meta:null,
     templateBase64:'',analysis:null,filter:'revision',query:'',visible:[],autoTried:false,
     accountAudit:null,accountPlatform:'all',accountStatus:'all',accountQuery:'',accountVisible:[],accountLimit:1500,revealedAccounts:new Set(),expandedAccountKey:'',
-    reviewSavingKey:'',accountFeedback:null,uiSize:loadUiSize(),refreshing:false,lastRefreshAt:'',fullscreenReturnY:0
+    reviewSavingKey:'',accountFeedback:null,uiSize:loadUiSize(),refreshing:false,lastRefreshAt:'',fullscreenReturnY:0,editingNoteKey:''
   };
 
   function loadUiSize(){
@@ -688,15 +688,21 @@
       return {family,name:auditPlatformLabel(family),ctas:audit.platforms[family]||0,perfiles:audit.platformRows[family]||0,...reviewProgress(accounts)};
     }).sort((a,b)=>a.percent-b.percent||b.pending-a.pending||a.name.localeCompare(b.name));
     const overall=reviewProgress(audit.accounts);
-    const chip=(item,key,color)=>`<button type="button" class="cm-platform-chip ${esc(item.tone)} ${state.accountPlatform===key?'on':''}" style="--platform-color:${color}" data-cm-audit-platform="${esc(key)}" title="${esc(`${item.label} · ${item.reviewed} de ${item.total} cuentas revisadas · ${item.pending} pendientes`)}">
-      <div class="cm-platform-chip-top"><b>${esc(item.name)}</b><strong>${item.percent}%</strong></div>
+    // ⚠️ REDISEÑO: con muchas plataformas (16+), pintar cada tarjeta de un color
+    // de marca distinto (morado, rojo, verde, teal...) hacía todo ilegible — puro
+    // ruido sin significado. Ahora el color de la tarjeta indica el AVANCE DE
+    // REVISIÓN (rojo=sin revisar, verde=completo), que es lo que realmente
+    // importa para escanear la lista de un vistazo. El color de marca queda
+    // solo como un puntito pequeño junto al nombre, para identificar rápido.
+    const chip=(item,key,color)=>`<button type="button" class="cm-platform-chip ${esc(item.tone)} ${state.accountPlatform===key?'on':''}" data-cm-audit-platform="${esc(key)}" title="${esc(`${item.label} · ${item.reviewed} de ${item.total} cuentas revisadas · ${item.pending} pendientes`)}">
+      <div class="cm-platform-chip-top"><span class="cm-platform-dot" style="background:${color}" aria-hidden="true"></span><b>${esc(item.name)}</b><strong>${item.percent}%</strong></div>
       <span class="cm-platform-chip-meta">${item.ctas} cta${item.ctas===1?'':'s'} · ${item.perfiles} perfil${item.perfiles===1?'':'es'}</span>
       <span class="cm-progress-mini" aria-hidden="true"><i style="width:${item.percent}%"></i></span>
       <small>${item.reviewed}/${item.total} revisadas</small>
     </button>`;
     const totalChip=chip({...overall,name:'Todas',ctas:audit.accounts.length,perfiles:audit.metrics.registros},'all','#168fd3');
     return `<section class="cm-review-progress">
-      <div class="cm-progress-head"><div><b>📊 Plataformas: cuentas y revisión</b><small>Toque una plataforma para filtrar la mesa de abajo · revisión vigente 15 días.</small></div></div>
+      <div class="cm-progress-head"><div><b>📊 Plataformas: cuentas y revisión</b><small>El color muestra qué tan avanzada va la revisión (🔴 falta · 🟢 completa). Toque una para filtrar la mesa de abajo.</small></div></div>
       <div class="cm-platform-filters">${totalChip}${items.map((item)=>chip(item,item.family,platformColor(item.family))).join('')}</div>
       <div class="cm-progress-legend"><span>🔴 0% sin revisar</span><span>🟡 revisión parcial</span><span>🟢 100% revisada</span></div>
     </section>`;
@@ -769,7 +775,39 @@
     return list.map((x)=>`<span class="cm-account-issue ${a.issueCount?'bad':'ok'}">${esc(x)}</span>`).join('');
   }
 
-  function rosterRowHtml(r,accountIndex,rowIndex){
+  // ⚠️ NUEVO: nota de referencia por perfil, guardada SOLO en este navegador
+  // (localStorage) — nunca se manda a Firebase. Sirve para poner un recordatorio
+  // rápido (ej. "(paga con Manuel)") sin afectar la base viva.
+  function localNoteKey(account,row){
+    return `cmNota::${account.key}::${norm(row.name||'')}::${norm(fieldText(row.profile)||'')}`;
+  }
+  function getLocalNote(key){
+    try{return localStorage.getItem(key)||'';}catch(_){return '';}
+  }
+  function setLocalNote(key,value){
+    try{value?localStorage.setItem(key,value):localStorage.removeItem(key);}catch(_){}
+  }
+  function toggleRosterNote(pointer){
+    const {account,row}=auditRoster(pointer);if(!account||!row)return;
+    const key=localNoteKey(account,row);
+    state.editingNoteKey=state.editingNoteKey===key?'':key;
+    render();
+  }
+  function saveRosterNote(pointer){
+    const {account,row}=auditRoster(pointer);if(!account||!row)return;
+    const key=localNoteKey(account,row);
+    const host=root();
+    const input=host?.querySelector(`[data-cm-note-input="${pointer}"]`);
+    setLocalNote(key,input?String(input.value||'').trim():'');
+    state.editingNoteKey='';
+    render();
+  }
+  function cancelRosterNote(){
+    state.editingNoteKey='';
+    render();
+  }
+
+  function rosterRowHtml(r,account,accountIndex,rowIndex){
     const s=ROSTER_STATUS[r.status]||{label:r.status||'Revisar',icon:'⚠️',tone:'bad'};
     const rawProfile=fieldText(r.profile);
     const profile=rawProfile?(/^perfil\b/i.test(rawProfile)?rawProfile:`Perfil ${rawProfile}`):'Perfil sin indicar';
@@ -782,12 +820,17 @@
       r.service?`<button class="cm-row-action delete" data-cm-delete-service="${pointer}">🗑️ Eliminar</button>`:'',
       r.excel&&!r.service&&!r.inv?`<button class="cm-row-action delete" data-cm-delete-excel="${pointer}">🗑️ Borrar del Excel</button>`:''
     ].filter(Boolean).join('');
+    const noteKey=localNoteKey(account,r);
+    const note=getLocalNote(noteKey);
+    const editingNote=state.editingNoteKey===noteKey;
+    const noteAction=`<button class="cm-row-action note" data-cm-note-toggle="${pointer}" title="Nota de referencia — se guarda solo en este navegador, no en Firebase">${note?'📝 Nota':'📝 +Nota'}</button>`;
     return `<div class="cm-roster-row ${s.tone}" title="${esc(r.detail||'')}">
       <div class="cm-roster-slot"><b>${esc(profile)}</b><small>${r.pin?`PIN ${esc(r.pin)}`:'Sin PIN'}</small><div class="cm-roster-sources">${sources.map((x)=>`<i>${esc(x)}</i>`).join('')}</div></div>
-      <button class="cm-roster-client" data-cm-audit-client="${accountIndex}:${rowIndex}" title="Abrir este cliente"><b>${esc(r.name||'Sin nombre')}</b><small>${esc(r.phone||'Sin teléfono')}</small></button>
+      <button class="cm-roster-client" data-cm-audit-client="${accountIndex}:${rowIndex}" title="Abrir este cliente"><b>${esc(r.name||'Sin nombre')}</b><small>${esc(r.phone||'Sin teléfono')}${note?` · (${esc(note)})`:''}</small></button>
       <div class="cm-roster-date"><b>${esc(dateLabel(r.date))}</b><small>Vencimiento</small></div>
       <span class="cm-roster-status ${s.tone}" title="${esc(r.detail||'')}">${s.icon} ${esc(s.label)}</span>
-      <div class="cm-roster-actions">${actions||'<span>Solo respaldo Excel</span>'}</div>
+      <div class="cm-roster-actions">${actions}${noteAction}</div>
+      ${editingNote?`<div class="cm-roster-note-edit"><input type="text" class="cm-roster-note-input" data-cm-note-input="${pointer}" placeholder="Nota de referencia (solo en este navegador, no toca Firebase)" value="${esc(note)}"><button class="cm-row-action" data-cm-note-save="${pointer}">💾 Guardar</button><button class="cm-row-action" data-cm-note-cancel="1">✖ Cancelar</button></div>`:''}
     </div>`;
   }
 
@@ -805,7 +848,7 @@
     const inventoryIds=a.accountIds.filter(Boolean);
     const editableAccount=inventoryIds.length===1;
     const password=a.clave?revealed?esc(a.clave):'••••••••':'Sin clave guardada';
-    const roster=expanded?a.roster.map((r,j)=>rosterRowHtml(r,i,j)).join(''):'';
+    const roster=expanded?a.roster.map((r,j)=>rosterRowHtml(r,a,i,j)).join(''):'';
     return `<article class="cm-ledger-account ${life.tone} ${expanded?'is-open':''}" style="--platform-color:${platformColor(a.family)}">
       <div class="cm-ledger-row">
         <div class="cm-ledger-platform-cell"><span class="cm-ledger-platform">${esc(a.platform)}</span><span class="cm-life-state ${life.tone}">${life.icon} ${esc(life.label)}</span></div>
@@ -950,6 +993,9 @@
     container.querySelectorAll('[data-cm-delete-account]').forEach(b=>b.onclick=()=>deleteAuditAccount(Number(b.dataset.cmDeleteAccount)));
     container.querySelectorAll('[data-cm-review-ok]').forEach(b=>b.onclick=()=>saveAccountReview(b.dataset.cmReviewOk,'correcta'));
     container.querySelectorAll('[data-cm-review-issue]').forEach(b=>b.onclick=()=>saveAccountReview(b.dataset.cmReviewIssue,'incidencia'));
+    container.querySelectorAll('[data-cm-note-toggle]').forEach(b=>b.onclick=()=>toggleRosterNote(b.dataset.cmNoteToggle));
+    container.querySelectorAll('[data-cm-note-save]').forEach(b=>b.onclick=()=>saveRosterNote(b.dataset.cmNoteSave));
+    container.querySelectorAll('[data-cm-note-cancel]').forEach(b=>b.onclick=()=>cancelRosterNote());
   }
 
   // Actualiza solamente la mesa de cuentas (conteo + tarjetas) sin tocar el
