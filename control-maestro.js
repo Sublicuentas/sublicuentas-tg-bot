@@ -4,7 +4,7 @@
   const API='/api/importar';
   const INVENTORY_API='/api/inventario';
   const RENEW_API='/api/renovar';
-  const BUILD='CONTROL-MAESTRO-NOTA-LOCAL-Y-COLOR-POR-AVANCE-20260808-26';
+  const BUILD='CONTROL-MAESTRO-FIX-PARPADEO-EXCEL-20260808-27';
   let accountSearchTimer=null,clientSearchTimer=null;
   const state={
     booted:false,installed:false,loading:false,busy:false,status:'',statusType:'',meta:null,
@@ -964,7 +964,7 @@
     const controlScreen=document.getElementById('screen-control-cuentas');
     const expanded=document.fullscreenElement===controlScreen||controlScreen?.classList.contains('cm-control-expanded');
     host.innerHTML=`<div class="cm-shell cm-size-${esc(state.uiSize)}" data-build="${BUILD}">
-      <header class="cm-hero"><div class="cm-title"><div class="cm-title-icon">📋</div><div><h2>Control Maestro</h2><p>Vista tipo Excel: una línea por cuenta, colores de vencimiento y clientes desplegables.</p></div></div><div class="cm-hero-actions"><div class="cm-refresh-top-wrap"><button class="cm-btn primary cm-refresh-top ${state.refreshing?'is-loading':''}" data-cm-action="refresh-data" ${state.busy?'disabled':''}>${state.refreshing?'⏳ Actualizando datos…':'🔄 Actualizar datos'}</button><small>${esc(refreshTimeLabel())}</small></div><button class="cm-btn cm-expand" data-cm-action="toggle-fullscreen">${expanded?'↙️ Salir de pantalla completa':'⛶ Pantalla completa'}</button><span class="cm-private">🔒 Solo Sublicuentas</span></div></header>
+      <header class="cm-hero"><div class="cm-title"><div class="cm-title-icon">📋</div><div><h2>Control Maestro</h2><p>Vista tipo Excel: una línea por cuenta, colores de vencimiento y clientes desplegables. <span class="cm-build-tag" title="Si subís un archivo nuevo y este texto no cambia, el navegador está mostrando una copia guardada — haga Ctrl+Shift+R (o borre caché) para forzar la versión nueva.">v.${esc(BUILD.slice(-8))}</span></p></div></div><div class="cm-hero-actions"><div class="cm-refresh-top-wrap"><button class="cm-btn primary cm-refresh-top ${state.refreshing?'is-loading':''}" data-cm-action="refresh-data" ${state.busy?'disabled':''}>${state.refreshing?'⏳ Actualizando datos…':'🔄 Actualizar datos'}</button><small>${esc(refreshTimeLabel())}</small></div><button class="cm-btn cm-expand" data-cm-action="toggle-fullscreen">${expanded?'↙️ Salir de pantalla completa':'⛶ Pantalla completa'}</button><span class="cm-private">🔒 Solo Sublicuentas</span></div></header>
       <div class="cm-reading-bar"><div><b>👓 Tamaño de lectura</b><small>Puede aumentarlo sin cambiar el tamaño del resto de Sublichat.</small></div><div class="cm-size-options" role="group" aria-label="Tamaño del texto"><button data-cm-size="normal" class="${state.uiSize==='normal'?'on':''}" aria-pressed="${state.uiSize==='normal'}">Normal</button><button data-cm-size="large" class="${state.uiSize==='large'?'on':''}" aria-pressed="${state.uiSize==='large'}">Grande</button><button data-cm-size="xlarge" class="${state.uiSize==='xlarge'?'on':''}" aria-pressed="${state.uiSize==='xlarge'}">Muy grande</button></div></div>
       ${kpisHtml()}${accountAuditHtml()}${templateHtml()}${reviewHtml()}${backupsHtml()}
     </div>`;
@@ -1587,9 +1587,17 @@
       catch(_){metaWarning=' No se pudo renovar el historial de revisiones, pero Clientes y Bodega sí se actualizaron.';}
       let excelWarning='';
       if(state.meta?.plantilla&&window.ExcelJS){
+        // ⚠️ BUG REAL encontrado: si la relectura del Excel fallaba (por ejemplo
+        // por una conexión lenta en el celular), esto BORRABA el análisis
+        // anterior que sí había funcionado. Como las cuentas "Solo Excel"
+        // dependen de tener ese análisis cargado, cada vez que fallaba la
+        // relectura, esas cuentas desaparecían de golpe — y volvían a aparecer
+        // en el siguiente refresco exitoso. Eso era el "parpadeo" entre 100% y
+        // 38% en Canva: no eran dos Control Maestro distintos, era el mismo,
+        // perdiendo y recuperando el cruce con el Excel en cada intento.
         try{await analyze(false);}
-        catch(_){state.analysis=null;excelWarning=' El cruce histórico con Excel queda pendiente hasta presionar “Revisar ahora”.';}
-      }else state.accountAudit=null;
+        catch(_){excelWarning=' El cruce histórico con Excel no se pudo releer esta vez (conexión lenta); se mantiene el último cruce cargado.';}
+      }else if(!state.analysis){state.accountAudit=null;}
       state.accountAudit=null;
       const fresh=source();
       state.lastRefreshAt=new Date().toISOString();
