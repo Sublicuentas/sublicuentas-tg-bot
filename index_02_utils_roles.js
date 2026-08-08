@@ -27,6 +27,32 @@ const panelMsgId = global.__SUBLICUENTAS_PANEL_MSG_ID__;
 const pending    = global.__SUBLICUENTAS_PENDING__;
 const wizard     = global.__SUBLICUENTAS_WIZARD__;
 
+// ⚠️ FIX: cuando alguien empezaba un flujo que espera texto (cambiar correo,
+// registrar un ingreso, etc.) y lo abandonaba a medias sin cancelar, ese
+// "pending" se quedaba pegado para siempre y bloqueaba la búsqueda por nombre
+// en cualquier parte del bot hasta escribir "menu". Ahora cada pending queda
+// con la hora en que se creó, para poder detectar y descartar los que ya
+// quedaron viejos/abandonados sin tener que tocar cada flujo uno por uno.
+if (!pending.__timestamped) {
+  const _pendingSet = pending.set.bind(pending);
+  pending.set = (key, value) => {
+    if (value && typeof value === "object" && !Array.isArray(value)) value._ts = Date.now();
+    return _pendingSet(key, value);
+  };
+  Object.defineProperty(pending, "__timestamped", { value: true, enumerable: false });
+}
+
+// ⚠️ FIX: mismo problema con el asistente de "agregar cliente nuevo" — si se
+// abandona a medias también bloqueaba la búsqueda para siempre.
+if (!wizard.__timestamped) {
+  const _wizardSet = wizard.set.bind(wizard);
+  wizard.set = (key, value) => {
+    if (value && typeof value === "object" && !Array.isArray(value)) value._ts = Date.now();
+    return _wizardSet(key, value);
+  };
+  Object.defineProperty(wizard, "__timestamped", { value: true, enumerable: false });
+}
+
 // ===============================
 // LOGS
 // ===============================

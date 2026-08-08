@@ -4762,13 +4762,26 @@ bot.on("message", async (msg) => {
       const tSearch = String(text || "").trim();
       const pSearch = pending.get(String(chatId));
       const pendingMode = String(pSearch?.mode || "");
-      const pendingBloqueaBusqueda = !!(pSearch && !["invSubmenuCtx"].includes(pendingMode));
+      // ⚠️ FIX: dos causas de "a veces no busca nada":
+      // 1) Modos que son solo "contexto" para el próximo botón (no esperan
+      //    texto libre) también bloqueaban la búsqueda por error.
+      // 2) Un flujo de texto abandonado a medias (sin cancelar) quedaba
+      //    pegado para siempre. Ahora, si el pending tiene más de 5 minutos,
+      //    se considera abandonado, se borra solo, y la búsqueda funciona.
+      const PENDING_STALE_MS = 5 * 60 * 1000;
+      const pendingStale = !!(pSearch && pSearch._ts && (Date.now() - pSearch._ts) > PENDING_STALE_MS);
+      if (pendingStale) pending.delete(String(chatId));
+      const wSearch = wizard.get(String(chatId));
+      const wizardStale = !!(wSearch && wSearch._ts && (Date.now() - wSearch._ts) > PENDING_STALE_MS);
+      if (wizardStale) wizard.delete(String(chatId));
+      const pendingContextOnly = ["invSubmenuCtx", "mailDelClientePickCtx", "mailEditPinPickCtx"].includes(pendingMode);
+      const pendingBloqueaBusqueda = !!(pSearch && !pendingContextOnly && !pendingStale);
       const pareceBusqueda =
         isEmailLike(tSearch) ||
         onlyDigits(tSearch).length >= 7 ||
         normalizeLooseText(tSearch).length >= 2;
 
-      if (pareceBusqueda && !wizard.has(String(chatId)) && !pendingBloqueaBusqueda) {
+      if (pareceBusqueda && !(wizard.has(String(chatId)) && !wizardStale) && !pendingBloqueaBusqueda) {
         return resolverBusquedaAdmin(chatId, tSearch);
       }
     }
