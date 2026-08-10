@@ -2169,7 +2169,7 @@ bot.onText(/\/sincronizar_claves/i, async (msg) => {
 // ✅ NUEVO: /version — para confirmar rápido si el bot ya tiene el código
 // nuevo después de subir un archivo, sin tener que adivinar. Cualquier admin
 // o vendedor lo puede usar.
-const BOT_BUILD = "BOT-BUILD-MENU-PRINCIPAL-COLOR-20260810-03";
+const BOT_BUILD = "BOT-BUILD-SUBMENUS-COLOR-20260810-04";
 bot.onText(/\/version/i, async (msg) => {
   if (!hasRuntimeLock()) return;
   const chatId = msg.chat.id;
