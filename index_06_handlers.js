@@ -470,7 +470,18 @@ async function sincronizarUnServicioDesdeInventarioLocal(clientId, idx) {
   const inv = await buscarInventarioFlexiblePorServicioLocal(actual, platActual);
   if (!inv) throw new Error("No encontré ese correo/usuario en inventario.");
 
-  const platInv = normalizarPlataforma(inv.plataformaCoincidente || inv.plataforma || platActual);
+  // ⚠️ FIX: si no había cuenta exacta en ESTA plataforma, buscarInventarioFlexiblePorServicioLocal
+  // caía a un match "solo_correo" (cualquier plataforma con ese mismo correo).
+  // Antes esto se aceptaba igual y CAMBIABA la plataforma del cliente para que
+  // coincidiera con lo que encontró — así fue como clientes de Disney
+  // terminaron con la clave y hasta la plataforma de una cuenta de Paramount
+  // que solo compartía el correo por casualidad. Ahora solo se acepta un
+  // match de la MISMA plataforma; si no hay uno exacto, se avisa en vez de adivinar.
+  if (inv.match !== "plataforma_correo") {
+    throw new Error(`Ese correo/usuario existe en inventario, pero en otra plataforma (${humanPlatLabelSyncLocal(inv.plataformaCoincidente || inv.plataforma || "")}), no en ${humanPlatLabelSyncLocal(platActual)}. No se tocó nada — revise manualmente cuál es la cuenta correcta.`);
+  }
+
+  const platInv = platActual;
   const claveInv = extraerClaveInventarioLocal(inv.data || {});
   const pinInv = extraerPinInventarioLocal(inv.data || {});
   const patch = { plataforma: platInv };
@@ -575,12 +586,18 @@ async function sincronizarClavesClientesVigentes(chatId) {
           continue;
         }
 
-        const platInv = normalizarPlataforma(inv.plataformaCoincidente || inv.plataforma || plat);
-        if (platInv && platInv !== plat && requiereClaveLocal(platInv)) {
-          servicio.plataforma = platInv;
-          plat = platInv;
-          changed = true;
-          plataformasCorregidas++;
+        // ⚠️ FIX: esto era la fuga principal. Si no había cuenta exacta en la
+        // MISMA plataforma, se aceptaba cualquier cuenta con el mismo correo
+        // aunque fuera de OTRA plataforma (match "solo_correo") y encima se
+        // CAMBIABA la plataforma del cliente para "corregirla" — así es como
+        // clientes de Disney terminaban con la clave (y hasta la plataforma)
+        // de una cuenta de Paramount que solo compartía el correo. Ahora solo
+        // se acepta un match de la MISMA plataforma; si no hay uno exacto, se
+        // deja el servicio intacto en vez de adivinar.
+        if (inv.match !== "plataforma_correo") {
+          sinInventario++;
+          nuevosServicios.push(servicio);
+          continue;
         }
 
         const claveInv = extraerClaveInventarioLocal(inv.data || {});
@@ -5604,38 +5621,53 @@ bot.on("message", async (msg) => {
           const inv = await buscarInventarioFlexiblePorServicioLocal(servicioBusqueda, platBase);
 
           let patch = { correo: correoIngresado };
+          let aplicoInventario = false;
+          let platCruzada = "";
 
+          // ⚠️ FIX: este era el flujo más usado de todos ("Cambiar correo"), y
+          // el más peligroso. Si el correo nuevo no existía en Bodega bajo ESTA
+          // plataforma pero SÍ existía bajo otra (mismo correo, cuenta
+          // distinta), esto se aceptaba igual — cambiaba la plataforma del
+          // servicio Y le copiaba la clave/PIN de la cuenta equivocada. Así
+          // fue como el Disney de Pamela terminó con datos de una cuenta de
+          // Paramount que solo compartía el correo. Ahora solo se usa el
+          // inventario si coincide exactamente con la plataforma actual; si
+          // el correo solo existe en otra plataforma, se guarda el correo tal
+          // cual lo escribiste y la clave/PIN quedan como estaban (no se tocan).
           if (inv) {
             const dataInv = inv.data || {};
             const platInv = normalizarPlataforma(inv.plataformaCoincidente || inv.plataforma || dataInv.plataforma || platBase);
-            const identInv = getIdentInventarioSyncLocal(dataInv) || correoIngresado;
-            const claveInv = extraerClaveInventarioLocal(dataInv);
-            const pinInv = extraerPinInventarioLocal(dataInv);
+            if (platInv === platBase) {
+              const identInv = getIdentInventarioSyncLocal(dataInv) || correoIngresado;
+              const claveInv = extraerClaveInventarioLocal(dataInv);
+              const pinInv = extraerPinInventarioLocal(dataInv);
 
-            patch.plataforma = platInv;
-            patch.correo = normalizeIdentByPlatformLocal(platInv, identInv);
+              patch.plataforma = platInv;
+              patch.correo = normalizeIdentByPlatformLocal(platInv, identInv);
 
-            if (requiereClaveLocal(platInv)) {
-              patch.clave = claveInv || actual.clave || actual.password || actual.pass || "";
+              if (requiereClaveLocal(platInv)) {
+                patch.clave = claveInv || actual.clave || actual.password || actual.pass || "";
+              } else {
+                patch.clave = "";
+              }
+
+              if (requierePinLocal(platInv)) {
+                patch.pin = extraerPinServicioLocal(actual) || pinInv || "";
+              } else {
+                patch.pin = "";
+              }
+              aplicoInventario = true;
             } else {
-              patch.clave = "";
-            }
-
-            if (requierePinLocal(platInv)) {
-              patch.pin = extraerPinServicioLocal(actual) || pinInv || "";
-            } else {
-              patch.pin = "";
+              platCruzada = platInv;
             }
           }
 
           await patchServicio(p.clientId, p.idx, patch);
 
-          if (inv) {
-            const platFinal = normalizarPlataforma(patch.plataforma || platBase);
-            const msg = platFinal !== platBase
-              ? `✅ Correo actualizado. También corregí la plataforma a *${humanPlatLabelLocal(platFinal)}* y traje los datos del inventario.`
-              : `✅ Correo actualizado y datos sincronizados desde inventario.`;
-            await bot.sendMessage(chatId, msg, { parse_mode: "Markdown" });
+          if (aplicoInventario) {
+            await bot.sendMessage(chatId, "✅ Correo actualizado y datos sincronizados desde inventario.", { parse_mode: "Markdown" });
+          } else if (platCruzada) {
+            await bot.sendMessage(chatId, `✅ Correo actualizado. ⚠️ Ese correo existe en Bodega pero en otra plataforma (*${humanPlatLabelSyncLocal(platCruzada)}*) — no toqué la clave ni el PIN para no mezclar cuentas. Revíselos manualmente si hace falta.`, { parse_mode: "Markdown" });
           } else {
             await bot.sendMessage(chatId, "✅ Correo actualizado. ⚠️ No lo encontré en inventario, revise clave/PIN si aplica.");
           }
