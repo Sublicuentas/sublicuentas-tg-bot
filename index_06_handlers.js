@@ -988,16 +988,16 @@ async function sendBottomMainMenu(chatId, userId, fromText = false) {
       const texto = "📊 *CENTRO DE OPERACIONES*\n\nSublicuentas — Conectamos su entretenimiento\n\nSeleccione una opción:";
       return upsertPanel(chatId, texto, [
         [
-          { text: "🎯 Control cuentas", callback_data: "menu:inventario" },
-          { text: "👥 Clientes", callback_data: "menu:clientes" },
+          { text: "🎯 Control cuentas", callback_data: "menu:inventario", style: "primary" },
+          { text: "👥 Clientes", callback_data: "menu:clientes", style: "primary" },
         ],
         [
-          { text: "💰 Control financiero", callback_data: "menu:pagos" },
-          { text: "🚨 Riesgos", callback_data: "menu:alertas" },
+          { text: "💰 Control financiero", callback_data: "menu:pagos", style: "success" },
+          { text: "🚨 Riesgos", callback_data: "menu:alertas", style: "danger" },
         ],
         [
-          { text: "📊 Análisis", callback_data: "menu:dashboard" },
-          { text: "👤 Revendedores", callback_data: "menu:revendedores" },
+          { text: "📊 Análisis", callback_data: "menu:dashboard", style: "primary" },
+          { text: "👤 Revendedores", callback_data: "menu:revendedores", style: "primary" },
         ],
       ], "Markdown");
     } else if (await safeIsVendedorLocal(userId)) {
@@ -2169,7 +2169,7 @@ bot.onText(/\/sincronizar_claves/i, async (msg) => {
 // ✅ NUEVO: /version — para confirmar rápido si el bot ya tiene el código
 // nuevo después de subir un archivo, sin tener que adivinar. Cualquier admin
 // o vendedor lo puede usar.
-const BOT_BUILD = "BOT-BUILD-BOTONES-COLOR-20260810-02";
+const BOT_BUILD = "BOT-BUILD-MENU-PRINCIPAL-COLOR-20260810-03";
 bot.onText(/\/version/i, async (msg) => {
   if (!hasRuntimeLock()) return;
   const chatId = msg.chat.id;
