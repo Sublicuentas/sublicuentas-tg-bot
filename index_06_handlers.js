@@ -2166,6 +2166,18 @@ bot.onText(/\/sincronizar_claves/i, async (msg) => {
   );
 });
 
+// ✅ NUEVO: /version — para confirmar rápido si el bot ya tiene el código
+// nuevo después de subir un archivo, sin tener que adivinar. Cualquier admin
+// o vendedor lo puede usar.
+const BOT_BUILD = "BOT-BUILD-BOTONES-COLOR-20260810-02";
+bot.onText(/\/version/i, async (msg) => {
+  if (!hasRuntimeLock()) return;
+  const chatId = msg.chat.id;
+  const userId = msg.from.id;
+  if (!(await safeIsAdminLocal(userId)) && !(await safeIsVendedorLocal(userId))) return;
+  return bot.sendMessage(chatId, `🔧 ${BOT_BUILD}\n\nSi acabás de subir un archivo nuevo y esto NO cambió, Render todavía no terminó de desplegar (o no se subió) — revisá el dashboard de Render.`);
+});
+
 bot.onText(/\/sincronizar_todo/i, async (msg) => {
   if (!hasRuntimeLock()) return;
 
@@ -4340,7 +4352,7 @@ Revise que el correo exista en inventario con esa plataforma o coloque la clave 
         const clientId = parts[4];
         const idx = Number(parts[5]);
         return upsertPanel(chatId, "🗑️ *Eliminar compra completa*\n\nSe quitarán todos los perfiles incluidos, se liberarán sus cupos y se eliminará el precio/renovación de este servicio. ¿Confirma?", [
-          [{ text: "✅ Confirmar", callback_data: `cli:serv:del:ok:${clientId}:${idx}` }],
+          [{ text: "🗑️ Sí, eliminar", callback_data: `cli:serv:del:ok:${clientId}:${idx}`, style: "danger" }],
           [{ text: "⬅️ Cancelar", callback_data: `cli:serv:menu:${clientId}:${idx}` }],
         ]);
       }
@@ -4973,7 +4985,7 @@ bot.on("message", async (msg) => {
         "editar_movimiento", "clientes_excel",
         // ✅ Diagnóstico / reparación de colisiones (antes faltaban aquí y por eso
         // el buscador genérico también los interceptaba y mandaba "Sin resultados").
-        "reparar_colisiones", "buscar_raw", "detectar_cruces",
+        "reparar_colisiones", "buscar_raw", "detectar_cruces", "version",
         // ✅ Comandos IMAP — no pasar a resolverBusquedaAdmin
         "code", "link", "hogar", "prime", "inbox", "debug",
         // ✅ Buzón de avisos web revendedores

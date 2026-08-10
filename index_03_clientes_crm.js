@@ -1060,7 +1060,7 @@ async function menuServicio(chatId, clientId, idx) {
   if (credBtns.length) kb.push(credBtns);
   kb.push([{ text: "💰 Cambiar precio", callback_data: `cli:serv:edit:precio:${clientId}:${idx}` }]);
   kb.push([{ text: "📅 Cambiar fecha renovación", callback_data: `cli:serv:edit:fecha:${clientId}:${idx}` }]);
-  kb.push([{ text: "🗑️ Eliminar compra completa", callback_data: `cli:serv:del:ask:${clientId}:${idx}` }]);
+  kb.push([{ text: "🗑️ Eliminar compra completa", callback_data: `cli:serv:del:ask:${clientId}:${idx}`, style: "danger" }]);
   kb.push([{ text: "⬅️ Volver Servicios", callback_data: `cli:serv:list:${clientId}` }, { text: "🏠 Inicio", callback_data: "go:inicio" }]);
 
   return upsertPanel(chatId, txt, kb);
