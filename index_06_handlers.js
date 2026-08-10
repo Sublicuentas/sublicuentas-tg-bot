@@ -2296,6 +2296,206 @@ bot.onText(/\/sincronizar_todo/i, async (msg) => {
   }
 });
 
+// ✅ NUEVO: /detectar_cruces (confirmar) — revisa cada cuenta del inventario y
+// compara a la gente que tiene adentro contra el servicio REAL de cada
+// cliente (colección "clientes"). Sin "confirmar" es solo un reporte, no
+// toca nada. Con "confirmar" SACA a esas personas de la cuenta equivocada
+// (no las mete en ningún lado más — para eso corré /sincronizar_todo después,
+// que ya está corregido y las va a poner en su cuenta correcta si existe).
+bot.onText(/\/detectar_cruces(?:\s+(confirmar))?/i, async (msg, match) => {
+  if (!hasRuntimeLock()) return;
+  const chatId = msg.chat.id;
+  const userId = msg.from.id;
+  const confirmar = !!(match && match[1]);
+
+  if (!(await safeIsAdminLocal(userId))) {
+    return bot.sendMessage(chatId, "⛔ Solo ADMIN puede ejecutar esto.");
+  }
+
+  await bot.sendMessage(
+    chatId,
+    confirmar
+      ? "🔧 Revisando y corrigiendo cruces de plataforma en el inventario…"
+      : "🔎 Revisando todo el inventario contra los servicios reales de cada cliente… puede tardar un poco. No se va a modificar nada, solo voy a armar la lista."
+  );
+
+  try {
+    const [snapInv, snapClientes] = await Promise.all([
+      db.collection("inventario").get(),
+      db.collection("clientes").get(),
+    ]);
+
+    // Índice de servicios REALES: correoNorm -> nombreNorm -> [{plataforma, nombre}]
+    // Esto refleja lo que dice la ficha del cliente, que es la fuente de verdad.
+    const serviciosPorCorreoNombre = new Map();
+    snapClientes.forEach((docCli) => {
+      const c = docCli.data() || {};
+      const servicios = Array.isArray(c.servicios) ? c.servicios : [];
+      const nombreCliente = c.nombrePerfil || c.nombre || "Sin Nombre";
+      const nombreNorm = normalizeLooseText(nombreCliente);
+      if (!nombreNorm) return;
+      servicios.forEach((s) => {
+        const correoNorm = String(s?.correo || "").trim().toLowerCase();
+        const plat = normalizarPlataforma(s?.plataforma || "");
+        if (!correoNorm || !plat) return;
+        if (!serviciosPorCorreoNombre.has(correoNorm)) serviciosPorCorreoNombre.set(correoNorm, new Map());
+        const porNombre = serviciosPorCorreoNombre.get(correoNorm);
+        if (!porNombre.has(nombreNorm)) porNombre.set(nombreNorm, []);
+        porNombre.get(nombreNorm).push({ plataforma: plat, nombre: nombreCliente });
+      });
+    });
+
+    const cruces = [];
+    const huerfanos = [];
+    // docId -> { ref, data, aQuitar: [{nombre, pin, slot}] }
+    const cuentasAfectadas = new Map();
+    let cuentasRevisadas = 0;
+    let perfilesRevisados = 0;
+
+    snapInv.forEach((docInv) => {
+      const data = docInv.data() || {};
+      const correoNorm = String(data.correo || "").trim().toLowerCase();
+      const platInv = normalizarPlataforma(data.plataforma || "");
+      if (!correoNorm || !platInv) return;
+      cuentasRevisadas++;
+
+      const clientesInv = Array.isArray(data.clientes) ? data.clientes : [];
+      const porNombre = serviciosPorCorreoNombre.get(correoNorm) || new Map();
+
+      clientesInv.forEach((cliInv) => {
+        perfilesRevisados++;
+        const nombreNorm = normalizeLooseText(cliInv?.nombre || "");
+        if (!nombreNorm) return;
+
+        const candidatos = porNombre.get(nombreNorm) || [];
+        if (!candidatos.length) {
+          huerfanos.push({
+            nombre: cliInv?.nombre || "Sin nombre",
+            plataforma: platInv,
+            correo: data.correo || "",
+            docId: docInv.id,
+          });
+          return;
+        }
+
+        const coincideAqui = candidatos.some((x) => x.plataforma === platInv);
+        if (coincideAqui) return; // está bien puesto, no hay problema
+
+        const otras = [...new Set(candidatos.map((x) => humanPlatLabelSyncLocal(x.plataforma)))];
+        cruces.push({
+          nombre: cliInv?.nombre || "Sin nombre",
+          pin: cliInv?.pin || "",
+          correo: data.correo || "",
+          plataformaActual: humanPlatLabelSyncLocal(platInv),
+          plataformaReal: otras.join(" / "),
+          docId: docInv.id,
+        });
+
+        if (!cuentasAfectadas.has(docInv.id)) {
+          cuentasAfectadas.set(docInv.id, { ref: docInv.ref, data, aQuitar: [] });
+        }
+        cuentasAfectadas.get(docInv.id).aQuitar.push(cliInv);
+      });
+    });
+
+    // ── Modo corrección: sacar de cada cuenta a la gente que no corresponde ──
+    if (confirmar) {
+      let cuentasCorregidas = 0;
+      let perfilesSacados = 0;
+
+      for (const { ref, data, aQuitar } of cuentasAfectadas.values()) {
+        const clientesActuales = Array.isArray(data.clientes) ? data.clientes : [];
+        const quitarSet = new Set(
+          aQuitar.map((x) => `${normalizeLooseText(x?.nombre || "")}|${String(x?.pin || "")}|${String(x?.slot || "")}`)
+        );
+        const clientesFinal = clientesActuales.filter((c) => {
+          const key = `${normalizeLooseText(c?.nombre || "")}|${String(c?.pin || "")}|${String(c?.slot || "")}`;
+          return !quitarSet.has(key);
+        });
+
+        const sacados = clientesActuales.length - clientesFinal.length;
+        if (!sacados) continue;
+
+        const capacidad = Number(data.capacidad || data.total || 0) || clientesFinal.length || 1;
+        const ocupados = clientesFinal.length;
+        const disponibles = Math.max(0, capacidad - ocupados);
+        const estado = disponibles === 0 ? "llena" : "activa";
+
+        await ref.set(
+          { clientes: clientesFinal, ocupados, disponibles, disp: disponibles, estado, updatedAt: admin.firestore.FieldValue.serverTimestamp() },
+          { merge: true }
+        );
+
+        cuentasCorregidas++;
+        perfilesSacados += sacados;
+      }
+
+      return bot.sendMessage(
+        chatId,
+        `✅ Corrección completada.\n\n` +
+          `📦 Cuentas corregidas: ${cuentasCorregidas}\n` +
+          `👤 Perfiles sacados de cuentas equivocadas: ${perfilesSacados}\n\n` +
+          (perfilesSacados
+            ? `💡 Solo se SACARON de donde no correspondían. Para que queden bien puestos en su cuenta correcta, corré /sincronizar_todo ahora.`
+            : `No había nada que corregir en este momento.`)
+      );
+    }
+
+    // ── Modo reporte (sin "confirmar") ──
+    const fecha = hoyDMY();
+    let reporte = `DIAGNÓSTICO DE INVENTARIO — cruces de plataforma\n`;
+    reporte += `Generado: ${fecha}\n`;
+    reporte += `Este archivo es solo de lectura, no se modificó nada en la base.\n\n`;
+    reporte += `Resumen:\n`;
+    reporte += `- Cuentas de inventario revisadas: ${cuentasRevisadas}\n`;
+    reporte += `- Perfiles/clientes revisados dentro de esas cuentas: ${perfilesRevisados}\n`;
+    reporte += `- Cruces de plataforma encontrados (gente en la cuenta equivocada): ${cruces.length}\n`;
+    reporte += `- Sin servicio activo encontrado con ese nombre (revisar aparte, puede ser normal): ${huerfanos.length}\n\n`;
+
+    reporte += `================================================\n`;
+    reporte += `CRUCES DE PLATAFORMA — hay que sacarlos de aquí\n`;
+    reporte += `================================================\n\n`;
+    if (!cruces.length) {
+      reporte += `No encontré ningún cruce de plataforma. 🎉\n\n`;
+    } else {
+      cruces.forEach((x, i) => {
+        reporte += `${i + 1}) ${x.nombre}${x.pin ? ` — PIN ${x.pin}` : ""}\n`;
+        reporte += `   Está metido en: ${x.plataformaActual} — ${x.correo}\n`;
+        reporte += `   Su servicio real es de: ${x.plataformaReal}\n`;
+        reporte += `   ID de la cuenta en Bodega: ${x.docId}\n\n`;
+      });
+    }
+
+    reporte += `================================================\n`;
+    reporte += `SIN SERVICIO ACTIVO ENCONTRADO (nombre no calzó con ningún servicio con ese correo — puede ser normal si ya no es cliente, o el nombre está escrito distinto)\n`;
+    reporte += `================================================\n\n`;
+    huerfanos.forEach((x, i) => {
+      reporte += `${i + 1}) ${x.nombre} — ${humanPlatLabelSyncLocal(x.plataforma)} — ${x.correo}\n`;
+    });
+
+    const buffer = Buffer.from(reporte, "utf8");
+    await bot.sendDocument(
+      chatId,
+      buffer,
+      {
+        caption:
+          `🔎 Diagnóstico completado — no se tocó nada.\n\n` +
+          `📦 Cuentas revisadas: ${cuentasRevisadas}\n` +
+          `👤 Perfiles revisados: ${perfilesRevisados}\n` +
+          `⚠️ Cruces de plataforma: ${cruces.length}\n` +
+          `❔ Sin servicio encontrado: ${huerfanos.length}\n\n` +
+          (cruces.length
+            ? `Para SACAR automáticamente a esta gente de la cuenta equivocada, envía:\n/detectar_cruces confirmar`
+            : `No encontré ningún cruce ahora mismo. 🎉`),
+      },
+      { filename: `cruces_inventario_${fecha.replace(/\//g, "-")}.txt`, contentType: "text/plain" }
+    );
+  } catch (error) {
+    logErr("detectar_cruces", error);
+    return bot.sendMessage(chatId, "⚠️ Ocurrió un error al revisar el inventario. Revise los logs del servidor.");
+  }
+});
+
 // ===============================
 // ✅ NUEVO: /reparar_colisiones
 // Separa clientes que quedaron mezclados en un mismo documento porque la
@@ -4773,7 +4973,7 @@ bot.on("message", async (msg) => {
         "editar_movimiento", "clientes_excel",
         // ✅ Diagnóstico / reparación de colisiones (antes faltaban aquí y por eso
         // el buscador genérico también los interceptaba y mandaba "Sin resultados").
-        "reparar_colisiones", "buscar_raw",
+        "reparar_colisiones", "buscar_raw", "detectar_cruces",
         // ✅ Comandos IMAP — no pasar a resolverBusquedaAdmin
         "code", "link", "hogar", "prime", "inbox", "debug",
         // ✅ Buzón de avisos web revendedores
