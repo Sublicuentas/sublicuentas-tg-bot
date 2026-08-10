@@ -2173,14 +2173,29 @@ bot.onText(/\/sincronizar_todo/i, async (msg) => {
     // así que esa búsqueda por ID casi nunca encontraba nada. Ahora cargamos
     // TODO el inventario una sola vez y lo indexamos por correo real, igual
     // que lo hace el backend de Sublichat HQ (renovar.js → ajustarInventario).
+    //
+    // ⚠️ BUG GRAVE encontrado y corregido: el índice se armaba SOLO por correo,
+    // sin la plataforma. Si el mismo correo existía en dos plataformas
+    // distintas (ej. "sabritas@capuchino.lat" como cuenta de Disney Y también
+    // como cuenta de Paramount), ambas caían en el mismo grupo — y al buscar
+    // dónde meter a un cliente de Disney, el código podía elegir por error la
+    // cuenta de Paramount (o al revés) solo porque tenía cupo libre, sin
+    // importar que fuera una plataforma totalmente distinta. Eso mezclaba
+    // clientes entre plataformas, marcaba cuentas "LLENA" con gente que no
+    // correspondía, y desordenaba el inventario cada vez que se corría este
+    // comando. Ahora el índice y la búsqueda usan correo + plataforma juntos,
+    // así nunca se cruzan cuentas de plataformas distintas aunque compartan
+    // el mismo correo.
     const snapInv = await db.collection("inventario").get();
-    const invPorCorreo = new Map(); // correoNorm -> [{ ref, data }]
+    const invPorCorreo = new Map(); // "plataforma|correoNorm" -> [{ ref, data }]
     snapInv.forEach((d) => {
       const data = d.data() || {};
       const correoNorm = String(data.correo || "").trim().toLowerCase();
       if (!correoNorm) return;
-      if (!invPorCorreo.has(correoNorm)) invPorCorreo.set(correoNorm, []);
-      invPorCorreo.get(correoNorm).push({ ref: d.ref, data });
+      const platNorm = normalizarPlataforma(data.plataforma || "");
+      const key = `${platNorm}|${correoNorm}`;
+      if (!invPorCorreo.has(key)) invPorCorreo.set(key, []);
+      invPorCorreo.get(key).push({ ref: d.ref, data });
     });
 
     const snapClientes = await db.collection("clientes").get();
@@ -2194,7 +2209,8 @@ bot.onText(/\/sincronizar_todo/i, async (msg) => {
         if (!s.correo || !s.plataforma) continue;
 
         const correoNorm = String(s.correo).trim().toLowerCase();
-        const candidatos = invPorCorreo.get(correoNorm) || [];
+        const platNorm = normalizarPlataforma(s.plataforma);
+        const candidatos = invPorCorreo.get(`${platNorm}|${correoNorm}`) || [];
 
         if (!candidatos.length) {
           clientesSinCuenta++;
