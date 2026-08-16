@@ -384,43 +384,41 @@ async function syncServicioEnInventario({ clienteNombre = "", plataforma = "", c
   const acceso = normalizeIdentByPlatformLocal(plat, correo);
   const found = await getInventarioDoc(plat, acceso);
   if (!found) return { ok: false, reason: "not_found" };
-
-  const { ref, data } = found;
-  let clientes = Array.isArray(data.clientes) ? data.clientes.slice() : [];
-
-  const pinNorm = String(pin || "").trim();
-  // ⚠️ FIX: la identidad del cliente es SOLO el nombre. Antes también se
-  // comparaba el PIN exacto, así que si el PIN llegaba distinto al guardado
-  // (ej: "" vs "0000"), el cliente se consideraba nuevo y se duplicaba en el
-  // arreglo — por eso cada /sincronizar_todo iba dejando copias. Ahora, si ya
-  // existe por nombre, se actualiza su PIN en el mismo registro.
-  const idxExiste = clientes.findIndex((x) => normTxt(x?.nombre || "") === normTxt(clienteNombre));
-  if (idxExiste !== -1) {
-    const patch = { updatedAt: admin.firestore.FieldValue.serverTimestamp() };
-    if (pinNorm && String(clientes[idxExiste].pin || "") !== pinNorm) {
-      clientes[idxExiste] = { ...clientes[idxExiste], pin: pinNorm };
-      patch.clientes = clientes;
+  const { ref } = found;
+  return db.runTransaction(async (tx) => {
+    const latest = await tx.get(ref);
+    if (!latest.exists) return { ok: false, reason: "not_found" };
+    const data = latest.data() || {};
+    let clientes = Array.isArray(data.clientes) ? data.clientes.slice() : [];
+    const pinNorm = String(pin || "").trim();
+    const idxExiste = clientes.findIndex((x) => normTxt(x?.nombre || "") === normTxt(clienteNombre));
+    if (idxExiste !== -1) {
+      const patch = {};
+      if (pinNorm && String(clientes[idxExiste].pin || "") !== pinNorm) {
+        clientes[idxExiste] = { ...clientes[idxExiste], pin: pinNorm };
+        patch.clientes = clientes;
+      }
+      const claveNorm = String(clave || "").trim();
+      if (claveNorm && requiereClaveLocal(plat) && (!data.clave || String(data.clave || "").toLowerCase() === "sin clave")) patch.clave = claveNorm;
+      if (Object.keys(patch).length) {
+        patch.updatedAt = admin.firestore.FieldValue.serverTimestamp();
+        tx.set(ref, patch, { merge: true });
+      }
+      return { ok: true, synced: true, added: false };
     }
+
+    const capacidad = Number(data.capacidad || data.total || getTotalPorPlataformaLocal(plat) || 1);
+    if (clientes.length >= capacidad) return { ok: false, reason: "full" };
+    clientes.push({ nombre: String(clienteNombre || "").trim(), pin: pinNorm, slot: clientes.length + 1 });
+    clientes = clientes.map((x, i) => ({ ...x, slot: i + 1 }));
+    const ocupados = clientes.length;
+    const disponibles = Math.max(0, capacidad - ocupados);
+    const patch = { clientes, ocupados, disponibles, disp: disponibles, capacidad, estado: disponibles === 0 ? "llena" : "activa", updatedAt: admin.firestore.FieldValue.serverTimestamp() };
     const claveNorm = String(clave || "").trim();
     if (claveNorm && requiereClaveLocal(plat) && (!data.clave || String(data.clave || "").toLowerCase() === "sin clave")) patch.clave = claveNorm;
-    if (Object.keys(patch).length > 1) await ref.set(patch, { merge: true });
-    return { ok: true, synced: true, added: false };
-  }
-
-  const capacidad = Number(data.capacidad || data.total || getTotalPorPlataformaLocal(plat) || 1);
-  if (clientes.length >= capacidad) return { ok: false, reason: "full" };
-
-  clientes.push({ nombre: String(clienteNombre || "").trim(), pin: pinNorm, slot: clientes.length + 1 });
-  clientes = clientes.map((x, i) => ({ ...x, slot: i + 1 }));
-  const ocupados = clientes.length;
-  const disponibles = Math.max(0, capacidad - ocupados);
-
-  const patch = { clientes, ocupados, disponibles, disp: disponibles, capacidad, estado: disponibles === 0 ? "llena" : "activa", updatedAt: admin.firestore.FieldValue.serverTimestamp() };
-  const claveNorm = String(clave || "").trim();
-  if (claveNorm && requiereClaveLocal(plat) && (!data.clave || String(data.clave || "").toLowerCase() === "sin clave")) patch.clave = claveNorm;
-
-  await ref.set(patch, { merge: true });
-  return { ok: true, synced: true, added: true, ocupados, disponibles, capacidad };
+    tx.set(ref, patch, { merge: true });
+    return { ok: true, synced: true, added: true, ocupados, disponibles, capacidad };
+  });
 }
 
 async function removeServicioDeInventario({ clienteNombre = "", plataforma = "", correo = "", pin = "" }) {
@@ -429,30 +427,27 @@ async function removeServicioDeInventario({ clienteNombre = "", plataforma = "",
   const found = await getInventarioDoc(plat, acceso);
   if (!found) return { ok: false, reason: "not_found" };
 
-  const { ref, data } = found;
-  let clientes = Array.isArray(data.clientes) ? data.clientes.slice() : [];
-  // ⚠️ FIX: antes exigía nombre + PIN exactos, así que si el PIN guardado no
-  // coincidía, la eliminación fallaba en silencio (removed:false) y el
-  // cliente parecía "no borrarse" o "volver" en el próximo sync. Ahora intenta
-  // nombre+PIN primero (más preciso), y si no hay match cae a nombre solo.
-  const pinFiltro = String(pin || "").trim();
-  let idx = -1;
-  if (pinFiltro) {
-    idx = clientes.findIndex((x) => normTxt(x?.nombre || "") === normTxt(clienteNombre) && String(x?.pin || "") === pinFiltro);
-  }
-  if (idx === -1) {
-    idx = clientes.findIndex((x) => normTxt(x?.nombre || "") === normTxt(clienteNombre));
-  }
-  if (idx === -1) return { ok: true, removed: false };
-
-  clientes.splice(idx, 1);
-  clientes = clientes.map((x, i) => ({ ...x, slot: i + 1 }));
-  const capacidad = Number(data.capacidad || data.total || getTotalPorPlataformaLocal(plat) || 1);
-  const ocupados = clientes.length;
-  const disponibles = Math.max(0, capacidad - ocupados);
-
-  await ref.set({ clientes, ocupados, disponibles, disp: disponibles, capacidad, estado: disponibles === 0 ? "llena" : "activa", updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
-  return { ok: true, removed: true };
+  const { ref } = found;
+  return db.runTransaction(async (tx) => {
+    const latest = await tx.get(ref);
+    if (!latest.exists) return { ok: false, reason: "not_found" };
+    const data = latest.data() || {};
+    let clientes = Array.isArray(data.clientes) ? data.clientes.slice() : [];
+    const pinFiltro = String(pin || "").trim();
+    let idx = -1;
+    if (pinFiltro) {
+      idx = clientes.findIndex((x) => normTxt(x?.nombre || "") === normTxt(clienteNombre) && String(x?.pin || "") === pinFiltro);
+    }
+    if (idx === -1) idx = clientes.findIndex((x) => normTxt(x?.nombre || "") === normTxt(clienteNombre));
+    if (idx === -1) return { ok: true, removed: false };
+    clientes.splice(idx, 1);
+    clientes = clientes.map((x, i) => ({ ...x, slot: i + 1 }));
+    const capacidad = Number(data.capacidad || data.total || getTotalPorPlataformaLocal(plat) || 1);
+    const ocupados = clientes.length;
+    const disponibles = Math.max(0, capacidad - ocupados);
+    tx.set(ref, { clientes, ocupados, disponibles, disp: disponibles, capacidad, estado: disponibles === 0 ? "llena" : "activa", updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+    return { ok: true, removed: true };
+  });
 }
 
 function normalizarCompraLocal(servicio = {}, titular = "", anterior = {}) {
@@ -469,28 +464,25 @@ function normalizarCompraLocal(servicio = {}, titular = "", anterior = {}) {
     const correoTop = index === 0 && servicio.correo != null ? servicio.correo : undefined;
     const claveTop = index === 0 && servicio.clave != null ? servicio.clave : undefined;
     const pinTop = index === 0 && (servicio.pin != null || servicio.pinPerfil != null) ? (servicio.pinPerfil ?? servicio.pin) : undefined;
-    const perfilGuardado = {
+    return {
       perfilId: String(raw.perfilId || raw.id || previo.perfilId || recordIdLocal("perfil")),
       nombre,
       perfil: String(raw.perfil || raw.nombrePerfil || raw.nombre || previo.perfil || nombre).trim(),
       correo: normalizeIdentByPlatformLocal(plat, raw.correo ?? correoTop ?? previo.correo ?? servicio.correo ?? anterior.correo ?? ""),
-      clave: requiereClaveLocal(plat) ? String(raw.clave ?? raw.password ?? raw.pass ?? claveTop ?? previo.clave ?? servicio.clave ?? anterior.clave ?? "").trim() : ""
+      clave: requiereClaveLocal(plat) ? String(raw.clave ?? raw.password ?? raw.pass ?? claveTop ?? previo.clave ?? servicio.clave ?? anterior.clave ?? "").trim() : "",
+      pin: requierePinLocal(plat) ? String(raw.pinPerfil ?? raw.pin_perfil ?? raw.perfilPin ?? raw.pin ?? pinTop ?? previo.pin ?? "").trim() : ""
     };
-    const pinPerfil = requierePinLocal(plat) ? String(raw.pinPerfil ?? raw.pin_perfil ?? raw.perfilPin ?? raw.pin ?? pinTop ?? previo.pin ?? "").trim() : "";
-    if (pinPerfil) perfilGuardado.pinPerfil = pinPerfil;
-    return perfilGuardado;
   });
   const principal = perfiles[0] || {};
   return {
     ...anterior,
     ...servicio,
-    schemaVersion: 2,
     compraId: String(servicio.compraId || anterior.compraId || recordIdLocal("compra")),
     modalidad: perfiles.length > 1 ? "multiperfil" : "individual",
     plataforma: plat,
     correo: principal.correo || "",
     clave: principal.clave || "",
-    pin: principal.pinPerfil || principal.pin || "",
+    pin: principal.pin || "",
     perfil: principal.perfil || principal.nombre || titular || "",
     perfiles
   };
@@ -540,6 +532,15 @@ async function sincronizarCompraInventarioLocal(anterior, nuevo, titular = "") {
       try { await syncServicioEnInventario({ clienteNombre: p.nombre || titular, plataforma: platAntes, correo: p.correo, clave: p.clave, pin: p.pin }); } catch (_) {}
     }
     throw error;
+  }
+}
+
+async function sincronizarCompraInventarioSeguroLocal(anterior, nuevo, titular = "") {
+  try {
+    return await sincronizarCompraInventarioLocal(anterior, nuevo, titular);
+  } catch (error) {
+    logErr("sincronizarCompraInventarioSeguroLocal", error);
+    return { ok: false, warning: String(error?.message || "No se pudo sincronizar inventario.") };
   }
 }
 
@@ -782,53 +783,30 @@ async function buscarClienteRobusto(query = "") {
   if (!qNorm && !qDigits) return [];
 
   const out = new Map();
-  // ⚠️ FIX: antes, si "vendedor_norm" tenía coincidencia EXACTA (ej. buscar
-  // "Yami" calzaba con el vendedor "Yami"), la función devolvía esos
-  // resultados de una vez y JAMÁS revisaba si el nombre del cliente también
-  // contenía "Yami" (como "Yami Hernandez") — por eso el cliente buscado no
-  // aparecía y solo salían otros clientes de ese vendedor. Ahora se rastrea
-  // aparte si hubo coincidencia real por nombre o teléfono; si lo único que
-  // hubo fue por vendedor, igual se hace el barrido completo para no perderse
-  // coincidencias de nombre.
-  const nombreOTelefonoHits = new Set();
 
   const jobs = [];
 
   if (qDigits && qDigits.length >= 7) {
-    jobs.push({
-      tipo: "telefono",
-      promise: db.collection(CLIENTES_COLLECTION).where("telefono_norm", "==", qDigits).limit(10).get(),
-    });
+    jobs.push(
+      db.collection(CLIENTES_COLLECTION).where("telefono_norm", "==", qDigits).limit(10).get(),
+    );
   }
 
   if (qNorm && qNorm.length >= 2) {
-    jobs.push({
-      // Antes era coincidencia EXACTA ("=="), así que "Yami" nunca calzaba
-      // con "Yami Hernandez". Ahora es por PREFIJO: cualquier nombre que
-      // EMPIECE con lo escrito entra, usando el índice de Firestore.
-      tipo: "nombre",
-      promise: db.collection(CLIENTES_COLLECTION)
-        .where("nombre_norm", ">=", qNorm)
-        .where("nombre_norm", "<", `${qNorm}\uf8ff`)
-        .limit(15).get(),
-    });
-    jobs.push({
-      tipo: "vendedor",
-      promise: db.collection(CLIENTES_COLLECTION).where("vendedor_norm", "==", qNorm).limit(10).get(),
-    });
+    jobs.push(
+      db.collection(CLIENTES_COLLECTION).where("nombre_norm", "==", qNorm).limit(10).get(),
+      db.collection(CLIENTES_COLLECTION).where("vendedor_norm", "==", qNorm).limit(10).get(),
+    );
   }
 
-  const settled = await Promise.allSettled(jobs.map((j) => j.promise));
-  settled.forEach((item, i) => {
-    if (item.status !== "fulfilled") return;
-    const tipo = jobs[i].tipo;
-    item.value.forEach((d) => {
-      if (!out.has(d.id)) out.set(d.id, { id: d.id, ...(d.data() || {}) });
-      if (tipo === "nombre" || tipo === "telefono") nombreOTelefonoHits.add(d.id);
-    });
-  });
+  const settled = await Promise.allSettled(jobs);
+  for (const item of settled) {
+    if (item.status === "fulfilled") {
+      item.value.forEach((d) => { if (!out.has(d.id)) out.set(d.id, { id: d.id, ...(d.data() || {}) }); });
+    }
+  }
 
-  if (nombreOTelefonoHits.size > 0) return Array.from(out.values()).slice(0, 30);
+  if (out.size > 0) return Array.from(out.values()).slice(0, 30);
 
   const snap = await db.collection(CLIENTES_COLLECTION).get();
 
@@ -1035,23 +1013,11 @@ async function menuServicio(chatId, clientId, idx) {
   txt += `💰 *Precio:* ${escMD(`${Number(s.precio || 0).toFixed(2)} Lps`)}\n`;
   txt += `📅 *Renovación:* ${escMD(s.fechaRenovacion || "-")}\n📊 *Estado:* ${est.emoji} ${escMD(est.texto)}`;
 
-  const totalPerfiles = cantidadPerfilesServicioLocal(s, c.nombrePerfil || "");
-  const identLabel = getIdentLabelLocal(s.plataforma || "");
-  const identIcon = identLabel === "Usuario" ? "👤" : "📧";
-  // ⚠️ FIX: antes decía siempre "Cambiar acceso del perfil 1", incluso en
-  // compras de un solo cliente (sin 2x1), lo que hacía parecer que "editar
-  // correo" había desaparecido. Ahora, si la compra es de 1 solo perfil dice
-  // directamente "Cambiar correo/usuario"; solo menciona "del perfil 1" cuando
-  // de verdad hay más de un perfil en la misma ficha (2x1).
-  const accesoLabel = totalPerfiles > 1
-    ? `${identIcon} Cambiar acceso del perfil 1 de ${totalPerfiles}`
-    : `${identIcon} Cambiar ${identLabel.toLowerCase()}`;
-
   const kb = [
     [{ text: "👥 Gestionar perfiles", callback_data: `cli:prof:list:${clientId}:${idx}` }],
     [{ text: "➕ Añadir perfil a esta compra", callback_data: `cli:prof:add:${clientId}:${idx}` }],
     [{ text: "📌 Cambiar plataforma", callback_data: `cli:serv:edit:plat:${clientId}:${idx}` }],
-    [{ text: accesoLabel, callback_data: `cli:serv:edit:mail:${clientId}:${idx}` }],
+    [{ text: `${getIdentLabelLocal(s.plataforma || "") === "Usuario" ? "👤" : "📧"} Cambiar acceso del perfil 1`, callback_data: `cli:serv:edit:mail:${clientId}:${idx}` }],
   ];
 
   const credBtns = [];
@@ -1060,7 +1026,7 @@ async function menuServicio(chatId, clientId, idx) {
   if (credBtns.length) kb.push(credBtns);
   kb.push([{ text: "💰 Cambiar precio", callback_data: `cli:serv:edit:precio:${clientId}:${idx}` }]);
   kb.push([{ text: "📅 Cambiar fecha renovación", callback_data: `cli:serv:edit:fecha:${clientId}:${idx}` }]);
-  kb.push([{ text: "🗑️ Eliminar compra completa", callback_data: `cli:serv:del:ask:${clientId}:${idx}`, style: "danger" }]);
+  kb.push([{ text: "🗑️ Eliminar compra completa", callback_data: `cli:serv:del:ask:${clientId}:${idx}` }]);
   kb.push([{ text: "⬅️ Volver Servicios", callback_data: `cli:serv:list:${clientId}` }, { text: "🏠 Inicio", callback_data: "go:inicio" }]);
 
   return upsertPanel(chatId, txt, kb);
@@ -1111,31 +1077,65 @@ async function menuPerfilServicio(chatId, clientId, idx, perfilIndex) {
 // ===============================
 // ESCRITURAS CRM (invalidan caché + registran historial)
 // ===============================
+function resolverIndiceCompraLocal(servicios = [], idx = null, compraId = "") {
+  const lista = Array.isArray(servicios) ? servicios : [];
+  const id = String(compraId || "").trim();
+  if (id) {
+    const porId = lista.findIndex((s) => String(s?.compraId || "").trim() === id);
+    if (porId !== -1) return porId;
+  }
+  const n = Number(idx);
+  return Number.isInteger(n) && n >= 0 && n < lista.length ? n : -1;
+}
+
+async function mutarServiciosClienteTx(clientId, mutador) {
+  const id = String(clientId || "").trim();
+  if (!id) throw new Error("Cliente inválido.");
+  if (typeof mutador !== "function") throw new Error("Cambio de servicios inválido.");
+  const ref = db.collection(CLIENTES_COLLECTION).doc(id);
+  return db.runTransaction(async (tx) => {
+    const doc = await tx.get(ref);
+    if (!doc.exists) throw new Error("Cliente no encontrado.");
+    const cliente = doc.data() || {};
+    const servicios = Array.isArray(cliente.servicios) ? cliente.servicios.slice() : [];
+    const resultado = await mutador({ cliente, servicios, ref });
+    const siguientes = Array.isArray(resultado?.servicios) ? resultado.servicios : servicios;
+    tx.set(ref, {
+      servicios: siguientes,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    }, { merge: true });
+    return { ...(resultado || {}), cliente, servicios: siguientes };
+  });
+}
+
 async function addServicioTx(clientId, servicio = {}) {
   const id = String(clientId || "").trim();
   if (!id) throw new Error("Cliente inválido.");
-
-  const ref = db.collection(CLIENTES_COLLECTION).doc(id);
-  const doc = await ref.get();
-  if (!doc.exists) throw new Error("Cliente no encontrado.");
-
-  const c = doc.data() || {};
-  const servicios = Array.isArray(c.servicios) ? c.servicios.slice() : [];
-  const compra = normalizarCompraLocal(servicio, c.nombrePerfil || "", {});
+  const servicioEntrada = {
+    ...servicio,
+    compraId: String(servicio.compraId || recordIdLocal("compra")),
+    perfiles: Array.isArray(servicio.perfiles)
+      ? servicio.perfiles.map((p) => ({ ...(p || {}), perfilId: String(p?.perfilId || recordIdLocal("perfil")) }))
+      : servicio.perfiles
+  };
+  const resultado = await mutarServiciosClienteTx(id, ({ cliente, servicios }) => {
+    const compra = normalizarCompraLocal(servicioEntrada, cliente.nombrePerfil || "", {});
+    const precio = Number(servicioEntrada.precio || 0);
+    const fechaRenovacion = String(servicioEntrada.fechaRenovacion || "").trim();
+    if (!Number.isFinite(precio) || precio <= 0) throw new Error("Precio inválido.");
+    if (!isFechaDMY(fechaRenovacion)) throw new Error("Fecha de renovación inválida.");
+    compra.precio = precio;
+    compra.fechaRenovacion = fechaRenovacion;
+    validarCompraLocal(compra);
+    const servicioIndex = servicios.length;
+    servicios.push(compra);
+    return { servicios, compra, servicioIndex, nombreTitular: cliente.nombrePerfil || "" };
+  });
+  const compra = resultado.compra;
   const plat = compra.plataforma;
-  const precio = Number(servicio.precio || 0);
-  const fechaRenovacion = String(servicio.fechaRenovacion || "").trim();
-  if (!Number.isFinite(precio) || precio <= 0) throw new Error("Precio inválido.");
-  if (!isFechaDMY(fechaRenovacion)) throw new Error("Fecha de renovación inválida.");
-  compra.precio = precio;
-  compra.fechaRenovacion = fechaRenovacion;
-  validarCompraLocal(compra);
-
-  const sync = await sincronizarCompraInventarioLocal(null, compra, c.nombrePerfil || "");
-
-  const servicioIndex = servicios.length;
-  servicios.push(compra);
-  await ref.set({ servicios, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+  const precio = Number(compra.precio || 0);
+  const fechaRenovacion = String(compra.fechaRenovacion || "");
+  const sync = await sincronizarCompraInventarioSeguroLocal(null, compra, resultado.nombreTitular || "");
 
   cacheInvalidatePrefix(`clientes:doc:${id}`);
 
@@ -1151,74 +1151,68 @@ async function addServicioTx(clientId, servicio = {}) {
     fechaRenovacion,
   });
 
-  return { ok: true, servicio: compra, servicioIndex, totalPerfiles: compra.perfiles.length, sync };
+  return { ok: true, servicio: compra, servicioIndex: resultado.servicioIndex, totalPerfiles: compra.perfiles.length, sync };
 }
 
-async function patchServicio(clientId, idx, patch = {}) {
-  const ref = db.collection(CLIENTES_COLLECTION).doc(String(clientId || ""));
-  const doc = await ref.get();
-  if (!doc.exists) throw new Error("Cliente no encontrado.");
-
-  const c = doc.data() || {};
-  const servicios = Array.isArray(c.servicios) ? c.servicios.slice() : [];
-  if (idx < 0 || idx >= servicios.length) throw new Error("Servicio inválido.");
-
-  const actual = servicios[idx] || {};
-  if (Object.prototype.hasOwnProperty.call(patch, "precio")) {
-    const n = Number(patch.precio || 0);
+async function patchServicio(clientId, idx, patch = {}, compraId = "") {
+  const id = String(clientId || "").trim();
+  const patchLimpio = { ...(patch || {}) };
+  const resultado = await mutarServiciosClienteTx(id, ({ cliente, servicios }) => {
+    const actualIdx = resolverIndiceCompraLocal(servicios, idx, compraId || patchLimpio.compraId);
+    if (actualIdx === -1) throw new Error("Servicio inválido.");
+    const actual = servicios[actualIdx] || {};
+  if (Object.prototype.hasOwnProperty.call(patchLimpio, "precio")) {
+    const n = Number(patchLimpio.precio || 0);
     if (!Number.isFinite(n) || n <= 0) throw new Error("Precio inválido.");
-    patch.precio = n;
+    patchLimpio.precio = n;
   }
-  if (Object.prototype.hasOwnProperty.call(patch, "fechaRenovacion")) {
-    if (!isFechaDMY(String(patch.fechaRenovacion || ""))) throw new Error("Fecha inválida.");
+  if (Object.prototype.hasOwnProperty.call(patchLimpio, "fechaRenovacion")) {
+    if (!isFechaDMY(String(patchLimpio.fechaRenovacion || ""))) throw new Error("Fecha inválida.");
   }
 
-  const entrada = { ...actual, ...patch };
-  if (Array.isArray(actual.perfiles) && actual.perfiles.length && !Object.prototype.hasOwnProperty.call(patch, "perfiles")) {
+  const entrada = { ...actual, ...patchLimpio };
+  if (Array.isArray(actual.perfiles) && actual.perfiles.length && !Object.prototype.hasOwnProperty.call(patchLimpio, "perfiles")) {
     entrada.perfiles = actual.perfiles.map((p) => ({ ...(p || {}) }));
     const principal = entrada.perfiles[0];
-    if (Object.prototype.hasOwnProperty.call(patch, "correo")) principal.correo = patch.correo;
-    if (Object.prototype.hasOwnProperty.call(patch, "clave")) principal.clave = patch.clave;
-    if (Object.prototype.hasOwnProperty.call(patch, "pin") || Object.prototype.hasOwnProperty.call(patch, "pinPerfil")) {
-      principal.pinPerfil = patch.pinPerfil ?? patch.pin ?? "";
-      delete principal.pin;
-    }
+    if (Object.prototype.hasOwnProperty.call(patchLimpio, "correo")) principal.correo = patchLimpio.correo;
+    if (Object.prototype.hasOwnProperty.call(patchLimpio, "clave")) principal.clave = patchLimpio.clave;
+    if (Object.prototype.hasOwnProperty.call(patchLimpio, "pin") || Object.prototype.hasOwnProperty.call(patchLimpio, "pinPerfil")) principal.pin = patchLimpio.pinPerfil ?? patchLimpio.pin ?? "";
   }
-  const siguiente = normalizarCompraLocal(entrada, c.nombrePerfil || "", actual);
+  const siguiente = normalizarCompraLocal(entrada, cliente.nombrePerfil || "", actual);
   if (!esPlataformaValida(siguiente.plataforma)) throw new Error("Plataforma inválida.");
-  const credencialesTocadas = ["plataforma", "correo", "clave", "pin", "pinPerfil", "perfiles"].some((k) => Object.prototype.hasOwnProperty.call(patch, k));
+  const credencialesTocadas = ["plataforma", "correo", "clave", "pin", "pinPerfil", "perfiles"].some((k) => Object.prototype.hasOwnProperty.call(patchLimpio, k));
   if (credencialesTocadas) validarCompraLocal(siguiente);
-
+    servicios[actualIdx] = siguiente;
+    return { servicios, actual, siguiente, actualIdx, nombreTitular: cliente.nombrePerfil || "" };
+  });
+  const { actual, siguiente } = resultado;
   const firma = (servicio) => JSON.stringify({
     plataforma: normalizarPlataforma(servicio?.plataforma || ""),
-    perfiles: perfilesServicioLocal(servicio, c.nombrePerfil || "").map((p) => ({ nombre: normTxt(p.nombre), correo: p.correo, clave: p.clave, pin: p.pin }))
+    perfiles: perfilesServicioLocal(servicio, resultado.nombreTitular || "").map((p) => ({ nombre: normTxt(p.nombre), correo: p.correo, clave: p.clave, pin: p.pin }))
   });
-  if (firma(actual) !== firma(siguiente)) {
-    await sincronizarCompraInventarioLocal(actual, siguiente, c.nombrePerfil || "");
-  }
+  const sync = firma(actual) !== firma(siguiente)
+    ? await sincronizarCompraInventarioSeguroLocal(actual, siguiente, resultado.nombreTitular || "")
+    : { ok: true, omitido: true };
 
-  servicios[idx] = siguiente;
-  await ref.set({ servicios, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
-
-  cacheInvalidatePrefix(`clientes:doc:${String(clientId)}`);
+  cacheInvalidatePrefix(`clientes:doc:${id}`);
 
   // ✅ Registrar cambios relevantes en historial
   const cambios = [];
-  if (patch.correo && patch.correo !== actual.correo)
-    cambios.push(`Correo: ${actual.correo || "-"} → ${patch.correo}`);
-  if (patch.clave !== undefined && patch.clave !== actual.clave)
+  if (patchLimpio.correo && patchLimpio.correo !== actual.correo)
+    cambios.push(`Correo: ${actual.correo || "-"} → ${patchLimpio.correo}`);
+  if (patchLimpio.clave !== undefined && patchLimpio.clave !== actual.clave)
     cambios.push(`Clave cambiada`);
-  if (patch.pin !== undefined && patch.pin !== actual.pin)
+  if (patchLimpio.pin !== undefined && patchLimpio.pin !== actual.pin)
     cambios.push(`PIN cambiado`);
-  if (patch.precio !== undefined && patch.precio !== actual.precio)
-    cambios.push(`Precio: ${Number(actual.precio || 0).toFixed(2)} → ${Number(patch.precio || 0).toFixed(2)} Lps`);
-  if (patch.fechaRenovacion && patch.fechaRenovacion !== actual.fechaRenovacion)
-    cambios.push(`Fecha: ${actual.fechaRenovacion || "-"} → ${patch.fechaRenovacion}`);
-  if (patch.plataforma && normalizarPlataforma(patch.plataforma) !== normalizarPlataforma(actual.plataforma || ""))
-    cambios.push(`Plataforma: ${humanPlataforma(actual.plataforma)} → ${humanPlataforma(patch.plataforma)}`);
+  if (patchLimpio.precio !== undefined && patchLimpio.precio !== actual.precio)
+    cambios.push(`Precio: ${Number(actual.precio || 0).toFixed(2)} → ${Number(patchLimpio.precio || 0).toFixed(2)} Lps`);
+  if (patchLimpio.fechaRenovacion && patchLimpio.fechaRenovacion !== actual.fechaRenovacion)
+    cambios.push(`Fecha: ${actual.fechaRenovacion || "-"} → ${patchLimpio.fechaRenovacion}`);
+  if (patchLimpio.plataforma && normalizarPlataforma(patchLimpio.plataforma) !== normalizarPlataforma(actual.plataforma || ""))
+    cambios.push(`Plataforma: ${humanPlataforma(actual.plataforma)} → ${humanPlataforma(patchLimpio.plataforma)}`);
 
   if (cambios.length) {
-    await registrarEventoHistorial(String(clientId), {
+    await registrarEventoHistorial(id, {
       tipo: "servicio_editado",
       descripcion: cambios.join(" | "),
       plataforma: siguiente.plataforma,
@@ -1231,160 +1225,173 @@ async function patchServicio(clientId, idx, patch = {}) {
     });
   }
 
-  return { ok: true, servicio: siguiente };
+  return { ok: true, servicio: siguiente, servicioIndex: resultado.actualIdx, sync };
 }
 
-async function addPerfilTx(clientId, idx, perfil = {}) {
+async function addPerfilTx(clientId, idx, perfil = {}, compraId = "") {
   const id = String(clientId || "").trim();
-  const ref = db.collection(CLIENTES_COLLECTION).doc(id);
-  const doc = await ref.get();
-  if (!doc.exists) throw new Error("Cliente no encontrado.");
-  const c = doc.data() || {};
-  const servicios = Array.isArray(c.servicios) ? c.servicios.slice() : [];
-  if (idx < 0 || idx >= servicios.length) throw new Error("Servicio inválido.");
-  const actual = servicios[idx] || {};
-  const perfiles = perfilesServicioLocal(actual, c.nombrePerfil || "");
-  perfiles.push({
-    perfilId: perfil.perfilId || recordIdLocal("perfil"),
+  const perfilEntrada = {
+    ...perfil,
+    perfilId: String(perfil.perfilId || recordIdLocal("perfil"))
+  };
+  const resultado = await mutarServiciosClienteTx(id, ({ cliente, servicios }) => {
+    const actualIdx = resolverIndiceCompraLocal(servicios, idx, compraId);
+    if (actualIdx === -1) throw new Error("Servicio inválido.");
+    const actual = servicios[actualIdx] || {};
+    const perfiles = perfilesServicioLocal(actual, cliente.nombrePerfil || "");
+    perfiles.push({
+    perfilId: perfilEntrada.perfilId,
     nombre: String(perfil.nombre || perfil.perfil || "").trim(),
     perfil: String(perfil.perfil || perfil.nombre || "").trim(),
     correo: perfil.correo || "", clave: perfil.clave || "", pin: perfil.pinPerfil ?? perfil.pin ?? ""
   });
-  const siguiente = normalizarCompraLocal({ ...actual, perfiles }, c.nombrePerfil || "", actual);
+  const siguiente = normalizarCompraLocal({ ...actual, perfiles }, cliente.nombrePerfil || "", actual);
   validarCompraLocal(siguiente);
-  await sincronizarCompraInventarioLocal(actual, siguiente, c.nombrePerfil || "");
-  servicios[idx] = siguiente;
-  await ref.set({ servicios, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+    servicios[actualIdx] = siguiente;
+    return { servicios, actual, siguiente, actualIdx, nombreTitular: cliente.nombrePerfil || "" };
+  });
+  const sync = await sincronizarCompraInventarioSeguroLocal(resultado.actual, resultado.siguiente, resultado.nombreTitular || "");
   cacheInvalidatePrefix(`clientes:doc:${id}`);
   await registrarEventoHistorial(id, {
-    tipo: "perfil_agregado", descripcion: `Se añadió ${perfil.nombre || "un perfil"} a la compra ${humanPlataforma(actual.plataforma || "")}`,
-    plataforma: actual.plataforma || "", correo: perfil.correo || "", pin: perfil.pinPerfil ?? perfil.pin ?? ""
+    tipo: "perfil_agregado", descripcion: `Se añadió ${perfil.nombre || "un perfil"} a la compra ${humanPlataforma(resultado.actual.plataforma || "")}`,
+    plataforma: resultado.actual.plataforma || "", correo: perfil.correo || "", pin: perfil.pinPerfil ?? perfil.pin ?? ""
   });
-  return { ok: true, servicio: siguiente, perfilIndex: siguiente.perfiles.length - 1 };
+  return { ok: true, servicio: resultado.siguiente, servicioIndex: resultado.actualIdx, perfilIndex: resultado.siguiente.perfiles.length - 1, sync };
 }
 
-async function patchPerfilTx(clientId, idx, perfilIndex, patch = {}) {
+async function patchPerfilTx(clientId, idx, perfilIndex, patch = {}, compraId = "", perfilId = "") {
   const id = String(clientId || "").trim();
-  const ref = db.collection(CLIENTES_COLLECTION).doc(id);
-  const doc = await ref.get();
-  if (!doc.exists) throw new Error("Cliente no encontrado.");
-  const c = doc.data() || {};
-  const servicios = Array.isArray(c.servicios) ? c.servicios.slice() : [];
-  if (idx < 0 || idx >= servicios.length) throw new Error("Servicio inválido.");
-  const actual = servicios[idx] || {};
-  const perfiles = perfilesServicioLocal(actual, c.nombrePerfil || "");
-  if (perfilIndex < 0 || perfilIndex >= perfiles.length) throw new Error("Perfil inválido.");
-  perfiles[perfilIndex] = { ...perfiles[perfilIndex], ...patch };
-  if (patch.nombre != null && patch.perfil == null) perfiles[perfilIndex].perfil = patch.nombre;
-  const siguiente = normalizarCompraLocal({ ...actual, perfiles }, c.nombrePerfil || "", actual);
+  const resultado = await mutarServiciosClienteTx(id, ({ cliente, servicios }) => {
+    const actualIdx = resolverIndiceCompraLocal(servicios, idx, compraId);
+    if (actualIdx === -1) throw new Error("Servicio inválido.");
+    const actual = servicios[actualIdx] || {};
+    const perfiles = perfilesServicioLocal(actual, cliente.nombrePerfil || "");
+    let actualPerfilIndex = Number(perfilIndex);
+    const perfilIdBuscado = String(perfilId || "").trim();
+    if (perfilIdBuscado) actualPerfilIndex = perfiles.findIndex((p) => String(p?.perfilId || "") === perfilIdBuscado);
+    if (!Number.isInteger(actualPerfilIndex) || actualPerfilIndex < 0 || actualPerfilIndex >= perfiles.length) throw new Error("Perfil inválido.");
+    perfiles[actualPerfilIndex] = { ...perfiles[actualPerfilIndex], ...patch };
+    if (patch.nombre != null && patch.perfil == null) perfiles[actualPerfilIndex].perfil = patch.nombre;
+    const siguiente = normalizarCompraLocal({ ...actual, perfiles }, cliente.nombrePerfil || "", actual);
   validarCompraLocal(siguiente);
-  await sincronizarCompraInventarioLocal(actual, siguiente, c.nombrePerfil || "");
-  servicios[idx] = siguiente;
-  await ref.set({ servicios, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+    servicios[actualIdx] = siguiente;
+    return { servicios, actual, siguiente, actualIdx, actualPerfilIndex, nombreTitular: cliente.nombrePerfil || "" };
+  });
+  const sync = await sincronizarCompraInventarioSeguroLocal(resultado.actual, resultado.siguiente, resultado.nombreTitular || "");
   cacheInvalidatePrefix(`clientes:doc:${id}`);
   await registrarEventoHistorial(id, {
-    tipo: "perfil_editado", descripcion: `Se editó el perfil ${siguiente.perfiles[perfilIndex]?.nombre || perfilIndex + 1} de ${humanPlataforma(actual.plataforma || "")}`,
-    plataforma: actual.plataforma || "", correo: siguiente.perfiles[perfilIndex]?.correo || "", pin: siguiente.perfiles[perfilIndex]?.pinPerfil || siguiente.perfiles[perfilIndex]?.pin || ""
+    tipo: "perfil_editado", descripcion: `Se editó el perfil ${resultado.siguiente.perfiles[resultado.actualPerfilIndex]?.nombre || resultado.actualPerfilIndex + 1} de ${humanPlataforma(resultado.actual.plataforma || "")}`,
+    plataforma: resultado.actual.plataforma || "", correo: resultado.siguiente.perfiles[resultado.actualPerfilIndex]?.correo || "", pin: resultado.siguiente.perfiles[resultado.actualPerfilIndex]?.pin || ""
   });
-  return { ok: true, servicio: siguiente, perfilIndex };
+  return { ok: true, servicio: resultado.siguiente, servicioIndex: resultado.actualIdx, perfilIndex: resultado.actualPerfilIndex, sync };
 }
 
-async function eliminarPerfilTx(clientId, idx, perfilIndex) {
+async function eliminarPerfilTx(clientId, idx, perfilIndex, compraId = "", perfilId = "") {
   const id = String(clientId || "").trim();
-  const ref = db.collection(CLIENTES_COLLECTION).doc(id);
-  const doc = await ref.get();
-  if (!doc.exists) throw new Error("Cliente no encontrado.");
-  const c = doc.data() || {};
-  const servicios = Array.isArray(c.servicios) ? c.servicios.slice() : [];
-  if (idx < 0 || idx >= servicios.length) throw new Error("Servicio inválido.");
-  const actual = servicios[idx] || {};
-  const perfiles = perfilesServicioLocal(actual, c.nombrePerfil || "");
+  const resultado = await mutarServiciosClienteTx(id, ({ cliente, servicios }) => {
+    const actualIdx = resolverIndiceCompraLocal(servicios, idx, compraId);
+    if (actualIdx === -1) throw new Error("Servicio inválido.");
+    const actual = servicios[actualIdx] || {};
+    const perfiles = perfilesServicioLocal(actual, cliente.nombrePerfil || "");
   if (perfiles.length <= 1) throw new Error("Es el único perfil. Para quitarlo, elimine la compra completa.");
-  if (perfilIndex < 0 || perfilIndex >= perfiles.length) throw new Error("Perfil inválido.");
-  const eliminado = perfiles.splice(perfilIndex, 1)[0];
-  const siguiente = normalizarCompraLocal({ ...actual, perfiles }, c.nombrePerfil || "", actual);
-  await sincronizarCompraInventarioLocal(actual, siguiente, c.nombrePerfil || "");
-  servicios[idx] = siguiente;
-  await ref.set({ servicios, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+    let actualPerfilIndex = Number(perfilIndex);
+    const perfilIdBuscado = String(perfilId || "").trim();
+    if (perfilIdBuscado) actualPerfilIndex = perfiles.findIndex((p) => String(p?.perfilId || "") === perfilIdBuscado);
+    if (!Number.isInteger(actualPerfilIndex) || actualPerfilIndex < 0 || actualPerfilIndex >= perfiles.length) throw new Error("Perfil inválido.");
+    const eliminado = perfiles.splice(actualPerfilIndex, 1)[0];
+    const siguiente = normalizarCompraLocal({ ...actual, perfiles }, cliente.nombrePerfil || "", actual);
+    servicios[actualIdx] = siguiente;
+    return { servicios, actual, siguiente, eliminado, actualIdx, actualPerfilIndex, nombreTitular: cliente.nombrePerfil || "" };
+  });
+  const sync = await sincronizarCompraInventarioSeguroLocal(resultado.actual, resultado.siguiente, resultado.nombreTitular || "");
   cacheInvalidatePrefix(`clientes:doc:${id}`);
   await registrarEventoHistorial(id, {
-    tipo: "perfil_eliminado", descripcion: `Se quitó ${eliminado.nombre || "un perfil"} de la compra ${humanPlataforma(actual.plataforma || "")}`,
-    plataforma: actual.plataforma || "", correo: eliminado.correo || "", pin: eliminado.pin || ""
+    tipo: "perfil_eliminado", descripcion: `Se quitó ${resultado.eliminado.nombre || "un perfil"} de la compra ${humanPlataforma(resultado.actual.plataforma || "")}`,
+    plataforma: resultado.actual.plataforma || "", correo: resultado.eliminado.correo || "", pin: resultado.eliminado.pin || ""
   });
-  return { ok: true, servicio: siguiente, eliminado };
+  return { ok: true, servicio: resultado.siguiente, servicioIndex: resultado.actualIdx, perfilIndex: resultado.actualPerfilIndex, eliminado: resultado.eliminado, sync };
 }
 
 async function sincronizarCuentaEnComprasTx({ plataforma = "", correo = "", nuevaClave, nuevoCorreo } = {}) {
   const plat = normalizarPlataforma(plataforma);
   const acceso = normalizeIdentByPlatformLocal(plat, correo);
   const snap = await db.collection(CLIENTES_COLLECTION).get();
-  let perfilesActualizados = 0, documentosActualizados = 0, operaciones = 0;
-  let batch = db.batch();
+  let perfilesActualizados = 0, documentosActualizados = 0;
   for (const doc of snap.docs) {
-    const data = doc.data() || {};
-    const servicios = Array.isArray(data.servicios) ? data.servicios : [];
-    let changed = false;
-    const next = servicios.map((servicio) => {
-      if (normalizarPlataforma(servicio?.plataforma || "") !== plat) return servicio;
-      const perfiles = Array.isArray(servicio?.perfiles) && servicio.perfiles.length ? servicio.perfiles : null;
-      if (!perfiles) {
-        if (normalizeIdentByPlatformLocal(plat, servicio?.correo || "") !== acceso) return servicio;
-        const copy = { ...servicio };
-        if (nuevoCorreo != null) copy.correo = normalizeIdentByPlatformLocal(plat, nuevoCorreo);
-        if (nuevaClave != null) copy.clave = String(nuevaClave || "").trim();
-        perfilesActualizados++;changed = true;return copy;
-      }
-      let localChanged = false;
-      const nextProfiles = perfiles.map((perfil) => {
-        if (normalizeIdentByPlatformLocal(plat, perfil?.correo ?? servicio?.correo ?? "") !== acceso) return perfil;
-        const copy = { ...(perfil || {}) };
-        if (nuevoCorreo != null) copy.correo = normalizeIdentByPlatformLocal(plat, nuevoCorreo);
-        if (nuevaClave != null) copy.clave = String(nuevaClave || "").trim();
-        perfilesActualizados++;localChanged = true;return copy;
+    const resultado = await db.runTransaction(async (tx) => {
+      const actualDoc = await tx.get(doc.ref);
+      if (!actualDoc.exists) return { changed: false, perfilesActualizados: 0 };
+      const data = actualDoc.data() || {};
+      const servicios = Array.isArray(data.servicios) ? data.servicios : [];
+      let changed = false;
+      let perfilesCambiados = 0;
+      const next = servicios.map((servicio) => {
+        if (normalizarPlataforma(servicio?.plataforma || "") !== plat) return servicio;
+        const perfiles = Array.isArray(servicio?.perfiles) && servicio.perfiles.length ? servicio.perfiles : null;
+        if (!perfiles) {
+          if (normalizeIdentByPlatformLocal(plat, servicio?.correo || "") !== acceso) return servicio;
+          const copy = { ...servicio };
+          if (nuevoCorreo != null) copy.correo = normalizeIdentByPlatformLocal(plat, nuevoCorreo);
+          if (nuevaClave != null) copy.clave = String(nuevaClave || "").trim();
+          perfilesCambiados++;
+          changed = true;
+          return copy;
+        }
+        let localChanged = false;
+        const nextProfiles = perfiles.map((perfil) => {
+          if (normalizeIdentByPlatformLocal(plat, perfil?.correo ?? servicio?.correo ?? "") !== acceso) return perfil;
+          const copy = { ...(perfil || {}) };
+          if (nuevoCorreo != null) copy.correo = normalizeIdentByPlatformLocal(plat, nuevoCorreo);
+          if (nuevaClave != null) copy.clave = String(nuevaClave || "").trim();
+          perfilesCambiados++;
+          localChanged = true;
+          return copy;
+        });
+        if (!localChanged) return servicio;
+        changed = true;
+        const copy = { ...servicio, perfiles: nextProfiles };
+        const principal = nextProfiles[0] || {};
+        copy.correo = principal.correo || copy.correo || "";
+        copy.clave = principal.clave != null ? principal.clave : copy.clave || "";
+        return copy;
       });
-      if (!localChanged) return servicio;
-      changed = true;
-      const copy = { ...servicio, perfiles: nextProfiles };
-      const principal = nextProfiles[0] || {};
-      copy.correo = principal.correo || copy.correo || "";
-      copy.clave = principal.clave != null ? principal.clave : copy.clave || "";
-      return copy;
+      if (changed) {
+        tx.set(doc.ref, {
+          servicios: next,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        }, { merge: true });
+      }
+      return { changed, perfilesActualizados: perfilesCambiados };
     });
-    if (changed) {
-      batch.set(doc.ref, { servicios: next, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
-      documentosActualizados++;operaciones++;
+    perfilesActualizados += Number(resultado.perfilesActualizados || 0);
+    if (resultado.changed) {
+      documentosActualizados++;
       cacheInvalidatePrefix(`clientes:doc:${doc.id}`);
-      if (operaciones >= 400) { await batch.commit();batch = db.batch();operaciones = 0; }
     }
   }
-  if (operaciones) await batch.commit();
   return { ok: true, perfilesActualizados, documentosActualizados };
 }
 
 // ===============================
 // ✅ ELIMINAR SERVICIO (con limpieza de inventario + historial)
 // ===============================
-async function eliminarServicioTx(clientId, idx) {
+async function eliminarServicioTx(clientId, idx, compraId = "") {
   const id = String(clientId || "").trim();
-  const ref = db.collection(CLIENTES_COLLECTION).doc(id);
-  const doc = await ref.get();
-  if (!doc.exists) throw new Error("Cliente no encontrado.");
-
-  const c = doc.data() || {};
-  const servicios = Array.isArray(c.servicios) ? c.servicios.slice() : [];
-  if (idx < 0 || idx >= servicios.length) throw new Error("Servicio inválido.");
-
-  const eliminado = servicios[idx];
-  await sincronizarCompraInventarioLocal(eliminado, null, c.nombrePerfil || "");
-  servicios.splice(idx, 1);
-
-  await ref.set({ servicios, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+  const resultado = await mutarServiciosClienteTx(id, ({ cliente, servicios }) => {
+    const actualIdx = resolverIndiceCompraLocal(servicios, idx, compraId);
+    if (actualIdx === -1) throw new Error("Servicio inválido.");
+    const eliminado = servicios[actualIdx];
+    servicios.splice(actualIdx, 1);
+    return { servicios, eliminado, actualIdx, nombreTitular: cliente.nombrePerfil || "" };
+  });
+  const eliminado = resultado.eliminado;
+  const sync = await sincronizarCompraInventarioSeguroLocal(eliminado, null, resultado.nombreTitular || "");
   cacheInvalidatePrefix(`clientes:doc:${id}`);
 
   // ✅ Registrar en historial
   await registrarEventoHistorial(id, {
     tipo: "servicio_eliminado",
-    descripcion: `Se eliminó ${humanPlataforma(eliminado.plataforma || "")} con ${cantidadPerfilesServicioLocal(eliminado, c.nombrePerfil || "")} perfil(es)`,
+    descripcion: `Se eliminó ${humanPlataforma(eliminado.plataforma || "")} con ${cantidadPerfilesServicioLocal(eliminado, resultado.nombreTitular || "")} perfil(es)`,
     plataforma: eliminado.plataforma || "",
     correo: eliminado.correo || "",
     clave: getClaveServicioLocal(eliminado, eliminado.plataforma || ""),
@@ -1393,7 +1400,86 @@ async function eliminarServicioTx(clientId, idx) {
     fechaRenovacion: eliminado.fechaRenovacion || "",
   });
 
-  return { ok: true, eliminado, nombreCliente: c.nombrePerfil || "" };
+  return { ok: true, eliminado, servicioIndex: resultado.actualIdx, nombreCliente: resultado.nombreTitular || "", sync };
+}
+
+async function renovarServicioTx(clientId, idx, { dias = 0, fechaExacta = "", compraId = "" } = {}) {
+  const id = String(clientId || "").trim();
+  const resultado = await mutarServiciosClienteTx(id, ({ cliente, servicios }) => {
+    const actualIdx = resolverIndiceCompraLocal(servicios, idx, compraId);
+    if (actualIdx === -1) throw new Error("Servicio inválido.");
+    const anterior = servicios[actualIdx] || {};
+    const fechaAnterior = String(anterior.fechaRenovacion || "");
+    const fechaNueva = fechaExacta
+      ? String(fechaExacta || "").trim()
+      : addDaysDMY(isFechaDMY(fechaAnterior) ? fechaAnterior : hoyDMY(), Number(dias || 0));
+    if (!isFechaDMY(fechaNueva)) throw new Error("Fecha inválida.");
+    const siguiente = { ...anterior, fechaRenovacion: fechaNueva };
+    servicios[actualIdx] = siguiente;
+    return { servicios, anterior, siguiente, actualIdx, fechaAnterior, fechaNueva, nombreTitular: cliente.nombrePerfil || "" };
+  });
+  cacheInvalidatePrefix(`clientes:doc:${id}`);
+  await registrarEventoHistorial(id, {
+    tipo: "servicio_renovado",
+    descripcion: `Se renovó ${humanPlataforma(resultado.siguiente.plataforma || "")}: ${resultado.fechaAnterior || "-"} → ${resultado.fechaNueva}`,
+    plataforma: resultado.siguiente.plataforma || "",
+    correo: resultado.siguiente.correo || "",
+    fechaAnterior: resultado.fechaAnterior,
+    fechaRenovacion: resultado.fechaNueva
+  });
+  return { ok: true, servicio: resultado.siguiente, servicioIndex: resultado.actualIdx, fechaAnterior: resultado.fechaAnterior, fechaNueva: resultado.fechaNueva };
+}
+
+async function renovarTodosServiciosTx(clientId, { dias = 0, fechaExacta = "" } = {}) {
+  const id = String(clientId || "").trim();
+  const resultado = await mutarServiciosClienteTx(id, ({ cliente, servicios }) => {
+    if (!servicios.length) throw new Error("Este cliente no tiene servicios.");
+    const siguientes = servicios.map((s) => {
+      const base = isFechaDMY(String(s?.fechaRenovacion || "")) ? String(s.fechaRenovacion) : hoyDMY();
+      const fechaNueva = fechaExacta ? String(fechaExacta || "").trim() : addDaysDMY(base, Number(dias || 0));
+      if (!isFechaDMY(fechaNueva)) throw new Error("Fecha inválida.");
+      return { ...(s || {}), fechaRenovacion: fechaNueva };
+    });
+    return { servicios: siguientes, total: siguientes.length, fechaExacta: String(fechaExacta || ""), nombreTitular: cliente.nombrePerfil || "" };
+  });
+  cacheInvalidatePrefix(`clientes:doc:${id}`);
+  await registrarEventoHistorial(id, {
+    tipo: "servicios_renovados",
+    descripcion: `Se renovaron ${resultado.total} servicio(s)${resultado.fechaExacta ? ` a ${resultado.fechaExacta}` : ` por ${Number(dias || 0)} días`}`
+  });
+  return { ok: true, total: resultado.total, servicios: resultado.servicios };
+}
+
+async function eliminarServiciosTx(clientId, referencias = []) {
+  const id = String(clientId || "").trim();
+  const refs = (Array.isArray(referencias) ? referencias : []).map((r) =>
+    typeof r === "number" ? { idx: r, compraId: "" } : { idx: Number(r?.idx), compraId: String(r?.compraId || "") }
+  );
+  if (!refs.length) throw new Error("No seleccionó servicios para eliminar.");
+  const resultado = await mutarServiciosClienteTx(id, ({ cliente, servicios }) => {
+    const indices = new Set();
+    refs.forEach((r) => {
+      const pos = resolverIndiceCompraLocal(servicios, r.idx, r.compraId);
+      if (pos !== -1) indices.add(pos);
+    });
+    if (!indices.size) throw new Error("Los servicios seleccionados ya no existen.");
+    const eliminados = [];
+    [...indices].sort((a, b) => b - a).forEach((pos) => {
+      eliminados.unshift(servicios[pos]);
+      servicios.splice(pos, 1);
+    });
+    return { servicios, eliminados, nombreTitular: cliente.nombrePerfil || "" };
+  });
+  const sync = [];
+  for (const servicio of resultado.eliminados) {
+    sync.push(await sincronizarCompraInventarioSeguroLocal(servicio, null, resultado.nombreTitular || ""));
+  }
+  cacheInvalidatePrefix(`clientes:doc:${id}`);
+  await registrarEventoHistorial(id, {
+    tipo: "servicios_eliminados",
+    descripcion: `Se eliminaron ${resultado.eliminados.length} servicio(s): ${resultado.eliminados.map((s) => humanPlataforma(s?.plataforma || "")).join(", ")}`
+  });
+  return { ok: true, eliminados: resultado.eliminados, servicios: resultado.servicios, sync };
 }
 
 // ===============================
@@ -1859,7 +1945,9 @@ module.exports = {
   enviarFichaCliente, enviarFichaClienteVendedor, enviarListaResultadosClientes, menuEditarCliente,
   menuListaServicios, menuServicio,
   menuListaPerfilesServicio, menuPerfilServicio,
-  patchServicio, addServicioTx, addPerfilTx, patchPerfilTx, eliminarPerfilTx, eliminarServicioTx, removeServicioDeInventario, sincronizarCuentaEnComprasTx,
+  patchServicio, addServicioTx, addPerfilTx, patchPerfilTx, eliminarPerfilTx, eliminarServicioTx,
+  renovarServicioTx, renovarTodosServiciosTx, eliminarServiciosTx,
+  removeServicioDeInventario, sincronizarCuentaEnComprasTx,
   menuListaRenovacion, menuRenovacionServicio, enviarPanelRenovacionesConAcciones,
   kbPlataformasWiz, wizardStart, wizardNext,
   clienteResumenTXT, reporteClientesTXTGeneral, reporteClientesSplitPorVendedorTXT,

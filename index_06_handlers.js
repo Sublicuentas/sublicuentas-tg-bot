@@ -90,6 +90,9 @@ const {
   patchPerfilTx,
   eliminarPerfilTx,
   eliminarServicioTx,
+  renovarServicioTx,
+  renovarTodosServiciosTx,
+  eliminarServiciosTx,
   sincronizarCuentaEnComprasTx,
   menuListaRenovacion,
   menuRenovacionServicio,
@@ -470,18 +473,7 @@ async function sincronizarUnServicioDesdeInventarioLocal(clientId, idx) {
   const inv = await buscarInventarioFlexiblePorServicioLocal(actual, platActual);
   if (!inv) throw new Error("No encontré ese correo/usuario en inventario.");
 
-  // ⚠️ FIX: si no había cuenta exacta en ESTA plataforma, buscarInventarioFlexiblePorServicioLocal
-  // caía a un match "solo_correo" (cualquier plataforma con ese mismo correo).
-  // Antes esto se aceptaba igual y CAMBIABA la plataforma del cliente para que
-  // coincidiera con lo que encontró — así fue como clientes de Disney
-  // terminaron con la clave y hasta la plataforma de una cuenta de Paramount
-  // que solo compartía el correo por casualidad. Ahora solo se acepta un
-  // match de la MISMA plataforma; si no hay uno exacto, se avisa en vez de adivinar.
-  if (inv.match !== "plataforma_correo") {
-    throw new Error(`Ese correo/usuario existe en inventario, pero en otra plataforma (${humanPlatLabelSyncLocal(inv.plataformaCoincidente || inv.plataforma || "")}), no en ${humanPlatLabelSyncLocal(platActual)}. No se tocó nada — revise manualmente cuál es la cuenta correcta.`);
-  }
-
-  const platInv = platActual;
+  const platInv = normalizarPlataforma(inv.plataformaCoincidente || inv.plataforma || platActual);
   const claveInv = extraerClaveInventarioLocal(inv.data || {});
   const pinInv = extraerPinInventarioLocal(inv.data || {});
   const patch = { plataforma: platInv };
@@ -499,7 +491,7 @@ async function sincronizarUnServicioDesdeInventarioLocal(clientId, idx) {
     patch.pin = "";
   }
 
-  await patchServicio(clientId, idx, patch);
+  await patchServicio(clientId, idx, patch, actual.compraId || "");
   return {
     ok: true,
     plataformaAnterior: platActual,
@@ -535,110 +527,116 @@ async function sincronizarClavesClientesVigentes(chatId) {
   try {
     const snapClientes = await db.collection("clientes").get();
     const inventarioIndex = await buildInventarioClaveIndexLocal();
-    let batch = db.batch();
-    let batchOps = 0;
-
-    async function commitIfNeeded(force = false) {
-      if (!batchOps) return;
-      if (!force && batchOps < 400) return;
-      await batch.commit();
-      batch = db.batch();
-      batchOps = 0;
-    }
 
     for (const docCli of snapClientes.docs) {
       clientesRevisados++;
-      const cliente = docCli.data() || {};
-      const servicios = Array.isArray(cliente.servicios) ? cliente.servicios : [];
-      if (!servicios.length) continue;
+      const resultado = await db.runTransaction(async (tx) => {
+        const docActual = await tx.get(docCli.ref);
+        if (!docActual.exists) return { changed: false, stats: {}, plataformas: [] };
+        const cliente = docActual.data() || {};
+        const servicios = Array.isArray(cliente.servicios) ? cliente.servicios : [];
+        const stats = {
+          serviciosRevisados: 0,
+          serviciosActualizados: 0,
+          omitidosNoVigentes: 0,
+          omitidosSoloCorreo: 0,
+          sinInventario: 0,
+          sinClaveInventario: 0,
+          sinCorreo: 0,
+          plataformasCorregidas: 0,
+        };
+        const plataformas = [];
+        let changed = false;
+        const nuevosServicios = [];
 
-      let changed = false;
-      const nuevosServicios = [];
+        for (const servicioRaw of servicios) {
+          const servicio = { ...(servicioRaw || {}) };
+          let plat = normalizarPlataforma(servicio.plataforma || "");
+          stats.serviciosRevisados++;
 
-      for (const servicioRaw of servicios) {
-        const servicio = { ...(servicioRaw || {}) };
-        let plat = normalizarPlataforma(servicio.plataforma || "");
-        serviciosRevisados++;
+          if (!servicioVigenteParaSyncLocal(servicio)) {
+            stats.omitidosNoVigentes++;
+            nuevosServicios.push(servicio);
+            continue;
+          }
+          if (!requiereClaveLocal(plat)) {
+            stats.omitidosSoloCorreo++;
+            nuevosServicios.push(servicio);
+            continue;
+          }
+          const identOriginal = getIdentServicioSyncLocal(servicio);
+          if (!identOriginal) {
+            stats.sinCorreo++;
+            nuevosServicios.push(servicio);
+            continue;
+          }
 
-        if (!servicioVigenteParaSyncLocal(servicio)) {
-          omitidosNoVigentes++;
+          const inv = await buscarInventarioFlexiblePorServicioLocal(servicio, plat, inventarioIndex);
+          if (!inv) {
+            stats.sinInventario++;
+            nuevosServicios.push(servicio);
+            continue;
+          }
+
+          const platInv = normalizarPlataforma(inv.plataformaCoincidente || inv.plataforma || plat);
+          if (platInv && platInv !== plat && requiereClaveLocal(platInv)) {
+            servicio.plataforma = platInv;
+            plat = platInv;
+            changed = true;
+            stats.plataformasCorregidas++;
+          }
+
+          const claveInv = extraerClaveInventarioLocal(inv.data || {});
+          if (!claveInv) {
+            stats.sinClaveInventario++;
+            nuevosServicios.push(servicio);
+            continue;
+          }
+
+          const pinInv = extraerPinInventarioLocal(inv.data || {});
+          if (requierePinLocal(plat) && !String(servicio.pin || "").trim() && pinInv) {
+            servicio.pin = pinInv;
+            changed = true;
+          }
+
+          const claveActual = String(servicio.clave || servicio.password || servicio.pass || "").trim();
+          if (claveActual !== claveInv) {
+            servicio.clave = claveInv;
+            delete servicio.password;
+            delete servicio.pass;
+            changed = true;
+            stats.serviciosActualizados++;
+            plataformas.push(plat);
+          }
           nuevosServicios.push(servicio);
-          continue;
         }
 
-        if (!requiereClaveLocal(plat)) {
-          omitidosSoloCorreo++;
-          nuevosServicios.push(servicio);
-          continue;
+        if (changed) {
+          tx.set(docCli.ref, {
+            servicios: nuevosServicios,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          }, { merge: true });
         }
+        return { changed, stats, plataformas };
+      });
 
-        const identOriginal = getIdentServicioSyncLocal(servicio);
-        if (!identOriginal) {
-          sinCorreo++;
-          nuevosServicios.push(servicio);
-          continue;
-        }
-
-        let inv = await buscarInventarioFlexiblePorServicioLocal(servicio, plat, inventarioIndex);
-        if (!inv) {
-          sinInventario++;
-          nuevosServicios.push(servicio);
-          continue;
-        }
-
-        // ⚠️ FIX: esto era la fuga principal. Si no había cuenta exacta en la
-        // MISMA plataforma, se aceptaba cualquier cuenta con el mismo correo
-        // aunque fuera de OTRA plataforma (match "solo_correo") y encima se
-        // CAMBIABA la plataforma del cliente para "corregirla" — así es como
-        // clientes de Disney terminaban con la clave (y hasta la plataforma)
-        // de una cuenta de Paramount que solo compartía el correo. Ahora solo
-        // se acepta un match de la MISMA plataforma; si no hay uno exacto, se
-        // deja el servicio intacto en vez de adivinar.
-        if (inv.match !== "plataforma_correo") {
-          sinInventario++;
-          nuevosServicios.push(servicio);
-          continue;
-        }
-
-        const claveInv = extraerClaveInventarioLocal(inv.data || {});
-        if (!claveInv) {
-          sinClaveInventario++;
-          nuevosServicios.push(servicio);
-          continue;
-        }
-
-        const pinInv = extraerPinInventarioLocal(inv.data || {});
-        if (requierePinLocal(plat) && !String(servicio.pin || "").trim() && pinInv) {
-          servicio.pin = pinInv;
-          changed = true;
-        }
-
-        const claveActual = String(servicio.clave || servicio.password || servicio.pass || "").trim();
-        if (claveActual !== claveInv) {
-          servicio.clave = claveInv;
-          delete servicio.password;
-          delete servicio.pass;
-          changed = true;
-          serviciosActualizados++;
-          plataformasActualizadas.set(plat, (plataformasActualizadas.get(plat) || 0) + 1);
-        }
-
-        nuevosServicios.push(servicio);
-      }
-
-      if (changed) {
+      const stats = resultado.stats || {};
+      serviciosRevisados += Number(stats.serviciosRevisados || 0);
+      serviciosActualizados += Number(stats.serviciosActualizados || 0);
+      omitidosNoVigentes += Number(stats.omitidosNoVigentes || 0);
+      omitidosSoloCorreo += Number(stats.omitidosSoloCorreo || 0);
+      sinInventario += Number(stats.sinInventario || 0);
+      sinClaveInventario += Number(stats.sinClaveInventario || 0);
+      sinCorreo += Number(stats.sinCorreo || 0);
+      plataformasCorregidas += Number(stats.plataformasCorregidas || 0);
+      (resultado.plataformas || []).forEach((plat) => {
+        plataformasActualizadas.set(plat, (plataformasActualizadas.get(plat) || 0) + 1);
+      });
+      if (resultado.changed) {
         clientesActualizados++;
-        batch.set(docCli.ref, {
-          servicios: nuevosServicios,
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        }, { merge: true });
-        batchOps++;
         try { cacheInvalidatePrefix(`clientes:doc:${docCli.id}`); } catch (_) {}
-        await commitIfNeeded(false);
       }
     }
-
-    await commitIfNeeded(true);
 
     const topPlats = Array.from(plataformasActualizadas.entries())
       .sort((a, b) => b[1] - a[1])
@@ -988,16 +986,16 @@ async function sendBottomMainMenu(chatId, userId, fromText = false) {
       const texto = "📊 *CENTRO DE OPERACIONES*\n\nSublicuentas — Conectamos su entretenimiento\n\nSeleccione una opción:";
       return upsertPanel(chatId, texto, [
         [
-          { text: "🎯 Control cuentas", callback_data: "menu:inventario", style: "primary" },
-          { text: "👥 Clientes", callback_data: "menu:clientes", style: "primary" },
+          { text: "🎯 Control cuentas", callback_data: "menu:inventario" },
+          { text: "👥 Clientes", callback_data: "menu:clientes" },
         ],
         [
-          { text: "💰 Control financiero", callback_data: "menu:pagos", style: "success" },
-          { text: "🚨 Riesgos", callback_data: "menu:alertas", style: "danger" },
+          { text: "💰 Control financiero", callback_data: "menu:pagos" },
+          { text: "🚨 Riesgos", callback_data: "menu:alertas" },
         ],
         [
-          { text: "📊 Análisis", callback_data: "menu:dashboard", style: "primary" },
-          { text: "👤 Revendedores", callback_data: "menu:revendedores", style: "primary" },
+          { text: "📊 Análisis", callback_data: "menu:dashboard" },
+          { text: "👤 Revendedores", callback_data: "menu:revendedores" },
         ],
       ], "Markdown");
     } else if (await safeIsVendedorLocal(userId)) {
@@ -2166,18 +2164,6 @@ bot.onText(/\/sincronizar_claves/i, async (msg) => {
   );
 });
 
-// ✅ NUEVO: /version — para confirmar rápido si el bot ya tiene el código
-// nuevo después de subir un archivo, sin tener que adivinar. Cualquier admin
-// o vendedor lo puede usar.
-const BOT_BUILD = "BOT-BUILD-SUBMENUS-COLOR-20260810-04";
-bot.onText(/\/version/i, async (msg) => {
-  if (!hasRuntimeLock()) return;
-  const chatId = msg.chat.id;
-  const userId = msg.from.id;
-  if (!(await safeIsAdminLocal(userId)) && !(await safeIsVendedorLocal(userId))) return;
-  return bot.sendMessage(chatId, `🔧 ${BOT_BUILD}\n\nSi acabás de subir un archivo nuevo y esto NO cambió, Render todavía no terminó de desplegar (o no se subió) — revisá el dashboard de Render.`);
-});
-
 bot.onText(/\/sincronizar_todo/i, async (msg) => {
   if (!hasRuntimeLock()) return;
 
@@ -2202,29 +2188,14 @@ bot.onText(/\/sincronizar_todo/i, async (msg) => {
     // así que esa búsqueda por ID casi nunca encontraba nada. Ahora cargamos
     // TODO el inventario una sola vez y lo indexamos por correo real, igual
     // que lo hace el backend de Sublichat HQ (renovar.js → ajustarInventario).
-    //
-    // ⚠️ BUG GRAVE encontrado y corregido: el índice se armaba SOLO por correo,
-    // sin la plataforma. Si el mismo correo existía en dos plataformas
-    // distintas (ej. "sabritas@capuchino.lat" como cuenta de Disney Y también
-    // como cuenta de Paramount), ambas caían en el mismo grupo — y al buscar
-    // dónde meter a un cliente de Disney, el código podía elegir por error la
-    // cuenta de Paramount (o al revés) solo porque tenía cupo libre, sin
-    // importar que fuera una plataforma totalmente distinta. Eso mezclaba
-    // clientes entre plataformas, marcaba cuentas "LLENA" con gente que no
-    // correspondía, y desordenaba el inventario cada vez que se corría este
-    // comando. Ahora el índice y la búsqueda usan correo + plataforma juntos,
-    // así nunca se cruzan cuentas de plataformas distintas aunque compartan
-    // el mismo correo.
     const snapInv = await db.collection("inventario").get();
-    const invPorCorreo = new Map(); // "plataforma|correoNorm" -> [{ ref, data }]
+    const invPorCorreo = new Map(); // correoNorm -> [{ ref, data }]
     snapInv.forEach((d) => {
       const data = d.data() || {};
       const correoNorm = String(data.correo || "").trim().toLowerCase();
       if (!correoNorm) return;
-      const platNorm = normalizarPlataforma(data.plataforma || "");
-      const key = `${platNorm}|${correoNorm}`;
-      if (!invPorCorreo.has(key)) invPorCorreo.set(key, []);
-      invPorCorreo.get(key).push({ ref: d.ref, data });
+      if (!invPorCorreo.has(correoNorm)) invPorCorreo.set(correoNorm, []);
+      invPorCorreo.get(correoNorm).push({ ref: d.ref, data });
     });
 
     const snapClientes = await db.collection("clientes").get();
@@ -2238,8 +2209,7 @@ bot.onText(/\/sincronizar_todo/i, async (msg) => {
         if (!s.correo || !s.plataforma) continue;
 
         const correoNorm = String(s.correo).trim().toLowerCase();
-        const platNorm = normalizarPlataforma(s.plataforma);
-        const candidatos = invPorCorreo.get(`${platNorm}|${correoNorm}`) || [];
+        const candidatos = invPorCorreo.get(correoNorm) || [];
 
         if (!candidatos.length) {
           clientesSinCuenta++;
@@ -2305,206 +2275,6 @@ bot.onText(/\/sincronizar_todo/i, async (msg) => {
   } catch (error) {
     logErr("sincronizar_todo", error);
     return bot.sendMessage(chatId, "⚠️ Ocurrió un error al sincronizar. Revise los logs del servidor.");
-  }
-});
-
-// ✅ NUEVO: /detectar_cruces (confirmar) — revisa cada cuenta del inventario y
-// compara a la gente que tiene adentro contra el servicio REAL de cada
-// cliente (colección "clientes"). Sin "confirmar" es solo un reporte, no
-// toca nada. Con "confirmar" SACA a esas personas de la cuenta equivocada
-// (no las mete en ningún lado más — para eso corré /sincronizar_todo después,
-// que ya está corregido y las va a poner en su cuenta correcta si existe).
-bot.onText(/\/detectar_cruces(?:\s+(confirmar))?/i, async (msg, match) => {
-  if (!hasRuntimeLock()) return;
-  const chatId = msg.chat.id;
-  const userId = msg.from.id;
-  const confirmar = !!(match && match[1]);
-
-  if (!(await safeIsAdminLocal(userId))) {
-    return bot.sendMessage(chatId, "⛔ Solo ADMIN puede ejecutar esto.");
-  }
-
-  await bot.sendMessage(
-    chatId,
-    confirmar
-      ? "🔧 Revisando y corrigiendo cruces de plataforma en el inventario…"
-      : "🔎 Revisando todo el inventario contra los servicios reales de cada cliente… puede tardar un poco. No se va a modificar nada, solo voy a armar la lista."
-  );
-
-  try {
-    const [snapInv, snapClientes] = await Promise.all([
-      db.collection("inventario").get(),
-      db.collection("clientes").get(),
-    ]);
-
-    // Índice de servicios REALES: correoNorm -> nombreNorm -> [{plataforma, nombre}]
-    // Esto refleja lo que dice la ficha del cliente, que es la fuente de verdad.
-    const serviciosPorCorreoNombre = new Map();
-    snapClientes.forEach((docCli) => {
-      const c = docCli.data() || {};
-      const servicios = Array.isArray(c.servicios) ? c.servicios : [];
-      const nombreCliente = c.nombrePerfil || c.nombre || "Sin Nombre";
-      const nombreNorm = normalizeLooseText(nombreCliente);
-      if (!nombreNorm) return;
-      servicios.forEach((s) => {
-        const correoNorm = String(s?.correo || "").trim().toLowerCase();
-        const plat = normalizarPlataforma(s?.plataforma || "");
-        if (!correoNorm || !plat) return;
-        if (!serviciosPorCorreoNombre.has(correoNorm)) serviciosPorCorreoNombre.set(correoNorm, new Map());
-        const porNombre = serviciosPorCorreoNombre.get(correoNorm);
-        if (!porNombre.has(nombreNorm)) porNombre.set(nombreNorm, []);
-        porNombre.get(nombreNorm).push({ plataforma: plat, nombre: nombreCliente });
-      });
-    });
-
-    const cruces = [];
-    const huerfanos = [];
-    // docId -> { ref, data, aQuitar: [{nombre, pin, slot}] }
-    const cuentasAfectadas = new Map();
-    let cuentasRevisadas = 0;
-    let perfilesRevisados = 0;
-
-    snapInv.forEach((docInv) => {
-      const data = docInv.data() || {};
-      const correoNorm = String(data.correo || "").trim().toLowerCase();
-      const platInv = normalizarPlataforma(data.plataforma || "");
-      if (!correoNorm || !platInv) return;
-      cuentasRevisadas++;
-
-      const clientesInv = Array.isArray(data.clientes) ? data.clientes : [];
-      const porNombre = serviciosPorCorreoNombre.get(correoNorm) || new Map();
-
-      clientesInv.forEach((cliInv) => {
-        perfilesRevisados++;
-        const nombreNorm = normalizeLooseText(cliInv?.nombre || "");
-        if (!nombreNorm) return;
-
-        const candidatos = porNombre.get(nombreNorm) || [];
-        if (!candidatos.length) {
-          huerfanos.push({
-            nombre: cliInv?.nombre || "Sin nombre",
-            plataforma: platInv,
-            correo: data.correo || "",
-            docId: docInv.id,
-          });
-          return;
-        }
-
-        const coincideAqui = candidatos.some((x) => x.plataforma === platInv);
-        if (coincideAqui) return; // está bien puesto, no hay problema
-
-        const otras = [...new Set(candidatos.map((x) => humanPlatLabelSyncLocal(x.plataforma)))];
-        cruces.push({
-          nombre: cliInv?.nombre || "Sin nombre",
-          pin: cliInv?.pin || "",
-          correo: data.correo || "",
-          plataformaActual: humanPlatLabelSyncLocal(platInv),
-          plataformaReal: otras.join(" / "),
-          docId: docInv.id,
-        });
-
-        if (!cuentasAfectadas.has(docInv.id)) {
-          cuentasAfectadas.set(docInv.id, { ref: docInv.ref, data, aQuitar: [] });
-        }
-        cuentasAfectadas.get(docInv.id).aQuitar.push(cliInv);
-      });
-    });
-
-    // ── Modo corrección: sacar de cada cuenta a la gente que no corresponde ──
-    if (confirmar) {
-      let cuentasCorregidas = 0;
-      let perfilesSacados = 0;
-
-      for (const { ref, data, aQuitar } of cuentasAfectadas.values()) {
-        const clientesActuales = Array.isArray(data.clientes) ? data.clientes : [];
-        const quitarSet = new Set(
-          aQuitar.map((x) => `${normalizeLooseText(x?.nombre || "")}|${String(x?.pin || "")}|${String(x?.slot || "")}`)
-        );
-        const clientesFinal = clientesActuales.filter((c) => {
-          const key = `${normalizeLooseText(c?.nombre || "")}|${String(c?.pin || "")}|${String(c?.slot || "")}`;
-          return !quitarSet.has(key);
-        });
-
-        const sacados = clientesActuales.length - clientesFinal.length;
-        if (!sacados) continue;
-
-        const capacidad = Number(data.capacidad || data.total || 0) || clientesFinal.length || 1;
-        const ocupados = clientesFinal.length;
-        const disponibles = Math.max(0, capacidad - ocupados);
-        const estado = disponibles === 0 ? "llena" : "activa";
-
-        await ref.set(
-          { clientes: clientesFinal, ocupados, disponibles, disp: disponibles, estado, updatedAt: admin.firestore.FieldValue.serverTimestamp() },
-          { merge: true }
-        );
-
-        cuentasCorregidas++;
-        perfilesSacados += sacados;
-      }
-
-      return bot.sendMessage(
-        chatId,
-        `✅ Corrección completada.\n\n` +
-          `📦 Cuentas corregidas: ${cuentasCorregidas}\n` +
-          `👤 Perfiles sacados de cuentas equivocadas: ${perfilesSacados}\n\n` +
-          (perfilesSacados
-            ? `💡 Solo se SACARON de donde no correspondían. Para que queden bien puestos en su cuenta correcta, corré /sincronizar_todo ahora.`
-            : `No había nada que corregir en este momento.`)
-      );
-    }
-
-    // ── Modo reporte (sin "confirmar") ──
-    const fecha = hoyDMY();
-    let reporte = `DIAGNÓSTICO DE INVENTARIO — cruces de plataforma\n`;
-    reporte += `Generado: ${fecha}\n`;
-    reporte += `Este archivo es solo de lectura, no se modificó nada en la base.\n\n`;
-    reporte += `Resumen:\n`;
-    reporte += `- Cuentas de inventario revisadas: ${cuentasRevisadas}\n`;
-    reporte += `- Perfiles/clientes revisados dentro de esas cuentas: ${perfilesRevisados}\n`;
-    reporte += `- Cruces de plataforma encontrados (gente en la cuenta equivocada): ${cruces.length}\n`;
-    reporte += `- Sin servicio activo encontrado con ese nombre (revisar aparte, puede ser normal): ${huerfanos.length}\n\n`;
-
-    reporte += `================================================\n`;
-    reporte += `CRUCES DE PLATAFORMA — hay que sacarlos de aquí\n`;
-    reporte += `================================================\n\n`;
-    if (!cruces.length) {
-      reporte += `No encontré ningún cruce de plataforma. 🎉\n\n`;
-    } else {
-      cruces.forEach((x, i) => {
-        reporte += `${i + 1}) ${x.nombre}${x.pin ? ` — PIN ${x.pin}` : ""}\n`;
-        reporte += `   Está metido en: ${x.plataformaActual} — ${x.correo}\n`;
-        reporte += `   Su servicio real es de: ${x.plataformaReal}\n`;
-        reporte += `   ID de la cuenta en Bodega: ${x.docId}\n\n`;
-      });
-    }
-
-    reporte += `================================================\n`;
-    reporte += `SIN SERVICIO ACTIVO ENCONTRADO (nombre no calzó con ningún servicio con ese correo — puede ser normal si ya no es cliente, o el nombre está escrito distinto)\n`;
-    reporte += `================================================\n\n`;
-    huerfanos.forEach((x, i) => {
-      reporte += `${i + 1}) ${x.nombre} — ${humanPlatLabelSyncLocal(x.plataforma)} — ${x.correo}\n`;
-    });
-
-    const buffer = Buffer.from(reporte, "utf8");
-    await bot.sendDocument(
-      chatId,
-      buffer,
-      {
-        caption:
-          `🔎 Diagnóstico completado — no se tocó nada.\n\n` +
-          `📦 Cuentas revisadas: ${cuentasRevisadas}\n` +
-          `👤 Perfiles revisados: ${perfilesRevisados}\n` +
-          `⚠️ Cruces de plataforma: ${cruces.length}\n` +
-          `❔ Sin servicio encontrado: ${huerfanos.length}\n\n` +
-          (cruces.length
-            ? `Para SACAR automáticamente a esta gente de la cuenta equivocada, envía:\n/detectar_cruces confirmar`
-            : `No encontré ningún cruce ahora mismo. 🎉`),
-      },
-      { filename: `cruces_inventario_${fecha.replace(/\//g, "-")}.txt`, contentType: "text/plain" }
-    );
-  } catch (error) {
-    logErr("detectar_cruces", error);
-    return bot.sendMessage(chatId, "⚠️ Ocurrió un error al revisar el inventario. Revise los logs del servidor.");
   }
 });
 
@@ -3567,21 +3337,10 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
         if (!selArr.length) return bot.sendMessage(chatId, "⚠️ No hay clientes seleccionados.");
         await bot.sendMessage(chatId, `⏳ Renovando ${selArr.length} cliente(s)...`);
         let ok = 0; let err = 0;
-        const { cacheInvalidatePrefix: cIPM } = require("./index_01_core");
         for (const cliId of selArr) {
           try {
-            const ref = db.collection("clientes").doc(String(cliId));
-            const doc = await ref.get();
-            if (!doc.exists) { err++; continue; }
-            const cData = doc.data() || {};
-            const servicios = Array.isArray(cData.servicios) ? cData.servicios : [];
-            if (!servicios.length) { err++; continue; }
-            const nuevos = servicios.map(s => {
-              const base = isFechaDMY(String(s.fechaRenovacion || "")) ? String(s.fechaRenovacion) : hoyDMY();
-              return { ...s, fechaRenovacion: addDaysDMY(base, dias) };
-            });
-            await ref.set({ servicios: nuevos, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
-            cIPM(`clientes:doc:${cliId}`); ok++;
+            await renovarTodosServiciosTx(String(cliId), { dias });
+            ok++;
           } catch(e) { logErr(`masivo:ren:ok:${cliId}`, e); err++; }
         }
         global[masivoKey(chatId)] = null;
@@ -4174,7 +3933,7 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
         const nombre = c2?.nombrePerfil || "Cliente";
         const compras = Array.isArray(c2?.servicios) ? c2.servicios : [];
         for (let i = compras.length - 1; i >= 0; i--) {
-          try { await eliminarServicioTx(clientId, i); }
+          try { await eliminarServicioTx(clientId, i, compras[i]?.compraId || ""); }
           catch (e) { return bot.sendMessage(chatId, `⚠️ No se borró el cliente porque no pude liberar todos sus perfiles: ${e.message || "revise Bodega"}`); }
         }
         const batch = db.batch();
@@ -4202,8 +3961,10 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
       if (data.startsWith("cli:prof:add:")) {
         const parts = data.split(":");
         const clientId = parts[3], idx = Number(parts[4]);
+        const c = await getCliente(clientId);
+        const compraId = String(c?.servicios?.[idx]?.compraId || "");
         wizard.delete(String(chatId));
-        pending.set(String(chatId), { mode: "cliProfAddName", clientId, idx });
+        pending.set(String(chatId), { mode: "cliProfAddName", clientId, idx, compraId });
         return upsertPanel(chatId,
           "👥 *AÑADIR PERFIL A LA MISMA COMPRA*\n\nEscriba el nombre de la persona o perfil. El precio y la fecha no se pedirán otra vez porque pertenecen a toda la compra:",
           [[{ text: "⬅️ Cancelar", callback_data: `cli:serv:menu:${clientId}:${idx}` }]]
@@ -4214,12 +3975,21 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
         const field = parts[3], clientId = parts[4], idx = Number(parts[5]), perfilIndex = Number(parts[6]);
         const labels = { name: "👤 Escriba el nuevo nombre del perfil:", mail: "📧 Escriba el nuevo correo/usuario:", key: "🔑 Escriba la nueva clave:", pin: "🔐 Escriba el nuevo PIN individual:" };
         if (!labels[field]) return bot.sendMessage(chatId, "⚠️ Opción inválida.");
-        pending.set(String(chatId), { mode: "cliProfEdit", field, clientId, idx, perfilIndex });
+        const c = await getCliente(clientId);
+        const compraId = String(c?.servicios?.[idx]?.compraId || "");
+        const perfilId = String(perfilesServicioLocal(c?.servicios?.[idx] || {}, c?.nombrePerfil || "")?.[perfilIndex]?.perfilId || "");
+        pending.set(String(chatId), { mode: "cliProfEdit", field, clientId, idx, perfilIndex, compraId, perfilId });
         return upsertPanel(chatId, labels[field], [[{ text: "⬅️ Cancelar", callback_data: `cli:prof:menu:${clientId}:${idx}:${perfilIndex}` }]]);
       }
       if (data.startsWith("cli:prof:del:ask:")) {
         const parts = data.split(":");
         const clientId = parts[4], idx = Number(parts[5]), perfilIndex = Number(parts[6]);
+        const c = await getCliente(clientId);
+        pending.set(String(chatId), {
+          mode: "cliProfDelete", clientId, idx, perfilIndex,
+          compraId: String(c?.servicios?.[idx]?.compraId || ""),
+          perfilId: String(perfilesServicioLocal(c?.servicios?.[idx] || {}, c?.nombrePerfil || "")?.[perfilIndex]?.perfilId || "")
+        });
         return upsertPanel(chatId,
           "🗑️ *QUITAR PERFIL*\n\nSe quitará solo esta persona y se liberará su cupo. La compra, el precio, la renovación y los demás perfiles se conservarán. ¿Confirma?",
           [[{ text: "✅ Sí, quitar perfil", callback_data: `cli:prof:del:ok:${clientId}:${idx}:${perfilIndex}` }],[{ text: "❌ Cancelar", callback_data: `cli:prof:menu:${clientId}:${idx}:${perfilIndex}` }]]
@@ -4228,8 +3998,10 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
       if (data.startsWith("cli:prof:del:ok:")) {
         const parts = data.split(":");
         const clientId = parts[4], idx = Number(parts[5]), perfilIndex = Number(parts[6]);
+        const ctx = pending.get(String(chatId));
         try {
-          await eliminarPerfilTx(clientId, idx, perfilIndex);
+          await eliminarPerfilTx(clientId, idx, perfilIndex, ctx?.compraId || "", ctx?.perfilId || "");
+          pending.delete(String(chatId));
           await bot.sendMessage(chatId, "✅ Perfil retirado. La compra conserva un solo precio y una sola renovación.");
           return menuListaPerfilesServicio(chatId, clientId, idx);
         } catch (e) { return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo quitar el perfil."}`); }
@@ -4270,12 +4042,13 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
         const servicios = Array.isArray(c.servicios) ? c.servicios : [];
         if (idx < 0 || idx >= servicios.length) return bot.sendMessage(chatId, "⚠️ Servicio inválido.");
         const platActual = normalizarPlataforma(servicios[idx]?.plataforma || "");
+        const compraId = String(servicios[idx]?.compraId || "");
 
-        if (field === "mail") pending.set(String(chatId), { mode: "cliServEditMail", clientId, idx, plat: platActual });
-        if (field === "clave") pending.set(String(chatId), { mode: "cliServEditClave", clientId, idx, plat: platActual });
-        if (field === "pin") pending.set(String(chatId), { mode: "cliServEditPin", clientId, idx, plat: platActual });
-        if (field === "precio") pending.set(String(chatId), { mode: "cliServEditPrecio", clientId, idx });
-        if (field === "fecha") pending.set(String(chatId), { mode: "cliServEditFecha", clientId, idx });
+        if (field === "mail") pending.set(String(chatId), { mode: "cliServEditMail", clientId, idx, plat: platActual, compraId });
+        if (field === "clave") pending.set(String(chatId), { mode: "cliServEditClave", clientId, idx, plat: platActual, compraId });
+        if (field === "pin") pending.set(String(chatId), { mode: "cliServEditPin", clientId, idx, plat: platActual, compraId });
+        if (field === "precio") pending.set(String(chatId), { mode: "cliServEditPrecio", clientId, idx, compraId });
+        if (field === "fecha") pending.set(String(chatId), { mode: "cliServEditFecha", clientId, idx, compraId });
 
         const titulo =
           field === "mail" ? `${identIcon(platActual)} *Cambiar ${getIdentLabelLocal(platActual).toLowerCase()}*` :
@@ -4325,7 +4098,7 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
             }
           }
 
-          await patchServicio(clientId, idx, patch);
+          await patchServicio(clientId, idx, patch, actual.compraId || "");
           return menuServicio(chatId, clientId, idx);
         } catch (e) {
           const msg = String(e.message || "No se pudo cambiar la plataforma.");
@@ -4351,8 +4124,10 @@ Revise que el correo exista en inventario con esa plataforma o coloque la clave 
         const parts = data.split(":");
         const clientId = parts[4];
         const idx = Number(parts[5]);
+        const c = await getCliente(clientId);
+        pending.set(String(chatId), { mode: "cliServDelete", clientId, idx, compraId: String(c?.servicios?.[idx]?.compraId || "") });
         return upsertPanel(chatId, "🗑️ *Eliminar compra completa*\n\nSe quitarán todos los perfiles incluidos, se liberarán sus cupos y se eliminará el precio/renovación de este servicio. ¿Confirma?", [
-          [{ text: "🗑️ Sí, eliminar", callback_data: `cli:serv:del:ok:${clientId}:${idx}`, style: "danger" }],
+          [{ text: "✅ Confirmar", callback_data: `cli:serv:del:ok:${clientId}:${idx}` }],
           [{ text: "⬅️ Cancelar", callback_data: `cli:serv:menu:${clientId}:${idx}` }],
         ]);
       }
@@ -4361,7 +4136,8 @@ Revise que el correo exista en inventario con esa plataforma o coloque la clave 
         const parts = data.split(":");
         const clientId = parts[4];
         const idx = Number(parts[5]);
-        try { await eliminarServicioTx(clientId, idx); }
+        const ctx = pending.get(String(chatId));
+        try { await eliminarServicioTx(clientId, idx, ctx?.compraId || ""); pending.delete(String(chatId)); }
         catch (e) { return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo eliminar la compra."}`); }
         const actualizado = await getCliente(clientId);
         const restantes = Array.isArray(actualizado?.servicios) ? actualizado.servicios : [];
@@ -4399,18 +4175,10 @@ Revise que el correo exista en inventario con esa plataforma o coloque la clave 
         const lastColon = raw.lastIndexOf(":");
         const clientId = raw.slice(0, lastColon);
         const idx = Number(raw.slice(lastColon + 1));
-        const ref = db.collection("clientes").doc(String(clientId));
-        const doc = await ref.get();
-        if (!doc.exists) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
-        const c = doc.data() || {};
-        const servicios = Array.isArray(c.servicios) ? c.servicios : [];
-        if (idx < 0 || idx >= servicios.length) return bot.sendMessage(chatId, "⚠️ Servicio inválido.");
-        const base = isFechaDMY(String(servicios[idx].fechaRenovacion || "")) ? String(servicios[idx].fechaRenovacion) : hoyDMY();
-        servicios[idx] = { ...servicios[idx], fechaRenovacion: addDaysDMY(base, 30) };
-        await ref.set({ servicios, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
-        const { cacheInvalidatePrefix: cIP } = require("./index_01_core");
-        cIP(`clientes:doc:${clientId}`);
-        await bot.sendMessage(chatId, `✅ Renovado +30 días\nNueva fecha: *${escMD(servicios[idx].fechaRenovacion)}*`, { parse_mode: "Markdown" });
+        const actual = await getCliente(clientId);
+        const compraId = String(actual?.servicios?.[idx]?.compraId || "");
+        const renovado = await renovarServicioTx(clientId, idx, { dias: 30, compraId });
+        await bot.sendMessage(chatId, `✅ Renovado +30 días\nNueva fecha: *${escMD(renovado.fechaNueva)}*`, { parse_mode: "Markdown" });
         return enviarFichaCliente(chatId, clientId);
       }
 
@@ -4420,18 +4188,10 @@ Revise que el correo exista en inventario con esa plataforma o coloque la clave 
         const lastColon = raw.lastIndexOf(":");
         const clientId = raw.slice(0, lastColon);
         const idx = Number(raw.slice(lastColon + 1));
-        const ref = db.collection("clientes").doc(String(clientId));
-        const doc = await ref.get();
-        if (!doc.exists) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
-        const c = doc.data() || {};
-        const servicios = Array.isArray(c.servicios) ? c.servicios : [];
-        if (idx < 0 || idx >= servicios.length) return bot.sendMessage(chatId, "⚠️ Servicio inválido.");
-        const base31 = isFechaDMY(String(servicios[idx].fechaRenovacion || "")) ? String(servicios[idx].fechaRenovacion) : hoyDMY();
-        servicios[idx] = { ...servicios[idx], fechaRenovacion: addDaysDMY(base31, 31) };
-        await ref.set({ servicios, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
-        const { cacheInvalidatePrefix: cIP31 } = require("./index_01_core");
-        cIP31(`clientes:doc:${clientId}`);
-        await bot.sendMessage(chatId, `✅ Renovado +31 días\nNueva fecha: *${escMD(servicios[idx].fechaRenovacion)}*`, { parse_mode: "Markdown" });
+        const actual = await getCliente(clientId);
+        const compraId = String(actual?.servicios?.[idx]?.compraId || "");
+        const renovado = await renovarServicioTx(clientId, idx, { dias: 31, compraId });
+        await bot.sendMessage(chatId, `✅ Renovado +31 días\nNueva fecha: *${escMD(renovado.fechaNueva)}*`, { parse_mode: "Markdown" });
         return enviarFichaCliente(chatId, clientId);
       }
 
@@ -4441,7 +4201,9 @@ Revise que el correo exista en inventario con esa plataforma o coloque la clave 
         const lastColon = raw.lastIndexOf(":");
         const clientId = raw.slice(0, lastColon);
         const idx = Number(raw.slice(lastColon + 1));
-        pending.set(String(chatId), { mode: "cliRenovarFechaManual", clientId, idx });
+        const c = await getCliente(clientId);
+        const compraId = String(c?.servicios?.[idx]?.compraId || "");
+        pending.set(String(chatId), { mode: "cliRenovarFechaManual", clientId, idx, compraId });
         return upsertPanel(chatId,
           "📅 *Renovar — fecha personalizada*\n\n" +
           "Escriba la fecha o los días a sumar:\n\n" +
@@ -4460,7 +4222,9 @@ Revise que el correo exista en inventario con esa plataforma o coloque la clave 
         const clientId = raw.slice(0, lastColon);
         const idx = Number(raw.slice(lastColon + 1));
         try {
-          const result = await eliminarServicioTx(clientId, idx);
+          const actual = await getCliente(clientId);
+          const compraId = String(actual?.servicios?.[idx]?.compraId || "");
+          const result = await eliminarServicioTx(clientId, idx, compraId);
           await bot.sendMessage(chatId,
             `🔄 *Servicio eliminado*\n\n` +
             `📦 ${escMD(humanPlatAlertLocal(result.eliminado?.plataforma || "-"))} — ${escMD(result.eliminado?.correo || "-")}\n` +
@@ -4490,6 +4254,12 @@ Revise que el correo exista en inventario con esa plataforma o coloque la clave 
         if (!c) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
         const servicios = Array.isArray(c.servicios) ? c.servicios : [];
         const s = servicios[idx] || {};
+        pending.set(String(chatId), {
+          mode: "cliRenNoRenovo",
+          clientId,
+          idx,
+          compraId: String(s.compraId || "")
+        });
         return upsertPanel(chatId,
           `❌ *NO RENOVÓ — CONFIRMAR ELIMINACIÓN*\n\n` +
           `👤 *${escMD(c.nombrePerfil || "Cliente")}*\n` +
@@ -4510,7 +4280,9 @@ Revise que el correo exista en inventario con esa plataforma o coloque la clave 
         const clientId = raw.slice(0, lastColon);
         const idx = Number(raw.slice(lastColon + 1));
         try {
-          const result = await eliminarServicioTx(clientId, idx);
+          const ctx = pending.get(String(chatId));
+          const result = await eliminarServicioTx(clientId, idx, ctx?.compraId || "");
+          pending.delete(String(chatId));
           await bot.sendMessage(chatId,
             `✅ *Servicio eliminado correctamente*\n\n` +
             `📦 ${escMD(humanPlatAlertLocal(result.eliminado?.plataforma || "-"))} — ${escMD(result.eliminado?.correo || "-")}\n` +
@@ -4549,19 +4321,7 @@ Revise que el correo exista en inventario con esa plataforma o coloque la clave 
 
       if (data.startsWith("cli:ren:all:ok:")) {
         const clientId = data.slice("cli:ren:all:ok:".length);
-        const ref = db.collection("clientes").doc(String(clientId));
-        const doc = await ref.get();
-        if (!doc.exists) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
-        const c = doc.data() || {};
-        const servicios = Array.isArray(c.servicios) ? c.servicios : [];
-        if (!servicios.length) return bot.sendMessage(chatId, "⚠️ Este cliente no tiene servicios.");
-        const nuevos = servicios.map((s) => {
-          const base = isFechaDMY(String(s.fechaRenovacion || "")) ? String(s.fechaRenovacion) : hoyDMY();
-          return { ...s, fechaRenovacion: addDaysDMY(base, 30) };
-        });
-        await ref.set({ servicios: nuevos, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
-        const { cacheInvalidatePrefix: cIP } = require("./index_01_core");
-        cIP(`clientes:doc:${clientId}`);
+        await renovarTodosServiciosTx(clientId, { dias: 30 });
         await bot.sendMessage(chatId, `✅ Todos los servicios renovados +30 días.`);
         return enviarFichaCliente(chatId, clientId);
       }
@@ -4577,19 +4337,7 @@ Revise que el correo exista en inventario con esa plataforma o coloque la clave 
 
       if (data.startsWith("cli:ren:all31:ok:")) {
         const clientId = data.slice("cli:ren:all31:ok:".length);
-        const ref = db.collection("clientes").doc(String(clientId));
-        const doc = await ref.get();
-        if (!doc.exists) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
-        const c = doc.data() || {};
-        const servicios = Array.isArray(c.servicios) ? c.servicios : [];
-        if (!servicios.length) return bot.sendMessage(chatId, "⚠️ Este cliente no tiene servicios.");
-        const nuevos31 = servicios.map((s) => {
-          const base = isFechaDMY(String(s.fechaRenovacion || "")) ? String(s.fechaRenovacion) : hoyDMY();
-          return { ...s, fechaRenovacion: addDaysDMY(base, 31) };
-        });
-        await ref.set({ servicios: nuevos31, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
-        const { cacheInvalidatePrefix: cIP31 } = require("./index_01_core");
-        cIP31(`clientes:doc:${clientId}`);
+        await renovarTodosServiciosTx(clientId, { dias: 31 });
         await bot.sendMessage(chatId, `✅ Todos los servicios renovados +31 días.`);
         return enviarFichaCliente(chatId, clientId);
       }
@@ -4603,7 +4351,10 @@ Revise que el correo exista en inventario con esa plataforma o coloque la clave 
         if (!servicios.length) return bot.sendMessage(chatId, "⚠️ Este cliente no tiene servicios.");
 
         // Inicializar selección vacía en pending
-        pending.set(String(chatId), { mode: "bajaMasiva", clientId, seleccionados: [] });
+        pending.set(String(chatId), {
+          mode: "bajaMasiva", clientId, seleccionados: [],
+          referencias: servicios.map((s, idx) => ({ idx, compraId: String(s?.compraId || "") }))
+        });
 
         let txt = `🗑️ *BAJA MASIVA DE SERVICIOS*\n👤 *${escMD(c.nombrePerfil || "Cliente")}*\n\n`;
         txt += `Seleccione los servicios a *eliminar* (los que NO renovaron).\nLuego presione *Confirmar eliminación*.\n\n`;
@@ -4677,32 +4428,11 @@ Revise que el correo exista en inventario con esa plataforma o coloque la clave 
           return bot.sendMessage(chatId, "⚠️ No seleccionó ningún servicio. Toque los que desea eliminar primero.");
         }
 
-        const c = await getCliente(clientId);
-        if (!c) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
-        const servicios = Array.isArray(c.servicios) ? c.servicios : [];
-
-        // Eliminar de mayor a menor índice para no desfasar el array
-        const indices = [...seleccionados].sort((a, b) => b - a);
-        const eliminados = [];
-
-        for (const idx of indices) {
-          if (idx < 0 || idx >= servicios.length) continue;
-          const s = servicios[idx];
-          eliminados.push(s);
-          servicios.splice(idx, 1);
-          // Liberar slot en inventario
-          try {
-            const { db: dbCore, admin: adminCore } = require("./index_01_core");
-            const { removeServicioDeInventario: removeInv } = require("./index_03_clientes_crm");
-            await removeInv({ clienteNombre: c.nombrePerfil || "", plataforma: s.plataforma || "", correo: s.correo || "", pin: s.pin || "" });
-          } catch (e) { logErr("bajaMasiva.removeInv", e); }
-        }
-
-        // Guardar servicios restantes
-        const ref = db.collection("clientes").doc(String(clientId));
-        await ref.set({ servicios, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
-        const { cacheInvalidatePrefix: cIP } = require("./index_01_core");
-        cIP(`clientes:doc:${clientId}`);
+        const referenciasBase = Array.isArray(ctx.referencias) ? ctx.referencias : [];
+        const referencias = seleccionados.map((idx) => referenciasBase[idx] || { idx, compraId: "" });
+        const baja = await eliminarServiciosTx(clientId, referencias);
+        const eliminados = baja.eliminados || [];
+        const servicios = baja.servicios || [];
         pending.delete(String(chatId));
       forceNextPanelAtBottom(chatId);
 
@@ -4985,7 +4715,7 @@ bot.on("message", async (msg) => {
         "editar_movimiento", "clientes_excel",
         // ✅ Diagnóstico / reparación de colisiones (antes faltaban aquí y por eso
         // el buscador genérico también los interceptaba y mandaba "Sin resultados").
-        "reparar_colisiones", "buscar_raw", "detectar_cruces", "version",
+        "reparar_colisiones", "buscar_raw",
         // ✅ Comandos IMAP — no pasar a resolverBusquedaAdmin
         "code", "link", "hogar", "prime", "inbox", "debug",
         // ✅ Buzón de avisos web revendedores
@@ -5007,26 +4737,13 @@ bot.on("message", async (msg) => {
       const tSearch = String(text || "").trim();
       const pSearch = pending.get(String(chatId));
       const pendingMode = String(pSearch?.mode || "");
-      // ⚠️ FIX: dos causas de "a veces no busca nada":
-      // 1) Modos que son solo "contexto" para el próximo botón (no esperan
-      //    texto libre) también bloqueaban la búsqueda por error.
-      // 2) Un flujo de texto abandonado a medias (sin cancelar) quedaba
-      //    pegado para siempre. Ahora, si el pending tiene más de 5 minutos,
-      //    se considera abandonado, se borra solo, y la búsqueda funciona.
-      const PENDING_STALE_MS = 5 * 60 * 1000;
-      const pendingStale = !!(pSearch && pSearch._ts && (Date.now() - pSearch._ts) > PENDING_STALE_MS);
-      if (pendingStale) pending.delete(String(chatId));
-      const wSearch = wizard.get(String(chatId));
-      const wizardStale = !!(wSearch && wSearch._ts && (Date.now() - wSearch._ts) > PENDING_STALE_MS);
-      if (wizardStale) wizard.delete(String(chatId));
-      const pendingContextOnly = ["invSubmenuCtx", "mailDelClientePickCtx", "mailEditPinPickCtx"].includes(pendingMode);
-      const pendingBloqueaBusqueda = !!(pSearch && !pendingContextOnly && !pendingStale);
+      const pendingBloqueaBusqueda = !!(pSearch && !["invSubmenuCtx"].includes(pendingMode));
       const pareceBusqueda =
         isEmailLike(tSearch) ||
         onlyDigits(tSearch).length >= 7 ||
         normalizeLooseText(tSearch).length >= 2;
 
-      if (pareceBusqueda && !(wizard.has(String(chatId)) && !wizardStale) && !pendingBloqueaBusqueda) {
+      if (pareceBusqueda && !wizard.has(String(chatId)) && !pendingBloqueaBusqueda) {
         return resolverBusquedaAdmin(chatId, tSearch);
       }
     }
@@ -5403,39 +5120,29 @@ bot.on("message", async (msg) => {
         pending.delete(String(chatId));
       forceNextPanelAtBottom(chatId);
 
-        // ⚠️ FIX: antes, si la cuenta no existía o el correo nuevo ya estaba
-        // en uso, el bot solo mandaba el texto del error y el botón "Editar
-        // correo" quedaba sin forma de volver a aparecer. Ahora siempre se
-        // reabre el panel de la cuenta para poder reintentar.
         const found = await buscarCorreoInventarioPorPlatCorreo(p.plataforma, p.correo);
-        if (!found) { await bot.sendMessage(chatId, "❌ La cuenta no existe."); return mostrarListaCorreosPlataforma(chatId, p.plataforma); }
+        if (!found) return bot.sendMessage(chatId, "❌ La cuenta no existe.");
 
-        try {
-          const nuevoCorreo = normalizeIdentByPlatformLocal(p.plataforma, t);
-          const nuevaRef = db.collection("inventario").doc(docIdInventarioLocal(nuevoCorreo, p.plataforma));
-          const nuevaDoc = await nuevaRef.get();
+        const nuevoCorreo = normalizeIdentByPlatformLocal(p.plataforma, t);
+        const nuevaRef = db.collection("inventario").doc(docIdInventarioLocal(nuevoCorreo, p.plataforma));
+        const nuevaDoc = await nuevaRef.get();
 
-          if (nuevaDoc.exists && nuevaRef.id !== found.ref.id) {
-            await bot.sendMessage(chatId, "⚠️ Ya existe una cuenta con ese correo en esta plataforma.");
-            return mostrarPanelCorreo(chatId, p.plataforma, p.correo);
-          }
-
-          const dataCuenta = { ...(found.data || {}) };
-          dataCuenta.correo = nuevoCorreo;
-          dataCuenta.ident = nuevoCorreo;
-          dataCuenta.updatedAt = admin.firestore.FieldValue.serverTimestamp();
-
-          await nuevaRef.set(dataCuenta, { merge: true });
-          if (nuevaRef.id !== found.ref.id) {
-            await found.ref.delete();
-          }
-
-          await bot.sendMessage(chatId, "✅ Correo de la cuenta actualizado.");
-          return mostrarPanelCorreo(chatId, p.plataforma, nuevoCorreo);
-        } catch (e) {
-          await bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo actualizar el correo."}`);
-          return mostrarPanelCorreo(chatId, p.plataforma, p.correo);
+        if (nuevaDoc.exists && nuevaRef.id !== found.ref.id) {
+          return bot.sendMessage(chatId, "⚠️ Ya existe una cuenta con ese correo en esta plataforma.");
         }
+
+        const dataCuenta = { ...(found.data || {}) };
+        dataCuenta.correo = nuevoCorreo;
+        dataCuenta.ident = nuevoCorreo;
+        dataCuenta.updatedAt = admin.firestore.FieldValue.serverTimestamp();
+
+        await nuevaRef.set(dataCuenta, { merge: true });
+        if (nuevaRef.id !== found.ref.id) {
+          await found.ref.delete();
+        }
+
+        await bot.sendMessage(chatId, "✅ Correo de la cuenta actualizado.");
+        return mostrarPanelCorreo(chatId, p.plataforma, nuevoCorreo);
       }
 
       // ✅ AGREGAR REVENDEDOR — paso 1: nombre
@@ -5605,16 +5312,7 @@ bot.on("message", async (msg) => {
 
         pending.delete(String(chatId));
         forceNextPanelAtBottom(chatId);
-        const ref = db.collection("clientes").doc(String(p.clientId));
-        const doc = await ref.get();
-        if (!doc.exists) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
-        const c = doc.data() || {};
-        const servicios = Array.isArray(c.servicios) ? c.servicios : [];
-        if (!servicios.length) return bot.sendMessage(chatId, "⚠️ Este cliente no tiene servicios.");
-        const nuevos = servicios.map(s => ({ ...s, fechaRenovacion: fechaFinal }));
-        await ref.set({ servicios: nuevos, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
-        const { cacheInvalidatePrefix: cIPallc } = require("./index_01_core");
-        cIPallc(`clientes:doc:${p.clientId}`);
+        await renovarTodosServiciosTx(p.clientId, { fechaExacta: fechaFinal });
         await bot.sendMessage(chatId, `✅ Todos los servicios renovados a la fecha: *${fechaFinal}*`, { parse_mode: "Markdown" });
         return enviarFichaCliente(chatId, p.clientId);
       }
@@ -5646,16 +5344,7 @@ bot.on("message", async (msg) => {
 
         pending.delete(String(chatId));
       forceNextPanelAtBottom(chatId);
-        const ref = db.collection("clientes").doc(String(p.clientId));
-        const doc = await ref.get();
-        if (!doc.exists) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
-        const c = doc.data() || {};
-        const servicios = Array.isArray(c.servicios) ? c.servicios : [];
-        if (p.idx < 0 || p.idx >= servicios.length) return bot.sendMessage(chatId, "⚠️ Servicio inválido.");
-        servicios[p.idx] = { ...(servicios[p.idx] || {}), fechaRenovacion: fechaFinal };
-        await ref.set({ servicios, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
-        const { cacheInvalidatePrefix: cIPone } = require("./index_01_core");
-        cIPone(`clientes:doc:${p.clientId}`);
+        await renovarServicioTx(p.clientId, p.idx, { fechaExacta: fechaFinal, compraId: p.compraId || "" });
         await bot.sendMessage(chatId, `✅ Fecha actualizada: *${fechaFinal}*`, { parse_mode: "Markdown" });
         return menuServicio(chatId, p.clientId, p.idx);
       }
@@ -5716,8 +5405,8 @@ bot.on("message", async (msg) => {
           return bot.sendMessage(chatId, "🔐 Escriba el PIN individual de este perfil:");
         }
         pending.delete(String(chatId));forceNextPanelAtBottom(chatId);
-        try { await addPerfilTx(p.clientId, p.idx, { nombre: p.nombre, perfil: p.nombre, correo: mail, clave: "", pin: "" }); }
-        catch (e) { await bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo añadir el perfil."}`); return menuListaPerfilesServicio(chatId, p.clientId, p.idx); }
+        try { await addPerfilTx(p.clientId, p.idx, { nombre: p.nombre, perfil: p.nombre, correo: mail, clave: "", pin: "" }, p.compraId || ""); }
+        catch (e) { return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo añadir el perfil."}`); }
         await bot.sendMessage(chatId, "✅ Perfil añadido a la misma compra. No se creó otro precio ni otra renovación.");
         return menuListaPerfilesServicio(chatId, p.clientId, p.idx);
       }
@@ -5728,16 +5417,16 @@ bot.on("message", async (msg) => {
           return bot.sendMessage(chatId, "🔐 Escriba el PIN individual de este perfil:");
         }
         pending.delete(String(chatId));forceNextPanelAtBottom(chatId);
-        try { await addPerfilTx(p.clientId, p.idx, { nombre: p.nombre, perfil: p.nombre, correo: p.mail, clave: t, pin: "" }); }
-        catch (e) { await bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo añadir el perfil."}`); return menuListaPerfilesServicio(chatId, p.clientId, p.idx); }
+        try { await addPerfilTx(p.clientId, p.idx, { nombre: p.nombre, perfil: p.nombre, correo: p.mail, clave: t, pin: "" }, p.compraId || ""); }
+        catch (e) { return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo añadir el perfil."}`); }
         await bot.sendMessage(chatId, "✅ Perfil añadido a la misma compra. No se creó otro precio ni otra renovación.");
         return menuListaPerfilesServicio(chatId, p.clientId, p.idx);
       }
 
       if (p.mode === "cliProfAddPin") {
         pending.delete(String(chatId));forceNextPanelAtBottom(chatId);
-        try { await addPerfilTx(p.clientId, p.idx, { nombre: p.nombre, perfil: p.nombre, correo: p.mail, clave: p.clave || "", pin: t }); }
-        catch (e) { await bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo añadir el perfil."}`); return menuListaPerfilesServicio(chatId, p.clientId, p.idx); }
+        try { await addPerfilTx(p.clientId, p.idx, { nombre: p.nombre, perfil: p.nombre, correo: p.mail, clave: p.clave || "", pin: t }, p.compraId || ""); }
+        catch (e) { return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo añadir el perfil."}`); }
         await bot.sendMessage(chatId, "✅ Perfil añadido a la misma compra con su PIN individual. El precio y la fecha siguen únicos.");
         return menuListaPerfilesServicio(chatId, p.clientId, p.idx);
       }
@@ -5755,8 +5444,8 @@ bot.on("message", async (msg) => {
         } else if (p.field === "key") patch.clave = t;
         else if (p.field === "pin") patch.pin = t;
         pending.delete(String(chatId));forceNextPanelAtBottom(chatId);
-        try { await patchPerfilTx(p.clientId, p.idx, p.perfilIndex, patch); }
-        catch (e) { await bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo editar el perfil."}`); return menuPerfilServicio(chatId, p.clientId, p.idx, p.perfilIndex); }
+        try { await patchPerfilTx(p.clientId, p.idx, p.perfilIndex, patch, p.compraId || "", p.perfilId || ""); }
+        catch (e) { return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo editar el perfil."}`); }
         await bot.sendMessage(chatId, "✅ Perfil actualizado dentro de la misma compra.");
         return menuPerfilServicio(chatId, p.clientId, p.idx, p.perfilIndex);
       }
@@ -5805,8 +5494,7 @@ bot.on("message", async (msg) => {
         try {
           await addServicioTx(String(p.clientId), { plataforma: p.plat, correo: p.mail, clave: p.clave || "", pin: p.pin || "", precio: p.precio, fechaRenovacion: t });
         } catch (e) {
-          await bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo agregar el servicio."}`);
-          return enviarFichaCliente(chatId, p.clientId);
+          return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo agregar el servicio."}`);
         }
         return enviarFichaCliente(chatId, p.clientId);
       }
@@ -5833,82 +5521,59 @@ bot.on("message", async (msg) => {
           const inv = await buscarInventarioFlexiblePorServicioLocal(servicioBusqueda, platBase);
 
           let patch = { correo: correoIngresado };
-          let aplicoInventario = false;
-          let platCruzada = "";
 
-          // ⚠️ FIX: este era el flujo más usado de todos ("Cambiar correo"), y
-          // el más peligroso. Si el correo nuevo no existía en Bodega bajo ESTA
-          // plataforma pero SÍ existía bajo otra (mismo correo, cuenta
-          // distinta), esto se aceptaba igual — cambiaba la plataforma del
-          // servicio Y le copiaba la clave/PIN de la cuenta equivocada. Así
-          // fue como el Disney de Pamela terminó con datos de una cuenta de
-          // Paramount que solo compartía el correo. Ahora solo se usa el
-          // inventario si coincide exactamente con la plataforma actual; si
-          // el correo solo existe en otra plataforma, se guarda el correo tal
-          // cual lo escribiste y la clave/PIN quedan como estaban (no se tocan).
           if (inv) {
             const dataInv = inv.data || {};
             const platInv = normalizarPlataforma(inv.plataformaCoincidente || inv.plataforma || dataInv.plataforma || platBase);
-            if (platInv === platBase) {
-              const identInv = getIdentInventarioSyncLocal(dataInv) || correoIngresado;
-              const claveInv = extraerClaveInventarioLocal(dataInv);
-              const pinInv = extraerPinInventarioLocal(dataInv);
+            const identInv = getIdentInventarioSyncLocal(dataInv) || correoIngresado;
+            const claveInv = extraerClaveInventarioLocal(dataInv);
+            const pinInv = extraerPinInventarioLocal(dataInv);
 
-              patch.plataforma = platInv;
-              patch.correo = normalizeIdentByPlatformLocal(platInv, identInv);
+            patch.plataforma = platInv;
+            patch.correo = normalizeIdentByPlatformLocal(platInv, identInv);
 
-              if (requiereClaveLocal(platInv)) {
-                patch.clave = claveInv || actual.clave || actual.password || actual.pass || "";
-              } else {
-                patch.clave = "";
-              }
-
-              if (requierePinLocal(platInv)) {
-                patch.pin = extraerPinServicioLocal(actual) || pinInv || "";
-              } else {
-                patch.pin = "";
-              }
-              aplicoInventario = true;
+            if (requiereClaveLocal(platInv)) {
+              patch.clave = claveInv || actual.clave || actual.password || actual.pass || "";
             } else {
-              platCruzada = platInv;
+              patch.clave = "";
+            }
+
+            if (requierePinLocal(platInv)) {
+              patch.pin = extraerPinServicioLocal(actual) || pinInv || "";
+            } else {
+              patch.pin = "";
             }
           }
 
-          await patchServicio(p.clientId, p.idx, patch);
+          await patchServicio(p.clientId, p.idx, patch, p.compraId || "");
 
-          if (aplicoInventario) {
-            await bot.sendMessage(chatId, "✅ Correo actualizado y datos sincronizados desde inventario.", { parse_mode: "Markdown" });
-          } else if (platCruzada) {
-            await bot.sendMessage(chatId, `✅ Correo actualizado. ⚠️ Ese correo existe en Bodega pero en otra plataforma (*${humanPlatLabelSyncLocal(platCruzada)}*) — no toqué la clave ni el PIN para no mezclar cuentas. Revíselos manualmente si hace falta.`, { parse_mode: "Markdown" });
+          if (inv) {
+            const platFinal = normalizarPlataforma(patch.plataforma || platBase);
+            const msg = platFinal !== platBase
+              ? `✅ Correo actualizado. También corregí la plataforma a *${humanPlatLabelLocal(platFinal)}* y traje los datos del inventario.`
+              : `✅ Correo actualizado y datos sincronizados desde inventario.`;
+            await bot.sendMessage(chatId, msg, { parse_mode: "Markdown" });
           } else {
             await bot.sendMessage(chatId, "✅ Correo actualizado. ⚠️ No lo encontré en inventario, revise clave/PIN si aplica.");
           }
 
           return menuServicio(chatId, p.clientId, p.idx);
         } catch (e) {
-          // ⚠️ FIX: antes esto dejaba al usuario sin panel (solo el texto del
-          // error), y el botón "Cambiar correo"/"Cambiar acceso" desaparecía
-          // hasta que la persona supiera que debía tocar "Cancelar" en un
-          // mensaje anterior. Ahora se reabre el mismo menú del servicio para
-          // que el botón siga disponible y pueda reintentar de una vez.
-          await bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo actualizar el servicio."}`);
-          return menuServicio(chatId, p.clientId, p.idx);
+          return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo actualizar el servicio."}`);
         }
       }
 
       if (p.mode === "cliServEditClave") {
         pending.delete(String(chatId));
       forceNextPanelAtBottom(chatId);
-        try { await patchServicio(p.clientId, p.idx, { clave: t }); }
-        catch (e) { await bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo actualizar el servicio."}`); return menuServicio(chatId, p.clientId, p.idx); }
+        try { await patchServicio(p.clientId, p.idx, { clave: t }, p.compraId || ""); } catch (e) { return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo actualizar el servicio."}`); }
         return menuServicio(chatId, p.clientId, p.idx);
       }
 
       if (p.mode === "cliServEditPin") {
         pending.delete(String(chatId));
       forceNextPanelAtBottom(chatId);
-        try { await patchServicio(p.clientId, p.idx, { pin: t }); }
-        catch (e) { await bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo actualizar el servicio."}`); return menuServicio(chatId, p.clientId, p.idx); }
+        try { await patchServicio(p.clientId, p.idx, { pin: t }, p.compraId || ""); } catch (e) { return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo actualizar el servicio."}`); }
         return menuServicio(chatId, p.clientId, p.idx);
       }
 
@@ -5917,8 +5582,7 @@ bot.on("message", async (msg) => {
         if (!Number.isFinite(n) || n <= 0) return bot.sendMessage(chatId, "⚠️ Precio inválido.");
         pending.delete(String(chatId));
       forceNextPanelAtBottom(chatId);
-        try { await patchServicio(p.clientId, p.idx, { precio: n }); }
-        catch (e) { await bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo actualizar el servicio."}`); return menuServicio(chatId, p.clientId, p.idx); }
+        try { await patchServicio(p.clientId, p.idx, { precio: n }, p.compraId || ""); } catch (e) { return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo actualizar el servicio."}`); }
         return menuServicio(chatId, p.clientId, p.idx);
       }
 
@@ -5926,8 +5590,7 @@ bot.on("message", async (msg) => {
         if (!isFechaDMY(t)) return bot.sendMessage(chatId, "⚠️ Formato inválido. Use dd/mm/yyyy");
         pending.delete(String(chatId));
       forceNextPanelAtBottom(chatId);
-        try { await patchServicio(p.clientId, p.idx, { fechaRenovacion: t }); }
-        catch (e) { await bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo actualizar el servicio."}`); return menuServicio(chatId, p.clientId, p.idx); }
+        try { await patchServicio(p.clientId, p.idx, { fechaRenovacion: t }, p.compraId || ""); } catch (e) { return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo actualizar el servicio."}`); }
         return menuServicio(chatId, p.clientId, p.idx);
       }
 
