@@ -2356,117 +2356,128 @@ bot.onText(/\/reparar_colisiones(?:\s+(confirmar))?/i, async (msg, match) => {
   if (!hasRuntimeLock()) return;
   const chatId = msg.chat.id;
   const userId = msg.from.id;
+  if (!(await safeIsAdminLocal(userId))) return bot.sendMessage(chatId, "⛔ Solo ADMIN puede ejecutar esto.");
 
-  if (!(await safeIsAdminLocal(userId))) {
-    return bot.sendMessage(chatId, "⛔ Solo ADMIN puede ejecutar esto.");
+  // SEGURIDAD: la versión anterior intentaba separar automáticamente usando
+  // servicio.perfil como si siempre fuera el titular y vaciaba teléfonos. Eso
+  // puede borrar evidencia y partir una compra legítima. Desde ahora este
+  // comando es SOLO LECTURA. La recuperación debe hacerse por clienteId y con
+  // evidencia (historial/inventario/respaldo), nunca por nombre inferido.
+  const confirmar = !!(match && match[1]);
+  if (confirmar) {
+    return bot.sendMessage(chatId,
+      "⛔ Reparación automática deshabilitada por seguridad. No se modificó Firebase. Use /reparar_colisiones sin 'confirmar' para auditar candidatos; la separación debe hacerse con evidencia por clienteId."
+    );
   }
 
-  const confirmar = !!(match && match[1]);
-
-  await bot.sendMessage(
-    chatId,
-    confirmar
-      ? "🔧 Reparando colisiones de teléfono..."
-      : "🔎 Revisando documentos con clientes mezclados (no se guarda nada todavía)..."
-  );
-
+  await bot.sendMessage(chatId, "🔎 Auditando posibles fichas mezcladas (SOLO LECTURA)...");
   try {
     const colisiones = await detectarColisionesTelefono();
+    if (!colisiones.length) return bot.sendMessage(chatId, "✅ No encontré documentos con varios nombres internos entre sus servicios.");
+    let txt = `⚠️ Encontré ${colisiones.length} documento(s) que requieren revisión manual:
 
-    if (!colisiones.length) {
-      return bot.sendMessage(chatId, "✅ No encontré clientes mezclados por teléfono de vendedor.");
+`;
+    colisiones.slice(0, 15).forEach((c, i) => {
+      txt += `${i + 1}) clientId: ${c.docId} — vendedor actual: ${c.vendedor || "-"} — tel actual: ${c.telefonoVendedor || "-"}
+`;
+      c.grupos.forEach((g) => { txt += `   • ${g.nombre} — ${g.servicios.length} servicio(s)
+`; });
+      txt += `
+`;
+    });
+    if (colisiones.length > 15) txt += `…y ${colisiones.length - 15} más.
+`;
+    txt += `\n⚠️ Esto es una señal, NO prueba de fusión. No se modificó ningún dato.`;
+    return bot.sendMessage(chatId, txt);
+  } catch (error) {
+    logErr("reparar_colisiones_auditoria", error);
+    return bot.sendMessage(chatId, "⚠️ No pude completar la auditoría. Revise los logs del servidor.");
+  }
+});
+
+// ===============================
+// AUDITORÍA FORENSE DE IDENTIDAD (SOLO LECTURA)
+// Detecta señales de fusiones antiguas sin modificar ningún documento.
+// ===============================
+bot.onText(/\/auditar_fusiones/i, async (msg) => {
+  if (!hasRuntimeLock()) return;
+  const chatId = msg.chat.id;
+  const userId = msg.from.id;
+  if (!(await safeIsAdminLocal(userId))) return bot.sendMessage(chatId, "⛔ Solo ADMIN puede ejecutar esto.");
+
+  await bot.sendMessage(chatId, "🔎 Auditando identidad de clientes en Firestore (solo lectura)...");
+  try {
+    const snap = await db.collection("clientes").get();
+    const docs = snap.docs.map(d => ({ id: d.id, ...(d.data() || {}) }));
+    const norm = (v) => String(v || "").trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, " ");
+    const slug = (v) => norm(v).replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80) || "cliente";
+    const vendorPhones = VENDOR_DEFAULT_PHONES_TG;
+    const porNombre = new Map();
+    const compraOwners = new Map();
+
+    for (const c of docs) {
+      const nn = norm(c.nombrePerfil || c.nombre || "");
+      if (nn) {
+        if (!porNombre.has(nn)) porNombre.set(nn, []);
+        porNombre.get(nn).push(c);
+      }
+      const servicios = Array.isArray(c.servicios) ? c.servicios : [];
+      for (const sv of servicios) {
+        const cid = String(sv?.compraId || "").trim();
+        if (!cid) continue;
+        if (!compraOwners.has(cid)) compraOwners.set(cid, []);
+        compraOwners.get(cid).push(c.id);
+      }
     }
 
-    if (!confirmar) {
-      // ✅ Texto plano (SIN parse_mode Markdown): los nombres/correos de
-      // clientes son datos reales y pueden traer "_", "*", etc. que rompen
-      // el parser de Telegram y hacen que el mensaje nunca llegue.
-      let txt = `⚠️ Encontré ${colisiones.length} documento(s) con clientes mezclados:\n\n`;
-      colisiones.slice(0, 10).forEach((c, i) => {
-        txt += `${i + 1}) doc ${c.docId} — vendedor: ${c.vendedor || "-"} — tel: ${c.telefonoVendedor || "-"}${c.esTelVendedorConocido ? " (tel. default de vendedor)" : ""}\n`;
-        c.grupos.forEach((g) => { txt += `   • ${g.nombre} — ${g.servicios.length} servicio(s)\n`; });
-        txt += `\n`;
-      });
-      if (colisiones.length > 10) txt += `…y ${colisiones.length - 10} documento(s) más.\n\n`;
-      txt += `Nada se ha modificado todavía. Para separarlos en clientes independientes, envía:\n/reparar_colisiones confirmar`;
-      return bot.sendMessage(chatId, txt);
-    }
+    const compraDuplicada = new Set([...compraOwners.entries()].filter(([, owners]) => new Set(owners).size > 1).map(([id]) => id));
+    const resultados = [];
+    for (const c of docs) {
+      const nombre = String(c.nombrePerfil || c.nombre || "").trim();
+      const nn = norm(nombre);
+      const tel = String(c.telefono || "").trim();
+      const telDigits = tel.replace(/\D/g, "");
+      const vend = String(c.vendedor || "").trim();
+      const servicios = Array.isArray(c.servicios) ? c.servicios : [];
+      let score = 0;
+      const motivos = [];
 
-    let nuevosClientes = 0;
-    let docsReparados = 0;
+      if (nn && c.id === slug(nn) && servicios.length >= 2) { score += 5; motivos.push("ID antiguo derivado solo del nombre"); }
+      if (vendorPhones.has(telDigits)) { score += 4; motivos.push("teléfono coincide con número default de vendedor"); }
 
-    for (const col of colisiones) {
-      const docRef = db.collection("clientes").doc(col.docId);
-      const docSnap = await docRef.get();
-      if (!docSnap.exists) continue;
-      const data = docSnap.data() || {};
-      const vendedor = data.vendedor || col.vendedor || "";
-
-      // El grupo que coincide con el nombre que YA tiene el documento se queda
-      // en ese mismo doc (así no se rompe nada que ya apunte a ese ID); el
-      // resto se separa a documentos nuevos, limpios, sin el teléfono del vendedor.
-      const nombreActualNorm = String(data.nombrePerfil || "").trim().toLowerCase();
-      const grupoQueSeQueda = col.grupos.find((g) => g.nombre.toLowerCase() === nombreActualNorm) || col.grupos[0];
-
-      for (const g of col.grupos) {
-        if (g === grupoQueSeQueda) continue;
-
-        const idBase = ("cli-" + g.nombre)
-          .toLowerCase()
-          .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
-          .replace(/[^a-z0-9]+/g, "-")
-          .replace(/^-+|-+$/g, "")
-          .slice(0, 80) || ("cli-" + Date.now());
-
-        let nuevoRef = db.collection("clientes").doc(idBase);
-        const existeYa = await nuevoRef.get();
-        if (existeYa.exists) {
-          nuevoRef = db.collection("clientes").doc(`${idBase}-${Date.now().toString().slice(-5)}`);
-        }
-
-        await nuevoRef.set({
-          nombrePerfil: g.nombre,
-          nombre: g.nombre,
-          nombre_norm: g.nombre.toLowerCase(),
-          telefono: "",
-          telefono_norm: "",
-          vendedor,
-          servicios: g.servicios,
-          createdAt: admin.firestore.FieldValue.serverTimestamp(),
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-          recuperadoDeColision: col.docId,
-        });
-        nuevosClientes++;
+      const homologos = porNombre.get(nn) || [];
+      if (nn && homologos.length > 1) {
+        const vendedores = new Set(homologos.map(x => norm(x.vendedor || "")));
+        const telefonos = new Set(homologos.map(x => String(x.telefono || "").replace(/\D/g, "")).filter(Boolean));
+        if (vendedores.size > 1 || telefonos.size > 1) { score += 3; motivos.push(`mismo nombre aparece en ${homologos.length} fichas con vendedor/teléfono distinto`); }
       }
 
-      await docRef.set(
-        {
-          servicios: grupoQueSeQueda.servicios,
-          nombrePerfil: grupoQueSeQueda.nombre,
-          nombre: grupoQueSeQueda.nombre,
-          nombre_norm: grupoQueSeQueda.nombre.toLowerCase(),
-          telefono: "",
-          telefono_norm: "",
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        },
-        { merge: true }
-      );
-      docsReparados++;
+      const nombresInternos = new Set();
+      for (const sv of servicios) {
+        const arr = Array.isArray(sv?.perfiles) && sv.perfiles.length ? sv.perfiles : [sv];
+        for (const p of arr) {
+          const x = norm(p?.perfil || p?.nombre || sv?.perfil || "");
+          if (x && !/^perfil\s*\d*$/.test(x)) nombresInternos.add(x);
+        }
+        if (compraDuplicada.has(String(sv?.compraId || ""))) { score += 8; motivos.push(`compraId repetido en otra ficha: ${sv.compraId}`); }
+      }
+      if (nombresInternos.size > 1 && servicios.length > 1) { score += 4; motivos.push(`${nombresInternos.size} nombres internos distintos entre servicios/perfiles`); }
+
+      if (score > 0) resultados.push({ id: c.id, nombre, tel, vend, servicios: servicios.length, score, motivos });
     }
 
-    return bot.sendMessage(
-      chatId,
-      `✅ Reparación completada\n\n📄 Documentos separados: ${docsReparados}\n👤 Clientes nuevos recuperados: ${nuevosClientes}\n\n💡 Ahora corre /sincronizar_todo para conectarlos con el inventario.`
-    );
-  } catch (error) {
-    logErr("reparar_colisiones", error);
-    if (String(error?.message || "").includes("timeout_firestore_25s")) {
-      return bot.sendMessage(
-        chatId,
-        "⚠️ Firestore no respondió en 25 segundos. Es probable que el bot se haya reiniciado a mitad de un deploy en Render. Revise el dashboard de Render (Logs / Events) para confirmar que el último deploy terminó en 'Live', y vuelva a intentar."
-      );
-    }
-    return bot.sendMessage(chatId, "⚠️ Ocurrió un error reparando. Revise los logs del servidor.");
+    resultados.sort((a,b) => b.score - a.score || b.servicios - a.servicios);
+    const altos = resultados.filter(x => x.score >= 7);
+    let txt = `✅ Auditoría terminada\n\nClientes: ${docs.length}\nCandidatos: ${resultados.length}\nAlta sospecha (score ≥7): ${altos.length}\n\n`;
+    (altos.length ? altos : resultados).slice(0, 20).forEach((x, i) => {
+      txt += `${i+1}) ${x.nombre || "Sin nombre"}\n   clientId: ${x.id}\n   vendedor: ${x.vend || "-"} | tel: ${x.tel || "-"} | servicios: ${x.servicios} | score: ${x.score}\n   señales: ${x.motivos.join("; ")}\n\n`;
+    });
+    txt += "⚠️ Solo lectura: no se modificó Firebase. Un candidato no debe separarse sin verificar historial/inventario/respaldo.";
+    if (txt.length > 3900) txt = txt.slice(0, 3850) + "\n…resultado recortado; hay más candidatos.";
+    return bot.sendMessage(chatId, txt);
+  } catch (e) {
+    logErr("auditar_fusiones", e);
+    return bot.sendMessage(chatId, "⚠️ No pude completar la auditoría de fusiones. Revise los logs.");
   }
 });
 
