@@ -2482,6 +2482,192 @@ bot.onText(/\/auditar_fusiones/i, async (msg) => {
 });
 
 // ===============================
+// AUDITORÍA FORENSE INDIVIDUAL: /auditar_cliente <nombre|teléfono|clientId>
+// SOLO LECTURA. Nunca crea, edita, separa ni elimina fichas.
+// ===============================
+function fechaAuditoriaLocal(v) {
+  if (!v) return "-";
+  if (typeof v === "string") return v;
+  try {
+    if (typeof v.toDate === "function") {
+      const d = v.toDate();
+      return `${String(d.getDate()).padStart(2,"0")}/${String(d.getMonth()+1).padStart(2,"0")}/${d.getFullYear()} ${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`;
+    }
+  } catch (_) {}
+  return "-";
+}
+
+function cortarTelegramLocal(texto = "", max = 3800) {
+  const s = String(texto || "");
+  if (s.length <= max) return [s];
+  const partes = [];
+  let resto = s;
+  while (resto.length > max) {
+    let corte = resto.lastIndexOf("\n", max);
+    if (corte < Math.floor(max * 0.55)) corte = max;
+    partes.push(resto.slice(0, corte));
+    resto = resto.slice(corte).replace(/^\n+/, "");
+  }
+  if (resto) partes.push(resto);
+  return partes;
+}
+
+async function buscarClienteAuditoriaLocal(query = "") {
+  const q = String(query || "").trim();
+  if (!q) return [];
+
+  // 1) clientId exacto: máxima prioridad, porque es la identidad real.
+  try {
+    const exactDoc = await db.collection("clientes").doc(q).get();
+    if (exactDoc.exists) return [{ id: exactDoc.id, ...(exactDoc.data() || {}) }];
+  } catch (_) {}
+
+  // 2) Reutilizamos el buscador robusto, pero reordenamos exactos primero.
+  const candidatos = await buscarClienteRobusto(q);
+  const norm = (v) => String(v || "").trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, " ");
+  const digits = (v) => String(v || "").replace(/\D/g, "");
+  const nq = norm(q);
+  const dq = digits(q);
+
+  return (Array.isArray(candidatos) ? candidatos : []).sort((a, b) => {
+    const score = (c) => {
+      const nombre = norm(c?.nombrePerfil || c?.nombre || "");
+      const tel = digits(c?.telefono || "");
+      let n = 0;
+      if (nombre && nombre === nq) n += 100;
+      if (dq.length >= 7 && tel === dq) n += 120;
+      if (String(c?.id || "") === q) n += 200;
+      if (nombre.includes(nq) && nq) n += 10;
+      if (dq.length >= 4 && tel.includes(dq)) n += 10;
+      return n;
+    };
+    return score(b) - score(a);
+  });
+}
+
+async function historialAuditoriaLocal(clientId = "") {
+  try {
+    const snap = await db.collection("historial_clientes")
+      .where("clientId", "==", String(clientId || ""))
+      .get();
+    return snap.docs.map(d => ({ id: d.id, ...(d.data() || {}) })).sort((a, b) => {
+      const ta = a?.fechaTS?.toMillis?.() || 0;
+      const tb = b?.fechaTS?.toMillis?.() || 0;
+      return tb - ta;
+    });
+  } catch (e) {
+    logErr("auditar_cliente_historial", e);
+    return [];
+  }
+}
+
+function nombresInternosAuditoriaLocal(cliente = {}) {
+  const salida = new Set();
+  const servicios = Array.isArray(cliente.servicios) ? cliente.servicios : [];
+  for (const sv of servicios) {
+    const perfiles = perfilesServicioLocal(sv, cliente.nombrePerfil || cliente.nombre || "");
+    for (const p of perfiles) {
+      const nombre = String(p?.nombre || p?.perfil || "").trim();
+      if (nombre && !/^perfil\s*\d*$/i.test(nombre)) salida.add(nombre);
+    }
+  }
+  return [...salida];
+}
+
+function renderAuditoriaClienteLocal(cliente = {}, eventos = []) {
+  const servicios = Array.isArray(cliente.servicios) ? cliente.servicios : [];
+  const internos = nombresInternosAuditoriaLocal(cliente);
+  let txt = `🔎 AUDITORÍA INDIVIDUAL — SOLO LECTURA\n\n`;
+  txt += `Nombre actual: ${cliente.nombrePerfil || cliente.nombre || "Sin nombre"}\n`;
+  txt += `clientId: ${cliente.id || "-"}\n`;
+  txt += `Teléfono actual: ${cliente.telefono || "-"}\n`;
+  txt += `Vendedor actual: ${cliente.vendedor || "-"}\n`;
+  txt += `Servicios actuales: ${servicios.length}\n`;
+  txt += `Creado: ${fechaAuditoriaLocal(cliente.createdAt || cliente.fechaCreacion || cliente.created_at)}\n`;
+  txt += `Actualizado: ${fechaAuditoriaLocal(cliente.updatedAt || cliente.fechaActualizacion || cliente.updated_at)}\n`;
+  txt += `Nombres internos detectados (${internos.length}): ${internos.length ? internos.join(" | ") : "ninguno"}\n`;
+
+  txt += `\n=== SERVICIOS ACTUALES ===\n`;
+  if (!servicios.length) txt += `(sin servicios)\n`;
+  servicios.forEach((sv, i) => {
+    const perfiles = perfilesServicioLocal(sv, cliente.nombrePerfil || cliente.nombre || "");
+    txt += `\n${i + 1}) ${humanPlataforma(sv?.plataforma || "")}\n`;
+    txt += `   compraId: ${sv?.compraId || "⚠️ SIN compraId"}\n`;
+    txt += `   correo/usuario: ${sv?.correo || perfiles?.[0]?.correo || "-"}\n`;
+    txt += `   renovación: ${sv?.fechaRenovacion || "-"} | precio: ${Number(sv?.precio || 0).toFixed(2)} Lps\n`;
+    txt += `   creado: ${fechaAuditoriaLocal(sv?.createdAt || sv?.fechaCreacion)} | actualizado: ${fechaAuditoriaLocal(sv?.updatedAt || sv?.fechaActualizacion)}\n`;
+    txt += `   perfiles (${perfiles.length}):\n`;
+    perfiles.forEach((p, pi) => {
+      txt += `      ${pi + 1}. ${p?.nombre || p?.perfil || "Sin nombre"} | perfilId: ${p?.perfilId || "⚠️ SIN perfilId"} | correo: ${p?.correo || "-"} | PIN: ${p?.pin || "-"}\n`;
+    });
+  });
+
+  txt += `\n=== HISTORIAL DISPONIBLE (${eventos.length}) ===\n`;
+  if (!eventos.length) {
+    txt += `No hay eventos en historial_clientes para este clientId.\n`;
+  } else {
+    eventos.slice(0, 30).forEach((ev, i) => {
+      const fecha = fechaAuditoriaLocal(ev?.fechaTS) !== "-" ? fechaAuditoriaLocal(ev?.fechaTS) : (ev?.fecha || "-");
+      const partes = [];
+      if (ev?.tipo) partes.push(String(ev.tipo));
+      if (ev?.descripcion) partes.push(String(ev.descripcion));
+      if (ev?.plataforma) partes.push(humanPlataforma(ev.plataforma));
+      if (ev?.correoAnterior) partes.push(`correo anterior: ${ev.correoAnterior}`);
+      if (ev?.correo) partes.push(`correo: ${ev.correo}`);
+      if (ev?.fechaAnterior) partes.push(`fecha anterior: ${ev.fechaAnterior}`);
+      if (ev?.precioAnterior != null) partes.push(`precio anterior: ${ev.precioAnterior}`);
+      txt += `${i + 1}. ${fecha} — ${partes.join(" | ") || "evento sin descripción"}\n`;
+    });
+    if (eventos.length > 30) txt += `…${eventos.length - 30} evento(s) adicional(es) no mostrados.\n`;
+  }
+
+  txt += `\n⚠️ Este reporte NO modifica Firebase y NO determina por sí solo qué servicio pertenece a otra persona.`;
+  return txt;
+}
+
+bot.onText(/^\/auditar_cliente(?:\s+(.+))?$/i, async (msg, match) => {
+  if (!hasRuntimeLock()) return;
+  const chatId = msg.chat.id;
+  const userId = msg.from.id;
+  if (!(await safeIsAdminLocal(userId))) return bot.sendMessage(chatId, "⛔ Solo ADMIN puede ejecutar esto.");
+
+  const query = String(match?.[1] || "").trim();
+  if (!query) {
+    return bot.sendMessage(chatId, "Uso: /auditar_cliente Nombre del cliente\nTambién acepta teléfono o clientId.");
+  }
+
+  await bot.sendMessage(chatId, `🔎 Auditando “${query}” (solo lectura)...`);
+  try {
+    const encontrados = await buscarClienteAuditoriaLocal(query);
+    if (!encontrados.length) return bot.sendMessage(chatId, "⚠️ No encontré ninguna ficha que coincida.");
+
+    // Para evitar mezclar resultados parciales sin querer, mostramos hasta 8
+    // coincidencias y cada ficha conserva su clientId claramente visible.
+    const seleccion = encontrados.slice(0, 8);
+    if (encontrados.length > 1) {
+      let cab = `Encontré ${encontrados.length} coincidencia(s). Mostraré ${seleccion.length}:\n`;
+      seleccion.forEach((c, i) => {
+        cab += `${i + 1}) ${c.nombrePerfil || c.nombre || "Sin nombre"} | ${c.telefono || "-"} | ${c.vendedor || "-"} | clientId: ${c.id}\n`;
+      });
+      await bot.sendMessage(chatId, cab);
+    }
+
+    for (const c of seleccion) {
+      const eventos = await historialAuditoriaLocal(c.id);
+      const reporte = renderAuditoriaClienteLocal(c, eventos);
+      const partes = cortarTelegramLocal(reporte);
+      for (let i = 0; i < partes.length; i++) {
+        const prefijo = partes.length > 1 ? `[${i + 1}/${partes.length}]\n` : "";
+        await bot.sendMessage(chatId, prefijo + partes[i]);
+      }
+    }
+  } catch (e) {
+    logErr("auditar_cliente", e);
+    return bot.sendMessage(chatId, "⚠️ No pude completar la auditoría individual. Revise los logs del servidor.");
+  }
+});
+
+// ===============================
 // ✅ NUEVO: /fix_duplicados (confirmar)
 // El nombre ya estaba reservado en comandosReservados pero nunca se había
 // implementado. Limpia clientes duplicados dentro del arreglo "clientes" de
@@ -4867,7 +5053,7 @@ bot.on("message", async (msg) => {
         "editar_movimiento", "clientes_excel",
         // ✅ Diagnóstico / reparación de colisiones (antes faltaban aquí y por eso
         // el buscador genérico también los interceptaba y mandaba "Sin resultados").
-        "reparar_colisiones", "buscar_raw",
+        "reparar_colisiones", "auditar_fusiones", "auditar_cliente", "buscar_raw",
         // ✅ Comandos IMAP — no pasar a resolverBusquedaAdmin
         "code", "link", "hogar", "prime", "inbox", "debug",
         // ✅ Buzón de avisos web revendedores
