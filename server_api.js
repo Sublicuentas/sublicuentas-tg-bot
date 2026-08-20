@@ -23,10 +23,13 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 
 // ✅ Usar módulo de auth compartido (elimina duplicación con index_08_api.js)
-const { revAuth, revAdminAuth, revParseFecha, revDiasRest, revFechaISO, revParseFechaInput } = require("./index_09_api_auth");
+const {
+  revAuth, revAdminAuth, revParseFecha, revDiasRest, revFechaISO, revParseFechaInput,
+  getJwtSecret, revLoginIpLimiter, createRevLoginHandler,
+} = require("./index_09_api_auth");
 
 // Reusa Firebase ya inicializado en el core (no arranca el bot)
-const { db, PORT } = require("./index_01_core");
+const { db, PORT, bot, SUPER_ADMIN } = require("./index_01_core");
 const admin = require("firebase-admin");
 const STORAGE_BUCKET_CANDIDATES = Array.from(new Set([
   process.env.STORAGE_BUCKET,
@@ -37,9 +40,8 @@ const STORAGE_BUCKET_CANDIDATES = Array.from(new Set([
 ].map((s) => String(s || "").trim()).filter(Boolean)));
 const STORAGE_BUCKET = STORAGE_BUCKET_CANDIDATES[0] || "";
 
-const JWT_SECRET = process.env.JWT_SECRET || "CAMBIAME_EN_RENDER";
-const ADMIN_USER = (process.env.ADMIN_USER || "").trim().toLowerCase();
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "";
+// ✅ Sin fallback inseguro: si falta JWT_SECRET, el proceso no arranca (ver index_09_api_auth.js).
+const JWT_SECRET = getJwtSecret();
 
 const app = express();
 app.use(cors());
@@ -102,34 +104,8 @@ async function revActualizarFechaCliente({ clienteId, socioNorm, servicioIndex, 
   };
 }
 
-// ── LOGIN (revendedor o admin) ──
-app.post("/rev/login", async (req, res) => {
-  try {
-    const usuario = (req.body.usuario || "").trim().toLowerCase();
-    const password = (req.body.password || "").trim();
-    if (!usuario || !password) return res.status(400).json({ error: "faltan_datos" });
-
-    if (ADMIN_USER && usuario === ADMIN_USER && password === ADMIN_PASSWORD) {
-      const token = jwt.sign({ admin: true, nombre: "Admin" }, JWT_SECRET, { expiresIn: "30d" });
-      return res.json({ token, admin: true, nombre: "Admin" });
-    }
-
-    const snap = await db.collection("revendedores").where("nombre_norm", "==", usuario).limit(1).get();
-    if (snap.empty) return res.status(401).json({ error: "credenciales" });
-    const doc = snap.docs[0], d = doc.data();
-    if (d.activo === false) return res.status(403).json({ error: "inactivo" });
-
-    if (!d.passwordHash) {
-      const hash = await bcrypt.hash(password, 10);
-      await doc.ref.update({ passwordHash: hash });
-    } else {
-      const okp = await bcrypt.compare(password, d.passwordHash);
-      if (!okp) return res.status(401).json({ error: "credenciales" });
-    }
-    const token = jwt.sign({ id: doc.id, nombre: d.nombre, nombre_norm: d.nombre_norm }, JWT_SECRET, { expiresIn: "30d" });
-    res.json({ token, nombre: d.nombre, nombre_norm: d.nombre_norm });
-  } catch (e) { console.error("rev/login", e); res.status(500).json({ error: "server" }); }
-});
+// ── LOGIN (revendedor o admin) ── handler compartido: ver index_09_api_auth.js
+app.post("/rev/login", revLoginIpLimiter, createRevLoginHandler({ db, bot, SUPER_ADMIN }));
 
 // ── CLIENTES del revendedor ──
 app.get("/rev/clientes", revAuth, async (req, res) => {

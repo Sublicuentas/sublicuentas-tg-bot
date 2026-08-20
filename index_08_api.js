@@ -27,10 +27,13 @@ const express = require("express");
 const cors = require("cors");
 
 // ✅ Usar módulo de auth compartido (elimina duplicación)
-const { revAuth, revAdminAuth, revParseFecha, revDiasRest, revFechaISO, revParseFechaInput, revAddMonths } = require("./index_09_api_auth");
+const {
+  revAuth, revAdminAuth, revParseFecha, revDiasRest, revFechaISO, revParseFechaInput, revAddMonths,
+  getJwtSecret, revLoginIpLimiter, createRevLoginHandler,
+} = require("./index_09_api_auth");
 
 const {
-  db, admin, ExcelJS, PORT,
+  db, admin, ExcelJS, PORT, bot, SUPER_ADMIN,
   CLIENTES_COLLECTION,
   FIN_BANCOS, FIN_MOTIVOS_EGRESO, PLATAFORMAS,
   cacheInvalidatePrefix, getCoreHealth,
@@ -303,42 +306,15 @@ app.get("/api/finanzas/excel", wrap(async (req, res) => {
    ════════════════════════════════════════════════════════════════ */
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
-const REV_JWT_SECRET = process.env.JWT_SECRET || "CAMBIAME_EN_RENDER";
-const REV_ADMIN_USER = (process.env.ADMIN_USER || "").trim().toLowerCase();
-const REV_ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "";
+// ✅ Sin fallback inseguro: si falta JWT_SECRET, el proceso no arranca (ver index_09_api_auth.js).
+const REV_JWT_SECRET = getJwtSecret();
 
 // ✅ Las funciones revAuth, revAdminAuth, revParseFecha, revDiasRest, etc.
 // ahora se importan de index_09_api_auth (módulo compartido)
 // Esto elimina duplicación y mantiene consistencia con server_api.js
 
-// LOGIN (revendedor con clave, o admin con ADMIN_USER/ADMIN_PASSWORD)
-app.post("/rev/login", async (req, res) => {
-  try {
-    const usuario = (req.body.usuario || "").trim().toLowerCase();
-    const password = (req.body.password || "").trim();
-    if (!usuario || !password) return res.status(400).json({ error: "faltan_datos" });
-
-    if (REV_ADMIN_USER && usuario === REV_ADMIN_USER && password === REV_ADMIN_PASSWORD) {
-      const token = jwt.sign({ admin: true, nombre: "Admin" }, REV_JWT_SECRET, { expiresIn: "30d" });
-      return res.json({ token, admin: true, nombre: "Admin" });
-    }
-
-    const snap = await db.collection("revendedores").where("nombre_norm", "==", usuario).limit(1).get();
-    if (snap.empty) return res.status(401).json({ error: "credenciales" });
-    const doc = snap.docs[0], d = doc.data();
-    if (d.activo === false) return res.status(403).json({ error: "inactivo" });
-
-    if (!d.passwordHash) {
-      const hash = await bcrypt.hash(password, 10);
-      await doc.ref.update({ passwordHash: hash });
-    } else {
-      const okp = await bcrypt.compare(password, d.passwordHash);
-      if (!okp) return res.status(401).json({ error: "credenciales" });
-    }
-    const token = jwt.sign({ id: doc.id, nombre: d.nombre, nombre_norm: d.nombre_norm }, REV_JWT_SECRET, { expiresIn: "30d" });
-    res.json({ token, nombre: d.nombre, nombre_norm: d.nombre_norm });
-  } catch (e) { console.error("rev/login", e); res.status(500).json({ error: "server" }); }
-});
+// LOGIN (revendedor con clave, o admin con ADMIN_USER/ADMIN_PASSWORD) — handler compartido
+app.post("/rev/login", revLoginIpLimiter, createRevLoginHandler({ db, bot, SUPER_ADMIN }));
 
 // CLIENTES del revendedor autenticado
 app.get("/rev/clientes", revAuth, async (req, res) => {

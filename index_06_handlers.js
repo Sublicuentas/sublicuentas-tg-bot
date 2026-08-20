@@ -28,6 +28,10 @@ const {
   cacheInvalidatePrefix,
 } = require("./index_01_core");
 
+// ✅ PIN de configuración inicial para /addvendedor y /resetpin (cierra el
+// hueco de "auto-claim" del panel de revendedores — ver index_09_api_auth.js)
+const { generarPinSetup } = require("./index_09_api_auth");
+
 const {
   isAdmin,
   isSuperAdmin,
@@ -2933,11 +2937,55 @@ bot.onText(/\/addvendedor\s+(\d+)\s+(.+)/i, async (msg, match) => {
   const nombre = String(match[2] || "").trim();
   if (!telegramId || !nombre) return bot.sendMessage(chatId, "⚠️ Uso:\n/addvendedor ID Nombre");
   const docId = String(nombre || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().replace(/\s+/g, " ") || String(Date.now());
+  // ✅ PIN de un solo uso: sin esto, cualquiera que adivine el usuario (el
+  // nombre en minúsculas) podía "reclamar" la cuenta con la clave que quisiera.
+  const { pin, pinSetupHash } = await generarPinSetup();
   await db.collection("revendedores").doc(docId).set(
-    { nombre, nombre_norm: docId, telegramId: String(telegramId), activo: true, autoLastSent: "", createdAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp() },
+    {
+      nombre, nombre_norm: docId, telegramId: String(telegramId), activo: true, autoLastSent: "",
+      pinSetupHash, pinSetupCreatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      createdAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    },
     { merge: true }
   );
-  return bot.sendMessage(chatId, `✅ Revendedor agregado\n\n👤 ${nombre}\n🆔 ${telegramId}\n📌 DocID: ${docId}`);
+  return bot.sendMessage(
+    chatId,
+    `✅ Revendedor agregado\n\n👤 ${nombre}\n🆔 ${telegramId}\n📌 DocID: ${docId}\n\n🔐 PIN de configuración (un solo uso): *${pin}*\nPasáselo al socio junto con su usuario (\`${docId}\`) por un canal de confianza. Lo va a necesitar la primera vez que entre al panel, junto con la clave que él mismo elija. El PIN se borra solo después de usarse.`,
+    { parse_mode: "Markdown" }
+  );
+});
+
+bot.onText(/\/resetpin\s+(.+)/i, async (msg, match) => {
+  if (!hasRuntimeLock()) return;
+  const chatId = msg.chat.id;
+  const userId = msg.from.id;
+  if (!(await safeIsAdminLocal(userId))) return bot.sendMessage(chatId, "⛔ Solo admin puede usar este comando");
+  const nombre = String(match[1] || "").trim();
+  if (!nombre) return bot.sendMessage(chatId, "⚠️ Uso:\n/resetpin Nombre");
+  const nombreNorm = String(nombre || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().replace(/\s+/g, " ");
+  const snap = await db.collection("revendedores").get();
+  let found = null;
+  snap.forEach((d) => {
+    const rev = d.data() || {};
+    const revNombreNorm = String(rev.nombre_norm || rev.nombre || d.id).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().replace(/\s+/g, " ");
+    if (revNombreNorm === nombreNorm) found = { ref: d.ref, nombre: rev.nombre || d.id };
+  });
+  if (!found) return bot.sendMessage(chatId, "⚠️ No encontré ese revendedor.");
+  // Genera un PIN nuevo y BORRA la contraseña actual: obliga a reclamar la
+  // cuenta de nuevo con el PIN. Útil si el socio olvidó su clave, o si
+  // sospechás que alguien más la reclamó por error.
+  const { pin, pinSetupHash } = await generarPinSetup();
+  await found.ref.update({
+    passwordHash: admin.firestore.FieldValue.delete(),
+    pinSetupHash,
+    pinSetupCreatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+  return bot.sendMessage(
+    chatId,
+    `🔐 PIN reiniciado para *${found.nombre}*\n\nNuevo PIN (un solo uso): *${pin}*\nSu clave anterior quedó invalidada — la próxima vez que entre al panel va a tener que poner este PIN y elegir una clave nueva.`,
+    { parse_mode: "Markdown" }
+  );
 });
 
 bot.onText(/\/delvendedor\s+(.+)/i, async (msg, match) => {
@@ -4709,7 +4757,7 @@ bot.on("message", async (msg) => {
         "start", "menu", "stock", "buscar", "cliente", "renovaciones", "txt",
         "clientes_txt", "vendedores_txt_split", "reindex_clientes", "fix_duplicados",
         "add", "del", "editclave", "adminadd", "admindel", "adminlist",
-        "addvendedor", "delvendedor", "id", "miid", "vincular_vendedor",
+        "addvendedor", "delvendedor", "resetpin", "id", "miid", "vincular_vendedor",
         "sincronizar_todo", "sincronizar_claves", "addcorreo", "finanzas", "resumen_fecha", "bancos_mes",
         "top_plataformas_mes", "cierre_caja", "cierre_caja_rango", "excel_finanzas",
         "editar_movimiento", "clientes_excel",
