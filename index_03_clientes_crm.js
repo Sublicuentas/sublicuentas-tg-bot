@@ -65,7 +65,7 @@ function normTxt(v = "") {
 function humanPlataforma(key = "") {
   const k = normalizarPlataforma(key);
   const map = {
-    netflix:"Netflix Premium", vipnetflix:"Netflix VIP", disneyp:"Disney Premium", disneys:"Disney Standard",
+    netflix:"Netflix Premium", vipnetflix:"Netflix VIP", disneyp:"Disney Premium", disneys:"Disney Premium sin ESPN",
     hbomax:"HBO Max", primevideo:"Prime Video", paramount:"Paramount+", crunchyroll:"Crunchyroll",
     vix:"Vix", appletv:"Apple TV", universal:"Universal+", spotify:"Spotify", youtube:"YouTube", office:"Microsoft 365",
     deezer:"Deezer", canva:"Canva", gemini:"Gemini", chatgpt:"ChatGPT", duolingo:"Duolingo",

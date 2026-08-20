@@ -120,7 +120,7 @@ function estadoCliente(servicios = []) {
 function plataformaLabel(v = "") {
   const k = normTxt(v).replace(/\s+/g, "");
   const map = {
-    netflix: "Netflix", vipnetflix: "Netflix VIP", disneyp: "Disney Premium", disneys: "Disney Standard",
+    netflix: "Netflix", vipnetflix: "Netflix VIP", disneyp: "Disney Premium", disneys: "Disney Premium sin ESPN",
     hbomax: "HBO Max", primevideo: "Prime Video", paramount: "Paramount+", crunchyroll: "Crunchyroll",
     vix: "Vix", appletv: "Apple TV+", universal: "Universal+", spotify: "Spotify",
     youtube: "YouTube Premium", deezer: "Deezer", canva: "Canva", gemini: "Gemini", chatgpt: "ChatGPT",

@@ -100,7 +100,7 @@ function humanPlataformaFallback(key = "") {
   const p = normalizarPlataforma(key);
   const map = {
     netflix: "Netflix Premium", vipnetflix: "Netflix VIP", disneyp: "Disney Premium",
-    disneys: "Disney Standard", hbomax: "HBO Max", primevideo: "Prime Video",
+    disneys: "Disney Premium sin ESPN", hbomax: "HBO Max", primevideo: "Prime Video",
     paramount: "Paramount+", crunchyroll: "Crunchyroll", vix: "Vix",
     appletv: "Apple TV", universal: "Universal+", spotify: "Spotify",
     youtube: "YouTube", deezer: "Deezer", oleadatv1: "OleadaTV (1)",
@@ -116,7 +116,7 @@ function normalizarPlataforma(v = "") {
 
   const aliases = {
     "netflix": "netflix", "netflix premium": "netflix", "premium netflix": "netflix", "vip netflix": "vipnetflix", "vipnetflix": "vipnetflix",
-    "disney premium": "disneyp", "disneyp": "disneyp", "disney standard": "disneys",
+    "disney premium": "disneyp", "disneyp": "disneyp", "disney standard": "disneys", "disney standard sin espn": "disneys", "disney premium sin espn": "disneys",
     "disneys": "disneys", "hbo": "hbomax", "hbo max": "hbomax", "hbomax": "hbomax",
     "prime": "primevideo", "prime video": "primevideo", "primevideo": "primevideo",
     "paramount": "paramount", "paramount plus": "paramount", "paramount+": "paramount",

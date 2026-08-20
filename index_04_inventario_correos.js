@@ -46,7 +46,7 @@ function humanPlatSafe(key = "") {
     netflix: "Netflix",
     vipnetflix: "Netflix VIP",
     disneyp: "Disney Premium",
-    disneys: "Disney Standard",
+    disneys: "Disney Premium sin ESPN",
     hbomax: "HBO Max",
     primevideo: "Prime Video",
     paramount: "Paramount+",
