@@ -993,27 +993,31 @@ async function sendBottomMainMenu(chatId, userId, fromText = false) {
 
     if (await safeIsAdminLocal(userId)) {
       const texto = "📊 *CENTRO DE OPERACIONES*\n\nSublicuentas — Conectamos su entretenimiento\n\nSeleccione una opción:";
+      // 🎨 FIX (ago-2026): a este menú nunca se le puso el campo "style" que
+      // sí tienen los demás menús (Finanzas, Alertas, Inventario) — por eso
+      // salía sin color aunque el resto del bot sí lo mostraba. Mismos
+      // colores que ya usan en esos otros menús para las mismas acciones.
       return upsertPanel(chatId, texto, [
         [
-          { text: "🎯 Control cuentas", callback_data: "menu:inventario" },
-          { text: "👥 Clientes", callback_data: "menu:clientes" },
+          { text: "🎯 Control cuentas", callback_data: "menu:inventario", style: "primary" },
+          { text: "👥 Clientes", callback_data: "menu:clientes", style: "primary" },
         ],
         [
-          { text: "💰 Control financiero", callback_data: "menu:pagos" },
-          { text: "🚨 Riesgos", callback_data: "menu:alertas" },
+          { text: "💰 Control financiero", callback_data: "menu:pagos", style: "success" },
+          { text: "🚨 Riesgos", callback_data: "menu:alertas", style: "danger" },
         ],
         [
-          { text: "📊 Análisis", callback_data: "menu:dashboard" },
-          { text: "👤 Revendedores", callback_data: "menu:revendedores" },
+          { text: "📊 Análisis", callback_data: "menu:dashboard", style: "primary" },
+          { text: "👤 Revendedores", callback_data: "menu:revendedores", style: "primary" },
         ],
       ], "Markdown");
     } else if (await safeIsVendedorLocal(userId)) {
       return upsertPanel(chatId, "👤 *MENÚ VENDEDOR*\n\nSeleccione una opción:", [
-        [{ text: "📅 Mis renovaciones hoy",  callback_data: "ren:mis:hoy" },      { text: "⏳ Próximos 3 días",      callback_data: "ren:mis:prox3" }],
-        [{ text: "📄 TXT renovaciones",      callback_data: "txt:mis" },           { text: "👥 Mis clientes",         callback_data: "vend:clientes" }],
-        [{ text: "🧾 TXT mis clientes",      callback_data: "vend:clientes:txt" }, { text: "💰 Mi resumen del mes",   callback_data: "vend:resumen" }],
-        [{ text: "🔴 Mis vencidos",          callback_data: "vend:vencidos" }],
-        [{ text: "🔍 Buscar cliente",          callback_data: "vend:buscar" }],
+        [{ text: "📅 Mis renovaciones hoy",  callback_data: "ren:mis:hoy", style: "primary" },      { text: "⏳ Próximos 3 días",      callback_data: "ren:mis:prox3", style: "primary" }],
+        [{ text: "📄 TXT renovaciones",      callback_data: "txt:mis", style: "primary" },           { text: "👥 Mis clientes",         callback_data: "vend:clientes", style: "primary" }],
+        [{ text: "🧾 TXT mis clientes",      callback_data: "vend:clientes:txt", style: "primary" }, { text: "💰 Mi resumen del mes",   callback_data: "vend:resumen", style: "success" }],
+        [{ text: "🔴 Mis vencidos",          callback_data: "vend:vencidos", style: "danger" }],
+        [{ text: "🔍 Buscar cliente",          callback_data: "vend:buscar", style: "primary" }],
       ], "Markdown");
     } else {
       return bot.sendMessage(chatId, "⛔ Acceso denegado");
