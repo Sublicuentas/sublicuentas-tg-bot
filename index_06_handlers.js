@@ -110,6 +110,7 @@ const {
   clienteDuplicado,
   perfilesServicioLocal,
   cantidadPerfilesServicioLocal,
+  compraSelectorLocal, perfilSelectorLocal, resolverIndiceCompraSelectorLocal, resolverIndicePerfilSelectorLocal,
 } = require("./index_03_clientes_crm");
 
 const {
@@ -4051,62 +4052,79 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
       }
 
       if (data.startsWith("cli:serv:list:")) return menuListaServicios(chatId, data.split(":")[3]);
-      if (data.startsWith("cli:serv:menu:")) return menuServicio(chatId, data.split(":")[3], Number(data.split(":")[4]));
+      if (data.startsWith("cli:serv:menu:")) return menuServicio(chatId, data.split(":")[3], data.split(":")[4]);
 
       if (data.startsWith("cli:prof:list:")) {
         const parts = data.split(":");
-        return menuListaPerfilesServicio(chatId, parts[3], Number(parts[4]));
+        return menuListaPerfilesServicio(chatId, parts[3], parts[4]);
       }
       if (data.startsWith("cli:prof:menu:")) {
         const parts = data.split(":");
-        return menuPerfilServicio(chatId, parts[3], Number(parts[4]), Number(parts[5]));
+        return menuPerfilServicio(chatId, parts[3], parts[4], parts[5]);
       }
       if (data.startsWith("cli:prof:add:")) {
         const parts = data.split(":");
-        const clientId = parts[3], idx = Number(parts[4]);
+        const clientId = parts[3], compraSel = parts[4];
         const c = await getCliente(clientId);
-        const compraId = String(c?.servicios?.[idx]?.compraId || "");
+        const servicios = Array.isArray(c?.servicios) ? c.servicios : [];
+        const idx = resolverIndiceCompraSelectorLocal(servicios, compraSel);
+        if (idx < 0) return bot.sendMessage(chatId, "⚠️ Esa compra cambió o ya no existe. Abra nuevamente la ficha.");
+        const compraId = String(servicios[idx]?.compraId || "");
         wizard.delete(String(chatId));
         pending.set(String(chatId), { mode: "cliProfAddName", clientId, idx, compraId });
         return upsertPanel(chatId,
           "👥 *AÑADIR PERFIL A LA MISMA COMPRA*\n\nEscriba el nombre de la persona o perfil. El precio y la fecha no se pedirán otra vez porque pertenecen a toda la compra:",
-          [[{ text: "⬅️ Cancelar", callback_data: `cli:serv:menu:${clientId}:${idx}` }]]
+          [[{ text: "⬅️ Cancelar", callback_data: `cli:serv:menu:${clientId}:${compraSel}` }]]
         );
       }
       if (data.startsWith("cli:prof:edit:")) {
         const parts = data.split(":");
-        const field = parts[3], clientId = parts[4], idx = Number(parts[5]), perfilIndex = Number(parts[6]);
+        const field = parts[3], clientId = parts[4], compraSel = parts[5], perfilSel = parts[6];
         const labels = { name: "👤 Escriba el nuevo nombre del perfil:", mail: "📧 Escriba el nuevo correo/usuario:", key: "🔑 Escriba la nueva clave:", pin: "🔐 Escriba el nuevo PIN individual:" };
         if (!labels[field]) return bot.sendMessage(chatId, "⚠️ Opción inválida.");
         const c = await getCliente(clientId);
-        const compraId = String(c?.servicios?.[idx]?.compraId || "");
-        const perfilId = String(perfilesServicioLocal(c?.servicios?.[idx] || {}, c?.nombrePerfil || "")?.[perfilIndex]?.perfilId || "");
+        const servicios = Array.isArray(c?.servicios) ? c.servicios : [];
+        const idx = resolverIndiceCompraSelectorLocal(servicios, compraSel);
+        if (idx < 0) return bot.sendMessage(chatId, "⚠️ Esa compra cambió o ya no existe. Abra nuevamente la ficha.");
+        const perfiles = perfilesServicioLocal(servicios[idx] || {}, c?.nombrePerfil || "");
+        const perfilIndex = resolverIndicePerfilSelectorLocal(perfiles, perfilSel);
+        if (perfilIndex < 0) return bot.sendMessage(chatId, "⚠️ Ese perfil cambió o ya no existe. Abra nuevamente la compra.");
+        const compraId = String(servicios[idx]?.compraId || "");
+        const perfilId = String(perfiles[perfilIndex]?.perfilId || "");
         pending.set(String(chatId), { mode: "cliProfEdit", field, clientId, idx, perfilIndex, compraId, perfilId });
-        return upsertPanel(chatId, labels[field], [[{ text: "⬅️ Cancelar", callback_data: `cli:prof:menu:${clientId}:${idx}:${perfilIndex}` }]]);
+        return upsertPanel(chatId, labels[field], [[{ text: "⬅️ Cancelar", callback_data: `cli:prof:menu:${clientId}:${compraSel}:${perfilSel}` }]]);
       }
       if (data.startsWith("cli:prof:del:ask:")) {
         const parts = data.split(":");
-        const clientId = parts[4], idx = Number(parts[5]), perfilIndex = Number(parts[6]);
+        const clientId = parts[4], compraSel = parts[5], perfilSel = parts[6];
         const c = await getCliente(clientId);
+        const servicios = Array.isArray(c?.servicios) ? c.servicios : [];
+        const idx = resolverIndiceCompraSelectorLocal(servicios, compraSel);
+        if (idx < 0) return bot.sendMessage(chatId, "⚠️ Esa compra cambió o ya no existe. Abra nuevamente la ficha.");
+        const perfiles = perfilesServicioLocal(servicios[idx] || {}, c?.nombrePerfil || "");
+        const perfilIndex = resolverIndicePerfilSelectorLocal(perfiles, perfilSel);
+        if (perfilIndex < 0) return bot.sendMessage(chatId, "⚠️ Ese perfil cambió o ya no existe. Abra nuevamente la compra.");
         pending.set(String(chatId), {
-          mode: "cliProfDelete", clientId, idx, perfilIndex,
-          compraId: String(c?.servicios?.[idx]?.compraId || ""),
-          perfilId: String(perfilesServicioLocal(c?.servicios?.[idx] || {}, c?.nombrePerfil || "")?.[perfilIndex]?.perfilId || "")
+          mode: "cliProfDelete", clientId, idx, perfilIndex, compraSel, perfilSel,
+          compraId: String(servicios[idx]?.compraId || ""),
+          perfilId: String(perfiles[perfilIndex]?.perfilId || "")
         });
         return upsertPanel(chatId,
           "🗑️ *QUITAR PERFIL*\n\nSe quitará solo esta persona y se liberará su cupo. La compra, el precio, la renovación y los demás perfiles se conservarán. ¿Confirma?",
-          [[{ text: "✅ Sí, quitar perfil", callback_data: `cli:prof:del:ok:${clientId}:${idx}:${perfilIndex}` }],[{ text: "❌ Cancelar", callback_data: `cli:prof:menu:${clientId}:${idx}:${perfilIndex}` }]]
+          [[{ text: "✅ Sí, quitar perfil", callback_data: `cli:prof:del:ok:${clientId}:${compraSel}:${perfilSel}` }],[{ text: "❌ Cancelar", callback_data: `cli:prof:menu:${clientId}:${compraSel}:${perfilSel}` }]]
         );
       }
       if (data.startsWith("cli:prof:del:ok:")) {
         const parts = data.split(":");
-        const clientId = parts[4], idx = Number(parts[5]), perfilIndex = Number(parts[6]);
+        const clientId = parts[4];
         const ctx = pending.get(String(chatId));
+        const idx = Number(ctx?.idx);
+        const perfilIndex = Number(ctx?.perfilIndex);
         try {
           await eliminarPerfilTx(clientId, idx, perfilIndex, ctx?.compraId || "", ctx?.perfilId || "");
           pending.delete(String(chatId));
           await bot.sendMessage(chatId, "✅ Perfil retirado. La compra conserva un solo precio y una sola renovación.");
-          return menuListaPerfilesServicio(chatId, clientId, idx);
+          return menuListaPerfilesServicio(chatId, clientId, ctx?.compraSel || idx);
         } catch (e) { return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo quitar el perfil."}`); }
       }
 
@@ -4131,19 +4149,20 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
         const parts = data.split(":");
         const field = parts[3];
         const clientId = parts[4];
-        const idx = Number(parts[5]);
-
-        if (field === "plat") {
-          return upsertPanel(chatId, "📌 *Cambiar plataforma*\nSeleccione:", [
-            ...kbPlataformasWiz("cli:serv:set:plat", clientId, idx),
-            [{ text: "⬅️ Cancelar", callback_data: `cli:serv:menu:${clientId}:${idx}` }],
-          ]);
-        }
-
+        const compraSel = parts[5];
         const c = await getCliente(clientId);
         if (!c) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
         const servicios = Array.isArray(c.servicios) ? c.servicios : [];
-        if (idx < 0 || idx >= servicios.length) return bot.sendMessage(chatId, "⚠️ Servicio inválido.");
+        const idx = resolverIndiceCompraSelectorLocal(servicios, compraSel);
+        if (idx < 0) return bot.sendMessage(chatId, "⚠️ Esa compra cambió o ya no existe. Abra nuevamente la ficha.");
+
+        if (field === "plat") {
+          return upsertPanel(chatId, "📌 *Cambiar plataforma*\nSeleccione:", [
+            ...kbPlataformasWiz("cli:serv:set:plat", clientId, compraSel),
+            [{ text: "⬅️ Cancelar", callback_data: `cli:serv:menu:${clientId}:${compraSel}` }],
+          ]);
+        }
+
         const platActual = normalizarPlataforma(servicios[idx]?.plataforma || "");
         const compraId = String(servicios[idx]?.compraId || "");
 
@@ -4167,21 +4186,22 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
           field === "precio" ? "Escriba el precio (solo número):" :
           "Escriba dd/mm/yyyy:";
 
-        return upsertPanel(chatId, `${titulo}\n${hint}`, [[{ text: "⬅️ Cancelar", callback_data: `cli:serv:menu:${clientId}:${idx}` }]]);
+        return upsertPanel(chatId, `${titulo}\n${hint}`, [[{ text: "⬅️ Cancelar", callback_data: `cli:serv:menu:${clientId}:${compraSel}` }]]);
       }
 
       if (data.startsWith("cli:serv:set:plat:")) {
         const parts = data.split(":");
         const plat = normalizarPlataforma(parts[4]);
         const clientId = parts[5];
-        const idx = Number(parts[6]);
+        const compraSel = parts[6];
         if (!esPlataformaValida(plat)) return bot.sendMessage(chatId, "⚠️ Plataforma inválida.");
 
         try {
           const c = await getCliente(clientId);
           if (!c) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
           const servicios = Array.isArray(c.servicios) ? c.servicios : [];
-          if (idx < 0 || idx >= servicios.length) return bot.sendMessage(chatId, "⚠️ Servicio inválido.");
+          const idx = resolverIndiceCompraSelectorLocal(servicios, compraSel);
+          if (idx < 0) return bot.sendMessage(chatId, "⚠️ Esa compra cambió o ya no existe. Abra nuevamente la ficha.");
 
           const actual = servicios[idx] || {};
           const patch = { plataforma: plat };
@@ -4202,7 +4222,7 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
           }
 
           await patchServicio(clientId, idx, patch, actual.compraId || "");
-          return menuServicio(chatId, clientId, idx);
+          return menuServicio(chatId, clientId, compraSel);
         } catch (e) {
           const msg = String(e.message || "No se pudo cambiar la plataforma.");
           if (msg.includes("Clave inválida")) {
@@ -4213,9 +4233,9 @@ La plataforma seleccionada ocupa clave y este servicio no tiene clave todavía.
 
 Revise que el correo exista en inventario con esa plataforma o coloque la clave manualmente.`,
               [
-                [{ text: "🔑 Cambiar clave", callback_data: `cli:serv:edit:clave:${clientId}:${idx}` }],
-                [{ text: "📧 Cambiar correo", callback_data: `cli:serv:edit:mail:${clientId}:${idx}` }],
-                [{ text: "⬅️ Volver servicio", callback_data: `cli:serv:menu:${clientId}:${idx}` }],
+                [{ text: "🔑 Cambiar clave", callback_data: `cli:serv:edit:clave:${clientId}:${compraSel}` }],
+                [{ text: "📧 Cambiar correo", callback_data: `cli:serv:edit:mail:${clientId}:${compraSel}` }],
+                [{ text: "⬅️ Volver servicio", callback_data: `cli:serv:menu:${clientId}:${compraSel}` }],
               ]
             );
           }
@@ -4226,20 +4246,23 @@ Revise que el correo exista en inventario con esa plataforma o coloque la clave 
       if (data.startsWith("cli:serv:del:ask:")) {
         const parts = data.split(":");
         const clientId = parts[4];
-        const idx = Number(parts[5]);
+        const compraSel = parts[5];
         const c = await getCliente(clientId);
-        pending.set(String(chatId), { mode: "cliServDelete", clientId, idx, compraId: String(c?.servicios?.[idx]?.compraId || "") });
+        const servicios = Array.isArray(c?.servicios) ? c.servicios : [];
+        const idx = resolverIndiceCompraSelectorLocal(servicios, compraSel);
+        if (idx < 0) return bot.sendMessage(chatId, "⚠️ Esa compra cambió o ya no existe. Abra nuevamente la ficha.");
+        pending.set(String(chatId), { mode: "cliServDelete", clientId, idx, compraSel, compraId: String(servicios[idx]?.compraId || "") });
         return upsertPanel(chatId, "🗑️ *Eliminar compra completa*\n\nSe quitarán todos los perfiles incluidos, se liberarán sus cupos y se eliminará el precio/renovación de este servicio. ¿Confirma?", [
-          [{ text: "✅ Confirmar", callback_data: `cli:serv:del:ok:${clientId}:${idx}` }],
-          [{ text: "⬅️ Cancelar", callback_data: `cli:serv:menu:${clientId}:${idx}` }],
+          [{ text: "✅ Confirmar", callback_data: `cli:serv:del:ok:${clientId}:${compraSel}` }],
+          [{ text: "⬅️ Cancelar", callback_data: `cli:serv:menu:${clientId}:${compraSel}` }],
         ]);
       }
 
       if (data.startsWith("cli:serv:del:ok:")) {
         const parts = data.split(":");
         const clientId = parts[4];
-        const idx = Number(parts[5]);
         const ctx = pending.get(String(chatId));
+        const idx = Number(ctx?.idx);
         try { await eliminarServicioTx(clientId, idx, ctx?.compraId || ""); pending.delete(String(chatId)); }
         catch (e) { return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo eliminar la compra."}`); }
         const actualizado = await getCliente(clientId);
@@ -4259,8 +4282,8 @@ Revise que el correo exista en inventario con esa plataforma o coloque la clave 
         const raw = data.slice("cli:ren:one:".length);
         const lastColon = raw.lastIndexOf(":");
         const clientId = raw.slice(0, lastColon);
-        const idx = Number(raw.slice(lastColon + 1));
-        return menuRenovacionServicio(chatId, clientId, idx);
+        const compraSel = raw.slice(lastColon + 1);
+        return menuRenovacionServicio(chatId, clientId, compraSel);
       }
 
       // ✅ ACCIÓN DESDE PANEL DEL DÍA
@@ -4268,8 +4291,8 @@ Revise que el correo exista en inventario con esa plataforma o coloque la clave 
         const raw = data.slice("ren:accion:".length);
         const lastColon = raw.lastIndexOf(":");
         const clientId = raw.slice(0, lastColon);
-        const idx = Number(raw.slice(lastColon + 1));
-        return menuRenovacionServicio(chatId, clientId, idx);
+        const compraSel = raw.slice(lastColon + 1);
+        return menuRenovacionServicio(chatId, clientId, compraSel);
       }
 
       // ✅ RENOVAR +30 DÍAS
@@ -4277,9 +4300,12 @@ Revise que el correo exista en inventario con esa plataforma o coloque la clave 
         const raw = data.slice("cli:ren:auto:".length);
         const lastColon = raw.lastIndexOf(":");
         const clientId = raw.slice(0, lastColon);
-        const idx = Number(raw.slice(lastColon + 1));
+        const compraSel = raw.slice(lastColon + 1);
         const actual = await getCliente(clientId);
-        const compraId = String(actual?.servicios?.[idx]?.compraId || "");
+        const servicios = Array.isArray(actual?.servicios) ? actual.servicios : [];
+        const idx = resolverIndiceCompraSelectorLocal(servicios, compraSel);
+        if (idx < 0) return bot.sendMessage(chatId, "⚠️ Esa compra cambió o ya no existe. Abra nuevamente la ficha.");
+        const compraId = String(servicios[idx]?.compraId || "");
         const renovado = await renovarServicioTx(clientId, idx, { dias: 30, compraId });
         await bot.sendMessage(chatId, `✅ Renovado +30 días\nNueva fecha: *${escMD(renovado.fechaNueva)}*`, { parse_mode: "Markdown" });
         return enviarFichaCliente(chatId, clientId);
@@ -4290,9 +4316,12 @@ Revise que el correo exista en inventario con esa plataforma o coloque la clave 
         const raw = data.slice("cli:ren:auto31:".length);
         const lastColon = raw.lastIndexOf(":");
         const clientId = raw.slice(0, lastColon);
-        const idx = Number(raw.slice(lastColon + 1));
+        const compraSel = raw.slice(lastColon + 1);
         const actual = await getCliente(clientId);
-        const compraId = String(actual?.servicios?.[idx]?.compraId || "");
+        const servicios = Array.isArray(actual?.servicios) ? actual.servicios : [];
+        const idx = resolverIndiceCompraSelectorLocal(servicios, compraSel);
+        if (idx < 0) return bot.sendMessage(chatId, "⚠️ Esa compra cambió o ya no existe. Abra nuevamente la ficha.");
+        const compraId = String(servicios[idx]?.compraId || "");
         const renovado = await renovarServicioTx(clientId, idx, { dias: 31, compraId });
         await bot.sendMessage(chatId, `✅ Renovado +31 días\nNueva fecha: *${escMD(renovado.fechaNueva)}*`, { parse_mode: "Markdown" });
         return enviarFichaCliente(chatId, clientId);
@@ -4303,9 +4332,12 @@ Revise que el correo exista en inventario con esa plataforma o coloque la clave 
         const raw = data.slice("cli:ren:manual:".length);
         const lastColon = raw.lastIndexOf(":");
         const clientId = raw.slice(0, lastColon);
-        const idx = Number(raw.slice(lastColon + 1));
+        const compraSel = raw.slice(lastColon + 1);
         const c = await getCliente(clientId);
-        const compraId = String(c?.servicios?.[idx]?.compraId || "");
+        const servicios = Array.isArray(c?.servicios) ? c.servicios : [];
+        const idx = resolverIndiceCompraSelectorLocal(servicios, compraSel);
+        if (idx < 0) return bot.sendMessage(chatId, "⚠️ Esa compra cambió o ya no existe. Abra nuevamente la ficha.");
+        const compraId = String(servicios[idx]?.compraId || "");
         pending.set(String(chatId), { mode: "cliRenovarFechaManual", clientId, idx, compraId });
         return upsertPanel(chatId,
           "📅 *Renovar — fecha personalizada*\n\n" +
@@ -4314,7 +4346,7 @@ Revise que el correo exista en inventario con esa plataforma o coloque la clave 
           "• `+40` — suma 40 días desde la fecha actual del servicio\n" +
           "• `+3m` — suma 3 meses\n" +
           "• `+90` — suma 90 días",
-          [[{ text: "⬅️ Cancelar", callback_data: `cli:ren:one:${clientId}:${idx}` }]]
+          [[{ text: "⬅️ Cancelar", callback_data: `cli:ren:one:${clientId}:${compraSel}` }]]
         );
       }
 
@@ -4323,10 +4355,13 @@ Revise que el correo exista en inventario con esa plataforma o coloque la clave 
         const raw = data.slice("cli:ren:cambio:".length);
         const lastColon = raw.lastIndexOf(":");
         const clientId = raw.slice(0, lastColon);
-        const idx = Number(raw.slice(lastColon + 1));
+        const compraSel = raw.slice(lastColon + 1);
         try {
           const actual = await getCliente(clientId);
-          const compraId = String(actual?.servicios?.[idx]?.compraId || "");
+          const servicios = Array.isArray(actual?.servicios) ? actual.servicios : [];
+          const idx = resolverIndiceCompraSelectorLocal(servicios, compraSel);
+          if (idx < 0) return bot.sendMessage(chatId, "⚠️ Esa compra cambió o ya no existe. Abra nuevamente la ficha.");
+          const compraId = String(servicios[idx]?.compraId || "");
           const result = await eliminarServicioTx(clientId, idx, compraId);
           await bot.sendMessage(chatId,
             `🔄 *Servicio eliminado*\n\n` +
@@ -4352,10 +4387,12 @@ Revise que el correo exista en inventario con esa plataforma o coloque la clave 
         const raw = data.slice("cli:ren:noren:ask:".length); // "CLIENTID:IDX"
         const lastColon = raw.lastIndexOf(":");
         const clientId = raw.slice(0, lastColon);
-        const idx = Number(raw.slice(lastColon + 1));
+        const compraSel = raw.slice(lastColon + 1);
         const c = await getCliente(clientId);
         if (!c) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
         const servicios = Array.isArray(c.servicios) ? c.servicios : [];
+        const idx = resolverIndiceCompraSelectorLocal(servicios, compraSel);
+        if (idx < 0) return bot.sendMessage(chatId, "⚠️ Esa compra cambió o ya no existe. Abra nuevamente la ficha.");
         const s = servicios[idx] || {};
         pending.set(String(chatId), {
           mode: "cliRenNoRenovo",
@@ -4370,8 +4407,8 @@ Revise que el correo exista en inventario con esa plataforma o coloque la clave 
           `${identIcon(s.plataforma || "")} ${escMD(s.correo || "-")}\n\n` +
           `_El servicio se eliminará y el slot en inventario quedará libre._\n\n¿Confirmar?`,
           [
-            [{ text: "✅ Sí, eliminar", callback_data: `cli:ren:noren:ok:${clientId}:${idx}` }],
-            [{ text: "⬅️ Cancelar",    callback_data: `cli:ren:one:${clientId}:${idx}` }],
+            [{ text: "✅ Sí, eliminar", callback_data: `cli:ren:noren:ok:${clientId}:${compraSel}` }],
+            [{ text: "⬅️ Cancelar",    callback_data: `cli:ren:one:${clientId}:${compraSel}` }],
           ]
         );
       }
@@ -4381,9 +4418,10 @@ Revise que el correo exista en inventario con esa plataforma o coloque la clave 
         const raw = data.slice("cli:ren:noren:ok:".length);
         const lastColon = raw.lastIndexOf(":");
         const clientId = raw.slice(0, lastColon);
-        const idx = Number(raw.slice(lastColon + 1));
+        const compraSel = raw.slice(lastColon + 1);
         try {
           const ctx = pending.get(String(chatId));
+          const idx = Number(ctx?.idx);
           const result = await eliminarServicioTx(clientId, idx, ctx?.compraId || "");
           pending.delete(String(chatId));
           await bot.sendMessage(chatId,

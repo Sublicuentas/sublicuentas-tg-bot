@@ -987,7 +987,7 @@ async function menuListaServicios(chatId, clientId) {
     ]);
   }
 
-  const kb = servicios.map((s, i) => [{ text: safeBtnLabel(`${i + 1}) ${humanPlataforma(s.plataforma || "")} • ${cantidadPerfilesServicioLocal(s, c.nombrePerfil || "")} perfil(es)`), callback_data: `cli:serv:menu:${clientId}:${s.idxOriginal}` }]);
+  const kb = servicios.map((s, i) => [{ text: safeBtnLabel(`${i + 1}) ${humanPlataforma(s.plataforma || "")} • ${cantidadPerfilesServicioLocal(s, c.nombrePerfil || "")} perfil(es)`), callback_data: `cli:serv:menu:${clientId}:${compraSelectorLocal(s, s.idxOriginal)}` }]);
   kb.push([{ text: "➕ Agregar servicio", callback_data: `cli:serv:add:${clientId}` }]);
   kb.push([{ text: "⬅️ Volver Ficha",   callback_data: `cli:view:${clientId}` }]);
   kb.push([{ text: "🏠 Inicio",          callback_data: "go:inicio" }]);
@@ -995,14 +995,16 @@ async function menuListaServicios(chatId, clientId) {
   return upsertPanel(chatId, `🧩 *SERVICIOS DE ${escMD(c.nombrePerfil || "CLIENTE")}*\n\nSeleccione uno:`, kb);
 }
 
-async function menuServicio(chatId, clientId, idx) {
+async function menuServicio(chatId, clientId, selector) {
   const c = await getCliente(clientId);
   if (!c) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
 
   const servicios = Array.isArray(c.servicios) ? c.servicios : [];
-  if (idx < 0 || idx >= servicios.length) return bot.sendMessage(chatId, "⚠️ Servicio inválido.");
+  const idx = resolverIndiceCompraSelectorLocal(servicios, selector);
+  if (idx < 0 || idx >= servicios.length) return bot.sendMessage(chatId, "⚠️ Esa compra cambió o ya no existe. Abra nuevamente la ficha.");
 
   const s = servicios[idx] || {};
+  const compraSel = compraSelectorLocal(s, idx);
   const est = getEstadoServicio(s.fechaRenovacion || "");
   let txt =
     `🧩 *SERVICIO #${idx + 1}*\n\n` +
@@ -1014,75 +1016,135 @@ async function menuServicio(chatId, clientId, idx) {
   txt += `📅 *Renovación:* ${escMD(s.fechaRenovacion || "-")}\n📊 *Estado:* ${est.emoji} ${escMD(est.texto)}`;
 
   const kb = [
-    [{ text: "👥 Gestionar perfiles", callback_data: `cli:prof:list:${clientId}:${idx}` }],
-    [{ text: "➕ Añadir perfil a esta compra", callback_data: `cli:prof:add:${clientId}:${idx}` }],
-    [{ text: "📌 Cambiar plataforma", callback_data: `cli:serv:edit:plat:${clientId}:${idx}` }],
-    [{ text: `${getIdentLabelLocal(s.plataforma || "") === "Usuario" ? "👤" : "📧"} Cambiar acceso del perfil 1`, callback_data: `cli:serv:edit:mail:${clientId}:${idx}` }],
+    [{ text: "👥 Gestionar perfiles", callback_data: `cli:prof:list:${clientId}:${compraSel}` }],
+    [{ text: "➕ Añadir perfil a esta compra", callback_data: `cli:prof:add:${clientId}:${compraSel}` }],
+    [{ text: "📌 Cambiar plataforma", callback_data: `cli:serv:edit:plat:${clientId}:${compraSel}` }],
+    [{ text: `${getIdentLabelLocal(s.plataforma || "") === "Usuario" ? "👤" : "📧"} Cambiar acceso del perfil 1`, callback_data: `cli:serv:edit:mail:${clientId}:${compraSel}` }],
   ];
 
   const credBtns = [];
-  if (requiereClaveLocal(s.plataforma || "")) credBtns.push({ text: "🔑 Cambiar clave", callback_data: `cli:serv:edit:clave:${clientId}:${idx}` });
-  if (requierePinLocal(s.plataforma || "")) credBtns.push({ text: "🔐 Cambiar PIN", callback_data: `cli:serv:edit:pin:${clientId}:${idx}` });
+  if (requiereClaveLocal(s.plataforma || "")) credBtns.push({ text: "🔑 Cambiar clave", callback_data: `cli:serv:edit:clave:${clientId}:${compraSel}` });
+  if (requierePinLocal(s.plataforma || "")) credBtns.push({ text: "🔐 Cambiar PIN", callback_data: `cli:serv:edit:pin:${clientId}:${compraSel}` });
   if (credBtns.length) kb.push(credBtns);
-  kb.push([{ text: "💰 Cambiar precio", callback_data: `cli:serv:edit:precio:${clientId}:${idx}` }]);
-  kb.push([{ text: "📅 Cambiar fecha renovación", callback_data: `cli:serv:edit:fecha:${clientId}:${idx}` }]);
-  kb.push([{ text: "🗑️ Eliminar compra completa", callback_data: `cli:serv:del:ask:${clientId}:${idx}` }]);
+  kb.push([{ text: "💰 Cambiar precio", callback_data: `cli:serv:edit:precio:${clientId}:${compraSel}` }]);
+  kb.push([{ text: "📅 Cambiar fecha renovación", callback_data: `cli:serv:edit:fecha:${clientId}:${compraSel}` }]);
+  kb.push([{ text: "🗑️ Eliminar compra completa", callback_data: `cli:serv:del:ask:${clientId}:${compraSel}` }]);
   kb.push([{ text: "⬅️ Volver Servicios", callback_data: `cli:serv:list:${clientId}` }, { text: "🏠 Inicio", callback_data: "go:inicio" }]);
 
   return upsertPanel(chatId, txt, kb);
 }
 
-async function menuListaPerfilesServicio(chatId, clientId, idx) {
+async function menuListaPerfilesServicio(chatId, clientId, selector) {
   const c = await getCliente(clientId);
   if (!c) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
   const servicios = Array.isArray(c.servicios) ? c.servicios : [];
-  if (idx < 0 || idx >= servicios.length) return bot.sendMessage(chatId, "⚠️ Servicio inválido.");
+  const idx = resolverIndiceCompraSelectorLocal(servicios, selector);
+  if (idx < 0 || idx >= servicios.length) return bot.sendMessage(chatId, "⚠️ Esa compra cambió o ya no existe. Abra nuevamente la ficha.");
   const s = servicios[idx] || {};
+  const compraSel = compraSelectorLocal(s, idx);
   const perfiles = perfilesServicioLocal(s, c.nombrePerfil || "");
   const kb = perfiles.map((p, pidx) => [{
     text: safeBtnLabel(`${pidx + 1}) ${p.nombre || "Perfil"} • ${p.correo || "sin acceso"}`),
-    callback_data: `cli:prof:menu:${clientId}:${idx}:${pidx}`
+    callback_data: `cli:prof:menu:${clientId}:${compraSel}:${perfilSelectorLocal(p, pidx)}`
   }]);
-  kb.push([{ text: "➕ Añadir otro perfil", callback_data: `cli:prof:add:${clientId}:${idx}` }]);
-  kb.push([{ text: "⬅️ Volver compra", callback_data: `cli:serv:menu:${clientId}:${idx}` }]);
+  kb.push([{ text: "➕ Añadir otro perfil", callback_data: `cli:prof:add:${clientId}:${compraSel}` }]);
+  kb.push([{ text: "⬅️ Volver compra", callback_data: `cli:serv:menu:${clientId}:${compraSel}` }]);
   return upsertPanel(chatId,
     `👥 *PERFILES DE LA COMPRA*\n\n👤 Titular: *${escMD(c.nombrePerfil || "Cliente")}*\n📦 ${escMD(humanPlataforma(s.plataforma || ""))}\n💰 Un solo precio: *${escMD(Number(s.precio || 0).toFixed(2))} Lps*\n📅 Una sola renovación: *${escMD(s.fechaRenovacion || "-")}*\n\nSeleccione un perfil:`,
     kb
   );
 }
 
-async function menuPerfilServicio(chatId, clientId, idx, perfilIndex) {
+async function menuPerfilServicio(chatId, clientId, compraSelector, perfilSelector) {
   const c = await getCliente(clientId);
   if (!c) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
-  const s = Array.isArray(c.servicios) ? c.servicios[idx] : null;
-  if (!s) return bot.sendMessage(chatId, "⚠️ Servicio inválido.");
+  const servicios = Array.isArray(c.servicios) ? c.servicios : [];
+  const idx = resolverIndiceCompraSelectorLocal(servicios, compraSelector);
+  const s = idx >= 0 ? servicios[idx] : null;
+  if (!s) return bot.sendMessage(chatId, "⚠️ Esa compra cambió o ya no existe. Abra nuevamente la ficha.");
   const perfiles = perfilesServicioLocal(s, c.nombrePerfil || "");
-  const p = perfiles[perfilIndex];
-  if (!p) return bot.sendMessage(chatId, "⚠️ Perfil inválido.");
+  const perfilIndex = resolverIndicePerfilSelectorLocal(perfiles, perfilSelector);
+  const p = perfilIndex >= 0 ? perfiles[perfilIndex] : null;
+  if (!p) return bot.sendMessage(chatId, "⚠️ Ese perfil cambió o ya no existe. Abra nuevamente la compra.");
+  const compraSel = compraSelectorLocal(s, idx);
+  const perfilSel = perfilSelectorLocal(p, perfilIndex);
   const individual = servicioParaPerfilLocal(s, p, c.nombrePerfil || "");
   let txt = `👤 *PERFIL ${perfilIndex + 1} DE ${perfiles.length}*\n\n🙍 *Nombre:* ${escMD(p.nombre || "-")}\n📦 *Plataforma:* ${escMD(humanPlataforma(s.plataforma || ""))}\n`;
   txt += renderCredencialesServicioLocal(individual, true, "");
   txt += `\n💰 _El precio pertenece a toda la compra: ${escMD(Number(s.precio || 0).toFixed(2))} Lps._`;
   const kb = [
-    [{ text: "👤 Cambiar nombre", callback_data: `cli:prof:edit:name:${clientId}:${idx}:${perfilIndex}` }],
-    [{ text: `📧 Cambiar ${getIdentLabelLocal(s.plataforma || "").toLowerCase()}`, callback_data: `cli:prof:edit:mail:${clientId}:${idx}:${perfilIndex}` }]
+    [{ text: "👤 Cambiar nombre", callback_data: `cli:prof:edit:name:${clientId}:${compraSel}:${perfilSel}` }],
+    [{ text: `📧 Cambiar ${getIdentLabelLocal(s.plataforma || "").toLowerCase()}`, callback_data: `cli:prof:edit:mail:${clientId}:${compraSel}:${perfilSel}` }]
   ];
-  if (requiereClaveLocal(s.plataforma || "")) kb.push([{ text: "🔑 Cambiar clave", callback_data: `cli:prof:edit:key:${clientId}:${idx}:${perfilIndex}` }]);
-  if (requierePinLocal(s.plataforma || "")) kb.push([{ text: "🔐 Cambiar PIN individual", callback_data: `cli:prof:edit:pin:${clientId}:${idx}:${perfilIndex}` }]);
-  if (perfiles.length > 1) kb.push([{ text: "🗑️ Quitar este perfil", callback_data: `cli:prof:del:ask:${clientId}:${idx}:${perfilIndex}` }]);
-  kb.push([{ text: "⬅️ Volver perfiles", callback_data: `cli:prof:list:${clientId}:${idx}` }]);
+  if (requiereClaveLocal(s.plataforma || "")) kb.push([{ text: "🔑 Cambiar clave", callback_data: `cli:prof:edit:key:${clientId}:${compraSel}:${perfilSel}` }]);
+  if (requierePinLocal(s.plataforma || "")) kb.push([{ text: "🔐 Cambiar PIN individual", callback_data: `cli:prof:edit:pin:${clientId}:${compraSel}:${perfilSel}` }]);
+  if (perfiles.length > 1) kb.push([{ text: "🗑️ Quitar este perfil", callback_data: `cli:prof:del:ask:${clientId}:${compraSel}:${perfilSel}` }]);
+  kb.push([{ text: "⬅️ Volver perfiles", callback_data: `cli:prof:list:${clientId}:${compraSel}` }]);
   return upsertPanel(chatId, txt, kb);
 }
 
 // ===============================
 // ESCRITURAS CRM (invalidan caché + registran historial)
 // ===============================
+function stableRefLocal(value = "", prefix = "r") {
+  const str = String(value || "");
+  let h1 = 2166136261 >>> 0, h2 = 2246822519 >>> 0;
+  for (let i = 0; i < str.length; i++) {
+    const c = str.charCodeAt(i);
+    h1 ^= c; h1 = Math.imul(h1, 16777619) >>> 0;
+    h2 ^= c; h2 = Math.imul(h2, 3266489917) >>> 0;
+  }
+  return `${prefix}${h1.toString(36)}${h2.toString(36)}`.slice(0, 15);
+}
+
+function compraSelectorLocal(servicio = {}, idx = -1) {
+  const id = String(servicio?.compraId || "").trim();
+  return id ? stableRefLocal(id, "c") : String(idx);
+}
+
+function perfilSelectorLocal(perfil = {}, idx = -1) {
+  const id = String(perfil?.perfilId || perfil?.id || "").trim();
+  return id ? stableRefLocal(id, "p") : String(idx);
+}
+
+function resolverIndiceCompraSelectorLocal(servicios = [], selector = null) {
+  const lista = Array.isArray(servicios) ? servicios : [];
+  const raw = String(selector ?? "").trim();
+  if (/^c[0-9a-z]+$/i.test(raw)) {
+    const matches = [];
+    lista.forEach((s, i) => {
+      const id = String(s?.compraId || "").trim();
+      if (id && stableRefLocal(id, "c") === raw) matches.push(i);
+    });
+    return matches.length === 1 ? matches[0] : -1;
+  }
+  const n = Number(raw);
+  return Number.isInteger(n) && n >= 0 && n < lista.length ? n : -1;
+}
+
+function resolverIndicePerfilSelectorLocal(perfiles = [], selector = null) {
+  const lista = Array.isArray(perfiles) ? perfiles : [];
+  const raw = String(selector ?? "").trim();
+  if (/^p[0-9a-z]+$/i.test(raw)) {
+    const matches = [];
+    lista.forEach((p, i) => {
+      const id = String(p?.perfilId || p?.id || "").trim();
+      if (id && stableRefLocal(id, "p") === raw) matches.push(i);
+    });
+    return matches.length === 1 ? matches[0] : -1;
+  }
+  const n = Number(raw);
+  return Number.isInteger(n) && n >= 0 && n < lista.length ? n : -1;
+}
+
 function resolverIndiceCompraLocal(servicios = [], idx = null, compraId = "") {
   const lista = Array.isArray(servicios) ? servicios : [];
   const id = String(compraId || "").trim();
   if (id) {
     const porId = lista.findIndex((s) => String(s?.compraId || "").trim() === id);
-    if (porId !== -1) return porId;
+    // compraId manda. Si fue proporcionado y no existe, no reutilizamos idx:
+    // el array pudo cambiar de orden y ese índice podría ser otra compra.
+    return porId;
   }
   const n = Number(idx);
   return Number.isInteger(n) && n >= 0 && n < lista.length ? n : -1;
@@ -1097,8 +1159,23 @@ async function mutarServiciosClienteTx(clientId, mutador) {
     const doc = await tx.get(ref);
     if (!doc.exists) throw new Error("Cliente no encontrado.");
     const cliente = doc.data() || {};
-    const servicios = Array.isArray(cliente.servicios) ? cliente.servicios.slice() : [];
-    const resultado = await mutador({ cliente, servicios, ref });
+    // Migración progresiva: al tocar cualquier ficha antigua aseguramos IDs
+    // persistentes para todas sus compras y perfiles, sin cambiar sus datos.
+    const servicios = (Array.isArray(cliente.servicios) ? cliente.servicios : []).map((servicio) => {
+      const s = { ...(servicio || {}) };
+      if (!String(s.compraId || "").trim()) s.compraId = recordIdLocal("compra");
+      if (Array.isArray(s.perfiles) && s.perfiles.length) {
+        s.perfiles = s.perfiles.map((perfil) => ({
+          ...(perfil || {}),
+          perfilId: String(perfil?.perfilId || perfil?.id || recordIdLocal("perfil"))
+        }));
+      } else {
+        // Las fichas legacy de perfil único también necesitan perfilId estable.
+        s.perfilId = String(s.perfilId || recordIdLocal("perfil"));
+      }
+      return s;
+    });
+    const resultado = await mutador({ cliente: { ...cliente, servicios }, servicios, ref });
     const siguientes = Array.isArray(resultado?.servicios) ? resultado.servicios : servicios;
     tx.set(ref, {
       servicios: siguientes,
@@ -1500,7 +1577,7 @@ async function menuListaRenovacion(chatId, clientId) {
 
   const kb = servicios.map((s) => [{
     text: safeBtnLabel(`${iconPlataforma(s.plataforma || "")} ${humanPlataforma(s.plataforma || "")} · ${cantidadPerfilesServicioLocal(s, c.nombrePerfil || "")} perfil(es) — ${s.fechaRenovacion || "sin fecha"}`),
-    callback_data: `cli:ren:one:${clientId}:${s.idxOriginal}`,
+    callback_data: `cli:ren:one:${clientId}:${compraSelectorLocal(s, s.idxOriginal)}`,
   }]);
   kb.push([
     { text: "⏫ Todos +30 días", callback_data: `cli:ren:all:ask:${clientId}` },
@@ -1519,14 +1596,16 @@ async function menuListaRenovacion(chatId, clientId) {
 // ===============================
 // ✅ MENÚ ACCIÓN DE RENOVACIÓN — 4 opciones por servicio
 // ===============================
-async function menuRenovacionServicio(chatId, clientId, idx) {
+async function menuRenovacionServicio(chatId, clientId, selector) {
   const c = await getCliente(clientId);
   if (!c) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
 
   const servicios = Array.isArray(c.servicios) ? c.servicios : [];
-  if (idx < 0 || idx >= servicios.length) return bot.sendMessage(chatId, "⚠️ Servicio inválido.");
+  const idx = resolverIndiceCompraSelectorLocal(servicios, selector);
+  if (idx < 0 || idx >= servicios.length) return bot.sendMessage(chatId, "⚠️ Esa compra cambió o ya no existe. Abra nuevamente la ficha.");
 
   const s = servicios[idx];
+  const compraSel = compraSelectorLocal(s, idx);
   const est = getEstadoServicio(s.fechaRenovacion || "");
 
   const txt =
@@ -1540,12 +1619,12 @@ async function menuRenovacionServicio(chatId, clientId, idx) {
 
   return upsertPanel(chatId, txt, [
     [
-      { text: "✅ +30 días", callback_data: `cli:ren:auto:${clientId}:${idx}` },
-      { text: "✅ +31 días", callback_data: `cli:ren:auto31:${clientId}:${idx}` },
+      { text: "✅ +30 días", callback_data: `cli:ren:auto:${clientId}:${compraSel}` },
+      { text: "✅ +31 días", callback_data: `cli:ren:auto31:${clientId}:${compraSel}` },
     ],
-    [{ text: "📅 Renovó — otra fecha", callback_data: `cli:ren:manual:${clientId}:${idx}` }],
-    [{ text: "🔄 Cambió de servicio", callback_data: `cli:ren:cambio:${clientId}:${idx}` }],
-    [{ text: "❌ No renovó — eliminar", callback_data: `cli:ren:noren:ask:${clientId}:${idx}` }],
+    [{ text: "📅 Renovó — otra fecha", callback_data: `cli:ren:manual:${clientId}:${compraSel}` }],
+    [{ text: "🔄 Cambió de servicio", callback_data: `cli:ren:cambio:${clientId}:${compraSel}` }],
+    [{ text: "❌ No renovó — eliminar", callback_data: `cli:ren:noren:ask:${clientId}:${compraSel}` }],
     [{ text: "⬅️ Volver",                    callback_data: `cli:ren:list:${clientId}` }, { text: "🏠 Inicio", callback_data: "go:inicio" }],
   ]);
 }
@@ -1962,4 +2041,5 @@ module.exports = {
   enviarMisClientes, enviarMisClientesTXT,
   obtenerRenovacionesPorFecha, renovacionesTexto, enviarTXT, enviarTXTATodosHoy,
   perfilesServicioLocal, cantidadPerfilesServicioLocal,
+  compraSelectorLocal, perfilSelectorLocal, resolverIndiceCompraSelectorLocal, resolverIndicePerfilSelectorLocal,
 };
