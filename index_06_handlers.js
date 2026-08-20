@@ -45,6 +45,7 @@ const {
   wizard,
   pending,
   limpiarQuery,
+  normTxt,
   normalizarPlataforma,
   esPlataformaValida,
   isEmailLike,
@@ -65,6 +66,10 @@ const {
 } = require("./index_02_utils_roles");
 
 const {
+  // 🐛 FIX (ago-2026): faltaban estas dos — ver comentario en el
+  // module.exports de index_03_clientes_crm.js.
+  iconPlataforma,
+  humanPlataforma,
   dedupeClientes,
   buscarPorTelefonoTodos,
   buscarClienteRobusto,
@@ -3263,6 +3268,52 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
       return sendBottomMainMenu(chatId, userId);
     }
 
+    // 📲 Recordatorios de vencimiento al cliente final (piloto Relojes/Sublicuentas)
+    if (data.startsWith("rec:start:") || data.startsWith("rec:next:")) {
+      if (!vendOk) return bot.sendMessage(chatId, "⚠️ No está vinculado a un vendedor.");
+      if (!VENDEDORES_PILOTO_RECORDATORIOS.has(normTxt(vend.nombre))) {
+        return bot.sendMessage(chatId, "⚠️ Esta función todavía no está activa para su cuenta.");
+      }
+
+      const parts = data.split(":");
+      const dmy = parts[2];
+      const key = recordatoriosKey(chatId, dmy);
+      let estado = recordatoriosState.get(key);
+
+      // Si el estado se perdió (reinicio del bot, o lo retoma otro día),
+      // se reconstruye de cero desde Firestore en vez de fallar en silencio.
+      if (!estado) {
+        const total = await prepararRecordatoriosPendientes(chatId, vend.nombre, dmy);
+        if (!total) return bot.sendMessage(chatId, "✅ No quedan recordatorios pendientes para esa fecha.");
+        estado = recordatoriosState.get(key);
+      }
+
+      if (data.startsWith("rec:next:")) {
+        const flag = parts[3];
+        if (flag === "e") estado.enviados++; else estado.omitidos++;
+        estado.indice++;
+      }
+
+      if (estado.indice >= estado.items.length) {
+        recordatoriosState.delete(key);
+        return bot.sendMessage(chatId,
+          `✅ *Listo — recordatorios de hoy*\n\n` +
+          `📲 Enviados: *${estado.enviados}*\n` +
+          `⏭️ Omitidos: *${estado.omitidos}*` +
+          (estado.omitidos ? `\n\n_Los omitidos ya no se pueden retomar desde aquí — reaparecerán si siguen pendientes en el aviso de mañana._` : ""),
+          { parse_mode: "Markdown" }
+        );
+      }
+
+      const { txt, kb } = tarjetaRecordatorio(dmy, estado);
+      try {
+        return await bot.sendMessage(String(chatId), txt, { parse_mode: "Markdown", reply_markup: { inline_keyboard: kb } });
+      } catch (e) {
+        logErr("recordatorios:tarjeta", e);
+        return bot.sendMessage(chatId, "⚠️ No se pudo mostrar el recordatorio. Intente de nuevo.");
+      }
+    }
+
     const vendedorOnlyAllowed = new Set([
       "ren:mis:hoy", "ren:mis:prox3", "txt:mis", "vend:clientes",
       "vend:clientes:txt", "vend:resumen", "vend:vencidos", "vend:precios",
@@ -5721,6 +5772,160 @@ async function enviarListaRenovacionesVendedor7AM(chatId, vendedorNombre) {
   try { await bot.sendMessage(String(chatId), txt, { parse_mode: "Markdown", reply_markup: { inline_keyboard: kb } }); return true; } catch(e) { return false; }
 }
 
+// ===============================
+// 📲 NUEVO: recordatorios de vencimiento al CLIENTE FINAL (piloto)
+// Hasta ahora los avisos de renovación solo llegan al vendedor por Telegram.
+// Esto le arma, además, un mensaje personalizado y variado (nunca dos veces
+// idéntico) por cada cliente que vence hoy, con un link de WhatsApp ya
+// escrito — el vendedor solo tiene que abrirlo y darle enviar desde su
+// propio número de siempre. No usa ninguna API de pago ni número nuevo.
+//
+// Por ahora, a propósito, solo se activa para los vendedores del piloto
+// (Relojes y Sublicuentas). Para sumar más vendedores, solo hay que agregar
+// su nombre (en minúsculas, sin tildes) a VENDEDORES_PILOTO_RECORDATORIOS.
+// ===============================
+const VENDEDORES_PILOTO_RECORDATORIOS = new Set(["relojes", "sublicuentas"]);
+
+// Código de país para armar el link de WhatsApp (wa.me exige el número
+// completo con código de país, sin "+" ni espacios). Ajustar aquí si el
+// negocio empieza a operar en otro país.
+const CODIGO_PAIS_TEL_WA = "504";
+
+function telefonoWhatsApp(telefono = "") {
+  const digits = onlyDigits(telefono);
+  if (!digits) return "";
+  if (digits.startsWith(CODIGO_PAIS_TEL_WA)) return digits;
+  if (digits.length === 8) return CODIGO_PAIS_TEL_WA + digits; // número local hondureño típico
+  return digits;
+}
+
+// Variedad "combinatoria": no hay un único texto fijo, se arma combinando
+// piezas sueltas. Con estas listas ya salen cientos de combinaciones
+// distintas, y crece solo con agregar más frases a los arreglos — no hay
+// límite de cuántas se pueden sumar.
+const REC_SALUDOS = [
+  (n) => `Hola ${n} 👋`,
+  (n) => `¡Qué tal, ${n}! 😊`,
+  (n) => `Hola ${n}, ¿cómo estás? 🙌`,
+  (n) => `¡Hey ${n}! 👋`,
+  (n) => `Buen día ${n} ☀️`,
+  (n) => `Hola ${n} 🙂`,
+  (n) => `¡Hola ${n}! Espero estés bien 😊`,
+  (n) => `${n}, ¿todo bien? 👋`,
+];
+const REC_CUERPOS_HOY = [
+  (plat, emoji) => `Tu ${emoji} *${plat}* vence *hoy* ⏰`,
+  (plat, emoji) => `Te escribo porque tu ${emoji} *${plat}* vence *hoy*`,
+  (plat, emoji) => `Pasando a recordarte que hoy vence tu ${emoji} *${plat}*`,
+  (plat, emoji) => `Tu suscripción de ${emoji} *${plat}* vence *hoy* 📌`,
+  (plat, emoji) => `Hoy es el día de renovar tu ${emoji} *${plat}* 🔄`,
+  (plat, emoji) => `Un recordatorio rápido: tu ${emoji} *${plat}* vence *hoy* ✅`,
+];
+const REC_CIERRES = [
+  () => `Cualquier duda, aquí estoy 🙌`,
+  () => `Cualquier cosa me avisas 🙂`,
+  () => `Quedo pendiente de tu renovación 🔄`,
+  () => `Avísame si la renuevo 👍`,
+  () => `Estoy para ayudarte 🤝`,
+  () => `Me dices y te la dejo lista 💫`,
+  () => `Quedo atenta/o a tu mensaje 📩`,
+  () => `Gracias por seguir confiando en mí 🙏`,
+];
+
+// Selección "variada pero estable": usa un hash de datos propios del
+// servicio (cliente + índice + fecha) para elegir la frase. Así, si el bot
+// reintenta el mismo día por lo que sea, el mensaje no cambia a mitad de
+// camino, pero entre clientes o fechas distintas sí varía.
+function elegirVariado(lista, semilla) {
+  let hash = 0;
+  const s = String(semilla || "");
+  for (let i = 0; i < s.length; i++) hash = (hash * 31 + s.charCodeAt(i)) >>> 0;
+  return lista[hash % lista.length];
+}
+
+function primerNombre(nombreCompleto = "") {
+  return String(nombreCompleto || "").trim().split(/\s+/)[0] || "cliente";
+}
+
+function construirMensajeRecordatorio(row) {
+  const nombre = primerNombre(row.nombrePerfil);
+  const plat = humanPlataforma(row.plataforma || "");
+  const emoji = iconPlataforma(row.plataforma || "");
+  const precio = Number(row.precio || 0).toFixed(2);
+  const semilla = `${row.clientId}:${row.idx}:${row.fechaRenovacion}`;
+
+  const saludo = elegirVariado(REC_SALUDOS, semilla + ":s")(nombre);
+  const cuerpo = elegirVariado(REC_CUERPOS_HOY, semilla + ":c")(plat, emoji);
+  const cierre = elegirVariado(REC_CIERRES, semilla + ":z")();
+
+  return `${saludo}\n\n${cuerpo}\n\n💰 Monto: *L. ${precio}*\n\n${cierre}`;
+}
+
+function linkWhatsAppRecordatorio(row) {
+  const tel = telefonoWhatsApp(row.telefono || "");
+  if (!tel) return "";
+  const texto = construirMensajeRecordatorio(row);
+  return `https://wa.me/${tel}?text=${encodeURIComponent(texto)}`;
+}
+
+// Estado en memoria del flujo "uno a la vez" por chat+fecha. Mismo patrón
+// que wizard/pending (global.__SUBLICUENTAS_...__) para que sobreviva a
+// recargas del módulo sin perderse. No necesita Firestore: es un flujo
+// corto, de una sola sesión de trabajo del vendedor.
+const recordatoriosState = global.__SUBLICUENTAS_RECORDATORIOS__ =
+  global.__SUBLICUENTAS_RECORDATORIOS__ || new Map();
+
+function recordatoriosKey(chatId, dmy) { return `${chatId}:${dmy}`; }
+
+async function prepararRecordatoriosPendientes(chatId, vendedorNombre, dmy) {
+  const list = await obtenerRenovacionesPorFecha(dmy, vendedorNombre);
+  const pendientes = list.filter((x) => telefonoWhatsApp(x.telefono || ""));
+  if (!pendientes.length) return 0;
+  recordatoriosState.set(recordatoriosKey(chatId, dmy), {
+    items: pendientes, indice: 0, enviados: 0, omitidos: 0,
+  });
+  return pendientes.length;
+}
+
+async function enviarAvisoRecordatoriosPendientes(chatId, vendedorNombre) {
+  if (!VENDEDORES_PILOTO_RECORDATORIOS.has(normTxt(vendedorNombre))) return false;
+  const { dmy } = getTimePartsNow();
+  const total = await prepararRecordatoriosPendientes(chatId, vendedorNombre, dmy);
+  if (!total) return false;
+  try {
+    await bot.sendMessage(String(chatId),
+      `📲 Tienes *${total}* cliente(s) para recordarles su renovación de hoy por WhatsApp.`,
+      { parse_mode: "Markdown", reply_markup: { inline_keyboard: [[
+        { text: `📲 Empezar a enviar recordatorios (${total} pendientes)`, callback_data: `rec:start:${dmy}` },
+      ]] } }
+    );
+    return true;
+  } catch (e) { logErr("recordatorios:aviso", e); return false; }
+}
+
+function tarjetaRecordatorio(dmy, estado) {
+  const row = estado.items[estado.indice];
+  const restantes = estado.items.length - estado.indice;
+  const link = linkWhatsAppRecordatorio(row);
+  const plat = humanPlataforma(row.plataforma || "");
+  const emoji = iconPlataforma(row.plataforma || "");
+  // ✅ El mensaje va dentro de un bloque de código (```): dentro de un
+  // bloque, Telegram no interpreta *, _ como formato, así que el asterisco
+  // de negrita del mensaje al cliente no choca con el Markdown del panel.
+  const txt =
+    `Recordatorio ${estado.indice + 1} de ${estado.items.length}\n\n` +
+    `${emoji} *${escMD(row.nombrePerfil || "Sin nombre")}* — ${escMD(plat)}\n` +
+    `📱 ${escMD(row.telefono || "-")} · vence *hoy*\n\n` +
+    "💬 Mensaje que se va a mandar:\n```\n" + construirMensajeRecordatorio(row) + "\n```";
+  const kb = [];
+  if (link) kb.push([{ text: "🟢 Abrir WhatsApp y enviar", url: link }]);
+  kb.push([
+    { text: "✅ Ya lo envié → siguiente", callback_data: `rec:next:${dmy}:e` },
+    { text: "⏭️ Omitir, siguiente", callback_data: `rec:next:${dmy}:o` },
+  ]);
+  return { txt, kb, restantes };
+}
+
 async function enviarTxtRenovacionesDiarias7AM() {
   if (!hasRuntimeLock()) return;
   const { dmy } = getTimePartsNow();
@@ -5738,6 +5943,7 @@ async function enviarTxtRenovacionesDiarias7AM() {
       if (!sent) continue;
       revendedoresEnviados.add(normalizeTelegramIdLocal(rev.telegramId));
       await db.collection("revendedores").doc(rev.id).set({ autoLastSent: dmy, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+      await enviarAvisoRecordatoriosPendientes(rev.telegramId, rev.nombre);
     } catch (e) { logErr(`AutoTXT:revendedor:${rev.id}`, e); }
   }
 

@@ -1940,6 +1940,12 @@ bot.onText(/^\/clientes_excel$/, async (msg) => {
 });
 
 module.exports = {
+  // 🐛 FIX (ago-2026): iconPlataforma() se usaba en index_06_handlers.js
+  // (botones "Mis renovaciones de hoy" / "en 3 días" y el aviso diario de
+  // las 7 AM) pero nunca estuvo exportada aquí — cada vez que se llamaba
+  // tiraba ReferenceError, atrapado en silencio por el try/catch de más
+  // arriba, y el vendedor solo veía "⚠️ Error interno".
+  iconPlataforma,
   humanPlataforma, renderFichaClienteMarkdown, serviciosConIndiceOriginal, dedupeClientes, clienteDuplicado,
   getCliente, buscarPorTelefonoTodos, buscarClienteRobusto,
   enviarFichaCliente, enviarFichaClienteVendedor, enviarListaResultadosClientes, menuEditarCliente,
