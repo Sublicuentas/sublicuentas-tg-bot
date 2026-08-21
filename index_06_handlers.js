@@ -2834,7 +2834,8 @@ bot.onText(/\/buscar_raw(?:\s+([\s\S]+))?/i, async (msg, match) => {
     return bot.sendMessage(chatId, txt);
   } catch (error) {
     logErr("buscar_raw", error);
-    return bot.sendMessage(chatId, "⚠️ Ocurrió un error buscando. Revise los logs del servidor.");
+    const detalle = String(error?.code || error?.message || error || "error desconocido");
+    return bot.sendMessage(chatId, `⚠️ Error real de Firestore:\n\n\`${detalle}\``, { parse_mode: "Markdown" });
   }
 });
 
