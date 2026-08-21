@@ -73,6 +73,7 @@ const {
   dedupeClientes,
   buscarPorTelefonoTodos,
   buscarClienteRobusto,
+  getClientesBusquedaSnapshot,
   enviarFichaCliente, enviarFichaClienteVendedor, renderFichaClienteMarkdown,
   enviarListaResultadosClientes,
   reporteClientesTXTGeneral,
@@ -1319,35 +1320,30 @@ async function buscarClientesFallbackLocal(query = "") {
   if (isEmailLike(qRaw)) return [];
 
   const out = new Map();
-
-  // Scan completo con búsqueda parcial (incluye en nombre_norm o vendedor_norm)
   try {
-    const snap = await db.collection("clientes").get();
-    snap.forEach((doc) => {
-      const x = doc.data() || {};
-      const nombreNorm = normalizeLooseText(x.nombrePerfil || x.nombre_norm || "");
-      const vendedorNorm = normalizeLooseText(x.vendedor || x.vendedor_norm || "");
-      const telefonoDigits = onlyDigits(x.telefono || x.telefono_norm || "");
+    // Reutiliza el snapshot de buscarClienteRobusto: NO vuelve a leer Firestore.
+    const rows = await getClientesBusquedaSnapshot();
+    for (const x of rows) {
+      const nombres = [x.nombrePerfil, x.nombre, x.cliente, x.nombre_norm]
+        .map((v) => normalizeLooseText(v || ""));
+      const vendedores = [x.vendedor, x.vendedor_norm]
+        .map((v) => normalizeLooseText(v || ""));
+      const telefonos = [x.telefono, x.telefono_norm, x.whatsapp, x.numero]
+        .map((v) => onlyDigits(v || ""));
 
       let match = false;
-
-      if (qDigits && qDigits.length >= 4 && telefonoDigits.includes(qDigits)) {
-        match = true;
-      }
-
+      if (qDigits && qDigits.length >= 4 && telefonos.some((v) => v.includes(qDigits))) match = true;
       if (!match && qNorm && qNorm.length >= 2) {
-        if (nombreNorm.includes(qNorm)) match = true;
-        if (!match && vendedorNorm.includes(qNorm)) match = true;
+        if (nombres.some((v) => v.includes(qNorm))) match = true;
+        if (!match && vendedores.some((v) => v.includes(qNorm))) match = true;
       }
 
-      if (match && !out.has(doc.id)) {
-        out.set(doc.id, { id: doc.id, ...(x || {}) });
-      }
-    });
+      if (match) out.set(x.id, x);
+      if (out.size >= 30) break;
+    }
   } catch (e) {
-    logErr("buscarClientesFallbackLocal:scan", e?.stack || e?.message || e);
+    logErr("buscarClientesFallbackLocal:cache", e?.stack || e?.message || e);
   }
-
   return Array.from(out.values()).slice(0, 30);
 }
 

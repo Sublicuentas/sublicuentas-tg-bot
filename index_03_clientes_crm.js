@@ -733,47 +733,90 @@ async function clienteDuplicado(nombre = "", telefono = "", excludeId = null) {
   }
 }
 
+
+// ===============================
+// BÚSQUEDA RÁPIDA — SNAPSHOT CACHEADO
+// Una sola lectura completa de clientes por ventana corta.
+// Evita repetir .get() varias veces para una misma búsqueda.
+// ===============================
+async function getClientesBusquedaSnapshot(force = false) {
+  const cacheKey = "clientes:busqueda_snapshot";
+  if (!force) {
+    const cached = cacheGet(cacheKey);
+    if (Array.isArray(cached)) return cached;
+  }
+
+  const snap = await db.collection(CLIENTES_COLLECTION).get();
+  const rows = snap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
+  // 20 s: suficientemente corto para altas/ediciones y muy útil para Telegram.
+  cacheSet(cacheKey, rows, 20 * 1000);
+  return rows;
+}
+
+function bolsasBusquedaClienteLocal(x = {}) {
+  const titular = String(x.nombrePerfil || x.nombre || x.cliente || "").trim();
+  const nombres = [
+    x.nombrePerfil, x.nombre, x.cliente, x.nombre_norm,
+    x.vendedor, x.vendedor_norm,
+  ].map((v) => normTxt(v || "")).filter(Boolean);
+
+  const telefonos = [x.telefono, x.telefono_norm, x.whatsapp, x.numero]
+    .map((v) => onlyDigits(v || "")).filter(Boolean);
+
+  const servicios = Array.isArray(x.servicios) ? x.servicios : [];
+  const textoServicios = [];
+  const digitosServicios = [];
+
+  for (const s of servicios) {
+    textoServicios.push(
+      normTxt(s?.correo || ""),
+      normTxt(s?.usuario || ""),
+      normTxt(s?.plataforma || ""),
+      normTxt(humanPlataforma(s?.plataforma || "")),
+      String(s?.clave || "").trim().toLowerCase(),
+      String(s?.pin || "").trim().toLowerCase(),
+    );
+
+    for (const perfil of perfilesServicioLocal(s, titular)) {
+      textoServicios.push(
+        normTxt(perfil?.nombre || ""),
+        normTxt(perfil?.nombrePerfil || ""),
+        normTxt(perfil?.perfil || ""),
+        normTxt(perfil?.correo || ""),
+        String(perfil?.clave || "").trim().toLowerCase(),
+        String(perfil?.pin || "").trim().toLowerCase(),
+      );
+      const pt = onlyDigits(perfil?.telefono || perfil?.whatsapp || "");
+      if (pt) digitosServicios.push(pt);
+    }
+  }
+
+  return {
+    textos: [...nombres, ...textoServicios].filter(Boolean),
+    digitos: [...telefonos, ...digitosServicios].filter(Boolean),
+  };
+}
+
 async function buscarPorTelefonoTodos(query = "") {
   const q = onlyDigits(query);
   if (!q) return [];
 
-  const out = new Map();
+  const rows = await getClientesBusquedaSnapshot();
+  const exactos = [];
+  const parciales = [];
 
-  // ✅ PASO 1: Búsqueda exacta post-procesada (SIN depender de telefono_norm en Firestore)
-  // Esto garantiza que encuentra EXACTAMENTE lo que escribiste
-  try {
-    const snap = await db.collection(CLIENTES_COLLECTION).get();
-    snap.forEach((d) => {
-      const tel = onlyDigits((d.data()?.telefono || "")).trim();
-      // ✅ EXACTO: el teléfono normalizado DEBE SER IGUAL al query
-      if (tel === q && !out.has(d.id)) {
-        out.set(d.id, { id: d.id, ...(d.data() || {}) });
-      }
-    });
-  } catch (_) {}
-
-  // ✅ Si encontró exacto, retornar inmediatamente
-  if (out.size > 0) {
-    return Array.from(out.values()).slice(0, 20);
+  for (const x of rows) {
+    const bolsas = bolsasBusquedaClienteLocal(x);
+    if (bolsas.digitos.some((tel) => tel === q)) {
+      exactos.push(x);
+      continue;
+    }
+    if (q.length >= 4 && bolsas.digitos.some((tel) => tel.includes(q))) {
+      parciales.push(x);
+    }
   }
 
-  // ❌ SOLO si no encuentra exacto, fallback a búsqueda parcial
-  // Pero limitar a que el query esté CONTENIDO en el teléfono
-  // (no al revés, que causaba el bug)
-  try {
-    const snap = await db.collection(CLIENTES_COLLECTION).get();
-    snap.forEach((d) => {
-      const x = d.data() || {};
-      const tel = onlyDigits(x.telefono || "").trim();
-      // ❌ PARCIAL: Solo si el query está DENTRO del teléfono
-      // Ej: si escribes "945", encuentra "87945442" pero no "87989267"
-      if (tel.includes(q) && !out.has(d.id)) {
-        out.set(d.id, { id: d.id, ...x });
-      }
-    });
-  } catch (_) {}
-
-  return Array.from(out.values()).slice(0, 20);
+  return (exactos.length ? exactos : parciales).slice(0, 20);
 }
 
 async function buscarClienteRobusto(query = "") {
@@ -784,14 +827,11 @@ async function buscarClienteRobusto(query = "") {
 
   const out = new Map();
 
+  // Primero aprovechar índices exactos cuando existan.
   const jobs = [];
-
   if (qDigits && qDigits.length >= 7) {
-    jobs.push(
-      db.collection(CLIENTES_COLLECTION).where("telefono_norm", "==", qDigits).limit(10).get(),
-    );
+    jobs.push(db.collection(CLIENTES_COLLECTION).where("telefono_norm", "==", qDigits).limit(10).get());
   }
-
   if (qNorm && qNorm.length >= 2) {
     jobs.push(
       db.collection(CLIENTES_COLLECTION).where("nombre_norm", "==", qNorm).limit(10).get(),
@@ -801,38 +841,26 @@ async function buscarClienteRobusto(query = "") {
 
   const settled = await Promise.allSettled(jobs);
   for (const item of settled) {
-    if (item.status === "fulfilled") {
-      item.value.forEach((d) => { if (!out.has(d.id)) out.set(d.id, { id: d.id, ...(d.data() || {}) }); });
-    }
+    if (item.status !== "fulfilled") continue;
+    item.value.forEach((d) => {
+      if (!out.has(d.id)) out.set(d.id, { id: d.id, ...(d.data() || {}) });
+    });
   }
 
-  if (out.size > 0) return Array.from(out.values()).slice(0, 30);
-
-  const snap = await db.collection(CLIENTES_COLLECTION).get();
-
-  snap.forEach((d) => {
-    const x = d.data() || {};
-    const nombre = normTxt(x.nombrePerfil || "");
-    const vendedor = normTxt(x.vendedor || "");
-    const telefono = onlyDigits(x.telefono || "");
-    const servicios = Array.isArray(x.servicios) ? x.servicios : [];
-
-    const bolsas = [
-      nombre, normTxt(x.nombre_norm || ""), telefono,
-      vendedor, normTxt(x.vendedor_norm || ""),
-      ...servicios.flatMap((s) => [
-        normTxt(s?.correo || ""), normTxt(s?.plataforma || ""),
-        normTxt(humanPlataforma(s?.plataforma || "")), String(s?.clave || "").trim().toLowerCase(), String(s?.pin || "").trim().toLowerCase(),
-        ...perfilesServicioLocal(s, x.nombrePerfil || "").flatMap((p) => [normTxt(p.nombre), normTxt(p.perfil), normTxt(p.correo), String(p.clave || "").toLowerCase(), String(p.pin || "").toLowerCase()]),
-      ]),
-    ];
-
+  // Para nombre parcial / campos internos: UN solo snapshot cacheado.
+  // Aunque haya coincidencia exacta, complementamos con parciales para que
+  // "Gustavo" pueda mostrar "Gustavo X" y perfiles relacionados.
+  const rows = await getClientesBusquedaSnapshot();
+  for (const x of rows) {
+    const bolsas = bolsasBusquedaClienteLocal(x);
     let ok = false;
-    if (qDigits && qDigits.length >= 4 && bolsas.some((b) => String(b).includes(qDigits))) ok = true;
-    if (!ok && qNorm && bolsas.some((b) => String(b).includes(qNorm))) ok = true;
 
-    if (ok && !out.has(d.id)) out.set(d.id, { id: d.id, ...x });
-  });
+    if (qDigits && qDigits.length >= 4 && bolsas.digitos.some((v) => v.includes(qDigits))) ok = true;
+    if (!ok && qNorm && qNorm.length >= 2 && bolsas.textos.some((v) => String(v).includes(qNorm))) ok = true;
+
+    if (ok && !out.has(x.id)) out.set(x.id, x);
+    if (out.size >= 30) break;
+  }
 
   return Array.from(out.values()).slice(0, 30);
 }
@@ -2026,7 +2054,7 @@ module.exports = {
   // arriba, y el vendedor solo veía "⚠️ Error interno".
   iconPlataforma,
   humanPlataforma, renderFichaClienteMarkdown, serviciosConIndiceOriginal, dedupeClientes, clienteDuplicado,
-  getCliente, buscarPorTelefonoTodos, buscarClienteRobusto,
+  getCliente, buscarPorTelefonoTodos, buscarClienteRobusto, getClientesBusquedaSnapshot,
   enviarFichaCliente, enviarFichaClienteVendedor, enviarListaResultadosClientes, menuEditarCliente,
   menuListaServicios, menuServicio,
   menuListaPerfilesServicio, menuPerfilServicio,
