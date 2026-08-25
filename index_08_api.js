@@ -403,6 +403,7 @@ app.use("/api", (_req, res) => fail(res, 404, "Ruta no encontrada"));
 // Montar en el proceso principal las mismas herramientas administrativas
 // que usa el servicio independiente server_api.js.
 require("./index_12_admin_panel")(app);
+require("./index_13_gamificacion")(app);
 
 if (!global.__SUBLICUENTAS_API_SERVER__) {
   global.__SUBLICUENTAS_API_SERVER__ = app.listen(PORT, () => {

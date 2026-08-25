@@ -777,5 +777,6 @@ app.post("/rev/ask", revAuth, async (req, res) => {
 
 // ── Panel admin (precios / vendedores / clientes) — para Sublichat HQ ──
 require("./index_12_admin_panel")(app);
+require("./index_13_gamificacion")(app);
 
 app.listen(PORT, () => console.log("🌐 Panel API (revendedores) activa en puerto", PORT));
