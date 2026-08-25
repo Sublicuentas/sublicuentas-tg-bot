@@ -17,7 +17,7 @@
    ════════════════════════════════════════════════════════════════ */
 
 const { revAdminAuth, generarPinSetup } = require("./index_09_api_auth");
-const { db, admin, PLATAFORMAS, CLIENTES_COLLECTION, REVENDEDORES_COLLECTION } = require("./index_01_core");
+const { db, admin, CLIENTES_COLLECTION, REVENDEDORES_COLLECTION } = require("./index_01_core");
 const { getCliente, patchServicio, eliminarServicioTx, buscarClienteRobusto } = require("./index_03_clientes_crm");
 
 const PRECIOS_COLLECTION = "precios";
@@ -35,51 +35,93 @@ function normNombre(v = "") {
 
 module.exports = function mountAdminPanel(app) {
   /* ═══════════════ PRECIOS ═══════════════
-     Colección nueva "precios", 1 doc por plataforma (mismas keys que
-     PLATAFORMAS en index_01_core.js). No existía antes: el endpoint viejo
-     /rev/precios leía "inventario" (cuentas/capacidad), que no tiene campo
-     de precio — por eso la pestaña Precios del panel de socios no mostraba
-     nada útil. Este módulo también corrige ESE endpoint más abajo.
+     ⚠️ CORRECCIÓN (ago-2026): la primera versión de esto asumía que los
+     precios eran 1-por-plataforma (llave = key de PLATAFORMAS). Resultó
+     que el catálogo REAL que ya usan los socios (el que ven en "Catálogo
+     mayorista" y el que arma el formulario de "Nueva compra") vive
+     hardcodeado en revendedoreschat/index.html como `const PRECIOS=[...]`
+     — agrupado por categoría, con variantes por ítem (ej. "Oleada · 1
+     dispositivo" y "Oleada · 3 dispositivos" son dos precios distintos
+     del mismo nombre). Colección rediseñada para calzar con eso: 1 doc
+     Firestore = 1 ítem del catálogo (no 1 por plataforma).
+
+     GET /rev/precios (el que ya consume revendedoreschat) devuelve los
+     ítems reagrupados en el MISMO formato {cat, sub, items:[{n,s,p,d}]}
+     que ya espera ese frontend — así no hay que tocarle la lógica de
+     "Nueva compra" (compraTipoDesdeCatalogo, etc.), solo la fuente de
+     datos. Ver migrar_precios_catalogo.js para la carga inicial con los
+     precios que ya estaban hardcodeados.
   */
 
-  // Admin: ver TODAS las plataformas conocidas, tengan precio puesto o no.
+  // Admin: lista plana de todos los ítems (para editar uno por uno).
   app.get("/rev/admin/precios", revAdminAuth, wrap(async (req, res) => {
+    // ✅ Sin orderBy múltiple (evita necesitar índice compuesto en
+    // Firestore): la colección es chica, se ordena en memoria.
     const snap = await db.collection(PRECIOS_COLLECTION).get();
-    const porPlataforma = {};
-    snap.docs.forEach((d) => { porPlataforma[d.id] = d.data() || {}; });
-    const lista = Object.values(PLATAFORMAS).map((p) => {
-      const doc = porPlataforma[p.key] || {};
-      return {
-        plataforma: p.key,
-        nombre: p.nombre,
-        categoria: p.categoria,
-        precio: doc.precio != null ? Number(doc.precio) : null,
-        activo: doc.activo !== false,
-        nota: doc.nota || "",
-        configurado: doc.precio != null,
-      };
-    }).sort((a, b) => a.categoria.localeCompare(b.categoria) || a.nombre.localeCompare(b.nombre));
+    const lista = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    lista.sort((a, b) => (Number(a.categoriaOrden) || 999) - (Number(b.categoriaOrden) || 999) || (Number(a.orden) || 999) - (Number(b.orden) || 999));
     ok(res, { precios: lista });
   }));
 
-  // Admin: fijar/editar el precio de una plataforma.
-  app.put("/rev/admin/precios/:plataforma", revAdminAuth, wrap(async (req, res) => {
-    const plataforma = String(req.params.plataforma || "").trim().toLowerCase();
-    const info = PLATAFORMAS[plataforma];
-    if (!info) return fail(res, 400, "plataforma_invalida");
+  // Admin: crear un ítem nuevo del catálogo.
+  app.post("/rev/admin/precios", revAdminAuth, wrap(async (req, res) => {
+    const b = req.body || {};
+    const categoria = String(b.categoria || "").trim();
+    const nombre = String(b.nombre || "").trim();
+    if (!categoria) return fail(res, 400, "falta_categoria");
+    if (!nombre) return fail(res, 400, "falta_nombre");
+    const precio = b.precio === null || b.precio === "" || b.precio === undefined ? null : Number(b.precio);
+    if (precio !== null && (!Number.isFinite(precio) || precio < 0)) return fail(res, 400, "precio_invalido");
 
-    const precio = Number(req.body?.precio);
-    if (!Number.isFinite(precio) || precio <= 0) return fail(res, 400, "precio_invalido");
-    const activo = req.body?.activo !== false;
-    const nota = String(req.body?.nota || "").trim().slice(0, 200);
-
-    await db.collection(PRECIOS_COLLECTION).doc(plataforma).set({
-      plataforma, precio, activo, nota,
+    const doc = {
+      categoria, categoriaSub: String(b.categoriaSub || "").trim(),
+      categoriaOrden: Number.isFinite(Number(b.categoriaOrden)) ? Number(b.categoriaOrden) : 999,
+      nombre, variante: String(b.variante || "").trim(),
+      precio, // null = "Por comisión" (mismo significado que it.p===null en el catálogo original)
+      detalle: String(b.detalle || "").trim().slice(0, 600),
+      activo: b.activo !== false,
+      orden: Number.isFinite(Number(b.orden)) ? Number(b.orden) : 999,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedBy: req.admin?.nombre || "Admin",
-    }, { merge: true });
+    };
+    const ref = await db.collection(PRECIOS_COLLECTION).add(doc);
+    ok(res, { id: ref.id, ...doc });
+  }));
 
-    ok(res, { plataforma, nombre: info.nombre, precio, activo, nota });
+  // Admin: editar un ítem existente (parcial).
+  app.put("/rev/admin/precios/:id", revAdminAuth, wrap(async (req, res) => {
+    const ref = db.collection(PRECIOS_COLLECTION).doc(req.params.id);
+    const snap = await ref.get();
+    if (!snap.exists) return fail(res, 404, "no_existe");
+
+    const b = req.body || {};
+    const patch = { updatedAt: admin.firestore.FieldValue.serverTimestamp(), updatedBy: req.admin?.nombre || "Admin" };
+    if (b.categoria !== undefined) patch.categoria = String(b.categoria).trim();
+    if (b.categoriaSub !== undefined) patch.categoriaSub = String(b.categoriaSub).trim();
+    if (b.categoriaOrden !== undefined) patch.categoriaOrden = Number(b.categoriaOrden) || 999;
+    if (b.nombre !== undefined) patch.nombre = String(b.nombre).trim();
+    if (b.variante !== undefined) patch.variante = String(b.variante).trim();
+    if (b.detalle !== undefined) patch.detalle = String(b.detalle).trim().slice(0, 600);
+    if (b.activo !== undefined) patch.activo = !!b.activo;
+    if (b.orden !== undefined) patch.orden = Number(b.orden) || 999;
+    if (b.precio !== undefined) {
+      const precio = b.precio === null || b.precio === "" ? null : Number(b.precio);
+      if (precio !== null && (!Number.isFinite(precio) || precio < 0)) return fail(res, 400, "precio_invalido");
+      patch.precio = precio;
+    }
+
+    await ref.update(patch);
+    const actualizado = await ref.get();
+    ok(res, { id: ref.id, ...actualizado.data() });
+  }));
+
+  // Admin: borrar un ítem del catálogo.
+  app.delete("/rev/admin/precios/:id", revAdminAuth, wrap(async (req, res) => {
+    const ref = db.collection(PRECIOS_COLLECTION).doc(req.params.id);
+    const snap = await ref.get();
+    if (!snap.exists) return fail(res, 404, "no_existe");
+    await ref.delete();
+    ok(res, { eliminado: ref.id });
   }));
 
   /* ═══════════════ VENDEDORES ═══════════════

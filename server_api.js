@@ -116,29 +116,40 @@ app.get("/rev/clientes", revAuth, async (req, res) => {
 });
 
 // ── PRECIOS ──
-// ✅ FIX: antes leía "inventario" (cuentas/capacidad), que no tiene campo
-// de precio — la pestaña Precios del panel de socios no mostraba nada
-// útil. Ahora lee la colección "precios" (la administra Sublichat en
-// /rev/admin/precios, ver index_12_admin_panel.js) y solo devuelve las
-// plataformas que el admin marcó como activas.
+// ✅ FIX (v1): antes leía "inventario" (cuentas/capacidad), que no tiene
+// campo de precio.
+// ✅ FIX (v2): el catálogo real que ya usa este panel — el que ve el socio
+// en "Catálogo mayorista" y el que arma el formulario "Nueva compra" — está
+// agrupado por categoría con variantes por ítem, no 1 precio por
+// plataforma. Ahora lee la colección "precios" (1 doc = 1 ítem, la
+// administra Sublichat en /rev/admin/precios, ver index_12_admin_panel.js)
+// y la reagrupa en el MISMO formato {cat, sub, items:[{n,s,p,d}]} que ya
+// esperan compraProductosCatalogo()/vPrecios() en index.html — así no hace
+// falta tocarles la lógica, solo cambiarles la fuente de datos.
 app.get("/rev/precios", revAuth, async (req, res) => {
   try {
+    // ✅ Sin where+orderBy combinado (evita necesitar índice compuesto en
+    // Firestore): la colección es chica, se filtra y ordena en memoria.
     const snap = await db.collection("precios").get();
-    const lista = snap.docs
-      .map((d) => {
-        const p = d.data() || {};
-        const info = PLATAFORMAS[d.id] || {};
-        return {
-          id: d.id,
-          plataforma: d.id,
-          nombre: info.nombre || p.plataforma || d.id,
-          categoria: info.categoria || "",
-          precio: Number(p.precio) || 0,
-          activo: p.activo !== false,
-        };
-      })
-      .filter((p) => p.activo && p.precio > 0);
-    res.json(lista);
+    const items = snap.docs.map((d) => d.data() || {}).filter((p) => p.activo !== false);
+    items.sort((a, b) => (Number(a.categoriaOrden) || 999) - (Number(b.categoriaOrden) || 999) || (Number(a.orden) || 999) - (Number(b.orden) || 999));
+
+    const grupos = [];
+    const porCategoria = {};
+    items.forEach((p) => {
+      const catKey = `${p.categoria || ""}|${p.categoriaSub || ""}`;
+      if (!porCategoria[catKey]) {
+        porCategoria[catKey] = { cat: p.categoria || "Catálogo", sub: p.categoriaSub || "", items: [] };
+        grupos.push(porCategoria[catKey]);
+      }
+      porCategoria[catKey].items.push({
+        n: p.nombre || "", s: p.variante || "",
+        p: p.precio == null ? null : Number(p.precio),
+        d: p.detalle || "",
+      });
+    });
+
+    res.json(grupos);
   } catch (e) { console.error("rev/precios", e); res.status(500).json({ error: "server" }); }
 });
 
