@@ -29,7 +29,7 @@ const {
 } = require("./index_09_api_auth");
 
 // Reusa Firebase ya inicializado en el core (no arranca el bot)
-const { db, PORT, bot, SUPER_ADMIN } = require("./index_01_core");
+const { db, PORT, bot, SUPER_ADMIN, PLATAFORMAS } = require("./index_01_core");
 const admin = require("firebase-admin");
 const STORAGE_BUCKET_CANDIDATES = Array.from(new Set([
   process.env.STORAGE_BUCKET,
@@ -115,11 +115,30 @@ app.get("/rev/clientes", revAuth, async (req, res) => {
   } catch (e) { console.error("rev/clientes", e); res.status(500).json({ error: "server" }); }
 });
 
-// ── PRECIOS (inventario) ──
+// ── PRECIOS ──
+// ✅ FIX: antes leía "inventario" (cuentas/capacidad), que no tiene campo
+// de precio — la pestaña Precios del panel de socios no mostraba nada
+// útil. Ahora lee la colección "precios" (la administra Sublichat en
+// /rev/admin/precios, ver index_12_admin_panel.js) y solo devuelve las
+// plataformas que el admin marcó como activas.
 app.get("/rev/precios", revAuth, async (req, res) => {
   try {
-    const snap = await db.collection("inventario").get();
-    res.json(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+    const snap = await db.collection("precios").get();
+    const lista = snap.docs
+      .map((d) => {
+        const p = d.data() || {};
+        const info = PLATAFORMAS[d.id] || {};
+        return {
+          id: d.id,
+          plataforma: d.id,
+          nombre: info.nombre || p.plataforma || d.id,
+          categoria: info.categoria || "",
+          precio: Number(p.precio) || 0,
+          activo: p.activo !== false,
+        };
+      })
+      .filter((p) => p.activo && p.precio > 0);
+    res.json(lista);
   } catch (e) { console.error("rev/precios", e); res.status(500).json({ error: "server" }); }
 });
 
@@ -725,5 +744,8 @@ app.post("/rev/ask", revAuth, async (req, res) => {
     res.status(500).json({ error: "ia_error", detail: e.message });
   }
 });
+
+// ── Panel admin (precios / vendedores / clientes) — para Sublichat HQ ──
+require("./index_12_admin_panel")(app);
 
 app.listen(PORT, () => console.log("🌐 Panel API (revendedores) activa en puerto", PORT));
