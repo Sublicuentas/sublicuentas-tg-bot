@@ -49,7 +49,7 @@ module.exports = function mountGamificacion(app) {
         const ventas = ventasPorSocio[k] || 0;
         const ren = renovaciones.filter(x => String(x.socio_norm || "").toLowerCase() === k);
         const cursos = Array.isArray(r.cursosCompletados) ? r.cursosCompletados.length : 0;
-        return { id: doc.id, nombre: r.nombre || k, nombre_norm:k, avatar:r.avatarData || "", ventas, clientes:clientesPorSocio[k] || 0, renovaciones:ren.length, cursos, racha:rachaDias(ren), nivel:nivel(ventas), score:ventas*100 + ren.length*25 + cursos*50 };
+        return { id: doc.id, nombre: r.nombre || k, nombreMostrar:r.nombreMostrar || r.nombre || k, nombre_norm:k, avatar:r.avatarData || "", ventas, clientes:clientesPorSocio[k] || 0, renovaciones:ren.length, cursos, racha:rachaDias(ren), nivel:nivel(ventas), score:ventas*100 + ren.length*25 + cursos*50 };
       }).sort((a,b) => b.ventas-a.ventas || b.score-a.score || a.nombre.localeCompare(b.nombre));
       ranking.forEach((x,i) => x.posicion=i+1);
       const me = ranking.find(x => x.nombre_norm === String(req.rev.nombre_norm || "").toLowerCase()) || null;
@@ -71,10 +71,19 @@ module.exports = function mountGamificacion(app) {
   app.post("/rev/perfil", revAuth, async (req,res) => {
     try {
       const ref = db.collection("revendedores").doc(req.rev.id);
-      const avatarData = String(req.body?.avatarData || "");
-      if (avatarData && (!/^data:image\/(jpeg|png|webp);base64,/.test(avatarData) || avatarData.length > 700000)) return res.status(413).json({error:"foto_invalida"});
-      await ref.set({ avatarData, perfilUpdatedAt:admin.firestore.FieldValue.serverTimestamp() }, {merge:true});
-      res.json({ok:true,avatarData});
+      const patch={perfilUpdatedAt:admin.firestore.FieldValue.serverTimestamp()};
+      if(Object.prototype.hasOwnProperty.call(req.body||{},"avatarData")){
+        const avatarData=String(req.body?.avatarData||"");
+        if (avatarData && (!/^data:image\/(jpeg|png|webp);base64,/.test(avatarData) || avatarData.length > 700000)) return res.status(413).json({error:"foto_invalida"});
+        patch.avatarData=avatarData;
+      }
+      if(Object.prototype.hasOwnProperty.call(req.body||{},"nombreMostrar")){
+        const nombreMostrar=String(req.body?.nombreMostrar||"").trim().replace(/[<>]/g,"").slice(0,45);
+        if(nombreMostrar.length<2)return res.status(400).json({error:"nombre_invalido"});
+        patch.nombreMostrar=nombreMostrar;
+      }
+      await ref.set(patch,{merge:true});
+      res.json({ok:true,...patch});
     } catch(e) { console.error("rev/perfil",e); res.status(500).json({error:"server"}); }
   });
   app.post("/rev/curso-completado", revAuth, async (req,res) => {

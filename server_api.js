@@ -424,6 +424,7 @@ app.post("/rev/compra", revAuth, async (req, res) => {
           key: b.key,
           nombreCliente: b.nombreCliente,
           dispositivo: b.dispositivo,
+          marcaTv: b.marcaTv,
         }];
 
     const productos = productosRaw.map((p) => {
@@ -442,6 +443,8 @@ app.post("/rev/compra", revAuth, async (req, res) => {
       const nombreCliente = cleanTg(p.nombreCliente, 80);
       const DISP_LABEL = { tv: "📺 TV", celular: "📱 Celular", tablet: "📱 Tablet", computadora: "💻 Computadora" };
       const dispositivo = DISP_LABEL[String(p.dispositivo || "").toLowerCase()] || cleanTg(p.dispositivo, 40);
+      const MARCA_LABEL={samsung:"Samsung",lg:"LG",tcl:"TCL",roku:"Roku TV"};
+      const marcaTv=MARCA_LABEL[String(p.marcaTv||"").toLowerCase()]||cleanTg(p.marcaTv,80);
       return {
         id: cleanTg(p.id, 90),
         servicio,
@@ -461,6 +464,7 @@ app.post("/rev/compra", revAuth, async (req, res) => {
         key,
         nombreCliente,
         dispositivo,
+        marcaTv,
       };
     }).filter((p) => p.servicio);
 
@@ -510,6 +514,7 @@ app.post("/rev/compra", revAuth, async (req, res) => {
       key: productos[0].key || "",
       nombreCliente: productos[0].nombreCliente || "",
       dispositivo: productos[0].dispositivo || "",
+      marcaTv: productos[0].marcaTv || "",
       comentario,
       monto,
       destino: destino.key,
@@ -531,6 +536,7 @@ app.post("/rev/compra", revAuth, async (req, res) => {
       const datos = [];
       if (p.perfil) datos.push(`Perfil: ${p.perfil}`);
       if (p.dispositivo) datos.push(`Dispositivo: ${p.dispositivo}`);
+      if (p.marcaTv) datos.push(`Marca / sistema TV: ${p.marcaTv}`);
       if (p.nombreCliente) datos.push(`Cliente: ${p.nombreCliente}`);
       if (p.correo) datos.push(`Correo: ${p.correo}`);
       if (p.detalleServicio) datos.push(`Detalle: ${p.detalleServicio}`);
