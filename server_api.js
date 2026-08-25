@@ -417,6 +417,8 @@ app.post("/rev/compra", revAuth, async (req, res) => {
           acceso: b.acceso,
           serial: b.serial,
           key: b.key,
+          nombreCliente: b.nombreCliente,
+          dispositivo: b.dispositivo,
         }];
 
     const productos = productosRaw.map((p) => {
@@ -429,6 +431,12 @@ app.post("/rev/compra", revAuth, async (req, res) => {
       const acceso = cleanTg(p.acceso, 220);
       const serial = cleanTg(p.serial, 220);
       const key = cleanTg(p.key, 220);
+      // ✅ NUEVO: nombre del cliente (para compras tipo "correo" — Gemini,
+      // Canva, invitación al correo) y dispositivo (para Disney, HBO/Max,
+      // Vix, Paramount, Crunchyroll y Prime Video).
+      const nombreCliente = cleanTg(p.nombreCliente, 80);
+      const DISP_LABEL = { tv: "📺 TV", celular: "📱 Celular", tablet: "📱 Tablet", computadora: "💻 Computadora" };
+      const dispositivo = DISP_LABEL[String(p.dispositivo || "").toLowerCase()] || cleanTg(p.dispositivo, 40);
       return {
         id: cleanTg(p.id, 90),
         servicio,
@@ -446,6 +454,8 @@ app.post("/rev/compra", revAuth, async (req, res) => {
         acceso,
         serial,
         key,
+        nombreCliente,
+        dispositivo,
       };
     }).filter((p) => p.servicio);
 
@@ -493,6 +503,8 @@ app.post("/rev/compra", revAuth, async (req, res) => {
       acceso: productos[0].acceso || "",
       serial: productos[0].serial || "",
       key: productos[0].key || "",
+      nombreCliente: productos[0].nombreCliente || "",
+      dispositivo: productos[0].dispositivo || "",
       comentario,
       monto,
       destino: destino.key,
@@ -513,6 +525,8 @@ app.post("/rev/compra", revAuth, async (req, res) => {
       const precio = p.precioCatalogo === null ? "Por comisión" : `Lps. ${p.precioCatalogo}`;
       const datos = [];
       if (p.perfil) datos.push(`Perfil: ${p.perfil}`);
+      if (p.dispositivo) datos.push(`Dispositivo: ${p.dispositivo}`);
+      if (p.nombreCliente) datos.push(`Cliente: ${p.nombreCliente}`);
       if (p.correo) datos.push(`Correo: ${p.correo}`);
       if (p.detalleServicio) datos.push(`Detalle: ${p.detalleServicio}`);
       if (p.acceso) datos.push(`Acceso: ${p.acceso}`);
@@ -521,7 +535,7 @@ app.post("/rev/compra", revAuth, async (req, res) => {
       if (!datos.length && p.entregaTipo) datos.push(`Entrega: ${p.entregaTipo}`);
       return [
         `${i + 1}) ${p.servicio} — ${precio}`,
-        ...datos.slice(0, 2).map((x) => `   • ${cleanTg(x, 150)}`),
+        ...datos.slice(0, 4).map((x) => `   • ${cleanTg(x, 150)}`),
       ];
     });
 

@@ -124,6 +124,89 @@ module.exports = function mountAdminPanel(app) {
     ok(res, { eliminado: ref.id });
   }));
 
+  // ✅ NUEVO: importar el catálogo inicial con un botón, sin entrar a la
+  // Shell de Render. Es la MISMA lógica de migrar_precios_catalogo.js
+  // (los precios que ya estaban hardcodeados en revendedoreschat/index.html),
+  // pero disponible como endpoint para que Sublichat la dispare con un clic.
+  // Seguro de correr más de una vez: si el ítem ya existe (misma
+  // categoría+nombre+variante), lo actualiza en vez de duplicarlo.
+  const PRECIOS_INICIALES = [
+    { cat: '📺 Streaming', sub: 'Plan mensual', items: [
+      { n: 'Netflix', p: 110, d: '👤 Perfil personal: correo y contraseña\n📺 Reproduce en 1 dispositivo a la vez\n🔐 Más perfiles: sin clave, acceso por código\n🏠 A los 20 días puede pedir código hogar' },
+      { n: 'Disney+ Premium', p: 80, d: '🔢 Acceso por código\n👤 PIN de perfil\n📱 1 dispositivo' },
+      { n: 'Disney+ Standar', p: 50, d: '🔢 Acceso por código\n👤 PIN de perfil\n📱 1 dispositivo' },
+      { n: 'Max', p: 60, d: '📺 En TV: acceso por código\n📱 En celular: se da clave\n👤 PIN de perfil · 1 dispositivo' },
+      { n: 'Vix', p: 30, d: '📧 Se entrega correo y contraseña\n📱 1 dispositivo' },
+      { n: 'Viki Rakuten', p: 60, d: '📧 Se entrega correo y contraseña\n📱 1 dispositivo' },
+      { n: 'Prime Video', p: 60, d: '🔢 Acceso por código\n👤 PIN de perfil · 1 dispositivo' },
+      { n: 'Paramount+', p: 60, d: '📧 Se entrega correo y contraseña\n📱 1 dispositivo' },
+      { n: 'Crunchyroll', p: 60, d: '👤 PIN de perfil\n📱 1 dispositivo' },
+      { n: 'Oleada', s: '1 dispositivo', p: 70, d: '▶️ Reproduce en 1 a la vez\n🤖 Solo dispositivos Android / Web' },
+      { n: 'Oleada', s: '3 dispositivos', p: 130, d: '▶️ Reproduce en 1 a la vez\n🤖 Solo dispositivos Android / Web' },
+      { n: 'IPTV', s: '1 pantalla', p: 80, d: '📲 Funciona en cualquier dispositivo\n🎁 Prueba gratis de 3 horas' },
+      { n: 'IPTV', s: '2 pantallas', p: 110, d: '📲 Funciona en cualquier dispositivo\n🎁 Prueba gratis de 3 horas' },
+      { n: 'IPTV', s: '3 pantallas', p: 140, d: '📲 Funciona en cualquier dispositivo\n🎁 Prueba gratis de 3 horas' },
+    ]},
+    { cat: '🎶 Música', sub: 'Plan mensual', items: [
+      { n: 'Spotify Premium', p: 80, d: '📧 Se entrega correo y contraseña' },
+      { n: 'Deezer Premium', p: 50, d: '📧 Se entrega correo y contraseña' },
+    ]},
+    { cat: '💻 Productividad', items: [
+      { n: 'Canva Edu Pro', s: '1 mes', p: 20, d: '✉️ Invitación al correo del cliente\n⚠️ Debe estar registrado en Canva' },
+      { n: 'Microsoft 365', s: '1 año · correo y clave · 5 disp · 100 GB', p: 200, d: '📧 Se entrega correo y contraseña\n💻 5 dispositivos\n☁️ 100 GB en Drive' },
+      { n: 'Microsoft 365', s: '1 año · a correo del cliente · 1 TB', p: 350, d: '📧 Al correo del cliente\n🗓️ Vigencia 1 año\n💻 Nivel 5 dispositivos\n☁️ 1 TB en Drive' },
+      { n: 'Office 2021 Pro Plus', s: 'Windows · licencia permanente', p: 200, d: '🪟 Solo para Windows\n🔑 Serial de activación\n♾️ Licencia permanente' },
+      { n: 'Office 2024 Pro Plus', s: 'Windows · licencia permanente', p: 250, d: '🪟 Solo para Windows\n🔑 Serial de activación\n♾️ Licencia permanente' },
+      { n: 'Antivirus McAfee', s: '1 año · 1 dispositivo', p: 150, d: '🛡️ Protección 1 dispositivo\n🔑 Se entrega key / serial\n🗓️ Vigencia 1 año' },
+      { n: 'Antivirus McAfee', s: '1 año · 3 dispositivos', p: 350, d: '🛡️ Protección 3 dispositivos\n🔑 Se entrega serial\n🗓️ Vigencia 1 año' },
+    ]},
+    { cat: '🤖 Inteligencia Artificial', items: [
+      { n: 'Gemini Pro', s: '1 mes', p: 100, d: '✉️ Invitación al Gmail del cliente' },
+    ]},
+    { cat: '🎮 Recargas de juegos', items: [
+      { n: 'Free Fire', s: 'Por comisión', p: null, d: '💬 Consultar precios con su asesor' },
+    ]},
+  ];
+  function slugPrecio(v) {
+    return String(v || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  }
+  app.post("/rev/admin/precios/importar-inicial", revAdminAuth, wrap(async (req, res) => {
+    const col = db.collection(PRECIOS_COLLECTION);
+    let creados = 0, actualizados = 0, categoriaOrden = 0;
+    for (const grupo of PRECIOS_INICIALES) {
+      categoriaOrden += 1;
+      let orden = 0;
+      for (const it of grupo.items) {
+        orden += 1;
+        const claveNatural = `${slugPrecio(grupo.cat)}__${slugPrecio(it.n)}__${slugPrecio(it.s || "")}`;
+        const existente = await col.where("claveNatural", "==", claveNatural).limit(1).get();
+        const doc = {
+          claveNatural,
+          categoria: grupo.cat,
+          categoriaSub: grupo.sub || "",
+          categoriaOrden,
+          nombre: it.n,
+          variante: it.s || "",
+          precio: it.p == null ? null : Number(it.p),
+          detalle: it.d || "",
+          activo: true,
+          orden,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedBy: req.admin?.nombre || "importacion_inicial",
+        };
+        if (!existente.empty) {
+          await existente.docs[0].ref.set(doc, { merge: true });
+          actualizados++;
+        } else {
+          doc.createdAt = admin.firestore.FieldValue.serverTimestamp();
+          await col.add(doc);
+          creados++;
+        }
+      }
+    }
+    ok(res, { creados, actualizados });
+  }));
+
   /* ═══════════════ VENDEDORES ═══════════════
      GET /rev/admin/revendedores (listar) e POST /rev/admin/impersonate
      ya existían en server_api.js — esto agrega crear / editar / resetear
