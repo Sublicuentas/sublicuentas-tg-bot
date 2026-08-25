@@ -128,6 +128,11 @@ app.get("/rev/clientes", revAuth, async (req, res) => {
 // falta tocarles la lógica, solo cambiarles la fuente de datos.
 app.get("/rev/precios", revAuth, async (req, res) => {
   try {
+    // El catálogo se administra desde Sublichat y debe reflejarse de inmediato
+    // en los paneles ya abiertos. Nunca permitir una copia HTTP intermedia.
+    res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+    res.set("Pragma", "no-cache");
+    res.set("Expires", "0");
     // ✅ Sin where+orderBy combinado (evita necesitar índice compuesto en
     // Firestore): la colección es chica, se filtra y ordena en memoria.
     const snap = await db.collection("precios").get();

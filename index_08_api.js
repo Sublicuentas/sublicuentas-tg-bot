@@ -324,11 +324,31 @@ app.get("/rev/clientes", revAuth, async (req, res) => {
   } catch (e) { console.error("rev/clientes", e); res.status(500).json({ error: "server" }); }
 });
 
-// PRECIOS (inventario)
+// PRECIOS del catálogo mayorista. Debe ser idéntico al endpoint del
+// server_api.js porque este archivo es el que arranca con `npm start`.
 app.get("/rev/precios", revAuth, async (req, res) => {
   try {
-    const snap = await db.collection("inventario").get();
-    res.json(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+    res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+    res.set("Pragma", "no-cache");
+    res.set("Expires", "0");
+    const snap = await db.collection("precios").get();
+    const items = snap.docs.map((d) => d.data() || {}).filter((p) => p.activo !== false);
+    items.sort((a, b) => (Number(a.categoriaOrden) || 999) - (Number(b.categoriaOrden) || 999) || (Number(a.orden) || 999) - (Number(b.orden) || 999));
+    const grupos = [];
+    const porCategoria = {};
+    items.forEach((p) => {
+      const catKey = `${p.categoria || ""}|${p.categoriaSub || ""}`;
+      if (!porCategoria[catKey]) {
+        porCategoria[catKey] = { cat: p.categoria || "Catálogo", sub: p.categoriaSub || "", items: [] };
+        grupos.push(porCategoria[catKey]);
+      }
+      porCategoria[catKey].items.push({
+        n: p.nombre || "", s: p.variante || "",
+        p: p.precio == null ? null : Number(p.precio),
+        d: p.detalle || "",
+      });
+    });
+    res.json(grupos);
   } catch (e) { console.error("rev/precios", e); res.status(500).json({ error: "server" }); }
 });
 
@@ -380,6 +400,10 @@ app.use("/api", (_req, res) => fail(res, 404, "Ruta no encontrada"));
 // ===============================
 // ARRANQUE — un único servidor HTTP para health, /api y /rev
 // ===============================
+// Montar en el proceso principal las mismas herramientas administrativas
+// que usa el servicio independiente server_api.js.
+require("./index_12_admin_panel")(app);
+
 if (!global.__SUBLICUENTAS_API_SERVER__) {
   global.__SUBLICUENTAS_API_SERVER__ = app.listen(PORT, () => {
     console.log("🌐 API REST Sublicuentas activa en puerto", PORT);
