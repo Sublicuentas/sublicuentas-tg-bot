@@ -305,16 +305,14 @@ app.post("/rev/renovacion", revAuth, async (req, res) => {
     const socio = req.rev.nombre || req.rev.nombre_norm || "Revendedor";
     const com = (comentario || "").toString().trim().slice(0, 600);
 
-    let renovacionFecha = null;
-    if ((nuevaFecha || meses) && clienteId !== undefined && servicioIndex !== undefined) {
-      renovacionFecha = await revActualizarFechaCliente({
-        clienteId,
-        socioNorm: req.rev.nombre_norm || "",
-        servicioIndex,
-        nuevaFecha,
-        meses,
-      });
+    const seleccionRaw=Array.isArray(req.body.servicios)&&req.body.servicios.length?req.body.servicios:[{servicioIndex,servicio}];
+    const seleccion=seleccionRaw.map(x=>({servicioIndex:Number(x.servicioIndex),servicio:String(x.servicio||"").slice(0,120)})).filter(x=>Number.isInteger(x.servicioIndex)&&x.servicioIndex>=0).slice(0,30);
+    if(!seleccion.length)return res.status(400).json({error:"sin_servicios"});
+    const renovacionesFecha=[];
+    if (nuevaFecha || meses) {
+      for(const item of seleccion) renovacionesFecha.push(await revActualizarFechaCliente({clienteId,socioNorm:req.rev.nombre_norm||"",servicioIndex:item.servicioIndex,nuevaFecha,meses}));
     }
+    const renovacionFecha=renovacionesFecha[0]||null;
 
     const imagenObj = await uploadPanelImage(imagen, "renovaciones");
     const imagenUrl = imagenObj.url || "";
@@ -322,8 +320,9 @@ app.post("/rev/renovacion", revAuth, async (req, res) => {
     const doc = {
       clienteId: (clienteId || "").toString(),
       cliente: (cliente || "").toString().slice(0, 120),
-      servicio: (renovacionFecha?.servicio || servicio || "").toString().slice(0, 120),
-      servicioIndex: Number.isInteger(Number(servicioIndex)) ? Number(servicioIndex) : null,
+      servicio: seleccion.length>1?`${seleccion.length} servicios`:(renovacionFecha?.servicio || seleccion[0]?.servicio || servicio || "").toString().slice(0, 120),
+      servicioIndex: seleccion.length===1?seleccion[0].servicioIndex:null,
+      servicios: seleccion.map((x,i)=>({servicioIndex:x.servicioIndex,servicio:renovacionesFecha[i]?.servicio||x.servicio,nuevaFecha:renovacionesFecha[i]?.nuevaFecha||String(nuevaFecha||"")})),
       comentario: com,
       quien: (quien || "").toString().slice(0, 120),
       monto: Number(monto) || 0,
@@ -336,7 +335,8 @@ app.post("/rev/renovacion", revAuth, async (req, res) => {
       imagenStorageError: imagenObj.storageError || "",
       fechaAnterior: renovacionFecha?.fechaAnterior || "",
       nuevaFecha: renovacionFecha?.nuevaFecha || (nuevaFecha || "").toString().slice(0, 20),
-      renovado: !!renovacionFecha?.actualizado,
+      renovado: renovacionesFecha.length>0,
+      renovadosCantidad: renovacionesFecha.length,
       createdAt: new Date(),
     };
     const ref = await db.collection("renovaciones").add(doc);
@@ -346,8 +346,8 @@ app.post("/rev/renovacion", revAuth, async (req, res) => {
       `━━━━━━━━━━━━━━`,
       `👤 Socio: ${cleanTg(socio, 80)}`,
       `🙍 Cliente: ${cleanTg(doc.cliente || "—", 120)}`,
-      `📦 Servicio: ${cleanTg(doc.servicio || "—", 120)}`,
-      doc.renovado ? `📅 Nueva fecha: ${cleanTg(doc.nuevaFecha || "—", 30)}` : "",
+      `📦 Servicios: ${doc.servicios.map(x=>x.servicio||('Servicio '+(x.servicioIndex+1))).join(', ')}`,
+      doc.renovado ? `📅 Nueva fecha: ${cleanTg(doc.nuevaFecha || "—", 30)} · ${doc.renovadosCantidad} renovado(s)` : "",
       doc.monto ? `💵 Pago: Lps. ${doc.monto}` : "",
       doc.quien ? `🔁 Renovó: ${cleanTg(doc.quien, 80)}` : "",
       com ? `📝 Nota: ${cleanTg(com, 260)}` : "",
@@ -357,7 +357,7 @@ app.post("/rev/renovacion", revAuth, async (req, res) => {
     const ids = await getAdminChatIds();
     await Promise.all(ids.map((id) => sendTelegramImageSmart(id, imagenObj, cap)));
 
-    res.json({ ok: true, id: ref.id, imagenUrl, renovado: doc.renovado, nuevaFecha: doc.nuevaFecha });
+    res.json({ ok: true, id: ref.id, imagenUrl, renovado: doc.renovado, renovadosCantidad:doc.renovadosCantidad, nuevaFecha: doc.nuevaFecha });
   } catch (e) {
     console.error("rev/renovacion", e);
     res.status(e.status || 500).json({ error: e.publicError || "server", detail: e.message });

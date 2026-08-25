@@ -1,6 +1,11 @@
 /* Panel de Socios · perfil, ranking y gamificación compartida */
-const { revAuth } = require("./index_09_api_auth");
-const { db, admin } = require("./index_01_core");
+const { revAuth, revAdminAuth } = require("./index_09_api_auth");
+const { db, admin, bot, SUPER_ADMIN } = require("./index_01_core");
+const RECOMPENSAS = {
+  Diamante:[{id:"hbo_1m",nombre:"HBO Max · 1 mes"},{id:"disney_sin_espn_1m",nombre:"Disney sin ESPN · 1 mes"},{id:"canva_1m",nombre:"Canva · 1 mes"}],
+  Leyenda:[{id:"prime_1m",nombre:"Prime Video · 1 mes"},{id:"duolingo_1m",nombre:"Duolingo · 1 mes"},{id:"crunchyroll_1m",nombre:"Crunchyroll · 1 mes"}],
+  Inmortal:[{id:"descuento_20",nombre:"20% de descuento"},{id:"gemini_1m",nombre:"Gemini Pro · 1 mes"},{id:"netflix_15d",nombre:"Netflix · 15 días"}],
+};
 
 function dateMs(v) {
   if (!v) return 0;
@@ -57,7 +62,9 @@ module.exports = function mountGamificacion(app) {
         { id:"cursos", icon:"🎓", nombre:"Socio preparado", activa:me.cursos>=1, detalle:"Completó un curso" },
         { id:"inmortal", icon:"👑", nombre:"Inmortal", activa:me.ventas>=26, detalle:"Alcanzó 26 ventas" },
       ] : [];
-      res.json({ ok:true, perfil:me, ranking:ranking.slice(0,50), insignias, catalogoActualizadoAt });
+      const claimSnap=await db.collection("recompensas_socios").where("socio_norm","==",String(req.rev.nombre_norm||"").toLowerCase()).get();
+      const solicitudes=claimSnap.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>dateMs(b.createdAt)-dateMs(a.createdAt));
+      res.json({ ok:true, perfil:me, insignias, catalogoActualizadoAt, recompensas:RECOMPENSAS[me?.nivel]||[], solicitudes });
     } catch (e) { console.error("rev/gamificacion",e); res.status(500).json({error:"server"}); }
   });
 
@@ -78,4 +85,20 @@ module.exports = function mountGamificacion(app) {
       res.json({ok:true,cursoId});
     } catch(e){console.error("rev/curso-completado",e);res.status(500).json({error:"server"});}
   });
+  app.post("/rev/recompensa", revAuth, async (req,res) => {
+    try {
+      const [revDoc,cliSnap]=await Promise.all([db.collection("revendedores").doc(req.rev.id).get(),db.collection("clientes").where("vendedor_norm","==",req.rev.nombre_norm).get()]);
+      const ventas=cliSnap.docs.reduce((n,d)=>n+(Array.isArray((d.data()||{}).servicios)?d.data().servicios.length:0),0),lvl=nivel(ventas);
+      const opciones=RECOMPENSAS[lvl]||[],op=opciones.find(x=>x.id===String(req.body?.recompensaId||""));
+      if(!op)return res.status(400).json({error:"recompensa_no_disponible"});
+      const anterior=await db.collection("recompensas_socios").where("socio_norm","==",req.rev.nombre_norm).get();
+      if(anterior.docs.some(d=>String((d.data()||{}).nivel)===lvl))return res.status(409).json({error:"nivel_ya_reclamado"});
+      const doc={socio:req.rev.nombre||req.rev.nombre_norm,socio_norm:req.rev.nombre_norm,nivel:lvl,ventas,recompensaId:op.id,recompensa:op.nombre,estado:"pendiente",createdAt:admin.firestore.FieldValue.serverTimestamp()};
+      const ref=await db.collection("recompensas_socios").add(doc);
+      if(bot&&SUPER_ADMIN)bot.sendMessage(SUPER_ADMIN,`🎁 RECOMPENSA SOLICITADA\nSocio: ${doc.socio}\nNivel: ${lvl}\nPremio: ${op.nombre}\nVentas: ${ventas}\nRef: ${ref.id.slice(-6)}`).catch(()=>{});
+      res.json({ok:true,id:ref.id,...doc});
+    }catch(e){console.error("rev/recompensa",e);res.status(500).json({error:"server"});}
+  });
+  app.get("/rev/admin/recompensas",revAdminAuth,async(req,res)=>{try{const snap=await db.collection("recompensas_socios").get();const items=snap.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>dateMs(b.createdAt)-dateMs(a.createdAt));res.json({ok:true,recompensas:items})}catch(e){res.status(500).json({error:"server"})}});
+  app.patch("/rev/admin/recompensas/:id",revAdminAuth,async(req,res)=>{try{const estado=String(req.body?.estado||"");if(!["pendiente","entregada","rechazada"].includes(estado))return res.status(400).json({error:"estado_invalido"});const ref=db.collection("recompensas_socios").doc(req.params.id),snap=await ref.get();if(!snap.exists)return res.status(404).json({error:"no_existe"});await ref.update({estado,updatedAt:admin.firestore.FieldValue.serverTimestamp()});res.json({ok:true,id:ref.id,estado})}catch(e){res.status(500).json({error:"server"})}});
 };
