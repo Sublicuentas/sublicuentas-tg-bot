@@ -20,6 +20,7 @@ const path = require("path");
 
 const core = require("./index_01_core");
 const utils = require("./index_02_utils_roles");
+const { registrarEventoSorteosSeguro } = require("./index_14_sorteos");
 
 const { bot, admin, db, PLATAFORMAS } = core;
 
@@ -1244,6 +1245,15 @@ async function addServicioTx(clientId, servicio = {}) {
 
   cacheInvalidatePrefix(`clientes:doc:${id}`);
 
+  // Sorteos: boleto automático por compra nueva. eventoId = compraId, estable
+  // y único por servicio agregado, así un reintento nunca duplica boletos.
+  try {
+    await registrarEventoSorteosSeguro({
+      tipo: "compra", clientId: id, eventoId: `compra:${compra.compraId}`,
+      clienteNombre: resultado.nombreTitular || "", origen: "Telegram"
+    });
+  } catch (_) {}
+
   // ✅ Registrar en historial
   await registrarEventoHistorial(id, {
     tipo: "servicio_agregado",
@@ -1524,6 +1534,17 @@ async function renovarServicioTx(clientId, idx, { dias = 0, fechaExacta = "", co
     return { servicios, anterior, siguiente, actualIdx, fechaAnterior, fechaNueva, nombreTitular: cliente.nombrePerfil || "" };
   });
   cacheInvalidatePrefix(`clientes:doc:${id}`);
+
+  // Sorteos: boleto automático por renovación real. eventoId = compraId+fecha
+  // nueva, así un reintento del mismo guardado nunca duplica boletos.
+  try {
+    await registrarEventoSorteosSeguro({
+      tipo: "renovacion", clientId: id,
+      eventoId: `renov:${resultado.siguiente.compraId || idx}:${resultado.fechaNueva}`,
+      clienteNombre: resultado.nombreTitular || "", origen: "Telegram"
+    });
+  } catch (_) {}
+
   await registrarEventoHistorial(id, {
     tipo: "servicio_renovado",
     descripcion: `Se renovó ${humanPlataforma(resultado.siguiente.plataforma || "")}: ${resultado.fechaAnterior || "-"} → ${resultado.fechaNueva}`,
@@ -1539,15 +1560,31 @@ async function renovarTodosServiciosTx(clientId, { dias = 0, fechaExacta = "" } 
   const id = String(clientId || "").trim();
   const resultado = await mutarServiciosClienteTx(id, ({ cliente, servicios }) => {
     if (!servicios.length) throw new Error("Este cliente no tiene servicios.");
+    const cambios = [];
     const siguientes = servicios.map((s) => {
-      const base = isFechaDMY(String(s?.fechaRenovacion || "")) ? String(s.fechaRenovacion) : hoyDMY();
+      const fechaAnterior = String(s?.fechaRenovacion || "");
+      const base = isFechaDMY(fechaAnterior) ? fechaAnterior : hoyDMY();
       const fechaNueva = fechaExacta ? String(fechaExacta || "").trim() : addDaysDMY(base, Number(dias || 0));
       if (!isFechaDMY(fechaNueva)) throw new Error("Fecha inválida.");
+      cambios.push({ compraId: s?.compraId || "", fechaAnterior, fechaNueva });
       return { ...(s || {}), fechaRenovacion: fechaNueva };
     });
-    return { servicios: siguientes, total: siguientes.length, fechaExacta: String(fechaExacta || ""), nombreTitular: cliente.nombrePerfil || "" };
+    return { servicios: siguientes, total: siguientes.length, cambios, fechaExacta: String(fechaExacta || ""), nombreTitular: cliente.nombrePerfil || "" };
   });
   cacheInvalidatePrefix(`clientes:doc:${id}`);
+
+  // Sorteos: un boleto automático por cada servicio realmente renovado
+  // (fecha distinta a la anterior) dentro de esta renovación masiva.
+  for (const cambio of resultado.cambios || []) {
+    if (!cambio.compraId || cambio.fechaNueva === cambio.fechaAnterior) continue;
+    try {
+      await registrarEventoSorteosSeguro({
+        tipo: "renovacion", clientId: id, eventoId: `renov:${cambio.compraId}:${cambio.fechaNueva}`,
+        clienteNombre: resultado.nombreTitular || "", origen: "Telegram"
+      });
+    } catch (_) {}
+  }
+
   await registrarEventoHistorial(id, {
     tipo: "servicios_renovados",
     descripcion: `Se renovaron ${resultado.total} servicio(s)${resultado.fechaExacta ? ` a ${resultado.fechaExacta}` : ` por ${Number(dias || 0)} días`}`
