@@ -40,6 +40,7 @@ function vendorGroup(value){
   if(['sublicuentas','sublicuenta','naara'].includes(raw))return 'sublicuentas';
   return raw;
 }
+function vendorEligible(value){return ['sublicuentas','relojes'].includes(vendorGroup(value));}
 function iso(value){const date=new Date(clean(value,40));return Number.isNaN(date.getTime())?'':date.toISOString();}
 function monthHonduras(){
   const parts=new Intl.DateTimeFormat('en-CA',{timeZone:'America/Tegucigalpa',year:'numeric',month:'2-digit'}).formatToParts(new Date());
@@ -124,7 +125,8 @@ async function registrarEventoSorteos(rawEvent={}){
   if(!type||!clientId||!eventId)return {ok:false,omitido:'evento_incompleto',creados:0};
   const clientSnap=await db.collection('clientes').doc(clientId).get();
   if(!clientSnap.exists)return {ok:false,omitido:'cliente_no_existe',creados:0};
-  const client=clientSnap.data()||{},vendor=clean(rawEvent.vendedor||client.vendedor,80),vendorNorm=norm(rawEvent.vendedorNorm||client.vendedor_norm||vendor);
+  const client=clientSnap.data()||{},vendor=clean(client.vendedor||rawEvent.vendedor,80),vendorNorm=vendorGroup(client.vendedor_norm||client.vendedor||rawEvent.vendedorNorm||rawEvent.vendedor);
+  if(!vendorEligible(vendorNorm))return {ok:true,omitido:'vendedor_no_elegible',creados:0};
   const event={tipo:type,clientId,eventoId:eventId,clienteNombre:clean(rawEvent.clienteNombre||client.nombrePerfil||client.nombre||'Cliente',120),
     telefono:clean(rawEvent.telefono||client.telefono,40),vendedor:vendor,vendedorNorm:vendorNorm,origen:clean(rawEvent.origen||'Telegram',80)};
   const loyalty=await updateLoyalty({...event,ciclosOro:rawEvent.ciclosOro});
@@ -144,4 +146,4 @@ async function registrarEventoSorteosSeguro(event={}){
   catch(error){console.error('SORTEOS_EVENT_ERROR',error?.message||error);return {ok:false,creados:0,error:String(error?.message||error||'Error de sorteos')};}
 }
 
-module.exports={DEFAULT_RULES,dateKey,eventIdFor,registrarEventoSorteos,registrarEventoSorteosSeguro};
+module.exports={DEFAULT_RULES,dateKey,eventIdFor,vendorGroup,vendorEligible,registrarEventoSorteos,registrarEventoSorteosSeguro};
