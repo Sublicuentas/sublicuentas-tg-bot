@@ -30,6 +30,7 @@ const {
 
 // Reusa Firebase ya inicializado en el core (no arranca el bot)
 const { db, PORT, bot, SUPER_ADMIN, PLATAFORMAS } = require("./index_01_core");
+const { registrarEventoSorteosSeguro } = require("./index_14_sorteos");
 const admin = require("firebase-admin");
 const STORAGE_BUCKET_CANDIDATES = Array.from(new Set([
   process.env.STORAGE_BUCKET,
@@ -93,14 +94,26 @@ async function revActualizarFechaCliente({ clienteId, socioNorm, servicioIndex, 
   svc.ultimaRenovacionAt = new Date();
   servicios[ix] = svc;
   await ref.update({ servicios, updatedAt: new Date(), ultimaRenovacionAt: new Date() });
+  const fechaFinal = revFechaISO(nf);
+  const fechaAnterior = anterior ? revFechaISO(anterior) : "";
+  const compraEvento = String(svc.compraId || `servicio-${ix}`);
+  const sorteo = fechaFinal !== fechaAnterior
+    ? await registrarEventoSorteosSeguro({
+      tipo: "renovacion", clientId: id, compraId: compraEvento, fechaEvento: fechaFinal,
+      eventoId: `renov:${compraEvento}:${fechaFinal}`,
+      clienteNombre: c.nombrePerfil || c.nombre || "Cliente", telefono: c.telefono || "",
+      vendedor: c.vendedor || c.vendedor_norm || socioNorm || "", origen: "Panel de socios"
+    })
+    : { ok: true, creados: 0, omitido: "fecha_sin_cambio" };
   return {
     actualizado: true,
     clienteId: id,
     servicioIndex: ix,
     campo,
-    fechaAnterior: anterior ? revFechaISO(anterior) : "",
-    nuevaFecha: revFechaISO(nf),
+    fechaAnterior,
+    nuevaFecha: fechaFinal,
     servicio: svc.plataforma || svc.servicio || svc.nombre || svc.cuenta || "Servicio",
+    sorteo,
   };
 }
 

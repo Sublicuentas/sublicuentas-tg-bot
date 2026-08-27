@@ -1245,14 +1245,13 @@ async function addServicioTx(clientId, servicio = {}) {
 
   cacheInvalidatePrefix(`clientes:doc:${id}`);
 
-  // Sorteos: boleto automático por compra nueva. eventoId = compraId, estable
-  // y único por servicio agregado, así un reintento nunca duplica boletos.
-  try {
-    await registrarEventoSorteosSeguro({
-      tipo: "compra", clientId: id, eventoId: `compra:${compra.compraId}`,
-      clienteNombre: resultado.nombreTitular || "", origen: "Telegram"
-    });
-  } catch (_) {}
+  // Sorteos: el módulo seguro nunca interrumpe la compra si Firestore falla.
+  const sorteo = await registrarEventoSorteosSeguro({
+    tipo: "compra", clientId: id, compraId: compra.compraId,
+    eventoId: `compra:${compra.compraId}`,
+    clienteNombre: resultado.cliente?.nombrePerfil || resultado.cliente?.nombre || resultado.nombreTitular || "Cliente",
+    telefono: resultado.cliente?.telefono || "", vendedor: resultado.cliente?.vendedor || "", origen: "Telegram"
+  });
 
   // ✅ Registrar en historial
   await registrarEventoHistorial(id, {
@@ -1266,7 +1265,7 @@ async function addServicioTx(clientId, servicio = {}) {
     fechaRenovacion,
   });
 
-  return { ok: true, servicio: compra, servicioIndex: resultado.servicioIndex, totalPerfiles: compra.perfiles.length, sync };
+  return { ok: true, servicio: compra, servicioIndex: resultado.servicioIndex, totalPerfiles: compra.perfiles.length, sync, sorteo };
 }
 
 async function patchServicio(clientId, idx, patch = {}, compraId = "") {
@@ -1535,15 +1534,16 @@ async function renovarServicioTx(clientId, idx, { dias = 0, fechaExacta = "", co
   });
   cacheInvalidatePrefix(`clientes:doc:${id}`);
 
-  // Sorteos: boleto automático por renovación real. eventoId = compraId+fecha
-  // nueva, así un reintento del mismo guardado nunca duplica boletos.
-  try {
-    await registrarEventoSorteosSeguro({
-      tipo: "renovacion", clientId: id,
-      eventoId: `renov:${resultado.siguiente.compraId || idx}:${resultado.fechaNueva}`,
-      clienteNombre: resultado.nombreTitular || "", origen: "Telegram"
-    });
-  } catch (_) {}
+  // Solo un cambio real de fecha genera boletos; editar sin moverla no cuenta.
+  const compraEvento = String(resultado.siguiente.compraId || `servicio-${resultado.actualIdx}`);
+  const sorteo = resultado.fechaNueva !== resultado.fechaAnterior
+    ? await registrarEventoSorteosSeguro({
+      tipo: "renovacion", clientId: id, compraId: compraEvento, fechaEvento: resultado.fechaNueva,
+      eventoId: `renov:${compraEvento}:${resultado.fechaNueva}`,
+      clienteNombre: resultado.cliente?.nombrePerfil || resultado.cliente?.nombre || resultado.nombreTitular || "Cliente",
+      telefono: resultado.cliente?.telefono || "", vendedor: resultado.cliente?.vendedor || "", origen: "Telegram"
+    })
+    : { ok: true, creados: 0, omitido: "fecha_sin_cambio" };
 
   await registrarEventoHistorial(id, {
     tipo: "servicio_renovado",
@@ -1553,7 +1553,7 @@ async function renovarServicioTx(clientId, idx, { dias = 0, fechaExacta = "", co
     fechaAnterior: resultado.fechaAnterior,
     fechaRenovacion: resultado.fechaNueva
   });
-  return { ok: true, servicio: resultado.siguiente, servicioIndex: resultado.actualIdx, fechaAnterior: resultado.fechaAnterior, fechaNueva: resultado.fechaNueva };
+  return { ok: true, servicio: resultado.siguiente, servicioIndex: resultado.actualIdx, fechaAnterior: resultado.fechaAnterior, fechaNueva: resultado.fechaNueva, sorteo };
 }
 
 async function renovarTodosServiciosTx(clientId, { dias = 0, fechaExacta = "" } = {}) {
@@ -1561,12 +1561,12 @@ async function renovarTodosServiciosTx(clientId, { dias = 0, fechaExacta = "" } 
   const resultado = await mutarServiciosClienteTx(id, ({ cliente, servicios }) => {
     if (!servicios.length) throw new Error("Este cliente no tiene servicios.");
     const cambios = [];
-    const siguientes = servicios.map((s) => {
+    const siguientes = servicios.map((s, index) => {
       const fechaAnterior = String(s?.fechaRenovacion || "");
       const base = isFechaDMY(fechaAnterior) ? fechaAnterior : hoyDMY();
       const fechaNueva = fechaExacta ? String(fechaExacta || "").trim() : addDaysDMY(base, Number(dias || 0));
       if (!isFechaDMY(fechaNueva)) throw new Error("Fecha inválida.");
-      cambios.push({ compraId: s?.compraId || "", fechaAnterior, fechaNueva });
+      cambios.push({ compraId: s?.compraId || `servicio-${index}`, fechaAnterior, fechaNueva });
       return { ...(s || {}), fechaRenovacion: fechaNueva };
     });
     return { servicios: siguientes, total: siguientes.length, cambios, fechaExacta: String(fechaExacta || ""), nombreTitular: cliente.nombrePerfil || "" };
@@ -1575,21 +1575,22 @@ async function renovarTodosServiciosTx(clientId, { dias = 0, fechaExacta = "" } 
 
   // Sorteos: un boleto automático por cada servicio realmente renovado
   // (fecha distinta a la anterior) dentro de esta renovación masiva.
+  const sorteos = [];
   for (const cambio of resultado.cambios || []) {
-    if (!cambio.compraId || cambio.fechaNueva === cambio.fechaAnterior) continue;
-    try {
-      await registrarEventoSorteosSeguro({
-        tipo: "renovacion", clientId: id, eventoId: `renov:${cambio.compraId}:${cambio.fechaNueva}`,
-        clienteNombre: resultado.nombreTitular || "", origen: "Telegram"
-      });
-    } catch (_) {}
+    if (cambio.fechaNueva === cambio.fechaAnterior) continue;
+    sorteos.push(await registrarEventoSorteosSeguro({
+      tipo: "renovacion", clientId: id, compraId: cambio.compraId, fechaEvento: cambio.fechaNueva,
+      eventoId: `renov:${cambio.compraId}:${cambio.fechaNueva}`,
+      clienteNombre: resultado.cliente?.nombrePerfil || resultado.cliente?.nombre || resultado.nombreTitular || "Cliente",
+      telefono: resultado.cliente?.telefono || "", vendedor: resultado.cliente?.vendedor || "", origen: "Telegram"
+    }));
   }
 
   await registrarEventoHistorial(id, {
     tipo: "servicios_renovados",
     descripcion: `Se renovaron ${resultado.total} servicio(s)${resultado.fechaExacta ? ` a ${resultado.fechaExacta}` : ` por ${Number(dias || 0)} días`}`
   });
-  return { ok: true, total: resultado.total, servicios: resultado.servicios };
+  return { ok: true, total: resultado.total, servicios: resultado.servicios, sorteos };
 }
 
 async function eliminarServiciosTx(clientId, referencias = []) {

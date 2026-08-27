@@ -33,19 +33,18 @@ const {
 } = require("./index_09_api_auth");
 
 const {
-  db, admin, ExcelJS, PORT, bot, SUPER_ADMIN,
-  CLIENTES_COLLECTION,
+  db, ExcelJS, PORT, bot, SUPER_ADMIN,
   FIN_BANCOS, FIN_MOTIVOS_EGRESO, PLATAFORMAS,
   cacheInvalidatePrefix, getCoreHealth,
 } = require("./index_01_core");
 
 const {
-  isAdmin, logErr, hoyDMY, isFechaDMY,
+  isAdmin, logErr, hoyDMY,
 } = require("./index_02_utils_roles");
 
 const {
   getCliente, buscarClienteRobusto, obtenerRenovacionesPorFecha,
-  patchServicio, eliminarServicioTx,
+  patchServicio, eliminarServicioTx, renovarServicioTx,
 } = require("./index_03_clientes_crm");
 
 const { buscarInventarioPorCorreo } = require("./index_04_inventario_correos");
@@ -90,32 +89,9 @@ async function generarMensajeCobroIA({ nombre, plataforma, precio, fecha }) {
   return texto;
 }
 
-// Copia EXACTA de addDaysDMY del bot (mismo formato DD/MM/AAAA)
-function addDaysDMY(baseDmy = "", days = 0) {
-  if (!isFechaDMY(baseDmy)) return hoyDMY();
-  const [dd, mm, yyyy] = String(baseDmy).split("/").map(Number);
-  const dt = new Date(Date.UTC(yyyy, mm - 1, dd, 12, 0, 0));
-  dt.setUTCDate(dt.getUTCDate() + Number(days || 0));
-  const d = String(dt.getUTCDate()).padStart(2, "0");
-  const m = String(dt.getUTCMonth() + 1).padStart(2, "0");
-  const y = String(dt.getUTCFullYear());
-  return `${d}/${m}/${y}`;
-}
-
 // Renovar un servicio — MISMA lógica que el handler cli:ren:auto del bot
 async function renovarServicio(clientId, idx, dias) {
-  const ref = db.collection(CLIENTES_COLLECTION).doc(String(clientId || ""));
-  const doc = await ref.get();
-  if (!doc.exists) throw new Error("Cliente no encontrado");
-  const c = doc.data() || {};
-  const servicios = Array.isArray(c.servicios) ? c.servicios : [];
-  if (idx < 0 || idx >= servicios.length) throw new Error("Servicio inválido");
-  const base = isFechaDMY(String(servicios[idx].fechaRenovacion || ""))
-    ? String(servicios[idx].fechaRenovacion) : hoyDMY();
-  servicios[idx] = { ...servicios[idx], fechaRenovacion: addDaysDMY(base, dias) };
-  await ref.set({ servicios, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
-  cacheInvalidatePrefix(`clientes:doc:${clientId}`);
-  return servicios[idx];
+  return renovarServicioTx(String(clientId || ""), Number(idx), { dias: Number(dias || 0) });
 }
 
 const ok = (res, data) => res.json({ ok: true, ...data });
@@ -182,8 +158,8 @@ app.get("/api/clientes/:id", wrap(async (req, res) => {
 app.post("/api/clientes/:id/renovar", wrap(async (req, res) => {
   const idx = Number(req.body.idx);
   const dias = Number(req.body.dias) === 31 ? 31 : 30;
-  const servicio = await renovarServicio(req.params.id, idx, dias);
-  ok(res, { servicio, mensaje: `Renovado +${dias} días` });
+  const resultado = await renovarServicio(req.params.id, idx, dias);
+  ok(res, { servicio: resultado.servicio, sorteo: resultado.sorteo, mensaje: `Renovado +${dias} días` });
 }));
 // Editar un servicio del cliente
 app.patch("/api/clientes/:id/servicio/:idx", wrap(async (req, res) => {
