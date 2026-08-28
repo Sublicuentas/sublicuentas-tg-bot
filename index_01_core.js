@@ -127,14 +127,24 @@ const PLATAFORMAS = {
   deezer:      { key: "deezer",      nombre: "Deezer",          categoria: "musica",    acceso: "correo_clave",     capacidadDefault: 1,  requiereCorreo: true,  requiereClave: true,  requierePin: false, permiteUsuario: false },
   oleadatv1:   { key: "oleadatv1",   nombre: "Oleada 1",        categoria: "iptv",      acceso: "usuario_clave",    capacidadDefault: 1,  requiereCorreo: false, requiereClave: true,  requierePin: false, permiteUsuario: true  },
   oleadatv3:   { key: "oleadatv3",   nombre: "Oleada 3",        categoria: "iptv",      acceso: "usuario_clave",    capacidadDefault: 3,  requiereCorreo: false, requiereClave: true,  requierePin: false, permiteUsuario: true  },
+  latintv1:    { key: "latintv1",    nombre: "LatinTV (1 dispositivo)",  categoria: "iptv", acceso: "usuario_clave", capacidadDefault: 1, requiereCorreo: false, requiereClave: true, requierePin: false, permiteUsuario: true },
+  latintv2:    { key: "latintv2",    nombre: "LatinTV (2 dispositivos)", categoria: "iptv", acceso: "usuario_clave", capacidadDefault: 2, requiereCorreo: false, requiereClave: true, requierePin: false, permiteUsuario: true },
+  latintv3:    { key: "latintv3",    nombre: "LatinTV (3 dispositivos)", categoria: "iptv", acceso: "usuario_clave", capacidadDefault: 3, requiereCorreo: false, requiereClave: true, requierePin: false, permiteUsuario: true },
+  latintv4:    { key: "latintv4",    nombre: "LatinTV (4 dispositivos)", categoria: "iptv", acceso: "usuario_clave", capacidadDefault: 4, requiereCorreo: false, requiereClave: true, requierePin: false, permiteUsuario: true },
+  liontv1:     { key: "liontv1",     nombre: "LionTV (1 dispositivo)",   categoria: "iptv", acceso: "usuario_clave", capacidadDefault: 1, requiereCorreo: false, requiereClave: true, requierePin: false, permiteUsuario: true },
+  liontv2:     { key: "liontv2",     nombre: "LionTV (2 dispositivos)",  categoria: "iptv", acceso: "usuario_clave", capacidadDefault: 2, requiereCorreo: false, requiereClave: true, requierePin: false, permiteUsuario: true },
+  liontv3:     { key: "liontv3",     nombre: "LionTV (3 dispositivos)",  categoria: "iptv", acceso: "usuario_clave", capacidadDefault: 3, requiereCorreo: false, requiereClave: true, requierePin: false, permiteUsuario: true },
+  liontv5:     { key: "liontv5",     nombre: "LionTV (5 dispositivos)",  categoria: "iptv", acceso: "usuario_clave", capacidadDefault: 5, requiereCorreo: false, requiereClave: true, requierePin: false, permiteUsuario: true },
+  // Compatibilidad con fichas antiguas sin marca. Ya no se ofrecen para altas nuevas.
   iptv1:       { key: "iptv1",       nombre: "IPTV 1",          categoria: "iptv",      acceso: "usuario_clave",    capacidadDefault: 1,  requiereCorreo: false, requiereClave: true,  requierePin: false, permiteUsuario: true  },
   iptv3:       { key: "iptv3",       nombre: "IPTV 3",          categoria: "iptv",      acceso: "usuario_clave",    capacidadDefault: 3,  requiereCorreo: false, requiereClave: true,  requierePin: false, permiteUsuario: true  },
   iptv4:       { key: "iptv4",       nombre: "IPTV 4",          categoria: "iptv",      acceso: "usuario_clave",    capacidadDefault: 4,  requiereCorreo: false, requiereClave: true,  requierePin: false, permiteUsuario: true  },
   canva:       { key: "canva",       nombre: "Canva",           categoria: "diseno_ia", acceso: "solo_correo",      capacidadDefault: 1,  requiereCorreo: true,  requiereClave: false, requierePin: false, permiteUsuario: false },
-  gemini:      { key: "gemini",      nombre: "Gemini",          categoria: "diseno_ia", acceso: "solo_correo",      capacidadDefault: 1,  requiereCorreo: true,  requiereClave: false, requierePin: false, permiteUsuario: false },
+  gemini:      { key: "gemini",      nombre: "Gemini Pro",      categoria: "diseno_ia", acceso: "solo_correo",      capacidadDefault: 1,  requiereCorreo: true,  requiereClave: false, requierePin: false, permiteUsuario: false },
   chatgpt:     { key: "chatgpt",     nombre: "ChatGPT",         categoria: "diseno_ia", acceso: "solo_correo",      capacidadDefault: 1,  requiereCorreo: true,  requiereClave: false, requierePin: false, permiteUsuario: false },
   duolingo:    { key: "duolingo",    nombre: "Duolingo",        categoria: "diseno_ia", acceso: "solo_correo",      capacidadDefault: 1,  requiereCorreo: true,  requiereClave: false, requierePin: false, permiteUsuario: false },
   office:      { key: "office",      nombre: "Microsoft 365",   categoria: "diseno_ia", acceso: "correo_clave",     capacidadDefault: 1,  requiereCorreo: true,  requiereClave: true,  requierePin: false, permiteUsuario: false },
+  office2021:  { key: "office2021",  nombre: "Office 2021",     categoria: "diseno_ia", acceso: "correo_clave",     capacidadDefault: 1,  requiereCorreo: true,  requiereClave: true,  requierePin: false, permiteUsuario: false },
 };
 
 const DEFAULT_TOTALS = Object.fromEntries(

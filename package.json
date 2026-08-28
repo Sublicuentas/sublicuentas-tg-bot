@@ -8,7 +8,9 @@
     "node": "18.x"
   },
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "migracion:precios:preview": "node migrar_precios_socios_202608.js --preview",
+    "migracion:precios:apply": "node migrar_precios_socios_202608.js --apply"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

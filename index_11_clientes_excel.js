@@ -123,8 +123,12 @@ function plataformaLabel(v = "") {
     netflix: "Netflix", vipnetflix: "Netflix VIP", disneyp: "Disney Premium", disneys: "Disney Premium sin ESPN",
     hbomax: "HBO Max", primevideo: "Prime Video", paramount: "Paramount+", crunchyroll: "Crunchyroll",
     vix: "Vix", appletv: "Apple TV+", universal: "Universal+", spotify: "Spotify",
-    youtube: "YouTube Premium", deezer: "Deezer", canva: "Canva", gemini: "Gemini", chatgpt: "ChatGPT",
-    oleadatv1: "Oleada TV 1", oleadatv3: "Oleada TV 3", iptv1: "IPTV 1", iptv3: "IPTV 3", iptv4: "IPTV 4",
+    youtube: "YouTube Premium", deezer: "Deezer", canva: "Canva", gemini: "Gemini Pro", chatgpt: "ChatGPT",
+    office: "Office 365", office2021: "Office 2021",
+    oleadatv1: "Oleada TV 1", oleadatv3: "Oleada TV 3",
+    latintv1: "LatinTV 1", latintv2: "LatinTV 2", latintv3: "LatinTV 3", latintv4: "LatinTV 4",
+    liontv1: "LionTV 1", liontv2: "LionTV 2", liontv3: "LionTV 3", liontv5: "LionTV 5",
+    iptv1: "IPTV anterior 1", iptv3: "IPTV anterior 3", iptv4: "IPTV anterior 4",
   };
   return map[k] || safe(v) || "Servicio";
 }

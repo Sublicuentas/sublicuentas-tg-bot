@@ -52,6 +52,12 @@ function revAuth(req, res, next) {
   if (!token) return res.status(401).json({ error: "sin_token" });
   try {
     req.rev = jwt.verify(token, getJwtSecret());
+    // Los JWT emitidos antes de la corrección Geissel → Geisell conservan
+    // el nombre anterior hasta 30 días. Se canonizan en memoria para que la
+    // sesión siga viendo sus clientes durante la transición.
+    if (String(req.rev?.nombre_norm || "").trim().toLowerCase() === "geissel") {
+      req.rev = { ...req.rev, id: "geisell", nombre: "Geisell", nombre_norm: "geisell" };
+    }
     next();
   } catch (e) {
     return res.status(401).json({ error: "token_invalido" });

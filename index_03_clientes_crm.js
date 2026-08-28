@@ -56,6 +56,14 @@ const INVENTARIO_COLLECTION  = "inventario";
 const REVENDEDORES_COLLECTION= "revendedores";
 const HISTORIAL_COLLECTION   = "historial_clientes";
 
+const IPTV_USUARIO_KEYS_LOCAL = new Set([
+  "oleadatv1", "oleadatv3",
+  "latintv1", "latintv2", "latintv3", "latintv4",
+  "liontv1", "liontv2", "liontv3", "liontv5",
+  // Compatibilidad de solo lectura/edición con registros anteriores.
+  "iptv1", "iptv3", "iptv4",
+]);
+
 // ===============================
 // HELPERS GENERALES
 // ===============================
@@ -69,21 +77,24 @@ function humanPlataforma(key = "") {
     netflix:"Netflix Premium", vipnetflix:"Netflix VIP", disneyp:"Disney Premium", disneys:"Disney Premium sin ESPN",
     hbomax:"HBO Max", primevideo:"Prime Video", paramount:"Paramount+", crunchyroll:"Crunchyroll",
     vix:"Vix", appletv:"Apple TV", universal:"Universal+", spotify:"Spotify", youtube:"YouTube", office:"Microsoft 365",
-    deezer:"Deezer", canva:"Canva", gemini:"Gemini", chatgpt:"ChatGPT", duolingo:"Duolingo",
-    oleadatv1:"Oleada TV (1)", oleadatv3:"Oleada TV (3)", iptv1:"IPTV (1)", iptv3:"IPTV (3)", iptv4:"IPTV (4)",
+    deezer:"Deezer", canva:"Canva", gemini:"Gemini Pro", chatgpt:"ChatGPT", duolingo:"Duolingo", office2021:"Office 2021",
+    oleadatv1:"Oleada TV (1 dispositivo)", oleadatv3:"Oleada TV (3 dispositivos)",
+    latintv1:"LatinTV (1 dispositivo)", latintv2:"LatinTV (2 dispositivos)", latintv3:"LatinTV (3 dispositivos)", latintv4:"LatinTV (4 dispositivos)",
+    liontv1:"LionTV (1 dispositivo)", liontv2:"LionTV (2 dispositivos)", liontv3:"LionTV (3 dispositivos)", liontv5:"LionTV (5 dispositivos)",
+    iptv1:"IPTV anterior (1)", iptv3:"IPTV anterior (3)", iptv4:"IPTV anterior (4)",
   };
   return map[k] || String(key || "");
 }
 
 function iconPlataforma(key = "") {
   const k = normalizarPlataforma(key);
-  const map = { netflix:"📺", vipnetflix:"🔥", disneyp:"🏰", disneys:"🎬", hbomax:"🎞️", primevideo:"🎥", paramount:"💿", crunchyroll:"🍥", vix:"📱", appletv:"🍎", universal:"🌍", spotify:"🎵", youtube:"▶️", office:"📎", deezer:"🎧", canva:"🎨", gemini:"✨", chatgpt:"🤖", duolingo:"🦉", oleadatv1:"🌊", oleadatv3:"🌊", iptv1:"📡", iptv3:"📡", iptv4:"📡" };
+  const map = { netflix:"📺", vipnetflix:"🔥", disneyp:"🏰", disneys:"🎬", hbomax:"🎞️", primevideo:"🎥", paramount:"💿", crunchyroll:"🍥", vix:"📱", appletv:"🍎", universal:"🌍", spotify:"🎵", youtube:"▶️", office:"📎", deezer:"🎧", canva:"🎨", gemini:"✨", chatgpt:"🤖", duolingo:"🦉", oleadatv1:"🌊", oleadatv3:"🌊", latintv1:"📡", latintv2:"📡", latintv3:"📡", latintv4:"📡", liontv1:"🦁", liontv2:"🦁", liontv3:"🦁", liontv5:"🦁", iptv1:"📡", iptv3:"📡", iptv4:"📡" };
   return map[k] || "📦";
 }
 
 function getIdentLabelLocal(plataforma = "") {
   const p = normalizarPlataforma(plataforma);
-  return ["oleadatv1","oleadatv3","iptv1","iptv3","iptv4"].includes(p) ? "Usuario" : "Correo";
+  return IPTV_USUARIO_KEYS_LOCAL.has(p) ? "Usuario" : "Correo";
 }
 
 function platformConfigLocal(plataforma = "") {
@@ -113,7 +124,7 @@ function esSoloCorreoLocal(plataforma = "") {
 function getAccessTypeLabelLocal(plataforma = "") {
   const p = normalizarPlataforma(plataforma);
   if (esSoloCorreoLocal(p)) return "Solo correo";
-  if (["oleadatv1","oleadatv3","iptv1","iptv3","iptv4"].includes(p)) return "Usuario + clave";
+  if (IPTV_USUARIO_KEYS_LOCAL.has(p)) return "Usuario + clave";
   if (requiereClaveLocal(p) && requierePinLocal(p)) return "Correo + clave + PIN";
   if (requiereClaveLocal(p)) return "Correo + clave";
   if (requierePinLocal(p)) return "Correo + PIN";
@@ -242,14 +253,14 @@ function validateIdentByPlatformLocal(plataforma = "", ident = "") {
   const p = normalizarPlataforma(plataforma);
   const v = String(ident || "").trim();
   if (!v) return false;
-  if (["oleadatv1","oleadatv3","iptv1","iptv3","iptv4"].includes(p)) return v.length >= 3 && !/\s/.test(v);
+  if (IPTV_USUARIO_KEYS_LOCAL.has(p)) return v.length >= 3 && !/\s/.test(v);
   return isEmailLike(v);
 }
 
 function normalizeIdentByPlatformLocal(plataforma = "", ident = "") {
   const p = normalizarPlataforma(plataforma);
   const v = String(ident || "").trim();
-  return ["oleadatv1","oleadatv3","iptv1","iptv3","iptv4"].includes(p) ? v : v.toLowerCase();
+  return IPTV_USUARIO_KEYS_LOCAL.has(p) ? v : v.toLowerCase();
 }
 
 function docIdInventarioLocal(ident = "", plataforma = "") {
@@ -260,7 +271,7 @@ function docIdInventarioLocal(ident = "", plataforma = "") {
 
 function getTotalPorPlataformaLocal(plat = "") {
   const p = normalizarPlataforma(plat);
-  const map = { netflix:5, vipnetflix:1, disneyp:6, disneys:3, hbomax:5, primevideo:5, paramount:5, crunchyroll:5, vix:4, appletv:4, universal:4, spotify:1, youtube:1, deezer:1, oleadatv1:1, oleadatv3:3, iptv1:1, iptv3:3, iptv4:4, canva:1, gemini:1, chatgpt:1, duolingo:1, office:1 };
+  const map = { netflix:5, vipnetflix:1, disneyp:6, disneys:3, hbomax:5, primevideo:5, paramount:5, crunchyroll:5, vix:4, appletv:4, universal:4, spotify:1, youtube:1, deezer:1, oleadatv1:1, oleadatv3:3, latintv1:1, latintv2:2, latintv3:3, latintv4:4, liontv1:1, liontv2:2, liontv3:3, liontv5:5, iptv1:1, iptv3:3, iptv4:4, canva:1, gemini:1, chatgpt:1, duolingo:1, office:1, office2021:1 };
   return map[p] || 1;
 }
 
@@ -354,7 +365,7 @@ function dedupeClientes(rows = []) {
 
 function kbPlataformasWiz(prefix = "wiz:plat", clientId = null, idx = null) {
   const rows = [];
-  const items = PLATFORM_KEYS.map((k) => {
+  const items = PLATFORM_KEYS.filter((k) => !["iptv1", "iptv3", "iptv4"].includes(k)).map((k) => {
     let cb = `${prefix}:${k}`;
     if (clientId !== null && clientId !== undefined) cb += `:${clientId}`;
     if (idx !== null && idx !== undefined) cb += `:${idx}`;

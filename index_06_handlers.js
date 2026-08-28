@@ -31,6 +31,7 @@ const {
 // ✅ PIN de configuración inicial para /addvendedor y /resetpin (cierra el
 // hueco de "auto-claim" del panel de revendedores — ver index_09_api_auth.js)
 const { generarPinSetup } = require("./index_09_api_auth");
+const { obtenerCatalogoSocio, tarifaIdParaSocio } = require("./index_15_catalogo_socios");
 
 const {
   isAdmin,
@@ -235,9 +236,19 @@ function platMetaLocal(plataforma = "") {
   return PLATAFORMAS[p] || {};
 }
 
+function esPlataformaUsuarioLocal(plataforma = "") {
+  const p = normalizarPlataforma(plataforma);
+  return [
+    "oleadatv1", "oleadatv3",
+    "latintv1", "latintv2", "latintv3", "latintv4",
+    "liontv1", "liontv2", "liontv3", "liontv5",
+    "iptv1", "iptv3", "iptv4",
+  ].includes(p);
+}
+
 function getIdentLabelLocal(plataforma = "") {
   const p = normalizarPlataforma(plataforma);
-  if (["oleadatv1", "oleadatv3", "iptv1", "iptv3", "iptv4"].includes(p)) return "Usuario";
+  if (esPlataformaUsuarioLocal(p)) return "Usuario";
   return "Correo";
 }
 
@@ -262,7 +273,7 @@ function esSoloCorreoLocal(plataforma = "") {
 function getAccessTypeLabelLocal(plataforma = "") {
   const p = normalizarPlataforma(plataforma);
   if (esSoloCorreoLocal(p)) return "Solo correo";
-  if (["oleadatv1", "oleadatv3", "iptv1", "iptv3", "iptv4"].includes(p)) return "Usuario + clave";
+  if (esPlataformaUsuarioLocal(p)) return "Usuario + clave";
   if (requiereClaveLocal(p) && requierePinLocal(p)) return "Correo + clave + PIN";
   if (requiereClaveLocal(p)) return "Correo + clave";
   if (requierePinLocal(p)) return "Correo + PIN";
@@ -273,7 +284,7 @@ function validateIdentByPlatformLocal(plataforma = "", ident = "") {
   const p = normalizarPlataforma(plataforma);
   const v = String(ident || "").trim();
   if (!v) return false;
-  if (["oleadatv1", "oleadatv3", "iptv1", "iptv3", "iptv4"].includes(p)) {
+  if (esPlataformaUsuarioLocal(p)) {
     return v.length >= 3 && !/\s/.test(v);
   }
   return isEmailLike(v);
@@ -282,7 +293,7 @@ function validateIdentByPlatformLocal(plataforma = "", ident = "") {
 function normalizeIdentByPlatformLocal(plataforma = "", ident = "") {
   const p = normalizarPlataforma(plataforma);
   const v = String(ident || "").trim();
-  if (["oleadatv1", "oleadatv3", "iptv1", "iptv3", "iptv4"].includes(p)) {
+  if (esPlataformaUsuarioLocal(p)) {
     return v;
   }
   return v.toLowerCase();
@@ -696,14 +707,23 @@ function humanPlatLabelSyncLocal(key = "") {
     deezer: "Deezer",
     oleadatv1: "Oleada TV (1)",
     oleadatv3: "Oleada TV (3)",
-    iptv1: "IPTV (1)",
-    iptv3: "IPTV (3)",
-    iptv4: "IPTV (4)",
+    latintv1: "LatinTV (1 dispositivo)",
+    latintv2: "LatinTV (2 dispositivos)",
+    latintv3: "LatinTV (3 dispositivos)",
+    latintv4: "LatinTV (4 dispositivos)",
+    liontv1: "LionTV (1 dispositivo)",
+    liontv2: "LionTV (2 dispositivos)",
+    liontv3: "LionTV (3 dispositivos)",
+    liontv5: "LionTV (5 dispositivos)",
+    iptv1: "IPTV anterior (1)",
+    iptv3: "IPTV anterior (3)",
+    iptv4: "IPTV anterior (4)",
     canva: "Canva",
-    gemini: "Gemini",
+    gemini: "Gemini Pro",
     chatgpt: "ChatGPT",
     duolingo: "Duolingo",
     office: "Microsoft 365",
+    office2021: "Office 2021",
   };
   return labels[p] || String(key || "");
 }
@@ -727,6 +747,14 @@ function getTotalPorPlataformaLocal(plat = "") {
     deezer: 1,
     oleadatv1: 1,
     oleadatv3: 3,
+    latintv1: 1,
+    latintv2: 2,
+    latintv3: 3,
+    latintv4: 4,
+    liontv1: 1,
+    liontv2: 2,
+    liontv3: 3,
+    liontv5: 5,
     iptv1: 1,
     iptv3: 3,
     iptv4: 4,
@@ -735,6 +763,7 @@ function getTotalPorPlataformaLocal(plat = "") {
     chatgpt: 1,
     duolingo: 1,
     office: 1,
+    office2021: 1,
   };
   return map[p] || 1;
 }
@@ -1673,14 +1702,23 @@ function humanPlatAlertLocal(key = "") {
     deezer: "Deezer",
     oleadatv1: "Oleada 1",
     oleadatv3: "Oleada 3",
-    iptv1: "IPTV 1",
-    iptv3: "IPTV 3",
-    iptv4: "IPTV 4",
+    latintv1: "LatinTV 1",
+    latintv2: "LatinTV 2",
+    latintv3: "LatinTV 3",
+    latintv4: "LatinTV 4",
+    liontv1: "LionTV 1",
+    liontv2: "LionTV 2",
+    liontv3: "LionTV 3",
+    liontv5: "LionTV 5",
+    iptv1: "IPTV anterior 1",
+    iptv3: "IPTV anterior 3",
+    iptv4: "IPTV anterior 4",
     canva: "Canva",
-    gemini: "Gemini",
+    gemini: "Gemini Pro",
     chatgpt: "ChatGPT",
     duolingo: "Duolingo",
     office: "Microsoft 365",
+    office2021: "Office 2021",
   };
   return map[k] || String(key || "");
 }
@@ -3138,7 +3176,8 @@ bot.onText(/\/addvendedor\s+(\d+)\s+(.+)/i, async (msg, match) => {
   const userId = msg.from.id;
   if (!(await safeIsAdminLocal(userId))) return bot.sendMessage(chatId, "⛔ Solo admin puede usar este comando");
   const telegramId = String(match[1] || "").trim();
-  const nombre = String(match[2] || "").trim();
+  let nombre = String(match[2] || "").trim();
+  if (String(nombre).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim() === "geissel") nombre = "Geisell";
   if (!telegramId || !nombre) return bot.sendMessage(chatId, "⚠️ Uso:\n/addvendedor ID Nombre");
   const docId = String(nombre || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().replace(/\s+/g, " ") || String(Date.now());
   // ✅ PIN de un solo uso: sin esto, cualquiera que adivine el usuario (el
@@ -3147,6 +3186,7 @@ bot.onText(/\/addvendedor\s+(\d+)\s+(.+)/i, async (msg, match) => {
   await db.collection("revendedores").doc(docId).set(
     {
       nombre, nombre_norm: docId, telegramId: String(telegramId), activo: true, autoLastSent: "",
+      tarifaId: tarifaIdParaSocio({ nombre, nombre_norm: docId }),
       pinSetupHash, pinSetupCreatedAt: admin.firestore.FieldValue.serverTimestamp(),
       createdAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     },
@@ -4941,18 +4981,18 @@ Revise que el correo exista en inventario con esa plataforma o coloque la clave 
     }
 
     if (data === "vend:precios") {
-      const PRECIOS = [
-        { plat: "Netflix",      precio: "L. 270" }, { plat: "Disney+",     precio: "L. 120" },
-        { plat: "HBO Max",      precio: "L. 130" }, { plat: "Prime Video", precio: "L. 90"  },
-        { plat: "Paramount+",   precio: "L. 90"  }, { plat: "Crunchyroll", precio: "L. 90"  },
-        { plat: "Apple TV",     precio: "L. 90"  }, { plat: "Spotify",     precio: "L. 90"  },
-        { plat: "YouTube",      precio: "L. 90"  }, { plat: "Canva",       precio: "L. 90"  },
-        { plat: "ChatGPT",      precio: "L. 160" }, { plat: "Gemini",      precio: "L. 90"  },
-        { plat: "IPTV",         precio: "L. 150" },
-      ];
-      let txt = "💲 *LISTA DE PRECIOS — REVENDEDOR*\n\n";
-      PRECIOS.forEach(p => { txt += `• ${escMD(p.plat)}: *${escMD(p.precio)}*\n`; });
-      txt += "\n_Precios por perfil mensual._";
+      if (!vendOk) return bot.sendMessage(chatId, "⚠️ No está vinculado a un vendedor.");
+      const catalogo = await obtenerCatalogoSocio(db, vend);
+      let txt = `💲 *LISTA DE PRECIOS — ${escMD(vend.nombre || "REVENDEDOR")}*\n`;
+      for (const grupo of catalogo.grupos || []) {
+        txt += `\n*${escMD(grupo.cat || "Catálogo")}*\n`;
+        for (const it of grupo.items || []) {
+          const nombre = it.s ? `${it.n} · ${it.s}` : it.n;
+          const precio = it.p == null ? "Por comisión" : `Lps. ${Number(it.p)}`;
+          txt += `• ${escMD(nombre)}: *${escMD(precio)}*\n`;
+        }
+      }
+      txt += "\n_Catálogo sincronizado con el Panel de Socios._";
       return upsertPanel(chatId, txt, [[{ text: "🏠 Inicio", callback_data: "go:inicio" }]]);
     }
 

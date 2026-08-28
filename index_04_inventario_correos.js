@@ -56,17 +56,26 @@ function humanPlatSafe(key = "") {
     universal: "Universal+",
     spotify: "Spotify",
     office: "Office",
+    office2021: "Office 2021",
     office365: "Office 365",
     microsoft365: "Microsoft 365",
     youtube: "YouTube",
     deezer: "Deezer",
-    oleadatv1: "Oleada 1",
-    oleadatv3: "Oleada 3",
-    iptv1: "IPTV 1",
-    iptv3: "IPTV 3",
-    iptv4: "IPTV 4",
+    oleadatv1: "Oleada TV (1 dispositivo)",
+    oleadatv3: "Oleada TV (3 dispositivos)",
+    latintv1: "LatinTV (1 dispositivo)",
+    latintv2: "LatinTV (2 dispositivos)",
+    latintv3: "LatinTV (3 dispositivos)",
+    latintv4: "LatinTV (4 dispositivos)",
+    liontv1: "LionTV (1 dispositivo)",
+    liontv2: "LionTV (2 dispositivos)",
+    liontv3: "LionTV (3 dispositivos)",
+    liontv5: "LionTV (5 dispositivos)",
+    iptv1: "IPTV anterior (1)",
+    iptv3: "IPTV anterior (3)",
+    iptv4: "IPTV anterior (4)",
     canva: "Canva",
-    gemini: "Gemini",
+    gemini: "Gemini Pro",
     chatgpt: "ChatGPT",
     duolingo: "Duolingo",
   };
@@ -75,7 +84,12 @@ function humanPlatSafe(key = "") {
 
 function isUserPlatform(plataforma = "") {
   const p = normalizarPlataforma(plataforma);
-  return ["oleadatv1", "oleadatv3", "iptv1", "iptv3", "iptv4"].includes(p);
+  return [
+    "oleadatv1", "oleadatv3",
+    "latintv1", "latintv2", "latintv3", "latintv4",
+    "liontv1", "liontv2", "liontv3", "liontv5",
+    "iptv1", "iptv3", "iptv4",
+  ].includes(p);
 }
 
 function isNetflixPlatform(plataforma = "") {
@@ -167,10 +181,19 @@ function getCapacidadCorreo(data = {}, plataforma = "") {
     youtube: 1,
     deezer: 1,
     office: 1,
+    office2021: 1,
     office365: 1,
     microsoft365: 1,
     oleadatv1: 1,
     oleadatv3: 3,
+    latintv1: 1,
+    latintv2: 2,
+    latintv3: 3,
+    latintv4: 4,
+    liontv1: 1,
+    liontv2: 2,
+    liontv3: 3,
+    liontv5: 5,
     iptv1: 1,
     iptv3: 3,
     iptv4: 4,

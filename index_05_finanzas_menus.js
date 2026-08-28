@@ -55,7 +55,7 @@ function categoryOfPlat(key = "") {
   if (["video","musica","iptv","diseno_ia"].includes(c)) return c;
   if (["netflix","vipnetflix","disneyp","disneys","hbomax","primevideo","paramount","crunchyroll","vix","appletv","universal"].includes(k)) return "video";
   if (["spotify","youtube","deezer"].includes(k)) return "musica";
-  if (["oleadatv1","oleadatv3","iptv1","iptv3","iptv4"].includes(k)) return "iptv";
+  if (["oleadatv1","oleadatv3","latintv1","latintv2","latintv3","latintv4","liontv1","liontv2","liontv3","liontv5","iptv1","iptv3","iptv4"].includes(k)) return "iptv";
   if (["canva","gemini","chatgpt","duolingo"].includes(k)) return "diseno_ia";
   return "video";
 }
@@ -382,7 +382,7 @@ async function menuInventario(chatId) {
 
 async function menuInventarioVideo(chatId) { const items = PLATFORM_KEYS.filter((x) => categoryOfPlat(x) === "video"); const kb = kbFromItems(items); kb.push([{ text: "⬅️ Volver Inventario", callback_data: "menu:inventario" }, { text: "🏠 Inicio", callback_data: "go:inicio" }]); return upsertPanel(chatId, "VIDEO\n\nSeleccione plataforma:", kb); }
 async function menuInventarioMusica(chatId) { const items = PLATFORM_KEYS.filter((x) => categoryOfPlat(x) === "musica"); const kb = kbFromItems(items); kb.push([{ text: "⬅️ Volver Inventario", callback_data: "menu:inventario" }, { text: "🏠 Inicio", callback_data: "go:inicio" }]); return upsertPanel(chatId, "MUSICA\n\nSeleccione plataforma:", kb); }
-async function menuInventarioIptv(chatId) { const items = PLATFORM_KEYS.filter((x) => categoryOfPlat(x) === "iptv"); const kb = kbFromItems(items); kb.push([{ text: "⬅️ Volver Inventario", callback_data: "menu:inventario" }, { text: "🏠 Inicio", callback_data: "go:inicio" }]); return upsertPanel(chatId, "IPTV\n\nSeleccione plataforma:", kb); }
+async function menuInventarioIptv(chatId) { const items = PLATFORM_KEYS.filter((x) => categoryOfPlat(x) === "iptv" && !["iptv1", "iptv3", "iptv4"].includes(x)); const kb = kbFromItems(items); kb.push([{ text: "⬅️ Volver Inventario", callback_data: "menu:inventario" }, { text: "🏠 Inicio", callback_data: "go:inicio" }]); return upsertPanel(chatId, "IPTV\n\nSeleccione LatinTV, LionTV u Oleada TV:", kb); }
 async function menuInventarioDisenoIA(chatId) { const items = PLATFORM_KEYS.filter((x) => categoryOfPlat(x) === "diseno_ia"); const kb = kbFromItems(items); kb.push([{ text: "⬅️ Volver Inventario", callback_data: "menu:inventario" }, { text: "🏠 Inicio", callback_data: "go:inicio" }]); return upsertPanel(chatId, "DISENO E IA\n\nSeleccione plataforma:", kb); }
 
 async function menuClientes(chatId) {

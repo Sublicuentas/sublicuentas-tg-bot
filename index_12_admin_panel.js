@@ -19,8 +19,18 @@
 const { revAdminAuth, generarPinSetup } = require("./index_09_api_auth");
 const { db, admin, CLIENTES_COLLECTION, REVENDEDORES_COLLECTION } = require("./index_01_core");
 const { getCliente, patchServicio, eliminarServicioTx, buscarClienteRobusto } = require("./index_03_clientes_crm");
+const {
+  TARIFA_PROPIETARIOS_ID,
+  CATALOGO_PROPIETARIOS,
+  tarifaIdParaSocio,
+} = require("./index_15_catalogo_socios");
+const {
+  previsualizarActualizacion,
+  aplicarActualizacion,
+} = require("./index_16_migracion_precios_socios");
 
 const PRECIOS_COLLECTION = "precios";
+const PRECIOS_ESPECIALES_COLLECTION = "precios_especiales";
 
 const ok = (res, data) => res.json({ ok: true, ...data });
 const fail = (res, code, msg) => res.status(code).json({ ok: false, error: msg });
@@ -31,6 +41,16 @@ const wrap = (fn) => (req, res) => Promise.resolve(fn(req, res)).catch((e) => {
 
 function normNombre(v = "") {
   return String(v || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().replace(/\s+/g, " ");
+}
+
+function tarifaPrecios(req) {
+  return String(req.query?.tarifa || req.body?.tarifaId || "general").trim() === TARIFA_PROPIETARIOS_ID
+    ? TARIFA_PROPIETARIOS_ID
+    : "general";
+}
+
+function coleccionPrecios(req) {
+  return tarifaPrecios(req) === "general" ? PRECIOS_COLLECTION : PRECIOS_ESPECIALES_COLLECTION;
 }
 
 module.exports = function mountAdminPanel(app) {
@@ -57,10 +77,17 @@ module.exports = function mountAdminPanel(app) {
   app.get("/rev/admin/precios", revAdminAuth, wrap(async (req, res) => {
     // ✅ Sin orderBy múltiple (evita necesitar índice compuesto en
     // Firestore): la colección es chica, se ordena en memoria.
-    const snap = await db.collection(PRECIOS_COLLECTION).get();
-    const lista = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    const tarifaId = tarifaPrecios(req);
+    const col = db.collection(coleccionPrecios(req));
+    const snap = tarifaId === "general" ? await col.get() : await col.where("tarifaId", "==", tarifaId).get();
+    const lista = snap.docs.map((d) => {
+      const data = d.data() || {};
+      // Algunos ítems semilla guardan su id de catálogo dentro del documento.
+      // Para editar/borrar, el panel necesita siempre el ID real de Firestore.
+      return { ...data, catalogId: data.catalogId || data.id || "", id: d.id, tarifaId };
+    });
     lista.sort((a, b) => (Number(a.categoriaOrden) || 999) - (Number(b.categoriaOrden) || 999) || (Number(a.orden) || 999) - (Number(b.orden) || 999));
-    ok(res, { precios: lista });
+    ok(res, { precios: lista, tarifaId });
   }));
 
   // Admin: crear un ítem nuevo del catálogo.
@@ -84,13 +111,16 @@ module.exports = function mountAdminPanel(app) {
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedBy: req.admin?.nombre || "Admin",
     };
-    const ref = await db.collection(PRECIOS_COLLECTION).add(doc);
-    ok(res, { id: ref.id, ...doc });
+    const tarifaId = tarifaPrecios(req);
+    if (tarifaId !== "general") doc.tarifaId = tarifaId;
+    const ref = await db.collection(coleccionPrecios(req)).add(doc);
+    ok(res, { id: ref.id, ...doc, tarifaId });
   }));
 
   // Admin: editar un ítem existente (parcial).
   app.put("/rev/admin/precios/:id", revAdminAuth, wrap(async (req, res) => {
-    const ref = db.collection(PRECIOS_COLLECTION).doc(req.params.id);
+    const tarifaId = tarifaPrecios(req);
+    const ref = db.collection(coleccionPrecios(req)).doc(req.params.id);
     const snap = await ref.get();
     if (!snap.exists) return fail(res, 404, "no_existe");
 
@@ -112,16 +142,17 @@ module.exports = function mountAdminPanel(app) {
 
     await ref.update(patch);
     const actualizado = await ref.get();
-    ok(res, { id: ref.id, ...actualizado.data() });
+    ok(res, { ...actualizado.data(), id: ref.id, tarifaId });
   }));
 
   // Admin: borrar un ítem del catálogo.
   app.delete("/rev/admin/precios/:id", revAdminAuth, wrap(async (req, res) => {
-    const ref = db.collection(PRECIOS_COLLECTION).doc(req.params.id);
+    const tarifaId = tarifaPrecios(req);
+    const ref = db.collection(coleccionPrecios(req)).doc(req.params.id);
     const snap = await ref.get();
     if (!snap.exists) return fail(res, 404, "no_existe");
     await ref.delete();
-    ok(res, { eliminado: ref.id });
+    ok(res, { eliminado: ref.id, tarifaId });
   }));
 
   // ✅ NUEVO: importar el catálogo inicial con un botón, sin entrar a la
@@ -207,6 +238,40 @@ module.exports = function mountAdminPanel(app) {
     ok(res, { creados, actualizados });
   }));
 
+  // Previsualización y aplicación única de la tarifa solicitada para
+  // Sublicuentas, Sublicuentas 2, Relojes y Geisell. La aplicación también
+  // corrige Geissel -> Geisell y actualiza los precios de sus clientes.
+  app.get("/rev/admin/actualizaciones/precios-agosto-2026", revAdminAuth, wrap(async (_req, res) => {
+    ok(res, await previsualizarActualizacion({ db }));
+  }));
+
+  app.post("/rev/admin/actualizaciones/precios-agosto-2026", revAdminAuth, wrap(async (req, res) => {
+    const resultado = await aplicarActualizacion({
+      db,
+      admin,
+      generarPinSetup,
+      force: req.body?.force === true,
+    });
+    ok(res, resultado);
+  }));
+
+  // Permite restaurar la lista especial si se vacía, sin tocar clientes ni
+  // vendedores. La migración completa de arriba es la opción recomendada.
+  app.post("/rev/admin/precios/importar-especial", revAdminAuth, wrap(async (req, res) => {
+    const ops = CATALOGO_PROPIETARIOS.map((row) => ({
+      id: `${TARIFA_PROPIETARIOS_ID}__${row.id}`,
+      data: {
+        ...row,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedBy: req.admin?.nombre || "Admin",
+      },
+    }));
+    const batch = db.batch();
+    ops.forEach(({ id, data }) => batch.set(db.collection(PRECIOS_ESPECIALES_COLLECTION).doc(id), data, { merge: true }));
+    await batch.commit();
+    ok(res, { tarifaId: TARIFA_PROPIETARIOS_ID, actualizados: ops.length });
+  }));
+
   /* ═══════════════ VENDEDORES ═══════════════
      GET /rev/admin/revendedores (listar) e POST /rev/admin/impersonate
      ya existían en server_api.js — esto agrega crear / editar / resetear
@@ -215,10 +280,14 @@ module.exports = function mountAdminPanel(app) {
   */
 
   app.post("/rev/admin/revendedores", revAdminAuth, wrap(async (req, res) => {
-    const nombre = String(req.body?.nombre || "").trim();
+    let nombre = String(req.body?.nombre || "").trim();
+    if (normNombre(nombre) === "geissel") nombre = "Geisell";
     const telegramId = String(req.body?.telegramId || "").trim().replace(/[^0-9]/g, "");
+    const telefono = String(req.body?.telefono || "").trim().replace(/[^0-9]/g, "");
     if (!nombre) return fail(res, 400, "falta_nombre");
-    if (!telegramId || telegramId.length < 5) return fail(res, 400, "telegramId_invalido");
+    if (telegramId && telegramId.length < 5) return fail(res, 400, "telegramId_invalido");
+    if (telefono && telefono.length < 8) return fail(res, 400, "telefono_invalido");
+    if (!telegramId && !telefono) return fail(res, 400, "falta_telefono_o_telegram");
 
     const docId = normNombre(nombre) || String(Date.now());
     const ref = db.collection(REVENDEDORES_COLLECTION).doc(docId);
@@ -227,14 +296,15 @@ module.exports = function mountAdminPanel(app) {
 
     const { pin, pinSetupHash } = await generarPinSetup();
     await ref.set({
-      nombre, nombre_norm: docId, telegramId, activo: true, autoLastSent: "",
+      nombre, nombre_norm: docId, telegramId, telefono, activo: true, autoLastSent: "",
+      tarifaId: tarifaIdParaSocio({ nombre, nombre_norm: docId }),
       pinSetupHash, pinSetupCreatedAt: admin.firestore.FieldValue.serverTimestamp(),
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 
     // El PIN solo se devuelve UNA vez, igual que en /addvendedor del bot.
-    ok(res, { docId, nombre, nombre_norm: docId, telegramId, pin });
+    ok(res, { docId, nombre, nombre_norm: docId, telegramId, telefono, pin });
   }));
 
   app.patch("/rev/admin/revendedores/:id", revAdminAuth, wrap(async (req, res) => {
@@ -247,11 +317,19 @@ module.exports = function mountAdminPanel(app) {
     // vínculos. Si hace falta renombrar el usuario, hay que reasignar a
     // mano los clientes primero.
     const patch = { updatedAt: admin.firestore.FieldValue.serverTimestamp() };
-    if (req.body?.nombre !== undefined) patch.nombre = String(req.body.nombre).trim().slice(0, 120);
+    if (req.body?.nombre !== undefined) {
+      const nombre = String(req.body.nombre).trim().slice(0, 120);
+      patch.nombre = normNombre(nombre) === "geissel" ? "Geisell" : nombre;
+    }
     if (req.body?.telegramId !== undefined) {
       const tid = String(req.body.telegramId).trim().replace(/[^0-9]/g, "");
-      if (!tid || tid.length < 5) return fail(res, 400, "telegramId_invalido");
+      if (tid && tid.length < 5) return fail(res, 400, "telegramId_invalido");
       patch.telegramId = tid;
+    }
+    if (req.body?.telefono !== undefined) {
+      const tel = String(req.body.telefono).trim().replace(/[^0-9]/g, "");
+      if (tel && tel.length < 8) return fail(res, 400, "telefono_invalido");
+      patch.telefono = tel;
     }
     if (req.body?.activo !== undefined) patch.activo = !!req.body.activo;
 

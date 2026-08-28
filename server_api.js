@@ -31,6 +31,10 @@ const {
 // Reusa Firebase ya inicializado en el core (no arranca el bot)
 const { db, PORT, bot, SUPER_ADMIN, PLATAFORMAS } = require("./index_01_core");
 const { registrarEventoSorteosSeguro } = require("./index_14_sorteos");
+const {
+  obtenerCatalogoSocio,
+  buscarProductoCatalogo,
+} = require("./index_15_catalogo_socios");
 const admin = require("firebase-admin");
 const STORAGE_BUCKET_CANDIDATES = Array.from(new Set([
   process.env.STORAGE_BUCKET,
@@ -146,28 +150,9 @@ app.get("/rev/precios", revAuth, async (req, res) => {
     res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
     res.set("Pragma", "no-cache");
     res.set("Expires", "0");
-    // ✅ Sin where+orderBy combinado (evita necesitar índice compuesto en
-    // Firestore): la colección es chica, se filtra y ordena en memoria.
-    const snap = await db.collection("precios").get();
-    const items = snap.docs.map((d) => d.data() || {}).filter((p) => p.activo !== false);
-    items.sort((a, b) => (Number(a.categoriaOrden) || 999) - (Number(b.categoriaOrden) || 999) || (Number(a.orden) || 999) - (Number(b.orden) || 999));
-
-    const grupos = [];
-    const porCategoria = {};
-    items.forEach((p) => {
-      const catKey = `${p.categoria || ""}|${p.categoriaSub || ""}`;
-      if (!porCategoria[catKey]) {
-        porCategoria[catKey] = { cat: p.categoria || "Catálogo", sub: p.categoriaSub || "", items: [] };
-        grupos.push(porCategoria[catKey]);
-      }
-      porCategoria[catKey].items.push({
-        n: p.nombre || "", s: p.variante || "",
-        p: p.precio == null ? null : Number(p.precio),
-        d: p.detalle || "",
-      });
-    });
-
-    res.json(grupos);
+    const catalogo = await obtenerCatalogoSocio(db, req.rev);
+    res.set("X-Catalogo-Tarifa", catalogo.tarifaId);
+    res.json(catalogo.grupos);
   } catch (e) { console.error("rev/precios", e); res.status(500).json({ error: "server" }); }
 });
 
@@ -417,6 +402,9 @@ app.post("/rev/compra", revAuth, async (req, res) => {
     const b = req.body || {};
     const socio = req.rev.nombre || req.rev.nombre_norm || "Revendedor";
     const destino = destinoInfo(b.destino);
+    // El navegador nunca decide el precio final. Se vuelve a consultar la
+    // tarifa del socio autenticado para impedir valores viejos o manipulados.
+    const catalogoSocio = await obtenerCatalogoSocio(db, req.rev);
 
     const productosRaw = Array.isArray(b.productos) && b.productos.length
       ? b.productos.slice(0, 20)
@@ -441,8 +429,15 @@ app.post("/rev/compra", revAuth, async (req, res) => {
         }];
 
     const productos = productosRaw.map((p) => {
-      const servicio = cleanTg(p.servicio || p.nombre || "", 140);
-      const precioCatalogo = p.precioCatalogo === null || p.precioCatalogo === undefined || p.precioCatalogo === "" ? null : Number(p.precioCatalogo) || 0;
+      const productoCatalogo = buscarProductoCatalogo(catalogoSocio.grupos, p);
+      if (!productoCatalogo) {
+        const err = new Error("producto_fuera_catalogo");
+        err.status = 400;
+        err.publicError = "producto_fuera_catalogo";
+        throw err;
+      }
+      const servicio = cleanTg(productoCatalogo.nombreCompleto || p.servicio || p.nombre || "", 140);
+      const precioCatalogo = productoCatalogo.p == null ? null : Number(productoCatalogo.p);
       const perfilNombre = cleanTg(p.perfilNombre, 80);
       const perfilApellido = cleanTg(p.perfilApellido, 80);
       const correo = cleanTg(p.correo, 160);
@@ -459,13 +454,14 @@ app.post("/rev/compra", revAuth, async (req, res) => {
       const MARCA_LABEL={samsung:"Samsung",lg:"LG",tcl:"TCL",roku:"Roku TV"};
       const marcaTv=MARCA_LABEL[String(p.marcaTv||"").toLowerCase()]||cleanTg(p.marcaTv,80);
       return {
-        id: cleanTg(p.id, 90),
+        id: cleanTg(productoCatalogo.id || p.catalogId || p.id, 90),
+        catalogId: cleanTg(productoCatalogo.id || "", 90),
         servicio,
-        servicioBase: cleanTg(p.servicioBase, 100),
+        servicioBase: cleanTg(productoCatalogo.n || p.servicioBase, 100),
         entregaTipo: cleanTg(p.entregaTipo || "", 60),
-        catalogCategory: cleanTg(p.catalogCategory || "", 120),
-        catalogSub: cleanTg(p.catalogSub || "", 160),
-        catalogDetalle: cleanTg(p.catalogDetalle || "", 500),
+        catalogCategory: cleanTg(productoCatalogo.categoria || p.catalogCategory || "", 120),
+        catalogSub: cleanTg(productoCatalogo.s || p.catalogSub || "", 160),
+        catalogDetalle: cleanTg(productoCatalogo.d || p.catalogDetalle || "", 500),
         precioCatalogo,
         perfilNombre,
         perfilApellido,
@@ -488,11 +484,8 @@ app.post("/rev/compra", revAuth, async (req, res) => {
     const clienteApellido = cleanTg(b.clienteApellido, 80);
     const subtotalCatalogo = productos.reduce((a, p) => a + (p.precioCatalogo !== null ? Number(p.precioCatalogo || 0) : 0), 0);
     const conPrecio = productos.filter((p) => p.precioCatalogo !== null).length;
-    const descuentoAuto = Math.min(Math.max(conPrecio - 1, 0), 4) * 10; // 2=10, 3=20, 4=30, 5+=40
-    const descuentoCombo = b.descuentoCombo !== undefined && b.descuentoCombo !== ""
-      ? Math.min(Number(b.descuentoCombo) || 0, 40)
-      : descuentoAuto;
-    const totalCombo = Math.max(0, (Number(b.subtotalCatalogo) || subtotalCatalogo) - descuentoCombo);
+    const descuentoCombo = Math.min(Math.max(conPrecio - 1, 0), 4) * 10; // 2=10, 3=20, 4=30, 5+=40
+    const totalCombo = Math.max(0, subtotalCatalogo - descuentoCombo);
     const monto = Number(b.monto) || totalCombo || 0;
     const servicio = productos.length > 1
       ? `Combo ${productos.length} plataformas`
@@ -534,6 +527,7 @@ app.post("/rev/compra", revAuth, async (req, res) => {
       destinoLabel: destino.label,
       socio,
       socio_norm: req.rev.nombre_norm || "",
+      tarifaId: catalogoSocio.tarifaId,
       imagenUrl,
       // Si Storage falla, Telegram recibe la foto por buffer; para que Panel Dios también la vea,
       // guardamos una copia liviana en Firestore cuando no hay URL pública.
@@ -635,7 +629,7 @@ app.get("/rev/admin/revendedores", revAdminAuth, async (req, res) => {
       const r = d.data();
       const k = r.nombre_norm || (r.nombre || d.id).toLowerCase();
       const c = porVend[k] || { clientes: 0, servicios: 0, vencidos: 0, porVencer: 0 };
-      return { id: d.id, nombre: r.nombre || d.id, nombre_norm: k, activo: r.activo !== false, telegramId: r.telegramId || "", ...c };
+      return { id: d.id, nombre: r.nombre || d.id, nombre_norm: k, activo: r.activo !== false, telegramId: r.telegramId || "", telefono: r.telefono || "", tarifaId: r.tarifaId || "general", ...c };
     }).sort((a, b) => b.clientes - a.clientes);
     res.json(lista);
   } catch (e) { console.error("rev/admin", e); res.status(500).json({ error: "server" }); }

@@ -37,6 +37,7 @@ const {
   FIN_BANCOS, FIN_MOTIVOS_EGRESO, PLATAFORMAS,
   cacheInvalidatePrefix, getCoreHealth,
 } = require("./index_01_core");
+const { obtenerCatalogoSocio } = require("./index_15_catalogo_socios");
 
 const {
   isAdmin, logErr, hoyDMY,
@@ -131,7 +132,9 @@ app.post("/api/login", wrap((req, res) => ok(res, { rol: "admin" })));
 app.get("/api/catalogos", wrap((_req, res) => ok(res, {
   bancos: FIN_BANCOS,
   motivos: FIN_MOTIVOS_EGRESO,
-  plataformas: Object.values(PLATAFORMAS).map((p) => ({ key: p.key, nombre: p.nombre, categoria: p.categoria })),
+  plataformas: Object.values(PLATAFORMAS)
+    .filter((p) => !["iptv1", "iptv3", "iptv4"].includes(p.key))
+    .map((p) => ({ key: p.key, nombre: p.nombre, categoria: p.categoria })),
 })));
 
 // ---------- CÓDIGOS (IMAP) ----------
@@ -307,24 +310,9 @@ app.get("/rev/precios", revAuth, async (req, res) => {
     res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
     res.set("Pragma", "no-cache");
     res.set("Expires", "0");
-    const snap = await db.collection("precios").get();
-    const items = snap.docs.map((d) => d.data() || {}).filter((p) => p.activo !== false);
-    items.sort((a, b) => (Number(a.categoriaOrden) || 999) - (Number(b.categoriaOrden) || 999) || (Number(a.orden) || 999) - (Number(b.orden) || 999));
-    const grupos = [];
-    const porCategoria = {};
-    items.forEach((p) => {
-      const catKey = `${p.categoria || ""}|${p.categoriaSub || ""}`;
-      if (!porCategoria[catKey]) {
-        porCategoria[catKey] = { cat: p.categoria || "Catálogo", sub: p.categoriaSub || "", items: [] };
-        grupos.push(porCategoria[catKey]);
-      }
-      porCategoria[catKey].items.push({
-        n: p.nombre || "", s: p.variante || "",
-        p: p.precio == null ? null : Number(p.precio),
-        d: p.detalle || "",
-      });
-    });
-    res.json(grupos);
+    const catalogo = await obtenerCatalogoSocio(db, req.rev);
+    res.set("X-Catalogo-Tarifa", catalogo.tarifaId);
+    res.json(catalogo.grupos);
   } catch (e) { console.error("rev/precios", e); res.status(500).json({ error: "server" }); }
 });
 
@@ -351,7 +339,7 @@ app.get("/rev/admin/revendedores", revAdminAuth, async (req, res) => {
       const r = d.data();
       const k = r.nombre_norm || (r.nombre || d.id).toLowerCase();
       const c = porVend[k] || { clientes: 0, servicios: 0, vencidos: 0, porVencer: 0 };
-      return { id: d.id, nombre: r.nombre || d.id, nombre_norm: k, activo: r.activo !== false, telegramId: r.telegramId || "", ...c };
+      return { id: d.id, nombre: r.nombre || d.id, nombre_norm: k, activo: r.activo !== false, telegramId: r.telegramId || "", telefono: r.telefono || "", tarifaId: r.tarifaId || "general", ...c };
     }).sort((a, b) => b.clientes - a.clientes);
     res.json(lista);
   } catch (e) { console.error("rev/admin", e); res.status(500).json({ error: "server" }); }

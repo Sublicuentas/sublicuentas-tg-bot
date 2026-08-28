@@ -104,9 +104,12 @@ function humanPlataformaFallback(key = "") {
     paramount: "Paramount+", crunchyroll: "Crunchyroll", vix: "Vix",
     appletv: "Apple TV", universal: "Universal+", spotify: "Spotify",
     youtube: "YouTube", deezer: "Deezer", oleadatv1: "OleadaTV (1)",
-    oleadatv3: "OleadaTV (3)", iptv1: "IPTV (1)", iptv3: "IPTV (3)",
-    iptv4: "IPTV (4)", canva: "Canva", gemini: "Gemini", chatgpt: "ChatGPT",
-    duolingo: "Duolingo", office: "Microsoft 365",
+    oleadatv3: "OleadaTV (3)", latintv1: "LatinTV (1)", latintv2: "LatinTV (2)",
+    latintv3: "LatinTV (3)", latintv4: "LatinTV (4)", liontv1: "LionTV (1)",
+    liontv2: "LionTV (2)", liontv3: "LionTV (3)", liontv5: "LionTV (5)",
+    iptv1: "IPTV anterior (1)", iptv3: "IPTV anterior (3)",
+    iptv4: "IPTV anterior (4)", canva: "Canva", gemini: "Gemini Pro", chatgpt: "ChatGPT",
+    duolingo: "Duolingo", office: "Microsoft 365", office2021: "Office 2021",
   };
   return map[p] || String(key || "");
 }
@@ -122,9 +125,18 @@ function normalizarPlataforma(v = "") {
     "paramount": "paramount", "paramount plus": "paramount", "paramount+": "paramount",
     "crunchyroll": "crunchyroll", "vix": "vix", "apple tv": "appletv", "appletv": "appletv",
     "universal": "universal", "universal plus": "universal", "universal+": "universal", "spotify": "spotify", "youtube": "youtube",
-    "youtube premium": "youtube", "deezer": "deezer", "office": "office", "microsoft": "office", "microsoft 365": "office", "office 365": "office", "m365": "office", "oleada": "oleadatv1",
+    "youtube premium": "youtube", "deezer": "deezer", "office": "office", "microsoft": "office", "microsoft 365": "office", "office 365": "office", "m365": "office", "office 2021": "office2021", "office2021": "office2021", "oleada": "oleadatv1",
     "oleadatv": "oleadatv1", "oleadatv 1": "oleadatv1", "oleada 1": "oleadatv1",
-    "oleadatv 3": "oleadatv3", "oleada 3": "oleadatv3", "iptv": "iptv1",
+    "oleadatv 3": "oleadatv3", "oleada 3": "oleadatv3",
+    "latin tv 1": "latintv1", "latintv 1": "latintv1", "latintv1": "latintv1",
+    "latin tv 2": "latintv2", "latintv 2": "latintv2", "latintv2": "latintv2",
+    "latin tv 3": "latintv3", "latintv 3": "latintv3", "latintv3": "latintv3",
+    "latin tv 4": "latintv4", "latintv 4": "latintv4", "latintv4": "latintv4",
+    "lion tv 1": "liontv1", "liontv 1": "liontv1", "liontv1": "liontv1",
+    "lion tv 2": "liontv2", "liontv 2": "liontv2", "liontv2": "liontv2",
+    "lion tv 3": "liontv3", "liontv 3": "liontv3", "liontv3": "liontv3",
+    "lion tv 5": "liontv5", "liontv 5": "liontv5", "liontv5": "liontv5",
+    "iptv": "iptv1",
     "iptv 1": "iptv1", "iptv 3": "iptv3", "iptv 4": "iptv4",
     "canva": "canva", "gemini": "gemini", "chatgpt": "chatgpt", "chat gpt": "chatgpt", "duolingo": "duolingo",
   };
@@ -137,8 +149,10 @@ function normalizarPlataforma(v = "") {
     disneystandard: "disneys", disneys: "disneys", hbomax: "hbomax",
     primevideo: "primevideo", paramount: "paramount", crunchyroll: "crunchyroll",
     appletv: "appletv", oleadatv1: "oleadatv1", oleada1: "oleadatv1",
-    oleadatv3: "oleadatv3", oleada3: "oleadatv3", iptv1: "iptv1",
-    iptv3: "iptv3", iptv4: "iptv4", universal: "universal", duolingo: "duolingo", office: "office", microsoft365: "office", office365: "office", m365: "office",
+    oleadatv3: "oleadatv3", oleada3: "oleadatv3",
+    latintv1: "latintv1", latintv2: "latintv2", latintv3: "latintv3", latintv4: "latintv4",
+    liontv1: "liontv1", liontv2: "liontv2", liontv3: "liontv3", liontv5: "liontv5", iptv1: "iptv1",
+    iptv3: "iptv3", iptv4: "iptv4", universal: "universal", duolingo: "duolingo", office: "office", office2021: "office2021", microsoft365: "office", office365: "office", m365: "office",
   };
 
   return aliasesCompact[s] || s;
