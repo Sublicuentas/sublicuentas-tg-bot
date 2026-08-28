@@ -260,6 +260,13 @@ function requiereClaveLocal(plataforma = "") {
   return !["canva", "gemini", "chatgpt", "duolingo"].includes(p);
 }
 
+function requiereCorreoLocal(plataforma = "") {
+  const p = normalizarPlataforma(plataforma);
+  const cfg = platMetaLocal(p);
+  if (Object.prototype.hasOwnProperty.call(cfg, "requiereCorreo")) return cfg.requiereCorreo === true;
+  return true;
+}
+
 function requierePinLocal(plataforma = "") {
   const p = normalizarPlataforma(plataforma);
   const cfg = platMetaLocal(p);
@@ -268,16 +275,17 @@ function requierePinLocal(plataforma = "") {
 }
 
 function esSoloCorreoLocal(plataforma = "") {
-  return !requiereClaveLocal(plataforma) && !requierePinLocal(plataforma);
+  return requiereCorreoLocal(plataforma) && !requiereClaveLocal(plataforma) && !requierePinLocal(plataforma);
 }
 
 function getAccessTypeLabelLocal(plataforma = "") {
   const p = normalizarPlataforma(plataforma);
+  if (!requiereCorreoLocal(p) && !requiereClaveLocal(p) && requierePinLocal(p)) return "Solo PIN";
   if (esSoloCorreoLocal(p)) return "Solo correo";
   if (esPlataformaUsuarioLocal(p)) return "Usuario + clave";
   if (requiereClaveLocal(p) && requierePinLocal(p)) return "Correo + clave + PIN";
   if (requiereClaveLocal(p)) return "Correo + clave";
-  if (requierePinLocal(p)) return "Correo + PIN";
+  if (requierePinLocal(p)) return requiereCorreoLocal(p) ? "Correo + PIN" : "Solo PIN";
   return "Correo";
 }
 
@@ -1140,8 +1148,8 @@ function formatearBloqueRenovaciones(rows = [], titulo = "") {
     txt += `${i + 1}) ${x.nombrePerfil || "Sin nombre"}\n`;
     txt += `Telefono: ${x.telefono || "-"}\n`;
     txt += `Plataforma: ${x.plataforma || "-"}\n`;
-    txt += `${getIdentLabelLocal(x.plataforma || "")}: ${x.correo || "-"}\n`;
-    txt += `PIN: ${x.pin || "-"}\n`;
+    if (requiereCorreoLocal(x.plataforma || "")) txt += `${getIdentLabelLocal(x.plataforma || "")}: ${x.correo || "-"}\n`;
+    if (requierePinLocal(x.plataforma || "")) txt += `PIN: ${x.pin || "-"}\n`;
     txt += `Precio: ${Number(x.precio || 0).toFixed(2)} Lps\n`;
     txt += `Fecha: ${x.fechaRenovacion || "-"}\n`;
     txt += `\n`;
@@ -4213,10 +4221,16 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
         st.clientId = clientId || st.clientId;
         st.servicio = st.servicio || {};
         st.servicio.plataforma = plat;
-        st.servStep = 2;
         st.step = 4;
+        if (requiereCorreoLocal(plat)) st.servStep = 2;
+        else if (requiereClaveLocal(plat)) st.servStep = 3;
+        else if (requierePinLocal(plat)) st.servStep = 4;
+        else st.servStep = 5;
         wizard.set(String(chatId), st);
-        return bot.sendMessage(chatId, `(Servicio 2/6) ${getIdentLabelLocal(plat)} de la cuenta:`);
+        if (st.servStep === 2) return bot.sendMessage(chatId, `(Servicio 2/6) ${getIdentLabelLocal(plat)} de la cuenta:`);
+        if (st.servStep === 3) return bot.sendMessage(chatId, "(Servicio 3/6) Clave de la cuenta:");
+        if (st.servStep === 4) return bot.sendMessage(chatId, "(Servicio 4/6) PIN de Apple TV:");
+        return bot.sendMessage(chatId, "(Servicio 5/6) Precio (solo número, Lps):");
       }
 
       if (data.startsWith("wiz:addmore:")) {
@@ -4326,6 +4340,10 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
         if (perfilIndex < 0) return bot.sendMessage(chatId, "⚠️ Ese perfil cambió o ya no existe. Abra nuevamente la compra.");
         const compraId = String(servicios[idx]?.compraId || "");
         const perfilId = String(perfiles[perfilIndex]?.perfilId || "");
+        const platPerfil = normalizarPlataforma(servicios[idx]?.plataforma || "");
+        if (field === "mail" && !requiereCorreoLocal(platPerfil)) return bot.sendMessage(chatId, "ℹ️ Apple TV se entrega solo con PIN; no usa correo.");
+        if (field === "key" && !requiereClaveLocal(platPerfil)) return bot.sendMessage(chatId, "ℹ️ Apple TV se entrega solo con PIN; no usa clave.");
+        if (field === "pin" && !requierePinLocal(platPerfil)) return bot.sendMessage(chatId, "ℹ️ Esta plataforma no usa PIN.");
         pending.set(String(chatId), { mode: "cliProfEdit", field, clientId, idx, perfilIndex, compraId, perfilId });
         return upsertPanel(chatId, labels[field], [[{ text: "⬅️ Cancelar", callback_data: `cli:prof:menu:${clientId}:${compraSel}:${perfilSel}` }]]);
       }
@@ -4376,8 +4394,20 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
         const plat = normalizarPlataforma(parts[3]);
         const clientId = parts[4];
         if (!esPlataformaValida(plat)) return bot.sendMessage(chatId, "⚠️ Plataforma inválida.");
-        pending.set(String(chatId), { mode: "cliAddServMail", clientId, plat });
-        return upsertPanel(chatId, `${identIcon(plat)} *${getIdentLabelLocal(plat)}* (${plat})\nEscriba el ${getIdentLabelLocal(plat).toLowerCase()}:`, [[{ text: "⬅️ Cancelar", callback_data: `cli:view:${clientId}` }]]);
+        if (requiereCorreoLocal(plat)) {
+          pending.set(String(chatId), { mode: "cliAddServMail", clientId, plat });
+          return upsertPanel(chatId, `${identIcon(plat)} *${getIdentLabelLocal(plat)}* (${plat})\nEscriba el ${getIdentLabelLocal(plat).toLowerCase()}:`, [[{ text: "⬅️ Cancelar", callback_data: `cli:view:${clientId}` }]]);
+        }
+        if (requiereClaveLocal(plat)) {
+          pending.set(String(chatId), { mode: "cliAddServClave", clientId, plat, mail: "" });
+          return upsertPanel(chatId, `🔑 *${humanPlataforma(plat)}*\nEscriba la clave:`, [[{ text: "⬅️ Cancelar", callback_data: `cli:view:${clientId}` }]]);
+        }
+        if (requierePinLocal(plat)) {
+          pending.set(String(chatId), { mode: "cliAddServPin", clientId, plat, mail: "", clave: "" });
+          return upsertPanel(chatId, `🔐 *${humanPlataforma(plat)} · Solo PIN*\nEscriba el PIN:`, [[{ text: "⬅️ Cancelar", callback_data: `cli:view:${clientId}` }]]);
+        }
+        pending.set(String(chatId), { mode: "cliAddServPrecio", clientId, plat, mail: "", clave: "", pin: "" });
+        return upsertPanel(chatId, `💰 *${humanPlataforma(plat)}*\nEscriba el precio:`, [[{ text: "⬅️ Cancelar", callback_data: `cli:view:${clientId}` }]]);
       }
 
       if (data.startsWith("cli:serv:edit:")) {
@@ -4400,6 +4430,10 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
 
         const platActual = normalizarPlataforma(servicios[idx]?.plataforma || "");
         const compraId = String(servicios[idx]?.compraId || "");
+
+        if (field === "mail" && !requiereCorreoLocal(platActual)) return bot.sendMessage(chatId, "ℹ️ Apple TV se entrega solo con PIN; no usa correo.");
+        if (field === "clave" && !requiereClaveLocal(platActual)) return bot.sendMessage(chatId, "ℹ️ Apple TV se entrega solo con PIN; no usa clave.");
+        if (field === "pin" && !requierePinLocal(platActual)) return bot.sendMessage(chatId, "ℹ️ Esta plataforma no usa PIN.");
 
         if (field === "mail") pending.set(String(chatId), { mode: "cliServEditMail", clientId, idx, plat: platActual, compraId });
         if (field === "clave") pending.set(String(chatId), { mode: "cliServEditClave", clientId, idx, plat: platActual, compraId });
@@ -4442,6 +4476,16 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
           if (idx < 0) return bot.sendMessage(chatId, "⚠️ Esa compra cambió o ya no existe. Abra nuevamente la ficha.");
 
           const actual = servicios[idx] || {};
+          if (!requiereCorreoLocal(plat) && !requiereClaveLocal(plat) && requierePinLocal(plat)) {
+            pending.set(String(chatId), {
+              mode: "cliServSetPlatPin",
+              clientId,
+              idx,
+              compraId: String(actual.compraId || ""),
+              plat,
+            });
+            return upsertPanel(chatId, `🔐 *${humanPlataforma(plat)} · Solo PIN*\n\nEscriba el PIN para terminar el cambio de plataforma:`, [[{ text: "⬅️ Cancelar", callback_data: `cli:serv:menu:${clientId}:${compraSel}` }]]);
+          }
           const patch = { plataforma: plat };
           const identActual = getIdentServicioSyncLocal(actual);
 
@@ -4642,7 +4686,7 @@ Revise que el correo exista en inventario con esa plataforma o coloque la clave 
           `❌ *NO RENOVÓ — CONFIRMAR ELIMINACIÓN*\n\n` +
           `👤 *${escMD(c.nombrePerfil || "Cliente")}*\n` +
           `📦 *${escMD(humanPlatAlertLocal(s.plataforma || ""))}*\n` +
-          `${identIcon(s.plataforma || "")} ${escMD(s.correo || "-")}\n\n` +
+          `${requiereCorreoLocal(s.plataforma || "") ? `${identIcon(s.plataforma || "")} ${escMD(s.correo || "-")}` : `🔐 PIN: ${escMD(extraerPinServicioLocal(s) || "-")}`}\n\n` +
           `_El servicio se eliminará y el slot en inventario quedará libre._\n\n¿Confirmar?`,
           [
             [{ text: "✅ Sí, eliminar", callback_data: `cli:ren:noren:ok:${clientId}:${compraSel}` }],
@@ -4817,7 +4861,7 @@ Revise que el correo exista en inventario con esa plataforma o coloque la clave 
 
         let msg = `✅ *Baja masiva completada*\n\n`;
         msg += `*Eliminados (${eliminados.length}):*\n`;
-        eliminados.forEach((s) => { msg += `• ${escMD(humanPlatAlertLocal(s.plataforma || ""))} — ${escMD(s.correo || "-")}\n`; });
+        eliminados.forEach((s) => { msg += `• ${escMD(humanPlatAlertLocal(s.plataforma || ""))} — ${escMD(requiereCorreoLocal(s.plataforma || "") ? (s.correo || "-") : `PIN ${extraerPinServicioLocal(s) || "-"}`)}\n`; });
         msg += `\n*Servicios restantes:* ${servicios.length}`;
 
         await bot.sendMessage(chatId, msg, { parse_mode: "Markdown" });
@@ -5770,6 +5814,20 @@ bot.on("message", async (msg) => {
         const s = c && Array.isArray(c.servicios) ? c.servicios[p.idx] : null;
         if (!s) { pending.delete(String(chatId)); return bot.sendMessage(chatId, "⚠️ La compra ya no existe."); }
         const plat = normalizarPlataforma(s.plataforma || "");
+        if (!requiereCorreoLocal(plat)) {
+          if (requiereClaveLocal(plat)) {
+            pending.set(String(chatId), { ...p, mode: "cliProfAddKey", plat, nombre: t, mail: "" });
+            return bot.sendMessage(chatId, "🔑 Escriba la clave de esa cuenta:");
+          }
+          if (requierePinLocal(plat)) {
+            pending.set(String(chatId), { ...p, mode: "cliProfAddPin", plat, nombre: t, mail: "", clave: "" });
+            return bot.sendMessage(chatId, "🔐 Escriba el PIN individual de Apple TV:");
+          }
+          pending.delete(String(chatId));forceNextPanelAtBottom(chatId);
+          try { await addPerfilTx(p.clientId, p.idx, { nombre: t, perfil: t, correo: "", clave: "", pin: "" }, p.compraId || ""); }
+          catch (e) { return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo añadir el perfil."}`); }
+          return menuListaPerfilesServicio(chatId, p.clientId, p.idx);
+        }
         pending.set(String(chatId), { ...p, mode: "cliProfAddMail", plat, nombre: t });
         return bot.sendMessage(chatId, `${identIcon(plat)} Escriba el ${getIdentLabelLocal(plat).toLowerCase()} donde quedará el perfil de ${t}:`);
       }
@@ -5977,6 +6035,17 @@ bot.on("message", async (msg) => {
         pending.delete(String(chatId));
       forceNextPanelAtBottom(chatId);
         try { await patchServicio(p.clientId, p.idx, { pin: t }, p.compraId || ""); } catch (e) { return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo actualizar el servicio."}`); }
+        return menuServicio(chatId, p.clientId, p.idx);
+      }
+
+      if (p.mode === "cliServSetPlatPin") {
+        pending.delete(String(chatId));
+        forceNextPanelAtBottom(chatId);
+        try {
+          await patchServicio(p.clientId, p.idx, { plataforma: p.plat, correo: "", clave: "", pin: t }, p.compraId || "");
+        } catch (e) {
+          return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo cambiar la plataforma."}`);
+        }
         return menuServicio(chatId, p.clientId, p.idx);
       }
 

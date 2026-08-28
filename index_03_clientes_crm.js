@@ -121,6 +121,12 @@ function requiereClaveLocal(plataforma = "") {
   return !["canva", "gemini", "chatgpt", "duolingo"].includes(p);
 }
 
+function requiereCorreoLocal(plataforma = "") {
+  const cfg = platformConfigLocal(plataforma);
+  if (Object.prototype.hasOwnProperty.call(cfg, "requiereCorreo")) return cfg.requiereCorreo === true;
+  return true;
+}
+
 function requierePinLocal(plataforma = "") {
   const cfg = platformConfigLocal(plataforma);
   if (Object.prototype.hasOwnProperty.call(cfg, "requierePin")) return cfg.requierePin === true;
@@ -128,16 +134,17 @@ function requierePinLocal(plataforma = "") {
 }
 
 function esSoloCorreoLocal(plataforma = "") {
-  return !requiereClaveLocal(plataforma) && !requierePinLocal(plataforma);
+  return requiereCorreoLocal(plataforma) && !requiereClaveLocal(plataforma) && !requierePinLocal(plataforma);
 }
 
 function getAccessTypeLabelLocal(plataforma = "") {
   const p = normalizarPlataforma(plataforma);
+  if (!requiereCorreoLocal(p) && !requiereClaveLocal(p) && requierePinLocal(p)) return "Solo PIN";
   if (esSoloCorreoLocal(p)) return "Solo correo";
   if (IPTV_USUARIO_KEYS_LOCAL.has(p)) return "Usuario + clave";
   if (requiereClaveLocal(p) && requierePinLocal(p)) return "Correo + clave + PIN";
   if (requiereClaveLocal(p)) return "Correo + clave";
-  if (requierePinLocal(p)) return "Correo + PIN";
+  if (requierePinLocal(p)) return requiereCorreoLocal(p) ? "Correo + PIN" : "Solo PIN";
   return "Correo";
 }
 
@@ -241,19 +248,23 @@ function renderCredencialesServicioLocal(servicio = {}, markdown = true, indent 
     perfiles.forEach((perfil, index) => {
       const individual = servicioParaPerfilLocal(servicio, perfil, servicio.nombrePerfil || servicio.titular || "");
       multi += `${indent}${index + 1}. ${markdown ? `*${esc(perfil.nombre || `Perfil ${index + 1}`)}*` : (perfil.nombre || `Perfil ${index + 1}`)}\n`;
-      const identLabel = getIdentLabelLocal(p);
-      const identIcon = identLabel === "Usuario" ? "👤" : "📧";
-      multi += `${indent}   ${identIcon} ${markdown ? `*${esc(identLabel)}:*` : `${identLabel}:`} ${esc(individual.correo || "-")}\n`;
+      if (requiereCorreoLocal(p)) {
+        const identLabel = getIdentLabelLocal(p);
+        const identIcon = identLabel === "Usuario" ? "👤" : "📧";
+        multi += `${indent}   ${identIcon} ${markdown ? `*${esc(identLabel)}:*` : `${identLabel}:`} ${esc(individual.correo || "-")}\n`;
+      }
       if (requiereClaveLocal(p)) multi += `${indent}   🔑 ${markdown ? "*Clave:*" : "Clave:"} ${esc(getClaveServicioLocal(individual, p) || "-")}\n`;
       if (requierePinLocal(p)) multi += `${indent}   🔐 ${markdown ? "*PIN:*" : "PIN:"} ${esc(getPinServicioLocal(individual, p) || "-")}\n`;
     });
     return multi;
   }
   const individual = servicioParaPerfilLocal(servicio, perfiles[0] || {}, servicio.nombrePerfil || servicio.titular || "");
-  const identLabel = getIdentLabelLocal(p);
-  const identIcon = identLabel === "Usuario" ? "👤" : "📧";
   let out = "";
-  out += `${indent}${identIcon} ${markdown ? `*${esc(identLabel)}:*` : `${identLabel}:`} ${esc(individual.correo || "-")}\n`;
+  if (requiereCorreoLocal(p)) {
+    const identLabel = getIdentLabelLocal(p);
+    const identIcon = identLabel === "Usuario" ? "👤" : "📧";
+    out += `${indent}${identIcon} ${markdown ? `*${esc(identLabel)}:*` : `${identLabel}:`} ${esc(individual.correo || "-")}\n`;
+  }
   if (requiereClaveLocal(p)) out += `${indent}🔑 ${markdown ? "*Clave:*" : "Clave:"} ${esc(getClaveServicioLocal(individual, p) || "-")}\n`;
   if (requierePinLocal(p)) out += `${indent}🔐 ${markdown ? "*PIN:*" : "PIN:"} ${esc(getPinServicioLocal(individual, p) || "-")}\n`;
   return out;
@@ -490,7 +501,9 @@ function normalizarCompraLocal(servicio = {}, titular = "", anterior = {}) {
       perfilId: String(raw.perfilId || raw.id || previo.perfilId || recordIdLocal("perfil")),
       nombre,
       perfil: String(raw.perfil || raw.nombrePerfil || raw.nombre || previo.perfil || nombre).trim(),
-      correo: normalizeIdentByPlatformLocal(plat, raw.correo ?? correoTop ?? previo.correo ?? servicio.correo ?? anterior.correo ?? ""),
+      correo: requiereCorreoLocal(plat)
+        ? normalizeIdentByPlatformLocal(plat, raw.correo ?? correoTop ?? previo.correo ?? servicio.correo ?? anterior.correo ?? "")
+        : "",
       clave: requiereClaveLocal(plat) ? String(raw.clave ?? raw.password ?? raw.pass ?? claveTop ?? previo.clave ?? servicio.clave ?? anterior.clave ?? "").trim() : "",
       pin: requierePinLocal(plat) ? String(raw.pinPerfil ?? raw.pin_perfil ?? raw.perfilPin ?? raw.pin ?? pinTop ?? previo.pin ?? "").trim() : ""
     };
@@ -517,17 +530,17 @@ function validarCompraLocal(compra = {}) {
   if (!perfiles.length) throw new Error("Agregue al menos un perfil.");
   perfiles.forEach((p, index) => {
     if (!String(p.nombre || "").trim()) throw new Error(`Falta el nombre del perfil ${index + 1}.`);
-    if (!validateIdentByPlatformLocal(plat, p.correo || "")) throw new Error(`${getIdentLabelLocal(plat)} inválido en ${p.nombre || `perfil ${index + 1}`}.`);
+    if (requiereCorreoLocal(plat) && !validateIdentByPlatformLocal(plat, p.correo || "")) throw new Error(`${getIdentLabelLocal(plat)} inválido en ${p.nombre || `perfil ${index + 1}`}.`);
     if (requiereClaveLocal(plat) && !String(p.clave || "").trim()) throw new Error(`Falta la clave de ${p.nombre || `perfil ${index + 1}`}.`);
     if (requierePinLocal(plat) && !String(p.pin || "").trim()) throw new Error(`Falta el PIN individual de ${p.nombre || `perfil ${index + 1}`}.`);
   });
 }
 
 async function sincronizarCompraInventarioLocal(anterior, nuevo, titular = "") {
-  const antes = anterior ? perfilesServicioLocal(anterior, titular) : [];
-  const despues = nuevo ? perfilesServicioLocal(nuevo, titular) : [];
   const platAntes = normalizarPlataforma(anterior?.plataforma || nuevo?.plataforma || "");
   const platNuevo = normalizarPlataforma(nuevo?.plataforma || anterior?.plataforma || "");
+  const antes = anterior && requiereCorreoLocal(platAntes) ? perfilesServicioLocal(anterior, titular) : [];
+  const despues = nuevo && requiereCorreoLocal(platNuevo) ? perfilesServicioLocal(nuevo, titular) : [];
   const key = (p, plat) => `${plat}|${normalizeIdentByPlatformLocal(plat, p.correo || "")}|${normTxt(p.nombre || "")}`;
   const nuevas = new Set(despues.map((p) => key(p, platNuevo)));
   const removidos = [];
@@ -1081,8 +1094,10 @@ async function menuServicio(chatId, clientId, selector) {
     [{ text: "👥 Gestionar perfiles", callback_data: `cli:prof:list:${clientId}:${compraSel}` }],
     [{ text: "➕ Añadir perfil a esta compra", callback_data: `cli:prof:add:${clientId}:${compraSel}` }],
     [{ text: "📌 Cambiar plataforma", callback_data: `cli:serv:edit:plat:${clientId}:${compraSel}` }],
-    [{ text: `${getIdentLabelLocal(s.plataforma || "") === "Usuario" ? "👤" : "📧"} Cambiar acceso del perfil 1`, callback_data: `cli:serv:edit:mail:${clientId}:${compraSel}` }],
   ];
+  if (requiereCorreoLocal(s.plataforma || "")) {
+    kb.push([{ text: `${getIdentLabelLocal(s.plataforma || "") === "Usuario" ? "👤" : "📧"} Cambiar acceso del perfil 1`, callback_data: `cli:serv:edit:mail:${clientId}:${compraSel}` }]);
+  }
 
   const credBtns = [];
   if (requiereClaveLocal(s.plataforma || "")) credBtns.push({ text: "🔑 Cambiar clave", callback_data: `cli:serv:edit:clave:${clientId}:${compraSel}` });
@@ -1107,7 +1122,7 @@ async function menuListaPerfilesServicio(chatId, clientId, selector) {
   const compraSel = compraSelectorLocal(s, idx);
   const perfiles = perfilesServicioLocal(s, c.nombrePerfil || "");
   const kb = perfiles.map((p, pidx) => [{
-    text: safeBtnLabel(`${pidx + 1}) ${p.nombre || "Perfil"} • ${p.correo || "sin acceso"}`),
+    text: safeBtnLabel(`${pidx + 1}) ${p.nombre || "Perfil"} • ${requiereCorreoLocal(s.plataforma || "") ? (p.correo || "sin acceso") : (p.pin || "sin PIN")}`),
     callback_data: `cli:prof:menu:${clientId}:${compraSel}:${perfilSelectorLocal(p, pidx)}`
   }]);
   kb.push([{ text: "➕ Añadir otro perfil", callback_data: `cli:prof:add:${clientId}:${compraSel}` }]);
@@ -1137,8 +1152,8 @@ async function menuPerfilServicio(chatId, clientId, compraSelector, perfilSelect
   txt += `\n💰 _El precio pertenece a toda la compra: ${escMD(Number(s.precio || 0).toFixed(2))} Lps._`;
   const kb = [
     [{ text: "👤 Cambiar nombre", callback_data: `cli:prof:edit:name:${clientId}:${compraSel}:${perfilSel}` }],
-    [{ text: `📧 Cambiar ${getIdentLabelLocal(s.plataforma || "").toLowerCase()}`, callback_data: `cli:prof:edit:mail:${clientId}:${compraSel}:${perfilSel}` }]
   ];
+  if (requiereCorreoLocal(s.plataforma || "")) kb.push([{ text: `📧 Cambiar ${getIdentLabelLocal(s.plataforma || "").toLowerCase()}`, callback_data: `cli:prof:edit:mail:${clientId}:${compraSel}:${perfilSel}` }]);
   if (requiereClaveLocal(s.plataforma || "")) kb.push([{ text: "🔑 Cambiar clave", callback_data: `cli:prof:edit:key:${clientId}:${compraSel}:${perfilSel}` }]);
   if (requierePinLocal(s.plataforma || "")) kb.push([{ text: "🔐 Cambiar PIN individual", callback_data: `cli:prof:edit:pin:${clientId}:${compraSel}:${perfilSel}` }]);
   if (perfiles.length > 1) kb.push([{ text: "🗑️ Quitar este perfil", callback_data: `cli:prof:del:ask:${clientId}:${compraSel}:${perfilSel}` }]);
