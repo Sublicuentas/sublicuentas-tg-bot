@@ -38,6 +38,11 @@ const {
   cacheInvalidatePrefix, getCoreHealth,
 } = require("./index_01_core");
 const { obtenerCatalogoSocio } = require("./index_15_catalogo_socios");
+const {
+  normVendedor,
+  vendedorEfectivoServicio,
+  filtrarClienteParaVendedor,
+} = require("./index_17_vendedores_servicio");
 
 const {
   isAdmin, logErr, hoyDMY,
@@ -298,8 +303,22 @@ app.post("/rev/login", revLoginIpLimiter, createRevLoginHandler({ db, bot, SUPER
 // CLIENTES del revendedor autenticado
 app.get("/rev/clientes", revAuth, async (req, res) => {
   try {
-    const snap = await db.collection("clientes").where("vendedor_norm", "==", req.rev.nombre_norm).get();
-    res.json(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+    const vendedorNormRaw = normVendedor(req.rev.nombre_norm || req.rev.nombre || "");
+    const vendedorNorm = vendedorNormRaw === "geissel" ? "geisell" : vendedorNormRaw;
+    const aliases = vendedorNorm === "geisell" ? ["geisell", "geissel"] : [vendedorNorm];
+    const consultas = await Promise.allSettled(aliases.flatMap(alias => [
+      db.collection("clientes").where("vendedores_norm", "array-contains", alias).get(),
+      db.collection("clientes").where("vendedor_norm", "==", alias).get(),
+    ]));
+    const docs = new Map();
+    consultas.forEach((resultado) => {
+      if (resultado.status !== "fulfilled") return;
+      resultado.value.docs.forEach((d) => docs.set(d.id, d));
+    });
+    const lista = Array.from(docs.values())
+      .map((d) => ({ id: d.id, ...filtrarClienteParaVendedor(d.data() || {}, vendedorNorm) }))
+      .filter((cliente) => cliente.servicios.length > 0);
+    res.json(lista);
   } catch (e) { console.error("rev/clientes", e); res.status(500).json({ error: "server" }); }
 });
 
@@ -326,10 +345,11 @@ app.get("/rev/admin/revendedores", revAdminAuth, async (req, res) => {
     const porVend = {};
     cliSnap.docs.forEach((d) => {
       const c = d.data();
-      const key = c.vendedor_norm || "";
-      if (!porVend[key]) porVend[key] = { clientes: 0, servicios: 0, vencidos: 0, porVencer: 0 };
-      porVend[key].clientes++;
       (Array.isArray(c.servicios) ? c.servicios : []).forEach((s) => {
+        const key = vendedorEfectivoServicio(s, c).vendedor_norm;
+        if (!key) return;
+        if (!porVend[key]) porVend[key] = { clientesIds: new Set(), servicios: 0, vencidos: 0, porVencer: 0 };
+        porVend[key].clientesIds.add(d.id);
         porVend[key].servicios++;
         const n = revDiasRest(revParseFecha(s.fechaRenovacion || s.vencimiento || s.fechaFin));
         if (n != null) { if (n < 0) porVend[key].vencidos++; else if (n <= 5) porVend[key].porVencer++; }
@@ -338,8 +358,8 @@ app.get("/rev/admin/revendedores", revAdminAuth, async (req, res) => {
     const lista = revSnap.docs.map((d) => {
       const r = d.data();
       const k = r.nombre_norm || (r.nombre || d.id).toLowerCase();
-      const c = porVend[k] || { clientes: 0, servicios: 0, vencidos: 0, porVencer: 0 };
-      return { id: d.id, nombre: r.nombre || d.id, nombre_norm: k, activo: r.activo !== false, telegramId: r.telegramId || "", telefono: r.telefono || "", tarifaId: r.tarifaId || "general", ...c };
+      const stats = porVend[k] || { clientesIds: new Set(), servicios: 0, vencidos: 0, porVencer: 0 };
+      return { id: d.id, nombre: r.nombre || d.id, nombre_norm: k, activo: r.activo !== false, telegramId: r.telegramId || "", telefono: r.telefono || "", tarifaId: r.tarifaId || "general", clientes: stats.clientesIds.size, servicios: stats.servicios, vencidos: stats.vencidos, porVencer: stats.porVencer };
     }).sort((a, b) => b.clientes - a.clientes);
     res.json(lista);
   } catch (e) { console.error("rev/admin", e); res.status(500).json({ error: "server" }); }

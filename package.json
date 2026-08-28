@@ -10,7 +10,9 @@
   "scripts": {
     "start": "node index.js",
     "migracion:precios:preview": "node migrar_precios_socios_202608.js --preview",
-    "migracion:precios:apply": "node migrar_precios_socios_202608.js --apply"
+    "migracion:precios:apply": "node migrar_precios_socios_202608.js --apply",
+    "migracion:vendedores:preview": "node migrar_vendedores_servicio_202608.js --preview",
+    "migracion:vendedores:apply": "node migrar_vendedores_servicio_202608.js --apply"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

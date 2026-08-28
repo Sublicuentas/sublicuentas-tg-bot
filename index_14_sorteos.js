@@ -125,7 +125,9 @@ async function registrarEventoSorteos(rawEvent={}){
   if(!type||!clientId||!eventId)return {ok:false,omitido:'evento_incompleto',creados:0};
   const clientSnap=await db.collection('clientes').doc(clientId).get();
   if(!clientSnap.exists)return {ok:false,omitido:'cliente_no_existe',creados:0};
-  const client=clientSnap.data()||{},vendor=clean(client.vendedor||rawEvent.vendedor,80),vendorNorm=vendorGroup(client.vendedor_norm||client.vendedor||rawEvent.vendedorNorm||rawEvent.vendedor);
+  // El vendedor del evento/servicio manda. `cliente.vendedor` es solo un
+  // campo legacy y puede representar otra cuenta de un cliente compartido.
+  const client=clientSnap.data()||{},vendor=clean(rawEvent.vendedor||client.vendedor,80),vendorNorm=vendorGroup(rawEvent.vendedorNorm||rawEvent.vendedor||client.vendedor_norm||client.vendedor);
   if(!vendorEligible(vendorNorm))return {ok:true,omitido:'vendedor_no_elegible',creados:0};
   const event={tipo:type,clientId,eventoId:eventId,clienteNombre:clean(rawEvent.clienteNombre||client.nombrePerfil||client.nombre||'Cliente',120),
     telefono:clean(rawEvent.telefono||client.telefono,40),vendedor:vendor,vendedorNorm:vendorNorm,origen:clean(rawEvent.origen||'Telegram',80)};

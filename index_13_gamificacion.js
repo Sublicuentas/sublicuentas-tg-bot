@@ -1,6 +1,7 @@
 /* Panel de Socios · perfil, ranking y gamificación compartida */
 const { revAuth, revAdminAuth } = require("./index_09_api_auth");
 const { db, admin, bot, SUPER_ADMIN } = require("./index_01_core");
+const { normVendedor, vendedorEfectivoServicio } = require("./index_17_vendedores_servicio");
 const RECOMPENSAS = {
   Diamante:[{id:"hbo_1m",nombre:"HBO Max · 1 mes"},{id:"disney_sin_espn_1m",nombre:"Disney sin ESPN · 1 mes"},{id:"canva_1m",nombre:"Canva · 1 mes"}],
   Leyenda:[{id:"prime_1m",nombre:"Prime Video · 1 mes"},{id:"duolingo_1m",nombre:"Duolingo · 1 mes"},{id:"crunchyroll_1m",nombre:"Crunchyroll · 1 mes"}],
@@ -38,18 +39,23 @@ module.exports = function mountGamificacion(app) {
         db.collection("renovaciones").get(), db.collection("precios").get(),
       ]);
       const renovaciones = renSnap.docs.map(d => d.data() || {});
-      const ventasPorSocio = {}, clientesPorSocio = {};
+      const ventasPorSocio = {}, clientesIdsPorSocio = {};
       cliSnap.docs.forEach(doc => {
-        const c = doc.data() || {}, k = String(c.vendedor_norm || "").toLowerCase();
-        if (!k) return; clientesPorSocio[k] = (clientesPorSocio[k] || 0) + 1;
-        ventasPorSocio[k] = (ventasPorSocio[k] || 0) + (Array.isArray(c.servicios) ? c.servicios.length : 0);
+        const c = doc.data() || {};
+        (Array.isArray(c.servicios) ? c.servicios : []).forEach(servicio => {
+          const k = vendedorEfectivoServicio(servicio, c).vendedor_norm;
+          if (!k) return;
+          ventasPorSocio[k] = (ventasPorSocio[k] || 0) + 1;
+          if (!clientesIdsPorSocio[k]) clientesIdsPorSocio[k] = new Set();
+          clientesIdsPorSocio[k].add(doc.id);
+        });
       });
       const ranking = revSnap.docs.map(doc => {
         const r = doc.data() || {}, k = String(r.nombre_norm || doc.id).toLowerCase();
         const ventas = ventasPorSocio[k] || 0;
         const ren = renovaciones.filter(x => String(x.socio_norm || "").toLowerCase() === k);
         const cursos = Array.isArray(r.cursosCompletados) ? r.cursosCompletados.length : 0;
-        return { id: doc.id, nombre: r.nombre || k, nombreMostrar:r.nombreMostrar || r.nombre || k, nombre_norm:k, avatar:r.avatarData || "", ventas, clientes:clientesPorSocio[k] || 0, renovaciones:ren.length, cursos, racha:rachaDias(ren), nivel:nivel(ventas), score:ventas*100 + ren.length*25 + cursos*50 };
+        return { id: doc.id, nombre: r.nombre || k, nombreMostrar:r.nombreMostrar || r.nombre || k, nombre_norm:k, avatar:r.avatarData || "", ventas, clientes:clientesIdsPorSocio[k]?.size || 0, renovaciones:ren.length, cursos, racha:rachaDias(ren), nivel:nivel(ventas), score:ventas*100 + ren.length*25 + cursos*50 };
       }).sort((a,b) => b.ventas-a.ventas || b.score-a.score || a.nombre.localeCompare(b.nombre));
       ranking.forEach((x,i) => x.posicion=i+1);
       const me = ranking.find(x => x.nombre_norm === String(req.rev.nombre_norm || "").toLowerCase()) || null;
@@ -96,8 +102,12 @@ module.exports = function mountGamificacion(app) {
   });
   app.post("/rev/recompensa", revAuth, async (req,res) => {
     try {
-      const [revDoc,cliSnap]=await Promise.all([db.collection("revendedores").doc(req.rev.id).get(),db.collection("clientes").where("vendedor_norm","==",req.rev.nombre_norm).get()]);
-      const ventas=cliSnap.docs.reduce((n,d)=>n+(Array.isArray((d.data()||{}).servicios)?d.data().servicios.length:0),0),lvl=nivel(ventas);
+      const [revDoc,cliSnap]=await Promise.all([db.collection("revendedores").doc(req.rev.id).get(),db.collection("clientes").get()]);
+      const vendedorNorm = normVendedor(req.rev.nombre_norm || req.rev.nombre || "");
+      const ventas=cliSnap.docs.reduce((total,d)=>{
+        const cliente=d.data()||{};
+        return total+(Array.isArray(cliente.servicios)?cliente.servicios:[]).filter(servicio=>vendedorEfectivoServicio(servicio,cliente).vendedor_norm===vendedorNorm).length;
+      },0),lvl=nivel(ventas);
       const opciones=RECOMPENSAS[lvl]||[],op=opciones.find(x=>x.id===String(req.body?.recompensaId||""));
       if(!op)return res.status(400).json({error:"recompensa_no_disponible"});
       const anterior=await db.collection("recompensas_socios").where("socio_norm","==",req.rev.nombre_norm).get();

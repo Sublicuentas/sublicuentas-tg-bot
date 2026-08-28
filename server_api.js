@@ -35,6 +35,14 @@ const {
   obtenerCatalogoSocio,
   buscarProductoCatalogo,
 } = require("./index_15_catalogo_socios");
+const {
+  normVendedor,
+  vendedorEfectivoServicio,
+  heredarVendedorServicios,
+  camposResumenVendedores,
+  servicioPerteneceAVendedor,
+  filtrarClienteParaVendedor,
+} = require("./index_17_vendedores_servicio");
 const admin = require("firebase-admin");
 const STORAGE_BUCKET_CANDIDATES = Array.from(new Set([
   process.env.STORAGE_BUCKET,
@@ -72,41 +80,89 @@ function revAddMonths(base, months) {
   if (d.getDate() !== day) d.setDate(0);
   return d;
 }
-async function revActualizarFechaCliente({ clienteId, socioNorm, servicioIndex, nuevaFecha, meses }) {
+async function revResolverSeleccionCliente({ clienteId, socioNorm, seleccion = [] }) {
+  const id = String(clienteId || "").trim();
+  if (!id) throw Object.assign(new Error("cliente_no_existe"), { status: 404, publicError: "cliente_no_existe" });
+  const snap = await db.collection("clientes").doc(id).get();
+  if (!snap.exists) throw Object.assign(new Error("cliente_no_existe"), { status: 404, publicError: "cliente_no_existe" });
+  const cliente = snap.data() || {};
+  const servicios = heredarVendedorServicios(Array.isArray(cliente.servicios) ? cliente.servicios : [], cliente);
+  const resueltos = seleccion.map((item) => {
+    const compraId = String(item?.compraId || "").trim();
+    const ix = compraId
+      ? servicios.findIndex((s) => String(s?.compraId || "").trim() === compraId)
+      : Number(item?.servicioIndex);
+    if (!Number.isInteger(ix) || ix < 0 || ix >= servicios.length) {
+      throw Object.assign(new Error("servicio_no_existe"), { status: 400, publicError: "servicio_no_existe" });
+    }
+    const servicio = servicios[ix] || {};
+    if (!servicioPerteneceAVendedor(servicio, cliente, socioNorm)) {
+      throw Object.assign(new Error("servicio_no_permitido"), { status: 403, publicError: "servicio_no_permitido" });
+    }
+    return {
+      ...item,
+      servicioIndex: ix,
+      compraId: String(servicio.compraId || compraId || ""),
+      servicio: item?.servicio || servicio.plataforma || servicio.servicio || servicio.nombre || "Servicio",
+    };
+  });
+  const vistos = new Set();
+  return resueltos.filter((item) => {
+    if (vistos.has(item.servicioIndex)) return false;
+    vistos.add(item.servicioIndex);
+    return true;
+  });
+}
+async function revActualizarFechaCliente({ clienteId, socioNorm, servicioIndex, compraId, nuevaFecha, meses }) {
   const id = (clienteId || "").toString().trim();
   if (!id) return { actualizado: false };
   const ref = db.collection("clientes").doc(id);
-  const snap = await ref.get();
-  if (!snap.exists) throw Object.assign(new Error("cliente_no_existe"), { status: 404, publicError: "cliente_no_existe" });
-  const c = snap.data() || {};
-  if ((c.vendedor_norm || "") !== (socioNorm || "")) throw Object.assign(new Error("cliente_no_permitido"), { status: 403, publicError: "cliente_no_permitido" });
-  const servicios = Array.isArray(c.servicios) ? [...c.servicios] : [];
-  const ix = Number(servicioIndex);
-  if (!Number.isInteger(ix) || ix < 0 || ix >= servicios.length) throw Object.assign(new Error("servicio_no_existe"), { status: 400, publicError: "servicio_no_existe" });
+  const mutation = await db.runTransaction(async (transaction) => {
+    const snap = await transaction.get(ref);
+    if (!snap.exists) throw Object.assign(new Error("cliente_no_existe"), { status: 404, publicError: "cliente_no_existe" });
+    const c = snap.data() || {};
+    const servicios = heredarVendedorServicios(Array.isArray(c.servicios) ? c.servicios : [], c);
+    const compraBuscada = String(compraId || "").trim();
+    const ix = compraBuscada
+      ? servicios.findIndex((s) => String(s?.compraId || "").trim() === compraBuscada)
+      : Number(servicioIndex);
+    if (!Number.isInteger(ix) || ix < 0 || ix >= servicios.length) throw Object.assign(new Error("servicio_no_existe"), { status: 400, publicError: "servicio_no_existe" });
+    if (!servicioPerteneceAVendedor(servicios[ix], c, socioNorm)) {
+      throw Object.assign(new Error("servicio_no_permitido"), { status: 403, publicError: "servicio_no_permitido" });
+    }
 
-  const svc = { ...(servicios[ix] || {}) };
-  const campo = revCampoFechaServicio(svc);
-  const anterior = revParseFecha(svc[campo] || svc.fechaRenovacion || svc.vencimiento || svc.vence || svc.fechaFin);
-  let nf = revParseFechaInput(nuevaFecha);
-  if (!nf && meses) {
-    const base = anterior && revDiasRest(anterior) > 0 ? anterior : new Date();
-    nf = revAddMonths(base, Number(meses));
-  }
-  if (!nf || isNaN(nf)) throw Object.assign(new Error("fecha_invalida"), { status: 400, publicError: "fecha_invalida" });
+    const svc = { ...(servicios[ix] || {}) };
+    const campo = revCampoFechaServicio(svc);
+    const anterior = revParseFecha(svc[campo] || svc.fechaRenovacion || svc.vencimiento || svc.vence || svc.fechaFin);
+    let nf = revParseFechaInput(nuevaFecha);
+    if (!nf && meses) {
+      const base = anterior && revDiasRest(anterior) > 0 ? anterior : new Date();
+      nf = revAddMonths(base, Number(meses));
+    }
+    if (!nf || isNaN(nf)) throw Object.assign(new Error("fecha_invalida"), { status: 400, publicError: "fecha_invalida" });
 
-  svc[campo] = revFechaISO(nf);
-  svc.ultimaRenovacionAt = new Date();
-  servicios[ix] = svc;
-  await ref.update({ servicios, updatedAt: new Date(), ultimaRenovacionAt: new Date() });
-  const fechaFinal = revFechaISO(nf);
-  const fechaAnterior = anterior ? revFechaISO(anterior) : "";
+    const ahora = new Date();
+    svc[campo] = revFechaISO(nf);
+    svc.ultimaRenovacionAt = ahora;
+    const procesadorNorm = normVendedor(socioNorm);
+    svc.ultimaRenovacionProcesadaPor = procesadorNorm === "geissel" ? "geisell" : procesadorNorm;
+    servicios[ix] = svc;
+    transaction.update(ref, {
+      servicios,
+      ...camposResumenVendedores(servicios, c),
+      updatedAt: ahora,
+      ultimaRenovacionAt: ahora,
+    });
+    return { c, svc, ix, campo, fechaFinal: revFechaISO(nf), fechaAnterior: anterior ? revFechaISO(anterior) : "" };
+  });
+  const { c, svc, ix, campo, fechaFinal, fechaAnterior } = mutation;
   const compraEvento = String(svc.compraId || `servicio-${ix}`);
   const sorteo = fechaFinal !== fechaAnterior
     ? await registrarEventoSorteosSeguro({
       tipo: "renovacion", clientId: id, compraId: compraEvento, fechaEvento: fechaFinal,
       eventoId: `renov:${compraEvento}:${fechaFinal}`,
       clienteNombre: c.nombrePerfil || c.nombre || "Cliente", telefono: c.telefono || "",
-      vendedor: c.vendedor || c.vendedor_norm || socioNorm || "", origen: "Panel de socios"
+      vendedor: vendedorEfectivoServicio(svc, c).vendedor || socioNorm || "", origen: "Panel de socios"
     })
     : { ok: true, creados: 0, omitido: "fecha_sin_cambio" };
   return {
@@ -127,8 +183,22 @@ app.post("/rev/login", revLoginIpLimiter, createRevLoginHandler({ db, bot, SUPER
 // ── CLIENTES del revendedor ──
 app.get("/rev/clientes", revAuth, async (req, res) => {
   try {
-    const snap = await db.collection("clientes").where("vendedor_norm", "==", req.rev.nombre_norm).get();
-    res.json(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+    const vendedorNormRaw = normVendedor(req.rev.nombre_norm || req.rev.nombre || "");
+    const vendedorNorm = vendedorNormRaw === "geissel" ? "geisell" : vendedorNormRaw;
+    const aliases = vendedorNorm === "geisell" ? ["geisell", "geissel"] : [vendedorNorm];
+    const consultas = await Promise.allSettled(aliases.flatMap(alias => [
+      db.collection("clientes").where("vendedores_norm", "array-contains", alias).get(),
+      db.collection("clientes").where("vendedor_norm", "==", alias).get(),
+    ]));
+    const docs = new Map();
+    consultas.forEach((resultado) => {
+      if (resultado.status !== "fulfilled") return;
+      resultado.value.docs.forEach((d) => docs.set(d.id, d));
+    });
+    const lista = Array.from(docs.values())
+      .map((d) => ({ id: d.id, ...filtrarClienteParaVendedor(d.data() || {}, vendedorNorm) }))
+      .filter((cliente) => cliente.servicios.length > 0);
+    res.json(lista);
   } catch (e) { console.error("rev/clientes", e); res.status(500).json({ error: "server" }); }
 });
 
@@ -304,11 +374,16 @@ app.post("/rev/renovacion", revAuth, async (req, res) => {
     const com = (comentario || "").toString().trim().slice(0, 600);
 
     const seleccionRaw=Array.isArray(req.body.servicios)&&req.body.servicios.length?req.body.servicios:[{servicioIndex,servicio}];
-    const seleccion=seleccionRaw.map(x=>({servicioIndex:Number(x.servicioIndex),servicio:String(x.servicio||"").slice(0,120)})).filter(x=>Number.isInteger(x.servicioIndex)&&x.servicioIndex>=0).slice(0,30);
-    if(!seleccion.length)return res.status(400).json({error:"sin_servicios"});
+    const seleccionEntrada=seleccionRaw.map(x=>({
+      servicioIndex:Number(x.servicioIndex),
+      compraId:String(x.compraId||"").trim().slice(0,160),
+      servicio:String(x.servicio||"").slice(0,120)
+    })).filter(x=>(x.compraId||Number.isInteger(x.servicioIndex))&&(x.compraId||x.servicioIndex>=0)).slice(0,30);
+    if(!seleccionEntrada.length)return res.status(400).json({error:"sin_servicios"});
+    const seleccion=await revResolverSeleccionCliente({clienteId,socioNorm:req.rev.nombre_norm||"",seleccion:seleccionEntrada});
     const renovacionesFecha=[];
     if (nuevaFecha || meses) {
-      for(const item of seleccion) renovacionesFecha.push(await revActualizarFechaCliente({clienteId,socioNorm:req.rev.nombre_norm||"",servicioIndex:item.servicioIndex,nuevaFecha,meses}));
+      for(const item of seleccion) renovacionesFecha.push(await revActualizarFechaCliente({clienteId,socioNorm:req.rev.nombre_norm||"",servicioIndex:item.servicioIndex,compraId:item.compraId,nuevaFecha,meses}));
     }
     const renovacionFecha=renovacionesFecha[0]||null;
 
@@ -320,7 +395,7 @@ app.post("/rev/renovacion", revAuth, async (req, res) => {
       cliente: (cliente || "").toString().slice(0, 120),
       servicio: seleccion.length>1?`${seleccion.length} servicios`:(renovacionFecha?.servicio || seleccion[0]?.servicio || servicio || "").toString().slice(0, 120),
       servicioIndex: seleccion.length===1?seleccion[0].servicioIndex:null,
-      servicios: seleccion.map((x,i)=>({servicioIndex:x.servicioIndex,servicio:renovacionesFecha[i]?.servicio||x.servicio,nuevaFecha:renovacionesFecha[i]?.nuevaFecha||String(nuevaFecha||"")})),
+      servicios: seleccion.map((x,i)=>({servicioIndex:x.servicioIndex,compraId:x.compraId||"",servicio:renovacionesFecha[i]?.servicio||x.servicio,nuevaFecha:renovacionesFecha[i]?.nuevaFecha||String(nuevaFecha||"")})),
       comentario: com,
       quien: (quien || "").toString().slice(0, 120),
       monto: Number(monto) || 0,
@@ -369,6 +444,7 @@ app.post("/rev/renovar-cliente", revAuth, async (req, res) => {
       clienteId: req.body.clienteId,
       socioNorm: req.rev.nombre_norm || "",
       servicioIndex: req.body.servicioIndex,
+      compraId: req.body.compraId,
       nuevaFecha: req.body.nuevaFecha,
       meses: req.body.meses,
     });
@@ -616,10 +692,11 @@ app.get("/rev/admin/revendedores", revAdminAuth, async (req, res) => {
     const porVend = {};
     cliSnap.docs.forEach((d) => {
       const c = d.data();
-      const key = c.vendedor_norm || "";
-      if (!porVend[key]) porVend[key] = { clientes: 0, servicios: 0, vencidos: 0, porVencer: 0 };
-      porVend[key].clientes++;
       (Array.isArray(c.servicios) ? c.servicios : []).forEach((s) => {
+        const key = vendedorEfectivoServicio(s, c).vendedor_norm;
+        if (!key) return;
+        if (!porVend[key]) porVend[key] = { clientesIds: new Set(), servicios: 0, vencidos: 0, porVencer: 0 };
+        porVend[key].clientesIds.add(d.id);
         porVend[key].servicios++;
         const n = revDiasRest(revParseFecha(s.fechaRenovacion || s.vencimiento || s.fechaFin));
         if (n != null) { if (n < 0) porVend[key].vencidos++; else if (n <= 5) porVend[key].porVencer++; }
@@ -628,8 +705,8 @@ app.get("/rev/admin/revendedores", revAdminAuth, async (req, res) => {
     const lista = revSnap.docs.map((d) => {
       const r = d.data();
       const k = r.nombre_norm || (r.nombre || d.id).toLowerCase();
-      const c = porVend[k] || { clientes: 0, servicios: 0, vencidos: 0, porVencer: 0 };
-      return { id: d.id, nombre: r.nombre || d.id, nombre_norm: k, activo: r.activo !== false, telegramId: r.telegramId || "", telefono: r.telefono || "", tarifaId: r.tarifaId || "general", ...c };
+      const stats = porVend[k] || { clientesIds: new Set(), servicios: 0, vencidos: 0, porVencer: 0 };
+      return { id: d.id, nombre: r.nombre || d.id, nombre_norm: k, activo: r.activo !== false, telegramId: r.telegramId || "", telefono: r.telefono || "", tarifaId: r.tarifaId || "general", clientes: stats.clientesIds.size, servicios: stats.servicios, vencidos: stats.vencidos, porVencer: stats.porVencer };
     }).sort((a, b) => b.clientes - a.clientes);
     res.json(lista);
   } catch (e) { console.error("rev/admin", e); res.status(500).json({ error: "server" }); }

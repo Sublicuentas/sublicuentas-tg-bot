@@ -32,6 +32,7 @@ const {
 // hueco de "auto-claim" del panel de revendedores — ver index_09_api_auth.js)
 const { generarPinSetup } = require("./index_09_api_auth");
 const { obtenerCatalogoSocio, tarifaIdParaSocio } = require("./index_15_catalogo_socios");
+const { canonicalVendedor, normVendedor, clientePerteneceAVendedor, vendedorEfectivoServicio } = require("./index_17_vendedores_servicio");
 
 const {
   isAdmin,
@@ -1214,9 +1215,9 @@ async function enviarResumenVendedorPro(chatId, vendedorNombre = "") {
 
   snap.forEach((d) => {
     const c = d.data() || {};
-    if (normVendorText(c.vendedor || "") !== normVendorText(vendedorNombre || "")) return;
-
-    const servicios = Array.isArray(c.servicios) ? c.servicios : [];
+    const vendedorNorm = normVendedor(vendedorNombre || "");
+    const servicios = (Array.isArray(c.servicios) ? c.servicios : [])
+      .filter((s) => vendedorEfectivoServicio(s, c).vendedor_norm === vendedorNorm);
     if (servicios.length) clientesActivos++;
 
     servicios.forEach((s) => {
@@ -1771,7 +1772,7 @@ async function getAlertaClientesLocal(tipo = "hoy") {
           clientId: doc.id,
           nombrePerfil: String(c.nombrePerfil || "Sin nombre").trim(),
           telefono: String(c.telefono || "-").trim(),
-          vendedor: String(c.vendedor || "-").trim(),
+          vendedor: vendedorEfectivoServicio(s, c).vendedor || "-",
           plataforma: normalizarPlataforma(s?.plataforma || ""),
           correo: String(s?.correo || "-").trim(),
           pin: String(s?.pin || "-").trim(),
@@ -4247,8 +4248,8 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
 
       if (data.startsWith("cli:edit:vend:")) {
         const clientId = data.split(":")[3];
-        pending.set(String(chatId), { mode: "cliEditVendedor", clientId });
-        return upsertPanel(chatId, "🧑‍💼 *Editar vendedor*\nEscriba el nuevo vendedor:", [[{ text: "⬅️ Cancelar", callback_data: `cli:edit:menu:${clientId}` }]]);
+        await bot.sendMessage(chatId, "ℹ️ El vendedor ahora se asigna por cuenta. Elija el servicio que desea transferir.");
+        return menuListaServicios(chatId, clientId);
       }
 
       // ✅ BORRAR CLIENTE
@@ -4405,12 +4406,14 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
         if (field === "pin") pending.set(String(chatId), { mode: "cliServEditPin", clientId, idx, plat: platActual, compraId });
         if (field === "precio") pending.set(String(chatId), { mode: "cliServEditPrecio", clientId, idx, compraId });
         if (field === "fecha") pending.set(String(chatId), { mode: "cliServEditFecha", clientId, idx, compraId });
+        if (field === "vendedor") pending.set(String(chatId), { mode: "cliServEditVendedor", clientId, idx, compraId });
 
         const titulo =
           field === "mail" ? `${identIcon(platActual)} *Cambiar ${getIdentLabelLocal(platActual).toLowerCase()}*` :
           field === "clave" ? "🔑 *Cambiar clave*" :
           field === "pin" ? "🔐 *Cambiar PIN*" :
           field === "precio" ? "💰 *Cambiar precio*" :
+          field === "vendedor" ? "🧾 *Cambiar vendedor responsable de esta cuenta*" :
           "📅 *Cambiar fecha*";
 
         const hint =
@@ -4418,6 +4421,7 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
           field === "clave" ? "Escriba la nueva clave:" :
           field === "pin" ? "Escriba el nuevo PIN:" :
           field === "precio" ? "Escriba el precio (solo número):" :
+          field === "vendedor" ? "Escriba el nombre del vendedor. Solo cambiará esta cuenta:" :
           "Escriba dd/mm/yyyy:";
 
         return upsertPanel(chatId, `${titulo}\n${hint}`, [[{ text: "⬅️ Cancelar", callback_data: `cli:serv:menu:${clientId}:${compraSel}` }]]);
@@ -4915,7 +4919,8 @@ Revise que el correo exista en inventario con esa plataforma o coloque la clave 
     // ✅ Ver ficha de cliente desde búsqueda del vendedor
     if (data.startsWith("vend:cli:")) {
       const clientId = data.slice("vend:cli:".length);
-      return enviarFichaClienteVendedor(chatId, clientId, "vend:buscar");
+      if (!vendOk) return bot.sendMessage(chatId, "⚠️ No está vinculado a un vendedor.");
+      return enviarFichaClienteVendedor(chatId, clientId, "vend:buscar", vend.nombre);
     }
 
     if (data === "rev:add:start") {
@@ -5527,7 +5532,11 @@ bot.on("message", async (msg) => {
         forceNextPanelAtBottom(chatId);
         if (!t || t.length < 2) return bot.sendMessage(chatId, "⚠️ Escriba al menos 2 caracteres.");
         const { buscarClienteRobusto } = require("./index_03_clientes_crm");
-        const resultados = await buscarClienteRobusto(t);
+        const vendedorActual = await safeGetRevendedorLocal(userId);
+        const resultadosTodos = await buscarClienteRobusto(t);
+        const resultados = resultadosTodos.filter((cliente) =>
+          vendedorActual?.nombre && clientePerteneceAVendedor(cliente, vendedorActual.nombre)
+        );
         if (!resultados.length) {
           return upsertPanel(chatId,
             `🔍 Sin resultados para *${escMD(t)}*`,
@@ -5535,7 +5544,7 @@ bot.on("message", async (msg) => {
           );
         }
         if (resultados.length === 1) {
-          return enviarFichaClienteVendedor(chatId, resultados[0].id, "vend:buscar");
+          return enviarFichaClienteVendedor(chatId, resultados[0].id, "vend:buscar", vendedorActual.nombre);
         }
         // Varios resultados — mostrar lista
         const kb = resultados.slice(0, 20).map(r => [{
@@ -5752,11 +5761,8 @@ bot.on("message", async (msg) => {
 
       if (p.mode === "cliEditVendedor") {
         pending.delete(String(chatId));
-      forceNextPanelAtBottom(chatId);
-        const ref = db.collection("clientes").doc(String(p.clientId));
-        await ref.set({ vendedor: t, vendedor_norm: String(t || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().replace(/\s+/g, " "), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
-        { const { cacheInvalidatePrefix: cIPv } = require("./index_01_core"); cIPv(`clientes:doc:${p.clientId}`); }
-        return menuEditarCliente(chatId, p.clientId);
+        await bot.sendMessage(chatId, "ℹ️ Esa edición global fue desactivada para no mover todas las cuentas. Seleccione el servicio que desea transferir.");
+        return menuListaServicios(chatId, p.clientId);
       }
 
       if (p.mode === "cliProfAddName") {
@@ -5864,10 +5870,32 @@ bot.on("message", async (msg) => {
 
       if (p.mode === "cliAddServFecha") {
         if (!isFechaDMY(t)) return bot.sendMessage(chatId, "⚠️ Formato inválido. Use dd/mm/yyyy:");
+        pending.set(String(chatId), { ...p, mode: "cliAddServVendedor", fechaRenovacion: t });
+        return bot.sendMessage(chatId, "🧾 Vendedor responsable de esta cuenta (por ejemplo, Sublicuentas o Relojes):");
+      }
+
+      if (p.mode === "cliAddServVendedor") {
+        const vendedorEntrada = canonicalVendedor(t);
+        if (!vendedorEntrada) return bot.sendMessage(chatId, "⚠️ Escriba un vendedor válido:");
+        const vendedorNorm = normVendedor(vendedorEntrada) === "geissel" ? "geisell" : normVendedor(vendedorEntrada);
+        const vendedorSnap = await db.collection("revendedores").where("nombre_norm", "==", vendedorNorm).limit(1).get();
+        if (vendedorSnap.empty) return bot.sendMessage(chatId, "⚠️ Ese vendedor no existe. Créelo primero o escriba exactamente su nombre:");
+        const vendedorData = vendedorSnap.docs[0].data() || {};
+        const vendedor = canonicalVendedor(vendedorData.nombre || vendedorEntrada);
         pending.delete(String(chatId));
-      forceNextPanelAtBottom(chatId);
+        forceNextPanelAtBottom(chatId);
         try {
-          await addServicioTx(String(p.clientId), { plataforma: p.plat, correo: p.mail, clave: p.clave || "", pin: p.pin || "", precio: p.precio, fechaRenovacion: t });
+          await addServicioTx(String(p.clientId), {
+            plataforma: p.plat,
+            correo: p.mail,
+            clave: p.clave || "",
+            pin: p.pin || "",
+            precio: p.precio,
+            fechaRenovacion: p.fechaRenovacion,
+            vendedor,
+            vendedor_norm: vendedorNorm,
+            vendedorTelefono: String(vendedorData.telefono || "").trim(),
+          });
         } catch (e) {
           return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo agregar el servicio."}`);
         }
@@ -5966,6 +5994,30 @@ bot.on("message", async (msg) => {
         pending.delete(String(chatId));
       forceNextPanelAtBottom(chatId);
         try { await patchServicio(p.clientId, p.idx, { fechaRenovacion: t }, p.compraId || ""); } catch (e) { return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo actualizar el servicio."}`); }
+        return menuServicio(chatId, p.clientId, p.idx);
+      }
+
+      if (p.mode === "cliServEditVendedor") {
+        const vendedorEntrada = canonicalVendedor(t);
+        if (!vendedorEntrada) return bot.sendMessage(chatId, "⚠️ Escriba un vendedor válido.");
+        const vendedorNorm = normVendedor(vendedorEntrada) === "geissel" ? "geisell" : normVendedor(vendedorEntrada);
+        const vendedorSnap = await db.collection("revendedores").where("nombre_norm", "==", vendedorNorm).limit(1).get();
+        if (vendedorSnap.empty) return bot.sendMessage(chatId, "⚠️ Ese vendedor no existe. Créelo primero o escriba exactamente su nombre.");
+        const vendedorData = vendedorSnap.docs[0].data() || {};
+        const vendedor = canonicalVendedor(vendedorData.nombre || vendedorEntrada);
+        pending.delete(String(chatId));
+        forceNextPanelAtBottom(chatId);
+        try {
+          await patchServicio(p.clientId, p.idx, {
+            vendedor,
+            vendedor_norm: vendedorNorm,
+            vendedorTelefono: String(vendedorData.telefono || "").trim(),
+            vendedorAsignadoAt: new Date().toISOString(),
+          }, p.compraId || "");
+        } catch (e) {
+          return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo transferir la cuenta."}`);
+        }
+        await bot.sendMessage(chatId, `✅ Cuenta transferida a ${vendedor}. Las demás cuentas del cliente no cambiaron.`);
         return menuServicio(chatId, p.clientId, p.idx);
       }
 

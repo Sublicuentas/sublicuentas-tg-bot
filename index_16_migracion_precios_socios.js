@@ -6,8 +6,14 @@ const {
   normSocio,
   precioEspecialParaServicio,
 } = require("./index_15_catalogo_socios");
+const {
+  vendedorEfectivoServicio,
+  camposResumenVendedores,
+} = require("./index_17_vendedores_servicio");
 
-const MIGRATION_ID = "precios_socios_20260828_v1";
+// v2 vuelve a ejecutar la actualización si v1 ya se aplicó: ahora el precio
+// y el vendedor se evalúan cuenta por cuenta dentro de clientes compartidos.
+const MIGRATION_ID = "precios_socios_20260828_v2";
 const TARGETS = new Set(["sublicuentas", "sublicuentas 2", "relojes", "geisell", "geissel"]);
 
 function canonicalVendor(value) {
@@ -27,6 +33,10 @@ function sameNumber(a, b) {
   return Number(a || 0) === Number(b || 0);
 }
 
+function sameStrings(a, b) {
+  return JSON.stringify(Array.isArray(a) ? a : []) === JSON.stringify(Array.isArray(b) ? b : []);
+}
+
 function analizarClientes(docs = []) {
   const cambios = [];
   const ambiguos = new Map();
@@ -34,36 +44,67 @@ function analizarClientes(docs = []) {
   let serviciosConPrecio = 0;
   for (const doc of docs) {
     const data = doc.data() || {};
-    const actual = canonicalVendor(data.vendedor_norm || data.vendedor || "");
-    if (!actual || !TARGETS.has(normSocio(data.vendedor_norm || data.vendedor || ""))) continue;
     const servicios = Array.isArray(data.servicios) ? data.servicios : [];
     let cambioPrecio = false;
+    let cambioVendedorServicio = false;
+    let tieneServicioObjetivo = false;
     const nuevosServicios = servicios.map((servicio) => {
+      const original = servicio || {};
+      const efectivo = vendedorEfectivoServicio(original, data);
+      const actual = canonicalVendor(efectivo.vendedor_norm || efectivo.vendedor || "");
+      if (!actual || !TARGETS.has(actual.norm)) return servicio;
+
+      tieneServicioObjetivo = true;
       serviciosRevisados++;
-      const regla = precioEspecialParaServicio(servicio || {});
-      if (!regla) return servicio;
+      let siguiente = {
+        ...original,
+        vendedor: actual.nombre,
+        vendedor_norm: actual.norm,
+        ...(efectivo.vendedorTelefono ? { vendedorTelefono: efectivo.vendedorTelefono } : {}),
+      };
+      if (String(original.vendedor || "").trim() !== actual.nombre || normSocio(original.vendedor_norm || "") !== actual.norm) {
+        cambioVendedorServicio = true;
+      }
+
+      const regla = precioEspecialParaServicio(original);
+      if (!regla) return siguiente;
       if (regla.ambiguo) {
         ambiguos.set(regla.regla, (ambiguos.get(regla.regla) || 0) + 1);
-        return servicio;
+        return siguiente;
       }
       serviciosConPrecio++;
-      if (sameNumber(servicio && servicio.precio, regla.precio)) return servicio;
+      if (sameNumber(original.precio, regla.precio)) return siguiente;
       cambioPrecio = true;
-      return { ...(servicio || {}), precio: regla.precio, precioActualizadoPor: MIGRATION_ID };
+      siguiente = { ...siguiente, precio: regla.precio, precioActualizadoPor: MIGRATION_ID };
+      return siguiente;
     });
-    const vendedorCambio = normSocio(data.vendedor_norm) !== actual.norm || String(data.vendedor || "").trim() !== actual.nombre;
-    if (cambioPrecio || vendedorCambio) {
+
+    const legacyActual = canonicalVendor(data.vendedor_norm || data.vendedor || "");
+    if (!tieneServicioObjetivo && !legacyActual) continue;
+    if (!tieneServicioObjetivo && !TARGETS.has(legacyActual.norm)) continue;
+
+    const baseResumen = legacyActual
+      ? { ...data, vendedor: legacyActual.nombre, vendedor_norm: legacyActual.norm }
+      : data;
+    const resumen = camposResumenVendedores(nuevosServicios, baseResumen);
+    const vendedorCambio =
+      String(data.vendedor || "").trim() !== resumen.vendedor ||
+      normSocio(data.vendedor_norm || "") !== resumen.vendedor_norm ||
+      String(data.vendedorTelefono || "").trim() !== String(resumen.vendedorTelefono || "").trim() ||
+      !sameStrings(data.vendedores, resumen.vendedores) ||
+      !sameStrings(data.vendedores_norm, resumen.vendedores_norm) ||
+      Boolean(data.clienteCompartido) !== Boolean(resumen.clienteCompartido);
+    if (cambioPrecio || cambioVendedorServicio || vendedorCambio) {
       cambios.push({
         id: doc.id,
         ref: doc.ref,
         data,
         patch: {
-          vendedor: actual.nombre,
-          vendedor_norm: actual.norm,
+          ...resumen,
           servicios: nuevosServicios,
         },
         cambioPrecio,
-        vendedorCambio,
+        vendedorCambio: vendedorCambio || cambioVendedorServicio,
       });
     }
   }
@@ -250,7 +291,15 @@ async function aplicarActualizacion({ db, admin, generarPinSetup, force = false 
       type: "set",
       ref: backupRef(db, "clientes", cambio.id),
       data: {
-        original: compact({ vendedor: cambio.data.vendedor, vendedor_norm: cambio.data.vendedor_norm, servicios: cambio.data.servicios }),
+        original: compact({
+          vendedor: cambio.data.vendedor,
+          vendedor_norm: cambio.data.vendedor_norm,
+          vendedorTelefono: cambio.data.vendedorTelefono,
+          vendedores: cambio.data.vendedores,
+          vendedores_norm: cambio.data.vendedores_norm,
+          clienteCompartido: cambio.data.clienteCompartido,
+          servicios: cambio.data.servicios,
+        }),
         guardadoAt: admin.firestore.FieldValue.serverTimestamp(),
       },
       options: { merge: true },
@@ -282,6 +331,7 @@ async function aplicarActualizacion({ db, admin, generarPinSetup, force = false 
 
 module.exports = {
   MIGRATION_ID,
+  analizarClientes,
   previsualizarActualizacion,
   aplicarActualizacion,
 };

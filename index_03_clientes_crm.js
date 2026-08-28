@@ -21,6 +21,16 @@ const path = require("path");
 const core = require("./index_01_core");
 const utils = require("./index_02_utils_roles");
 const { registrarEventoSorteosSeguro } = require("./index_14_sorteos");
+const {
+  normVendedor,
+  canonicalVendedor,
+  vendedorEfectivoServicio,
+  heredarVendedorServicios,
+  resumenVendedoresCliente,
+  camposResumenVendedores,
+  clientePerteneceAVendedor,
+  filtrarClienteParaVendedor,
+} = require("./index_17_vendedores_servicio");
 
 const { bot, admin, db, PLATAFORMAS } = core;
 
@@ -623,7 +633,7 @@ async function generarHistorialTXT(clientId) {
 
   txt += `Nombre: ${c.nombrePerfil || "Sin nombre"}\n`;
   txt += `Telefono: ${c.telefono || "-"}\n`;
-  txt += `Vendedor: ${c.vendedor || "-"}\n`;
+  txt += `Vendedores: ${resumenVendedoresCliente(servicios, c).vendedores.join(" + ") || "-"}\n`;
   txt += `Estado actual: ${resumen.estadoTexto}\n`;
   txt += `Total mensual actual: ${Number(resumen.total || 0).toFixed(2)} Lps\n`;
   txt += `Proxima renovacion: ${resumen.proxima}\n`;
@@ -643,6 +653,7 @@ async function generarHistorialTXT(clientId) {
       txt += renderCredencialesServicioLocal(s, false, "");
       txt += `Precio: ${Number(s.precio || 0).toFixed(2)} Lps\n`;
       txt += `Renovacion: ${s.fechaRenovacion || "-"}\n`;
+      txt += `Vendedor responsable: ${vendedorEfectivoServicio(s, c).vendedor || "-"}\n`;
       txt += `Estado: ${est.texto}\n`;
     });
   }
@@ -770,6 +781,8 @@ function bolsasBusquedaClienteLocal(x = {}) {
   const nombres = [
     x.nombrePerfil, x.nombre, x.cliente, x.nombre_norm,
     x.vendedor, x.vendedor_norm,
+    ...(Array.isArray(x.vendedores) ? x.vendedores : []),
+    ...(Array.isArray(x.vendedores_norm) ? x.vendedores_norm : []),
   ].map((v) => normTxt(v || "")).filter(Boolean);
 
   const telefonos = [x.telefono, x.telefono_norm, x.whatsapp, x.numero]
@@ -785,6 +798,8 @@ function bolsasBusquedaClienteLocal(x = {}) {
       normTxt(s?.usuario || ""),
       normTxt(s?.plataforma || ""),
       normTxt(humanPlataforma(s?.plataforma || "")),
+      normTxt(s?.vendedor || ""),
+      normTxt(s?.vendedor_norm || ""),
       String(s?.clave || "").trim().toLowerCase(),
       String(s?.pin || "").trim().toLowerCase(),
     );
@@ -883,9 +898,10 @@ async function buscarClienteRobusto(query = "") {
 function clienteResumenTXT(c = {}) {
   const nombre = String(c.nombrePerfil || "Sin nombre").trim();
   const telefono = String(c.telefono || "-").trim();
-  const vendedor = String(c.vendedor || "-").trim();
   const servicios = Array.isArray(c.servicios) ? c.servicios : [];
   const resumen = resumenGeneralCliente(servicios);
+  const vendedores = resumenVendedoresCliente(servicios, c);
+  const vendedor = vendedores.vendedores.join(" + ") || "-";
 
   let txt = "CRM CLIENTE\n";
   txt += `Nombre: ${nombre}\nTelefono: ${telefono}\nVendedor: ${vendedor}\n`;
@@ -898,6 +914,7 @@ function clienteResumenTXT(c = {}) {
     servicios.forEach((s, i) => {
       const est = getEstadoServicio(s.fechaRenovacion || "");
       txt += `\n${i + 1}) ${humanPlataforma(s.plataforma || "")}\n`;
+      txt += `Vendedor responsable: ${vendedorEfectivoServicio(s, c).vendedor || "-"}\n`;
       txt += renderCredencialesServicioLocal(s, false, "");
       txt += `Precio: ${Number(s.precio || 0).toFixed(2)} Lps\n`;
       txt += `Renovacion: ${s.fechaRenovacion || "-"}\nEstado: ${est.texto}\n`;
@@ -910,9 +927,10 @@ function clienteResumenTXT(c = {}) {
 function renderFichaClienteMarkdown(c = {}) {
   const nombre = String(c.nombrePerfil || "Sin nombre").trim();
   const telefono = String(c.telefono || "-").trim();
-  const vendedor = String(c.vendedor || "-").trim();
   const servicios = Array.isArray(c.servicios) ? c.servicios : [];
   const resumen = resumenGeneralCliente(servicios);
+  const vendedores = resumenVendedoresCliente(servicios, c);
+  const vendedor = vendedores.vendedores.join(" + ") || "-";
 
   let txt = `👤 *CRM CLIENTE*\n\n`;
   txt += `🙍 *Nombre:* ${escMD(nombre)}\n📱 *Teléfono:* ${escMD(telefono)}\n🧾 *Vendedor:* ${escMD(vendedor)}\n`;
@@ -927,6 +945,7 @@ function renderFichaClienteMarkdown(c = {}) {
     servicios.forEach((s, i) => {
       const est = getEstadoServicio(s.fechaRenovacion || "");
       txt += `\n\n${i + 1}) ${iconPlataforma(s.plataforma || "")} *${escMD(humanPlataforma(s.plataforma || ""))}*\n`;
+      txt += `🧾 *Vendedor responsable:* ${escMD(vendedorEfectivoServicio(s, c).vendedor || "-")}\n`;
       txt += renderCredencialesServicioLocal(s, true, "");
       txt += `💵 *Precio:* ${escMD(`${Number(s.precio || 0).toFixed(2)} Lps`)}\n`;
       txt += `📅 *Renovación:* ${escMD(s.fechaRenovacion || "-")} — ${est.emoji} ${escMD(est.texto)}`;
@@ -955,9 +974,11 @@ async function enviarFichaCliente(chatId, clientId) {
 }
 
 // ✅ Ficha completa para revendedores — cuentas, claves, fecha, monto
-async function enviarFichaClienteVendedor(chatId, clientId, backCb = "vend:clientes") {
-  const c = await getCliente(clientId);
-  if (!c) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
+async function enviarFichaClienteVendedor(chatId, clientId, backCb = "vend:clientes", vendedorNombre = "") {
+  const original = await getCliente(clientId);
+  if (!original) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
+  const c = vendedorNombre ? filtrarClienteParaVendedor(original, vendedorNombre) : original;
+  if (vendedorNombre && !(c.servicios || []).length) return bot.sendMessage(chatId, "⛔ Ese cliente no tiene cuentas asignadas a usted.");
 
   const servicios = Array.isArray(c.servicios) ? c.servicios : [];
   let total = 0;
@@ -1003,11 +1024,11 @@ async function menuEditarCliente(chatId, clientId) {
   if (!c) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
 
   return upsertPanel(chatId,
-    `✏️ *EDITAR CLIENTE*\n\n👤 *Nombre:* ${escMD(c.nombrePerfil || "-")}\n📱 *Teléfono:* ${escMD(c.telefono || "-")}\n🧾 *Vendedor:* ${escMD(c.vendedor || "-")}\n\nSeleccione qué desea editar:`,
+    `✏️ *EDITAR CLIENTE*\n\n👤 *Nombre:* ${escMD(c.nombrePerfil || "-")}\n📱 *Teléfono:* ${escMD(c.telefono || "-")}\n🧾 *Vendedores:* ${escMD(resumenVendedoresCliente(c.servicios || [], c).vendedores.join(" + ") || "-")}\n\nEl vendedor se cambia dentro de cada servicio.`,
     [
       [{ text: "👤 Cambiar nombre", callback_data: `cli:edit:nombre:${clientId}` }],
       [{ text: "📱 Cambiar teléfono", callback_data: `cli:edit:tel:${clientId}` }],
-      [{ text: "🧾 Cambiar vendedor", callback_data: `cli:edit:vend:${clientId}` }],
+      [{ text: "🧾 Asignar vendedor por servicio", callback_data: `cli:serv:list:${clientId}` }],
       [{ text: "⬅️ Volver Ficha",   callback_data: `cli:view:${clientId}` }],
       [{ text: "🏠 Inicio",          callback_data: "go:inicio" }],
     ]
@@ -1051,6 +1072,7 @@ async function menuServicio(chatId, clientId, selector) {
     `${iconPlataforma(s.plataforma || "")} *Plataforma:* ${escMD(humanPlataforma(s.plataforma || ""))}\n`;
 
   txt += renderCredencialesServicioLocal(s, true, "");
+  txt += `🧾 *Vendedor responsable:* ${escMD(vendedorEfectivoServicio(s, c).vendedor || "-")}\n`;
   txt += `🛒 *Compra:* ${cantidadPerfilesServicioLocal(s, c.nombrePerfil || "")} perfil(es) · un solo precio\n`;
   txt += `💰 *Precio:* ${escMD(`${Number(s.precio || 0).toFixed(2)} Lps`)}\n`;
   txt += `📅 *Renovación:* ${escMD(s.fechaRenovacion || "-")}\n📊 *Estado:* ${est.emoji} ${escMD(est.texto)}`;
@@ -1068,6 +1090,7 @@ async function menuServicio(chatId, clientId, selector) {
   if (credBtns.length) kb.push(credBtns);
   kb.push([{ text: "💰 Cambiar precio", callback_data: `cli:serv:edit:precio:${clientId}:${compraSel}` }]);
   kb.push([{ text: "📅 Cambiar fecha renovación", callback_data: `cli:serv:edit:fecha:${clientId}:${compraSel}` }]);
+  kb.push([{ text: "🧾 Cambiar vendedor responsable", callback_data: `cli:serv:edit:vendedor:${clientId}:${compraSel}` }]);
   kb.push([{ text: "🗑️ Eliminar compra completa", callback_data: `cli:serv:del:ask:${clientId}:${compraSel}` }]);
   kb.push([{ text: "⬅️ Volver Servicios", callback_data: `cli:serv:list:${clientId}` }, { text: "🏠 Inicio", callback_data: "go:inicio" }]);
 
@@ -1201,7 +1224,11 @@ async function mutarServiciosClienteTx(clientId, mutador) {
     const cliente = doc.data() || {};
     // Migración progresiva: al tocar cualquier ficha antigua aseguramos IDs
     // persistentes para todas sus compras y perfiles, sin cambiar sus datos.
-    const servicios = (Array.isArray(cliente.servicios) ? cliente.servicios : []).map((servicio) => {
+    const serviciosHeredados = heredarVendedorServicios(
+      Array.isArray(cliente.servicios) ? cliente.servicios : [],
+      cliente
+    );
+    const servicios = serviciosHeredados.map((servicio) => {
       const s = { ...(servicio || {}) };
       if (!String(s.compraId || "").trim()) s.compraId = recordIdLocal("compra");
       if (Array.isArray(s.perfiles) && s.perfiles.length) {
@@ -1216,12 +1243,19 @@ async function mutarServiciosClienteTx(clientId, mutador) {
       return s;
     });
     const resultado = await mutador({ cliente: { ...cliente, servicios }, servicios, ref });
-    const siguientes = Array.isArray(resultado?.servicios) ? resultado.servicios : servicios;
+    const siguientesRaw = Array.isArray(resultado?.servicios) ? resultado.servicios : servicios;
+    const siguientes = heredarVendedorServicios(siguientesRaw, cliente);
+    const resumenVendedores = camposResumenVendedores(siguientes, cliente);
     tx.set(ref, {
       servicios: siguientes,
+      ...resumenVendedores,
       updatedAt: admin.firestore.FieldValue.serverTimestamp()
     }, { merge: true });
-    return { ...(resultado || {}), cliente, servicios: siguientes };
+    return {
+      ...(resultado || {}),
+      cliente: { ...cliente, ...resumenVendedores, servicios: siguientes },
+      servicios: siguientes,
+    };
   });
 }
 
@@ -1248,7 +1282,7 @@ async function addServicioTx(clientId, servicio = {}) {
     servicios.push(compra);
     return { servicios, compra, servicioIndex, nombreTitular: cliente.nombrePerfil || "" };
   });
-  const compra = resultado.compra;
+  const compra = resultado.servicios?.[resultado.servicioIndex] || resultado.compra;
   const plat = compra.plataforma;
   const precio = Number(compra.precio || 0);
   const fechaRenovacion = String(compra.fechaRenovacion || "");
@@ -1261,7 +1295,7 @@ async function addServicioTx(clientId, servicio = {}) {
     tipo: "compra", clientId: id, compraId: compra.compraId,
     eventoId: `compra:${compra.compraId}`,
     clienteNombre: resultado.cliente?.nombrePerfil || resultado.cliente?.nombre || resultado.nombreTitular || "Cliente",
-    telefono: resultado.cliente?.telefono || "", vendedor: resultado.cliente?.vendedor || "", origen: "Telegram"
+    telefono: resultado.cliente?.telefono || "", vendedor: compra.vendedor || resultado.cliente?.vendedor || "", origen: "Telegram"
   });
 
   // ✅ Registrar en historial
@@ -1335,6 +1369,10 @@ async function patchServicio(clientId, idx, patch = {}, compraId = "") {
     cambios.push(`Fecha: ${actual.fechaRenovacion || "-"} → ${patchLimpio.fechaRenovacion}`);
   if (patchLimpio.plataforma && normalizarPlataforma(patchLimpio.plataforma) !== normalizarPlataforma(actual.plataforma || ""))
     cambios.push(`Plataforma: ${humanPlataforma(actual.plataforma)} → ${humanPlataforma(patchLimpio.plataforma)}`);
+  const vendedorAnterior = vendedorEfectivoServicio(actual, resultado.cliente || {}).vendedor;
+  const vendedorSiguiente = vendedorEfectivoServicio(siguiente, resultado.cliente || {}).vendedor;
+  if (normVendedor(vendedorAnterior) !== normVendedor(vendedorSiguiente))
+    cambios.push(`Vendedor responsable: ${vendedorAnterior || "-"} → ${vendedorSiguiente || "-"}`);
 
   if (cambios.length) {
     await registrarEventoHistorial(id, {
@@ -1552,7 +1590,7 @@ async function renovarServicioTx(clientId, idx, { dias = 0, fechaExacta = "", co
       tipo: "renovacion", clientId: id, compraId: compraEvento, fechaEvento: resultado.fechaNueva,
       eventoId: `renov:${compraEvento}:${resultado.fechaNueva}`,
       clienteNombre: resultado.cliente?.nombrePerfil || resultado.cliente?.nombre || resultado.nombreTitular || "Cliente",
-      telefono: resultado.cliente?.telefono || "", vendedor: resultado.cliente?.vendedor || "", origen: "Telegram"
+      telefono: resultado.cliente?.telefono || "", vendedor: resultado.siguiente?.vendedor || resultado.cliente?.vendedor || "", origen: "Telegram"
     })
     : { ok: true, creados: 0, omitido: "fecha_sin_cambio" };
 
@@ -1577,7 +1615,12 @@ async function renovarTodosServiciosTx(clientId, { dias = 0, fechaExacta = "" } 
       const base = isFechaDMY(fechaAnterior) ? fechaAnterior : hoyDMY();
       const fechaNueva = fechaExacta ? String(fechaExacta || "").trim() : addDaysDMY(base, Number(dias || 0));
       if (!isFechaDMY(fechaNueva)) throw new Error("Fecha inválida.");
-      cambios.push({ compraId: s?.compraId || `servicio-${index}`, fechaAnterior, fechaNueva });
+      cambios.push({
+        compraId: s?.compraId || `servicio-${index}`,
+        fechaAnterior,
+        fechaNueva,
+        vendedor: vendedorEfectivoServicio(s, cliente).vendedor,
+      });
       return { ...(s || {}), fechaRenovacion: fechaNueva };
     });
     return { servicios: siguientes, total: siguientes.length, cambios, fechaExacta: String(fechaExacta || ""), nombreTitular: cliente.nombrePerfil || "" };
@@ -1593,7 +1636,7 @@ async function renovarTodosServiciosTx(clientId, { dias = 0, fechaExacta = "" } 
       tipo: "renovacion", clientId: id, compraId: cambio.compraId, fechaEvento: cambio.fechaNueva,
       eventoId: `renov:${cambio.compraId}:${cambio.fechaNueva}`,
       clienteNombre: resultado.cliente?.nombrePerfil || resultado.cliente?.nombre || resultado.nombreTitular || "Cliente",
-      telefono: resultado.cliente?.telefono || "", vendedor: resultado.cliente?.vendedor || "", origen: "Telegram"
+      telefono: resultado.cliente?.telefono || "", vendedor: cambio.vendedor || resultado.cliente?.vendedor || "", origen: "Telegram"
     }));
   }
 
@@ -1831,7 +1874,9 @@ async function wizardNext(chatId, rawText = "") {
         await ref.set({
           nombrePerfil: st.nombre, nombre_norm: normTxt(st.nombre),
           telefono: st.telefono, telefono_norm: onlyDigits(st.telefono),
-          vendedor: st.vendedor, vendedor_norm: normTxt(st.vendedor),
+          vendedor: canonicalVendedor(st.vendedor), vendedor_norm: normVendedor(st.vendedor),
+          vendedores: [canonicalVendedor(st.vendedor)], vendedores_norm: [normVendedor(st.vendedor)],
+          clienteCompartido: false,
           servicios: [],
           createdAt: admin.firestore.FieldValue.serverTimestamp(),
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -1854,6 +1899,8 @@ async function wizardNext(chatId, rawText = "") {
         }],
         precio: st.servicio.precio,
         fechaRenovacion: st.servicio.fechaRenovacion,
+        vendedor: canonicalVendedor(st.vendedor),
+        vendedor_norm: normVendedor(st.vendedor),
       });
 
       wizard.set(String(chatId), { step: 4, clientId, nombre: st.nombre, telefono: st.telefono, vendedor: st.vendedor, servicio: {}, servStep: 1 });
@@ -1884,18 +1931,17 @@ async function obtenerRenovacionesPorFecha(fechaDMY, vendedor = null) {
 
   snap.forEach((d) => {
     const c = d.data() || {};
-    const vendedorCliente = String(c.vendedor || "").trim();
-
-    if (vendedorNorm && normTxt(vendedorCliente) !== vendedorNorm) return;
 
     const servicios = Array.isArray(c.servicios) ? c.servicios : [];
     servicios.forEach((s, idx) => {
       if (String(s?.fechaRenovacion || "").trim() !== fecha) return;
+      const vendedorServicio = vendedorEfectivoServicio(s, c).vendedor;
+      if (vendedorNorm && normVendedor(vendedorServicio) !== normVendedor(vendedorNorm)) return;
       out.push({
         clientId: d.id, idx,
         nombrePerfil: c.nombrePerfil || "Sin nombre",
         telefono: c.telefono || "-",
-        vendedor: vendedorCliente || "-",
+        vendedor: vendedorServicio || "-",
         plataforma: s.plataforma || "",
         correo: s.correo || "",
         clave: getClaveServicioLocal(s, s.plataforma || ""),
@@ -2013,9 +2059,12 @@ async function reporteClientesSplitPorVendedorTXT(chatId) {
 
   const groups = {};
   for (const c of rows) {
-    const key = String(c.vendedor || "Sin vendedor").trim() || "Sin vendedor";
-    if (!groups[key]) groups[key] = [];
-    groups[key].push(c);
+    const resumen = resumenVendedoresCliente(c.servicios || [], c);
+    const vendedores = resumen.vendedores.length ? resumen.vendedores : ["Sin vendedor"];
+    for (const key of vendedores) {
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(key === "Sin vendedor" ? c : filtrarClienteParaVendedor(c, key));
+    }
   }
 
   const vendedores = Object.keys(groups).sort((a, b) => normTxt(a).localeCompare(normTxt(b), "es"));
@@ -2041,17 +2090,24 @@ async function enviarMisClientes(chatId, vendedorNombre = "") {
   const snap = await db.collection(CLIENTES_COLLECTION).get();
   const rows = snap.docs
     .map((d) => ({ id: d.id, ...(d.data() || {}) }))
-    .filter((c) => normTxt(c.vendedor || "") === normTxt(vendedorNombre || ""));
+    .filter((c) => clientePerteneceAVendedor(c, vendedorNombre))
+    .map((c) => filtrarClienteParaVendedor(c, vendedorNombre));
 
   if (!rows.length) return bot.sendMessage(chatId, "⚠️ No tiene clientes asignados.");
-  return enviarListaResultadosClientes(chatId, rows);
+  const keyboard = rows.slice(0, 30).map((c) => [{
+    text: safeBtnLabel(`${c.nombrePerfil || "Sin nombre"} • ${c.telefono || "sin teléfono"}`),
+    callback_data: `vend:cli:${c.id}`,
+  }]);
+  keyboard.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
+  return upsertPanel(chatId, "👥 *MIS CLIENTES*\n\nSolo se muestran las cuentas administradas por usted:", keyboard);
 }
 
 async function enviarMisClientesTXT(chatId, vendedorNombre = "") {
   const snap = await db.collection(CLIENTES_COLLECTION).get();
   const rows = snap.docs
     .map((d) => ({ id: d.id, ...(d.data() || {}) }))
-    .filter((c) => normTxt(c.vendedor || "") === normTxt(vendedorNombre || ""));
+    .filter((c) => clientePerteneceAVendedor(c, vendedorNombre))
+    .map((c) => filtrarClienteParaVendedor(c, vendedorNombre));
 
   let txt = `CLIENTES DEL VENDEDOR: ${vendedorNombre}\n\n`;
   if (!rows.length) txt += "Sin clientes asignados.\n";

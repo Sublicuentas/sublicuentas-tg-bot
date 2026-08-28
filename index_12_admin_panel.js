@@ -20,6 +20,12 @@ const { revAdminAuth, generarPinSetup } = require("./index_09_api_auth");
 const { db, admin, CLIENTES_COLLECTION, REVENDEDORES_COLLECTION } = require("./index_01_core");
 const { getCliente, patchServicio, eliminarServicioTx, buscarClienteRobusto } = require("./index_03_clientes_crm");
 const {
+  normVendedor,
+  canonicalVendedor,
+  resumenVendedoresCliente,
+  clientePerteneceAVendedor,
+} = require("./index_17_vendedores_servicio");
+const {
   TARIFA_PROPIETARIOS_ID,
   CATALOGO_PROPIETARIOS,
   tarifaIdParaSocio,
@@ -28,6 +34,10 @@ const {
   previsualizarActualizacion,
   aplicarActualizacion,
 } = require("./index_16_migracion_precios_socios");
+const {
+  previsualizarVendedoresPorServicio,
+  aplicarVendedoresPorServicio,
+} = require("./index_18_migracion_vendedores_servicio");
 
 const PRECIOS_COLLECTION = "precios";
 const PRECIOS_ESPECIALES_COLLECTION = "precios_especiales";
@@ -255,6 +265,16 @@ module.exports = function mountAdminPanel(app) {
     ok(res, resultado);
   }));
 
+  // Migra fichas antiguas al modelo de vendedor por cuenta. Cada servicio
+  // sin vendedor hereda el vendedor legacy del cliente y se crea respaldo.
+  app.get("/rev/admin/actualizaciones/vendedores-por-servicio", revAdminAuth, wrap(async (_req, res) => {
+    ok(res, await previsualizarVendedoresPorServicio({ db }));
+  }));
+
+  app.post("/rev/admin/actualizaciones/vendedores-por-servicio", revAdminAuth, wrap(async (req, res) => {
+    ok(res, await aplicarVendedoresPorServicio({ db, admin, force: req.body?.force === true }));
+  }));
+
   // Permite restaurar la lista especial si se vacía, sin tocar clientes ni
   // vendedores. La migración completa de arriba es la opción recomendada.
   app.post("/rev/admin/precios/importar-especial", revAdminAuth, wrap(async (req, res) => {
@@ -377,21 +397,40 @@ module.exports = function mountAdminPanel(app) {
   app.get("/rev/admin/clientes", revAdminAuth, wrap(async (req, res) => {
     const q = String(req.query.q || "").trim();
     if (q) {
-      const resultados = await buscarClienteRobusto(q);
-      return ok(res, { clientes: resultados });
+      let resultados = await buscarClienteRobusto(q);
+      const vendedorFiltro = normVendedor(req.query.vendedor || "");
+      if (vendedorFiltro) resultados = resultados.filter((c) => clientePerteneceAVendedor(c, vendedorFiltro));
+      return ok(res, { clientes: resultados.map((c) => {
+        const servicios = Array.isArray(c.servicios) ? c.servicios : [];
+        const resumen = resumenVendedoresCliente(servicios, c);
+        return {
+          id: c.id,
+          nombre: c.nombrePerfil || c.nombre || "Sin nombre",
+          telefono: c.telefono || "",
+          vendedor: resumen.vendedores.join(" + ") || c.vendedor || "",
+          vendedor_norm: resumen.vendedores_norm[0] || c.vendedor_norm || "",
+          vendedores: resumen.vendedores,
+          vendedores_norm: resumen.vendedores_norm,
+          clienteCompartido: resumen.clienteCompartido,
+          servicios: servicios.length,
+        };
+      }) });
     }
-    const vendedor = String(req.query.vendedor || "").trim().toLowerCase();
-    let query = db.collection(CLIENTES_COLLECTION);
-    if (vendedor) query = query.where("vendedor_norm", "==", vendedor);
-    const snap = await query.limit(500).get();
-    const lista = snap.docs.map((d) => {
+    const vendedor = normVendedor(req.query.vendedor || "");
+    const snap = await db.collection(CLIENTES_COLLECTION).limit(500).get();
+    const lista = snap.docs.filter((d) => !vendedor || clientePerteneceAVendedor(d.data() || {}, vendedor)).map((d) => {
       const c = d.data() || {};
       const servicios = Array.isArray(c.servicios) ? c.servicios : [];
+      const resumen = resumenVendedoresCliente(servicios, c);
       return {
         id: d.id,
         nombre: c.nombrePerfil || c.nombre || "Sin nombre",
         telefono: c.telefono || "",
-        vendedor_norm: c.vendedor_norm || "",
+        vendedor: resumen.vendedores.join(" + ") || c.vendedor || "",
+        vendedor_norm: resumen.vendedores_norm[0] || c.vendedor_norm || "",
+        vendedores: resumen.vendedores,
+        vendedores_norm: resumen.vendedores_norm,
+        clienteCompartido: resumen.clienteCompartido,
         servicios: servicios.length,
       };
     });
@@ -413,10 +452,7 @@ module.exports = function mountAdminPanel(app) {
     if (req.body?.nombrePerfil !== undefined) patch.nombrePerfil = String(req.body.nombrePerfil).trim().slice(0, 120);
     if (req.body?.telefono !== undefined) patch.telefono = String(req.body.telefono).trim().slice(0, 40);
     if (req.body?.vendedor_norm !== undefined) {
-      const vn = normNombre(req.body.vendedor_norm);
-      const vendSnap = await db.collection(REVENDEDORES_COLLECTION).where("nombre_norm", "==", vn).limit(1).get();
-      if (vendSnap.empty) return fail(res, 400, "vendedor_no_existe");
-      patch.vendedor_norm = vn;
+      return fail(res, 409, "vendedor_se_asigna_por_servicio");
     }
 
     await ref.update(patch);
@@ -436,14 +472,26 @@ module.exports = function mountAdminPanel(app) {
   app.patch("/rev/admin/clientes/:id/servicios/:idx", revAdminAuth, wrap(async (req, res) => {
     const idx = Number(req.params.idx);
     if (!Number.isInteger(idx) || idx < 0) return fail(res, 400, "indice_invalido");
-    const resultado = await patchServicio(req.params.id, idx, req.body || {});
+    const patch = { ...(req.body || {}) };
+    if (patch.vendedor !== undefined || patch.vendedor_norm !== undefined) {
+      const vn = normVendedor(patch.vendedor_norm || patch.vendedor || "");
+      const vendSnap = await db.collection(REVENDEDORES_COLLECTION).where("nombre_norm", "==", vn).limit(1).get();
+      if (vendSnap.empty) return fail(res, 400, "vendedor_no_existe");
+      const vendedorDoc = vendSnap.docs[0].data() || {};
+      patch.vendedor = canonicalVendedor(vendedorDoc.nombre || patch.vendedor || vn);
+      patch.vendedor_norm = vn;
+      patch.vendedorTelefono = String(patch.vendedorTelefono || vendedorDoc.telefono || "").trim();
+      patch.vendedorAsignadoAt = new Date().toISOString();
+      patch.vendedorAsignadoPor = req.admin?.nombre || "Admin";
+    }
+    const resultado = await patchServicio(req.params.id, idx, patch, String(req.body?.compraId || ""));
     ok(res, resultado);
   }));
 
   app.delete("/rev/admin/clientes/:id/servicios/:idx", revAdminAuth, wrap(async (req, res) => {
     const idx = Number(req.params.idx);
     if (!Number.isInteger(idx) || idx < 0) return fail(res, 400, "indice_invalido");
-    const resultado = await eliminarServicioTx(req.params.id, idx);
+    const resultado = await eliminarServicioTx(req.params.id, idx, String(req.query?.compraId || ""));
     ok(res, resultado);
   }));
 };

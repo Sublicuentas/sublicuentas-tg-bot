@@ -6,6 +6,7 @@
 */
 
 const { ExcelJS, db } = require("./index_01_core");
+const { vendedorEfectivoServicio, resumenVendedoresCliente } = require("./index_17_vendedores_servicio");
 
 function logErr(scope = "error", err = "") {
   try { console.error(`❌ [${scope}]`, err?.stack || err?.message || err); } catch (_) {}
@@ -166,14 +167,15 @@ function normalizeClient(doc) {
     ...servicios.map((s) => pick(s, ["fechaContratacion", "fechaInicio", "fecha_inicio", "createdAt"])),
   ].map(toDate).filter(Boolean).sort((a, b) => a - b);
 
+  const vendedores = resumenVendedoresCliente(servicios, c);
   return {
     id: c.id || "",
     nombre: safe(c.nombrePerfil || c.nombre || c.cliente || c.name || "Sin nombre"),
     telefono: safe(c.telefono || c.telefono_norm || c.celular || c.whatsapp || ""),
     telefonoDigits: onlyDigits(c.telefono || c.telefono_norm || c.celular || c.whatsapp || ""),
     email: safe(c.email || c.correo || ""),
-    vendedor: safe(c.vendedor || c.revendedor || c.socio || "Sin vendedor"),
-    vendedorNorm: normTxt(c.vendedor_norm || c.vendedor || c.revendedor || c.socio || "sin vendedor"),
+    vendedor: vendedores.vendedores.join(" + ") || safe(c.vendedor || c.revendedor || c.socio || "Sin vendedor"),
+    vendedorNorm: vendedores.vendedores_norm.join(" + ") || normTxt(c.vendedor_norm || c.vendedor || c.revendedor || c.socio || "sin vendedor"),
     servicios,
     serviciosCount: servicios.length,
     totalMensual,
@@ -208,7 +210,7 @@ function buildServiceRows(clientes = []) {
         nombre: c.nombre,
         perfil: safe(p.nombre || p.nombrePerfil || p.perfil || c.nombre),
         telefono: c.telefono,
-        vendedor: c.vendedor,
+        vendedor: vendedorEfectivoServicio(s, c.raw || c).vendedor || c.vendedor,
         plataforma: plataformaLabel(s.plataforma || s.servicio || s.nombre || ""),
         correo: safe(p.correo || s.correo || s.usuario || s.ident || s.email || ""),
         pin: safe(p.pinPerfil || p.pin_perfil || p.perfilPin || p.pin || (perfilIndex === 0 ? (s.pinPerfil || s.pin || s.perfil || s.clavePerfil || "") : "")),
@@ -369,13 +371,22 @@ async function crearResumen(ws, clientes, servicios) {
 function groupByVendedor(clientes) {
   const map = new Map();
   clientes.forEach((c) => {
-    const key = c.vendedor || "Sin vendedor";
-    if (!map.has(key)) map.set(key, { vendedor: key, clientes: 0, servicios: 0, total: 0, vigentes: 0, noVigentes: 0 });
-    const x = map.get(key);
-    x.clientes += 1;
-    x.servicios += c.serviciosCount;
-    x.total += c.totalMensual;
-    if (c.estado === "Vigente") x.vigentes += 1; else x.noVigentes += 1;
+    const porCliente = new Map();
+    (Array.isArray(c.servicios) ? c.servicios : []).forEach((servicio) => {
+      const key = vendedorEfectivoServicio(servicio, c.raw || c).vendedor || "Sin vendedor";
+      if (!porCliente.has(key)) porCliente.set(key, []);
+      porCliente.get(key).push(servicio);
+    });
+    if (!porCliente.size) porCliente.set(c.vendedor || "Sin vendedor", []);
+    porCliente.forEach((servicios, key) => {
+      if (!map.has(key)) map.set(key, { vendedor: key, clientes: 0, servicios: 0, total: 0, vigentes: 0, noVigentes: 0 });
+      const x = map.get(key);
+      x.clientes += 1;
+      x.servicios += servicios.length;
+      x.total += servicios.reduce((sum, servicio) => sum + num(servicio.precio || servicio.monto || servicio.total), 0);
+      const estado = estadoCliente(servicios);
+      if (estado === "Vigente") x.vigentes += 1; else x.noVigentes += 1;
+    });
   });
   return Array.from(map.values()).sort((a, b) => b.total - a.total);
 }

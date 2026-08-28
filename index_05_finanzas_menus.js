@@ -20,6 +20,7 @@ const {
 } = require("./index_02_utils_roles");
 
 const { humanPlataforma, obtenerRenovacionesPorFecha } = require("./index_03_clientes_crm");
+const { vendedorEfectivoServicio, resumenVendedoresCliente } = require("./index_17_vendedores_servicio");
 
 // ===============================
 // CONFIG
@@ -626,9 +627,9 @@ async function generarDashboard(chatId) {
     let renovacionesSemana = 0;
     const ingresoPorVendedor = {};
     for (const c of clientes) {
-      const vendedor = String(c.vendedor || "Sin vendedor").trim();
       const servicios = Array.isArray(c.servicios) ? c.servicios : [];
       for (const s of servicios) {
+        const vendedor = vendedorEfectivoServicio(s, c).vendedor || "Sin vendedor";
         const fecha = String(s.fechaRenovacion || "").trim();
         if (!/^\d{2}\/\d{2}\/\d{4}$/.test(fecha)) continue;
         const [fdd, fmm, fyyyy] = fecha.split("/");
@@ -770,7 +771,8 @@ async function ejecutarBackupDominical() {
         const f = String(s.fechaRenovacion || "").trim();
         if (f) { const [fdd, fmm, fyyyy] = f.split("/"); const ts = new Date(Number(fyyyy), Number(fmm) - 1, Number(fdd)).getTime(); if (ts < proximaTs) { proximaTs = ts; proxima = f; } }
       }
-      wsClientes.addRow({ nombre: c.nombrePerfil || "", telefono: c.telefono || "", vendedor: c.vendedor || "", servicios: servicios.length, total, proxima });
+      const vendedores = resumenVendedoresCliente(servicios, c).vendedores.join(" + ");
+      wsClientes.addRow({ nombre: c.nombrePerfil || "", telefono: c.telefono || "", vendedor: vendedores, servicios: servicios.length, total, proxima });
     }
     wsClientes.getRow(1).font = { bold: true }; wsClientes.views = [{ state: "frozen", ySplit: 1 }];
     const tempPath = `/tmp/backup_dominical_${hoy.replace(/\//g, "-")}.xlsx`;
