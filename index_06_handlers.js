@@ -4229,7 +4229,7 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
         wizard.set(String(chatId), st);
         if (st.servStep === 2) return bot.sendMessage(chatId, `(Servicio 2/6) ${getIdentLabelLocal(plat)} de la cuenta:`);
         if (st.servStep === 3) return bot.sendMessage(chatId, "(Servicio 3/6) Clave de la cuenta:");
-        if (st.servStep === 4) return bot.sendMessage(chatId, "(Servicio 4/6) PIN de Apple TV:");
+        if (st.servStep === 4) return bot.sendMessage(chatId, "(Servicio 4/6) PIN del perfil:");
         return bot.sendMessage(chatId, "(Servicio 5/6) Precio (solo número, Lps):");
       }
 
