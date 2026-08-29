@@ -306,15 +306,31 @@ app.get("/rev/clientes", revAuth, async (req, res) => {
     const vendedorNormRaw = normVendedor(req.rev.nombre_norm || req.rev.nombre || "");
     const vendedorNorm = vendedorNormRaw === "geissel" ? "geisell" : vendedorNormRaw;
     const aliases = vendedorNorm === "geisell" ? ["geisell", "geissel"] : [vendedorNorm];
-    const consultas = await Promise.allSettled(aliases.flatMap(alias => [
-      db.collection("clientes").where("vendedores_norm", "array-contains", alias).get(),
-      db.collection("clientes").where("vendedor_norm", "==", alias).get(),
-    ]));
+    const nombresLegacy = vendedorNorm === "geisell" ? ["Geisell", "Geissel", "geisell", "geissel"] : [];
+    const consultas = await Promise.allSettled([
+      ...aliases.flatMap(alias => [
+        db.collection("clientes").where("vendedores_norm", "array-contains", alias).get(),
+        db.collection("clientes").where("vendedor_norm", "==", alias).get(),
+      ]),
+      ...nombresLegacy.flatMap(nombre => [
+        db.collection("clientes").where("vendedores", "array-contains", nombre).get(),
+        db.collection("clientes").where("vendedor", "==", nombre).get(),
+      ]),
+    ]);
     const docs = new Map();
     consultas.forEach((resultado) => {
       if (resultado.status !== "fulfilled") return;
       resultado.value.docs.forEach((d) => docs.set(d.id, d));
     });
+    // Datos antiguos pueden tener el vendedor únicamente dentro de
+    // servicios[]. Este respaldo evita que esos clientes desaparezcan.
+    if (!docs.size && vendedorNorm === "geisell") {
+      const legacySnap = await db.collection("clientes").get();
+      legacySnap.docs.forEach((d) => {
+        const visible = filtrarClienteParaVendedor(d.data() || {}, vendedorNorm);
+        if (visible.servicios.length) docs.set(d.id, d);
+      });
+    }
     const lista = Array.from(docs.values())
       .map((d) => ({ id: d.id, ...filtrarClienteParaVendedor(d.data() || {}, vendedorNorm) }))
       .filter((cliente) => cliente.servicios.length > 0);
@@ -355,12 +371,36 @@ app.get("/rev/admin/revendedores", revAdminAuth, async (req, res) => {
         if (n != null) { if (n < 0) porVend[key].vencidos++; else if (n <= 5) porVend[key].porVencer++; }
       });
     });
-    const lista = revSnap.docs.map((d) => {
-      const r = d.data();
-      const k = r.nombre_norm || (r.nombre || d.id).toLowerCase();
+    // Unificar el alias histórico "Geissel" bajo el nombre correcto
+    // "Geisell", incluyendo sus clientes y renovaciones.
+    const cuentas = new Map();
+    revSnap.docs.forEach((d) => {
+      const r = d.data() || {};
+      const rawKey = normVendedor(r.nombre_norm || r.nombre || d.id);
+      const k = rawKey === "geissel" ? "geisell" : rawKey;
       const stats = porVend[k] || { clientesIds: new Set(), servicios: 0, vencidos: 0, porVencer: 0 };
-      return { id: d.id, nombre: r.nombre || d.id, nombre_norm: k, activo: r.activo !== false, soloCatalogo: esRevSoloCatalogo({ id: d.id, ...r }), telegramId: r.telegramId || "", telefono: r.telefono || "", tarifaId: r.tarifaId || "general", clientes: stats.clientesIds.size, servicios: stats.servicios, vencidos: stats.vencidos, porVencer: stats.porVencer };
-    }).sort((a, b) => b.clientes - a.clientes);
+      const item = {
+        id: d.id,
+        nombre: k === "geisell" ? "Geisell" : (r.nombre || d.id),
+        nombre_norm: k,
+        activo: r.activo !== false,
+        soloCatalogo: esRevSoloCatalogo({ id: d.id, ...r, nombre_norm: k }),
+        sinCompras: esRevSoloCatalogo({ id: d.id, ...r, nombre_norm: k }),
+        telegramId: r.telegramId || "",
+        telefono: r.telefono || "",
+        tarifaId: r.tarifaId || "general",
+        clientes: stats.clientesIds.size,
+        servicios: stats.servicios,
+        vencidos: stats.vencidos,
+        porVencer: stats.porVencer,
+        _rawKey: rawKey,
+      };
+      const anterior = cuentas.get(k);
+      if (!anterior || (rawKey === "geisell" && anterior._rawKey !== "geisell")) cuentas.set(k, item);
+    });
+    const lista = Array.from(cuentas.values())
+      .map(({ _rawKey, ...item }) => item)
+      .sort((a, b) => b.clientes - a.clientes);
     res.json(lista);
   } catch (e) { console.error("rev/admin", e); res.status(500).json({ error: "server" }); }
 });
@@ -368,14 +408,32 @@ app.get("/rev/admin/revendedores", revAdminAuth, async (req, res) => {
 // ADMIN: "ver como" un revendedor
 app.post("/rev/admin/impersonate", revAdminAuth, async (req, res) => {
   try {
+    const id = (req.body.id || "").trim();
     const nombre_norm = (req.body.nombre_norm || "").trim().toLowerCase();
-    if (!nombre_norm) return res.status(400).json({ error: "falta_revendedor" });
-    const snap = await db.collection("revendedores").where("nombre_norm", "==", nombre_norm).limit(1).get();
-    if (snap.empty) return res.status(404).json({ error: "no_existe" });
-    const d = snap.docs[0].data();
-    const soloCatalogo = esRevSoloCatalogo({ id: snap.docs[0].id, ...d });
-    const token = jwt.sign({ id: snap.docs[0].id, nombre: d.nombre, nombre_norm: d.nombre_norm, soloCatalogo }, REV_JWT_SECRET, { expiresIn: "6h" });
-    res.json({ token, nombre: d.nombre, nombre_norm: d.nombre_norm, soloCatalogo });
+    if (!id && !nombre_norm) return res.status(400).json({ error: "falta_revendedor" });
+    let doc = null;
+    if (id) {
+      const porId = await db.collection("revendedores").doc(id).get();
+      if (porId.exists) doc = porId;
+    }
+    if (!doc && nombre_norm) {
+      const aliases = [nombre_norm];
+      if (nombre_norm === "geisell") aliases.push("geissel");
+      const snaps = await Promise.all(aliases.map(alias =>
+        db.collection("revendedores").where("nombre_norm", "==", alias).limit(1).get()
+      ));
+      const snap = snaps.find(s => !s.empty);
+      if (snap) doc = snap.docs[0];
+    }
+    if (!doc) return res.status(404).json({ error: "no_existe" });
+    const d = doc.data() || {};
+    const rawNorm = normVendedor(d.nombre_norm || d.nombre || doc.id);
+    const nn = rawNorm === "geissel" ? "geisell" : rawNorm;
+    const nombre = nn === "geisell" ? "Geisell" : (d.nombre || doc.id);
+    const soloCatalogo = esRevSoloCatalogo({ id: doc.id, ...d, nombre_norm: nn });
+    const sinCompras = soloCatalogo;
+    const token = jwt.sign({ id: doc.id, nombre, nombre_norm: nn, soloCatalogo, sinCompras }, REV_JWT_SECRET, { expiresIn: "6h" });
+    res.json({ token, nombre, nombre_norm: nn, soloCatalogo, sinCompras });
   } catch (e) { console.error("rev/impersonate", e); res.status(500).json({ error: "server" }); }
 });
 /* ════════════ fin panel revendedores ════════════ */

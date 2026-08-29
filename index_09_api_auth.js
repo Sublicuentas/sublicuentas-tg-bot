@@ -44,9 +44,9 @@ function safeEqualStr(a, b) {
 }
 
 /**
- * Permiso de consulta: Geisell usa el panel únicamente como catálogo. El
- * campo `soloCatalogo` permite aplicar el mismo rol a otra cuenta en el
- * futuro sin cambiar código; los alias históricos se mantienen bloqueados.
+ * Permiso sin compras: Geisell puede consultar clientes, catálogo,
+ * renovaciones y mensajes de renovación, pero no registrar compras. Se
+ * conserva el nombre `soloCatalogo` para aceptar tokens y datos anteriores.
  */
 function esRevSoloCatalogo(rev = {}) {
   const nombre = String(rev.nombre_norm || rev.nombre || rev.usuario || rev.id || "")
@@ -69,7 +69,7 @@ function revAuth(req, res, next) {
     if (String(req.rev?.nombre_norm || "").trim().toLowerCase() === "geissel") {
       req.rev = { ...req.rev, id: "geisell", nombre: "Geisell", nombre_norm: "geisell" };
     }
-    if (esRevSoloCatalogo(req.rev)) req.rev = { ...req.rev, soloCatalogo: true };
+    if (esRevSoloCatalogo(req.rev)) req.rev = { ...req.rev, soloCatalogo: true, sinCompras: true };
     next();
   } catch (e) {
     return res.status(401).json({ error: "token_invalido" });
@@ -177,40 +177,81 @@ function createRevLoginHandler({ db, bot, SUPER_ADMIN }) {
       const ADMIN_USER = (process.env.ADMIN_USER || "").trim().toLowerCase();
       const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "";
 
-      const usuario = (req.body?.usuario || "").trim().toLowerCase();
+      const usuarioIngresado = (req.body?.usuario || "").trim().toLowerCase();
+      // El nombre correcto es Geisell. El alias mal escrito sigue entrando
+      // para no dejar fuera una cuenta o sesión creada anteriormente.
+      const usuario = usuarioIngresado === "geissel" ? "geisell" : usuarioIngresado;
       const password = (req.body?.password || "").trim();
       const pin = (req.body?.pin || "").trim();
       if (!usuario || !password) return res.status(400).json({ error: "faltan_datos" });
 
-      const throttle = await checkLoginThrottle(db, usuario);
-      if (throttle.blocked) {
-        return res.status(429).json({ error: "demasiados_intentos", retryAfterSeconds: throttle.retryAfterSeconds });
-      }
+      // Esta lectura se inicia ya y, para revendedores, viaja en paralelo con
+      // la búsqueda de la cuenta. Antes eran dos esperas de Firestore seguidas.
+      const throttlePromise = checkLoginThrottle(db, usuario);
 
       // ── Admin ──
-      if (ADMIN_USER && ADMIN_PASSWORD && usuario === ADMIN_USER && safeEqualStr(password, ADMIN_PASSWORD)) {
-        await clearLoginThrottle(db, usuario);
+      if (ADMIN_USER && ADMIN_PASSWORD && usuarioIngresado === ADMIN_USER && safeEqualStr(password, ADMIN_PASSWORD)) {
+        const throttle = await throttlePromise;
+        if (throttle.blocked) {
+          return res.status(429).json({ error: "demasiados_intentos", retryAfterSeconds: throttle.retryAfterSeconds });
+        }
+        clearLoginThrottle(db, usuario).catch(() => {});
         const token = jwt.sign({ admin: true, nombre: "Admin" }, JWT_SECRET, { expiresIn: "30d" });
         return res.json({ token, admin: true, nombre: "Admin" });
       }
 
       // ── Revendedor ──
-      const snap = await db.collection("revendedores").where("nombre_norm", "==", usuario).limit(1).get();
-      if (snap.empty) {
+      const aliases = usuario === "geisell" ? ["geisell", "geissel"] : [usuario];
+      const [throttle, snaps] = await Promise.all([
+        throttlePromise,
+        Promise.all(aliases.map(alias =>
+          db.collection("revendedores").where("nombre_norm", "==", alias).limit(1).get()
+        )),
+      ]);
+      if (throttle.blocked) {
+        return res.status(429).json({ error: "demasiados_intentos", retryAfterSeconds: throttle.retryAfterSeconds });
+      }
+      const encontrados = [];
+      snaps.forEach(snap => snap.docs.forEach(doc => encontrados.push(doc)));
+      if (!encontrados.length) {
         await registerLoginFailure(db, usuario);
         return res.status(400).json({ error: "credenciales" });
       }
-      const doc = snap.docs[0], d = doc.data();
-      if (d.activo === false) return res.status(403).json({ error: "inactivo" });
+      // Si coexistieran las dos grafías, se usa primero la cuenta activa y
+      // correctamente nombrada.
+      encontrados.sort((a, b) => {
+        const ad = a.data() || {}, bd = b.data() || {};
+        const activoA = ad.activo !== false ? 1 : 0;
+        const activoB = bd.activo !== false ? 1 : 0;
+        const canonA = String(ad.nombre_norm || "").toLowerCase() === "geisell" ? 1 : 0;
+        const canonB = String(bd.nombre_norm || "").toLowerCase() === "geisell" ? 1 : 0;
+        return (activoB - activoA) || (canonB - canonA);
+      });
+      const activos = encontrados.filter(candidato => (candidato.data() || {}).activo !== false);
+      if (!activos.length) return res.status(403).json({ error: "inactivo" });
 
-      if (d.passwordHash) {
-        // Flujo normal: ya tiene contraseña configurada.
-        const okp = await bcrypt.compare(password, d.passwordHash);
-        if (!okp) {
+      // Si existen dos documentos históricos, aceptar la contraseña del que
+      // realmente la conserva. Así la consolidación del nombre no rompe el
+      // acceso mientras se despliega la migración de datos.
+      let doc = null, d = null;
+      for (const candidato of activos) {
+        const datos = candidato.data() || {};
+        if (!datos.passwordHash) continue;
+        if (await bcrypt.compare(password, datos.passwordHash)) {
+          doc = candidato;
+          d = datos;
+          break;
+        }
+      }
+
+      if (!doc) {
+        const candidatoSetup = activos.find(candidato => !(candidato.data() || {}).passwordHash);
+        if (!candidatoSetup) {
           await registerLoginFailure(db, usuario);
           return res.status(400).json({ error: "credenciales" });
         }
-      } else {
+        doc = candidatoSetup;
+        d = doc.data() || {};
         // Primera vez: exige el PIN de un solo uso (ya no se auto-reclama con solo la contraseña).
         if (!d.pinSetupHash) {
           return res.status(403).json({ error: "cuenta_no_configurada" });
@@ -238,10 +279,13 @@ function createRevLoginHandler({ db, bot, SUPER_ADMIN }) {
         }
       }
 
-      await clearLoginThrottle(db, usuario);
+      clearLoginThrottle(db, usuario).catch(() => {});
       const soloCatalogo = esRevSoloCatalogo({ id: doc.id, ...d });
-      const token = jwt.sign({ id: doc.id, nombre: d.nombre, nombre_norm: d.nombre_norm, soloCatalogo }, JWT_SECRET, { expiresIn: "30d" });
-      res.json({ token, nombre: d.nombre, nombre_norm: d.nombre_norm, soloCatalogo });
+      const nombreNorm = usuario === "geisell" ? "geisell" : (d.nombre_norm || usuario);
+      const nombre = nombreNorm === "geisell" ? "Geisell" : (d.nombre || usuario);
+      const sinCompras = soloCatalogo;
+      const token = jwt.sign({ id: doc.id, nombre, nombre_norm: nombreNorm, soloCatalogo, sinCompras }, JWT_SECRET, { expiresIn: "30d" });
+      res.json({ token, nombre, nombre_norm: nombreNorm, soloCatalogo, sinCompras });
     } catch (e) {
       console.error("rev/login", e);
       res.status(500).json({ error: "server" });
