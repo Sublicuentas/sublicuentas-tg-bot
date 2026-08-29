@@ -29,7 +29,7 @@ const cors = require("cors");
 // ✅ Usar módulo de auth compartido (elimina duplicación)
 const {
   revAuth, revAdminAuth, revParseFecha, revDiasRest, revFechaISO, revParseFechaInput, revAddMonths,
-  getJwtSecret, revLoginIpLimiter, createRevLoginHandler,
+  getJwtSecret, revLoginIpLimiter, createRevLoginHandler, esRevSoloCatalogo,
 } = require("./index_09_api_auth");
 
 const {
@@ -359,7 +359,7 @@ app.get("/rev/admin/revendedores", revAdminAuth, async (req, res) => {
       const r = d.data();
       const k = r.nombre_norm || (r.nombre || d.id).toLowerCase();
       const stats = porVend[k] || { clientesIds: new Set(), servicios: 0, vencidos: 0, porVencer: 0 };
-      return { id: d.id, nombre: r.nombre || d.id, nombre_norm: k, activo: r.activo !== false, telegramId: r.telegramId || "", telefono: r.telefono || "", tarifaId: r.tarifaId || "general", clientes: stats.clientesIds.size, servicios: stats.servicios, vencidos: stats.vencidos, porVencer: stats.porVencer };
+      return { id: d.id, nombre: r.nombre || d.id, nombre_norm: k, activo: r.activo !== false, soloCatalogo: esRevSoloCatalogo({ id: d.id, ...r }), telegramId: r.telegramId || "", telefono: r.telefono || "", tarifaId: r.tarifaId || "general", clientes: stats.clientesIds.size, servicios: stats.servicios, vencidos: stats.vencidos, porVencer: stats.porVencer };
     }).sort((a, b) => b.clientes - a.clientes);
     res.json(lista);
   } catch (e) { console.error("rev/admin", e); res.status(500).json({ error: "server" }); }
@@ -373,8 +373,9 @@ app.post("/rev/admin/impersonate", revAdminAuth, async (req, res) => {
     const snap = await db.collection("revendedores").where("nombre_norm", "==", nombre_norm).limit(1).get();
     if (snap.empty) return res.status(404).json({ error: "no_existe" });
     const d = snap.docs[0].data();
-    const token = jwt.sign({ id: snap.docs[0].id, nombre: d.nombre, nombre_norm: d.nombre_norm }, REV_JWT_SECRET, { expiresIn: "6h" });
-    res.json({ token, nombre: d.nombre, nombre_norm: d.nombre_norm });
+    const soloCatalogo = esRevSoloCatalogo({ id: snap.docs[0].id, ...d });
+    const token = jwt.sign({ id: snap.docs[0].id, nombre: d.nombre, nombre_norm: d.nombre_norm, soloCatalogo }, REV_JWT_SECRET, { expiresIn: "6h" });
+    res.json({ token, nombre: d.nombre, nombre_norm: d.nombre_norm, soloCatalogo });
   } catch (e) { console.error("rev/impersonate", e); res.status(500).json({ error: "server" }); }
 });
 /* ════════════ fin panel revendedores ════════════ */

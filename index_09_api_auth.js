@@ -44,6 +44,17 @@ function safeEqualStr(a, b) {
 }
 
 /**
+ * Permiso de consulta: Geisell usa el panel únicamente como catálogo. El
+ * campo `soloCatalogo` permite aplicar el mismo rol a otra cuenta en el
+ * futuro sin cambiar código; los alias históricos se mantienen bloqueados.
+ */
+function esRevSoloCatalogo(rev = {}) {
+  const nombre = String(rev.nombre_norm || rev.nombre || rev.usuario || rev.id || "")
+    .trim().toLowerCase();
+  return rev.soloCatalogo === true || nombre === "geisell" || nombre === "geissel";
+}
+
+/**
  * Middleware: Valida JWT token para revendedor/admin
  */
 function revAuth(req, res, next) {
@@ -58,6 +69,7 @@ function revAuth(req, res, next) {
     if (String(req.rev?.nombre_norm || "").trim().toLowerCase() === "geissel") {
       req.rev = { ...req.rev, id: "geisell", nombre: "Geisell", nombre_norm: "geisell" };
     }
+    if (esRevSoloCatalogo(req.rev)) req.rev = { ...req.rev, soloCatalogo: true };
     next();
   } catch (e) {
     return res.status(401).json({ error: "token_invalido" });
@@ -227,8 +239,9 @@ function createRevLoginHandler({ db, bot, SUPER_ADMIN }) {
       }
 
       await clearLoginThrottle(db, usuario);
-      const token = jwt.sign({ id: doc.id, nombre: d.nombre, nombre_norm: d.nombre_norm }, JWT_SECRET, { expiresIn: "30d" });
-      res.json({ token, nombre: d.nombre, nombre_norm: d.nombre_norm });
+      const soloCatalogo = esRevSoloCatalogo({ id: doc.id, ...d });
+      const token = jwt.sign({ id: doc.id, nombre: d.nombre, nombre_norm: d.nombre_norm, soloCatalogo }, JWT_SECRET, { expiresIn: "30d" });
+      res.json({ token, nombre: d.nombre, nombre_norm: d.nombre_norm, soloCatalogo });
     } catch (e) {
       console.error("rev/login", e);
       res.status(500).json({ error: "server" });
@@ -315,6 +328,7 @@ async function generarPinSetup() {
 module.exports = {
   getJwtSecret,
   safeEqualStr,
+  esRevSoloCatalogo,
   revAuth,
   revAdminAuth,
   revLoginIpLimiter,

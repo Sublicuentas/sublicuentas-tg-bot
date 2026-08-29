@@ -25,7 +25,7 @@ const jwt = require("jsonwebtoken");
 // ✅ Usar módulo de auth compartido (elimina duplicación con index_08_api.js)
 const {
   revAuth, revAdminAuth, revParseFecha, revDiasRest, revFechaISO, revParseFechaInput,
-  getJwtSecret, revLoginIpLimiter, createRevLoginHandler,
+  getJwtSecret, revLoginIpLimiter, createRevLoginHandler, esRevSoloCatalogo,
 } = require("./index_09_api_auth");
 
 // Reusa Firebase ya inicializado en el core (no arranca el bot)
@@ -475,6 +475,7 @@ app.post("/rev/renovar-cliente", revAuth, async (req, res) => {
 // ── COMPRA NUEVA / COMBO: socio envía solicitud + comprobante; avisa a Telegram según destino ──
 app.post("/rev/compra", revAuth, async (req, res) => {
   try {
+    if (esRevSoloCatalogo(req.rev)) return res.status(403).json({ error: "solo_catalogo" });
     const b = req.body || {};
     const socio = req.rev.nombre || req.rev.nombre_norm || "Revendedor";
     const destino = destinoInfo(b.destino);
@@ -706,7 +707,7 @@ app.get("/rev/admin/revendedores", revAdminAuth, async (req, res) => {
       const r = d.data();
       const k = r.nombre_norm || (r.nombre || d.id).toLowerCase();
       const stats = porVend[k] || { clientesIds: new Set(), servicios: 0, vencidos: 0, porVencer: 0 };
-      return { id: d.id, nombre: r.nombre || d.id, nombre_norm: k, activo: r.activo !== false, telegramId: r.telegramId || "", telefono: r.telefono || "", tarifaId: r.tarifaId || "general", clientes: stats.clientesIds.size, servicios: stats.servicios, vencidos: stats.vencidos, porVencer: stats.porVencer };
+      return { id: d.id, nombre: r.nombre || d.id, nombre_norm: k, activo: r.activo !== false, soloCatalogo: esRevSoloCatalogo({ id: d.id, ...r }), telegramId: r.telegramId || "", telefono: r.telefono || "", tarifaId: r.tarifaId || "general", clientes: stats.clientesIds.size, servicios: stats.servicios, vencidos: stats.vencidos, porVencer: stats.porVencer };
     }).sort((a, b) => b.clientes - a.clientes);
     res.json(lista);
   } catch (e) { console.error("rev/admin", e); res.status(500).json({ error: "server" }); }
@@ -810,8 +811,9 @@ app.post("/rev/admin/impersonate", revAdminAuth, async (req, res) => {
 
     const data = doc.data();
     const nn = data.nombre_norm || (data.nombre || doc.id).toLowerCase();
-    const token = jwt.sign({ id: doc.id, nombre: data.nombre, nombre_norm: nn }, JWT_SECRET, { expiresIn: "6h" });
-    res.json({ token, nombre: data.nombre, nombre_norm: nn });
+    const soloCatalogo = esRevSoloCatalogo({ id: doc.id, ...data, nombre_norm: nn });
+    const token = jwt.sign({ id: doc.id, nombre: data.nombre, nombre_norm: nn, soloCatalogo }, JWT_SECRET, { expiresIn: "6h" });
+    res.json({ token, nombre: data.nombre, nombre_norm: nn, soloCatalogo });
   } catch (e) { console.error("rev/impersonate", e); res.status(500).json({ error: "server" }); }
 });
 
