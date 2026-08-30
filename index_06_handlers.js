@@ -243,6 +243,7 @@ function platMetaLocal(plataforma = "") {
 function esPlataformaUsuarioLocal(plataforma = "") {
   const p = normalizarPlataforma(plataforma);
   return [
+    "stellatv1", "stellatv2", "stellatv3",
     "oleadatv1", "oleadatv3",
     "latintv1", "latintv2", "latintv3", "latintv4",
     "liontv1", "liontv2", "liontv3", "liontv5",
