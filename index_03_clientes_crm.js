@@ -74,6 +74,14 @@ const IPTV_USUARIO_KEYS_LOCAL = new Set([
   "iptv1", "iptv3", "iptv4",
 ]);
 
+const TV_DIGITAL_BRANDS_LOCAL = {
+  stella: { label: "Stella TV", icon: "⭐", keys: ["stellatv1", "stellatv2", "stellatv3"] },
+  oleada: { label: "Oleada TV", icon: "🌊", keys: ["oleadatv1", "oleadatv3"] },
+  lion: { label: "Lion TV", icon: "🦁", keys: ["liontv1", "liontv2", "liontv3", "liontv5"] },
+  latin: { label: "Latin TV", icon: "📡", keys: ["latintv1", "latintv2", "latintv3", "latintv4"] },
+};
+const TV_DIGITAL_KEYS_LOCAL = new Set(Object.values(TV_DIGITAL_BRANDS_LOCAL).flatMap((marca) => marca.keys));
+
 // ===============================
 // HELPERS GENERALES
 // ===============================
@@ -88,6 +96,7 @@ function humanPlataforma(key = "") {
     hbomax:"HBO Max", primevideo:"Prime Video", paramount:"Paramount+", crunchyroll:"Crunchyroll",
     vix:"Vix", appletv:"Apple TV", universal:"Universal+", spotify:"Spotify", youtube:"YouTube", office:"Microsoft 365",
     deezer:"Deezer", canva:"Canva", gemini:"Gemini Pro", chatgpt:"ChatGPT", duolingo:"Duolingo", office2021:"Office 2021",
+    stellatv1:"Stella TV (1 dispositivo)", stellatv2:"Stella TV (2 dispositivos)", stellatv3:"Stella TV (3 dispositivos)",
     oleadatv1:"Oleada TV (1 dispositivo)", oleadatv3:"Oleada TV (3 dispositivos)",
     latintv1:"LatinTV (1 dispositivo)", latintv2:"LatinTV (2 dispositivos)", latintv3:"LatinTV (3 dispositivos)", latintv4:"LatinTV (4 dispositivos)",
     liontv1:"LionTV (1 dispositivo)", liontv2:"LionTV (2 dispositivos)", liontv3:"LionTV (3 dispositivos)", liontv5:"LionTV (5 dispositivos)",
@@ -98,7 +107,7 @@ function humanPlataforma(key = "") {
 
 function iconPlataforma(key = "") {
   const k = normalizarPlataforma(key);
-  const map = { netflix:"📺", vipnetflix:"🔥", disneyp:"🏰", disneys:"🎬", hbomax:"🎞️", primevideo:"🎥", paramount:"💿", crunchyroll:"🍥", vix:"📱", appletv:"🍎", universal:"🌍", spotify:"🎵", youtube:"▶️", office:"📎", deezer:"🎧", canva:"🎨", gemini:"✨", chatgpt:"🤖", duolingo:"🦉", oleadatv1:"🌊", oleadatv3:"🌊", latintv1:"📡", latintv2:"📡", latintv3:"📡", latintv4:"📡", liontv1:"🦁", liontv2:"🦁", liontv3:"🦁", liontv5:"🦁", iptv1:"📡", iptv3:"📡", iptv4:"📡" };
+  const map = { netflix:"📺", vipnetflix:"🔥", disneyp:"🏰", disneys:"🎬", hbomax:"🎞️", primevideo:"🎥", paramount:"💿", crunchyroll:"🍥", vix:"📱", appletv:"🍎", universal:"🌍", spotify:"🎵", youtube:"▶️", office:"📎", deezer:"🎧", canva:"🎨", gemini:"✨", chatgpt:"🤖", duolingo:"🦉", stellatv1:"⭐", stellatv2:"⭐", stellatv3:"⭐", oleadatv1:"🌊", oleadatv3:"🌊", latintv1:"📡", latintv2:"📡", latintv3:"📡", latintv4:"📡", liontv1:"🦁", liontv2:"🦁", liontv3:"🦁", liontv5:"🦁", iptv1:"📡", iptv3:"📡", iptv4:"📡" };
   return map[k] || "📦";
 }
 
@@ -123,6 +132,10 @@ function requiereClaveLocal(plataforma = "") {
 
 function requiereCorreoLocal(plataforma = "") {
   const cfg = platformConfigLocal(plataforma);
+  // El campo CRM se llama "correo", pero en Oleada/Lion/Latin guarda el
+  // usuario. permiteUsuario significa que ese identificador también es
+  // obligatorio y debe pedirse/entregarse.
+  if (cfg.permiteUsuario === true) return true;
   if (Object.prototype.hasOwnProperty.call(cfg, "requiereCorreo")) return cfg.requiereCorreo === true;
   return true;
 }
@@ -292,7 +305,7 @@ function docIdInventarioLocal(ident = "", plataforma = "") {
 
 function getTotalPorPlataformaLocal(plat = "") {
   const p = normalizarPlataforma(plat);
-  const map = { netflix:5, vipnetflix:1, disneyp:6, disneys:3, hbomax:5, primevideo:5, paramount:5, crunchyroll:5, vix:4, appletv:4, universal:4, spotify:1, youtube:1, deezer:1, oleadatv1:1, oleadatv3:3, latintv1:1, latintv2:2, latintv3:3, latintv4:4, liontv1:1, liontv2:2, liontv3:3, liontv5:5, iptv1:1, iptv3:3, iptv4:4, canva:1, gemini:1, chatgpt:1, duolingo:1, office:1, office2021:1 };
+  const map = { netflix:5, vipnetflix:1, disneyp:6, disneys:3, hbomax:5, primevideo:5, paramount:5, crunchyroll:5, vix:4, appletv:4, universal:4, spotify:1, youtube:1, deezer:1, stellatv1:1, stellatv2:2, stellatv3:3, oleadatv1:1, oleadatv3:3, latintv1:1, latintv2:2, latintv3:3, latintv4:4, liontv1:1, liontv2:2, liontv3:3, liontv5:5, iptv1:1, iptv3:3, iptv4:4, canva:1, gemini:1, chatgpt:1, duolingo:1, office:1, office2021:1 };
   return map[p] || 1;
 }
 
@@ -384,14 +397,81 @@ function dedupeClientes(rows = []) {
   return Array.from(map.values());
 }
 
+function appendCallbackContextLocal(base = "", clientId = null, idx = null) {
+  let cb = String(base || "");
+  if (clientId !== null && clientId !== undefined) cb += `:${clientId}`;
+  if (idx !== null && idx !== undefined) cb += `:${idx}`;
+  return cb;
+}
+
+function modoSelectorPlataformasLocal(prefix = "") {
+  if (prefix === "wiz:plat") return "wiz";
+  if (prefix === "cli:add:plat") return "add";
+  if (prefix === "cli:serv:set:plat") return "set";
+  return "";
+}
+
+function prefijoSelectorPlataformasLocal(mode = "") {
+  return ({ wiz: "wiz:plat", add: "cli:add:plat", set: "cli:serv:set:plat" })[String(mode || "")] || "";
+}
+
+function kbTvDigitalMarcasWiz(mode = "wiz", clientId = null, idx = null) {
+  const rows = [];
+  const marcas = Object.entries(TV_DIGITAL_BRANDS_LOCAL).map(([key, marca]) => ({
+    text: `${marca.icon} ${marca.label}`,
+    callback_data: appendCallbackContextLocal(`platgrp:${mode}:brand:${key}`, clientId, idx),
+  }));
+  for (let i = 0; i < marcas.length; i += 2) rows.push(marcas.slice(i, i + 2));
+  rows.push([{
+    text: "⬅️ Todas las plataformas",
+    callback_data: appendCallbackContextLocal(`platgrp:${mode}:all`, clientId, idx),
+  }]);
+  return rows;
+}
+
+function kbTvDigitalPlanesWiz(mode = "wiz", brand = "", clientId = null, idx = null) {
+  const marca = TV_DIGITAL_BRANDS_LOCAL[String(brand || "").toLowerCase()];
+  const prefix = prefijoSelectorPlataformasLocal(mode);
+  if (!marca || !prefix) return [];
+  const rows = [];
+  const planes = marca.keys.map((key) => {
+    const cantidad = Number(PLATAFORMAS?.[key]?.capacidadDefault || 1);
+    return {
+      text: `${cantidad} dispositivo${cantidad === 1 ? "" : "s"}`,
+      callback_data: appendCallbackContextLocal(`${prefix}:${key}`, clientId, idx),
+    };
+  });
+  for (let i = 0; i < planes.length; i += 2) rows.push(planes.slice(i, i + 2));
+  rows.push([{
+    text: "⬅️ TV Digital",
+    callback_data: appendCallbackContextLocal(`platgrp:${mode}:brands`, clientId, idx),
+  }]);
+  return rows;
+}
+
 function kbPlataformasWiz(prefix = "wiz:plat", clientId = null, idx = null) {
   const rows = [];
-  const items = PLATFORM_KEYS.filter((k) => !["iptv1", "iptv3", "iptv4"].includes(k)).map((k) => {
-    let cb = `${prefix}:${k}`;
-    if (clientId !== null && clientId !== undefined) cb += `:${clientId}`;
-    if (idx !== null && idx !== undefined) cb += `:${idx}`;
-    return { text: `${iconPlataforma(k)} ${humanPlataforma(k)}`, callback_data: cb };
+  const items = [];
+  const mode = modoSelectorPlataformasLocal(prefix);
+  let grupoAgregado = false;
+
+  PLATFORM_KEYS.filter((k) => !["iptv1", "iptv3", "iptv4"].includes(k)).forEach((k) => {
+    if (TV_DIGITAL_KEYS_LOCAL.has(k) && mode) {
+      if (!grupoAgregado) {
+        items.push({
+          text: "📺 TV Digital",
+          callback_data: appendCallbackContextLocal(`platgrp:${mode}:brands`, clientId, idx),
+        });
+        grupoAgregado = true;
+      }
+      return;
+    }
+    items.push({
+      text: `${iconPlataforma(k)} ${humanPlataforma(k)}`,
+      callback_data: appendCallbackContextLocal(`${prefix}:${k}`, clientId, idx),
+    });
   });
+
   for (let i = 0; i < items.length; i += 2) rows.push(items.slice(i, i + 2));
   return rows;
 }
@@ -2182,7 +2262,7 @@ module.exports = {
   renovarServicioTx, renovarTodosServiciosTx, eliminarServiciosTx,
   removeServicioDeInventario, sincronizarCuentaEnComprasTx,
   menuListaRenovacion, menuRenovacionServicio, enviarPanelRenovacionesConAcciones,
-  kbPlataformasWiz, wizardStart, wizardNext,
+  kbPlataformasWiz, kbTvDigitalMarcasWiz, kbTvDigitalPlanesWiz, wizardStart, wizardNext,
   clienteResumenTXT, reporteClientesTXTGeneral, reporteClientesSplitPorVendedorTXT,
   enviarHistorialClienteTXT, enviarHistorialClienteTXTReal,
   generarHistorialTXT, getHistorialCliente, registrarEventoHistorial,

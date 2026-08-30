@@ -56,7 +56,7 @@ function categoryOfPlat(key = "") {
   if (["video","musica","iptv","diseno_ia"].includes(c)) return c;
   if (["netflix","vipnetflix","disneyp","disneys","hbomax","primevideo","paramount","crunchyroll","vix","appletv","universal"].includes(k)) return "video";
   if (["spotify","youtube","deezer"].includes(k)) return "musica";
-  if (["oleadatv1","oleadatv3","latintv1","latintv2","latintv3","latintv4","liontv1","liontv2","liontv3","liontv5","iptv1","iptv3","iptv4"].includes(k)) return "iptv";
+  if (["stellatv1","stellatv2","stellatv3","oleadatv1","oleadatv3","latintv1","latintv2","latintv3","latintv4","liontv1","liontv2","liontv3","liontv5","iptv1","iptv3","iptv4"].includes(k)) return "iptv";
   if (["canva","gemini","chatgpt","duolingo"].includes(k)) return "diseno_ia";
   return "video";
 }
@@ -375,7 +375,7 @@ async function menuInventario(chatId) {
   return upsertPanel(chatId,
     "📦 *INVENTARIO*\n\nSeleccione una categoría:", [
     [{ text: "🎬 Video", callback_data: "menu:inventario:video", style: "primary" }, { text: "🎵 Música", callback_data: "menu:inventario:musica", style: "primary" }],
-    [{ text: "📡 IPTV", callback_data: "menu:inventario:iptv", style: "primary" }, { text: "🎨 Diseño e IA", callback_data: "menu:inventario:designai", style: "primary" }],
+    [{ text: "📺 TV Digital", callback_data: "menu:inventario:iptv", style: "primary" }, { text: "🎨 Diseño e IA", callback_data: "menu:inventario:designai", style: "primary" }],
     [{ text: "📊 Stock general", callback_data: "inv:general", style: "primary" }],
     [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
   ]);
@@ -383,7 +383,29 @@ async function menuInventario(chatId) {
 
 async function menuInventarioVideo(chatId) { const items = PLATFORM_KEYS.filter((x) => categoryOfPlat(x) === "video"); const kb = kbFromItems(items); kb.push([{ text: "⬅️ Volver Inventario", callback_data: "menu:inventario" }, { text: "🏠 Inicio", callback_data: "go:inicio" }]); return upsertPanel(chatId, "VIDEO\n\nSeleccione plataforma:", kb); }
 async function menuInventarioMusica(chatId) { const items = PLATFORM_KEYS.filter((x) => categoryOfPlat(x) === "musica"); const kb = kbFromItems(items); kb.push([{ text: "⬅️ Volver Inventario", callback_data: "menu:inventario" }, { text: "🏠 Inicio", callback_data: "go:inicio" }]); return upsertPanel(chatId, "MUSICA\n\nSeleccione plataforma:", kb); }
-async function menuInventarioIptv(chatId) { const items = PLATFORM_KEYS.filter((x) => categoryOfPlat(x) === "iptv" && !["iptv1", "iptv3", "iptv4"].includes(x)); const kb = kbFromItems(items); kb.push([{ text: "⬅️ Volver Inventario", callback_data: "menu:inventario" }, { text: "🏠 Inicio", callback_data: "go:inicio" }]); return upsertPanel(chatId, "IPTV\n\nSeleccione LatinTV, LionTV u Oleada TV:", kb); }
+const TV_DIGITAL_INVENTARIO_MARCAS = {
+  stella: { label: "Stella TV", icon: "⭐", prefix: "stellatv" },
+  oleada: { label: "Oleada TV", icon: "🌊", prefix: "oleadatv" },
+  lion: { label: "Lion TV", icon: "🦁", prefix: "liontv" },
+  latin: { label: "Latin TV", icon: "📡", prefix: "latintv" },
+};
+async function menuInventarioIptv(chatId) {
+  const kb = pairButtons(Object.entries(TV_DIGITAL_INVENTARIO_MARCAS).map(([key, marca]) => ({
+    text: `${marca.icon} ${marca.label}`,
+    callback_data: `menu:inventario:tvdigital:${key}`,
+    style: "primary",
+  })));
+  kb.push([{ text: "⬅️ Volver Inventario", callback_data: "menu:inventario" }, { text: "🏠 Inicio", callback_data: "go:inicio" }]);
+  return upsertPanel(chatId, "📺 *TV DIGITAL*\n\nSeleccione el servicio:", kb);
+}
+async function menuInventarioTvDigitalMarca(chatId, brand = "") {
+  const marca = TV_DIGITAL_INVENTARIO_MARCAS[String(brand || "").toLowerCase()];
+  if (!marca) return menuInventarioIptv(chatId);
+  const items = PLATFORM_KEYS.filter((x) => String(x || "").startsWith(marca.prefix));
+  const kb = kbFromItems(items);
+  kb.push([{ text: "⬅️ TV Digital", callback_data: "menu:inventario:iptv" }, { text: "🏠 Inicio", callback_data: "go:inicio" }]);
+  return upsertPanel(chatId, `${marca.icon} *${marca.label.toUpperCase()}*\n\nSeleccione la cantidad de dispositivos:`, kb);
+}
 async function menuInventarioDisenoIA(chatId) { const items = PLATFORM_KEYS.filter((x) => categoryOfPlat(x) === "diseno_ia"); const kb = kbFromItems(items); kb.push([{ text: "⬅️ Volver Inventario", callback_data: "menu:inventario" }, { text: "🏠 Inicio", callback_data: "go:inicio" }]); return upsertPanel(chatId, "DISENO E IA\n\nSeleccione plataforma:", kb); }
 
 async function menuClientes(chatId) {
@@ -1054,7 +1076,7 @@ bot.onText(/^\/reportes_excel_mes\s+(\d{2}\/\d{4})$/, async (msg, match) => {
 
 module.exports = {
   menuPrincipal, menuVendedor, menuInventario, menuInventarioVideo, menuInventarioMusica,
-  menuInventarioIptv, menuInventarioDisenoIA, menuClientes, menuRenovaciones, menuPagos,
+  menuInventarioIptv, menuInventarioTvDigitalMarca, menuInventarioDisenoIA, menuClientes, menuRenovaciones, menuPagos,
   menuAlertas, menuFinRegistro, menuFinEliminarTipo, menuFinReportes,
   kbBancosFinanzas, kbBancosFinanzasEgreso, kbMotivosFinanzas,
   registrarIngresoTx, registrarEgresoTx,

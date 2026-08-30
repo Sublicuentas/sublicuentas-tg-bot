@@ -91,6 +91,8 @@ const {
   enviarHistorialClienteTXT,
   enviarHistorialClienteTXTReal,
   kbPlataformasWiz,
+  kbTvDigitalMarcasWiz,
+  kbTvDigitalPlanesWiz,
   menuEditarCliente,
   menuListaServicios,
   menuServicio,
@@ -139,6 +141,7 @@ const {
   menuInventarioVideo,
   menuInventarioMusica,
   menuInventarioIptv,
+  menuInventarioTvDigitalMarca,
   menuInventarioDisenoIA,
   menuClientes,
   menuPagos,
@@ -263,6 +266,9 @@ function requiereClaveLocal(plataforma = "") {
 function requiereCorreoLocal(plataforma = "") {
   const p = normalizarPlataforma(plataforma);
   const cfg = platMetaLocal(p);
+  // En plataformas con usuario, el identificador se almacena en el mismo
+  // campo que el correo y también debe solicitarse antes de la clave.
+  if (cfg.permiteUsuario === true) return true;
   if (Object.prototype.hasOwnProperty.call(cfg, "requiereCorreo")) return cfg.requiereCorreo === true;
   return true;
 }
@@ -714,6 +720,9 @@ function humanPlatLabelSyncLocal(key = "") {
     spotify: "Spotify",
     youtube: "YouTube",
     deezer: "Deezer",
+    stellatv1: "Stella TV (1 dispositivo)",
+    stellatv2: "Stella TV (2 dispositivos)",
+    stellatv3: "Stella TV (3 dispositivos)",
     oleadatv1: "Oleada TV (1)",
     oleadatv3: "Oleada TV (3)",
     latintv1: "LatinTV (1 dispositivo)",
@@ -754,6 +763,9 @@ function getTotalPorPlataformaLocal(plat = "") {
     spotify: 1,
     youtube: 1,
     deezer: 1,
+    stellatv1: 1,
+    stellatv2: 2,
+    stellatv3: 3,
     oleadatv1: 1,
     oleadatv3: 3,
     latintv1: 1,
@@ -1709,6 +1721,9 @@ function humanPlatAlertLocal(key = "") {
     spotify: "Spotify",
     youtube: "YouTube",
     deezer: "Deezer",
+    stellatv1: "Stella TV 1",
+    stellatv2: "Stella TV 2",
+    stellatv3: "Stella TV 3",
     oleadatv1: "Oleada 1",
     oleadatv3: "Oleada 3",
     latintv1: "LatinTV 1",
@@ -3584,6 +3599,7 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
       if (data === "menu:inventario:video") return menuInventarioVideo(chatId);
       if (data === "menu:inventario:musica") return menuInventarioMusica(chatId);
       if (data === "menu:inventario:iptv") return menuInventarioIptv(chatId);
+      if (data.startsWith("menu:inventario:tvdigital:")) return menuInventarioTvDigitalMarca(chatId, data.split(":")[3]);
       if (data === "menu:inventario:designai") return menuInventarioDisenoIA(chatId);
       if (data === "menu:clientes") return menuClientes(chatId);
       if (data === "menu:pagos") return menuPagos(chatId);
@@ -4209,6 +4225,46 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
 
       if (data.startsWith("cli:view:")) return enviarFichaCliente(chatId, data.split(":")[2]);
       if (data === "cli:wiz:start") { pending.delete(String(chatId)); return wizardStart(chatId); }
+
+      if (data.startsWith("platgrp:")) {
+        const parts = data.split(":");
+        const mode = parts[1];
+        const view = parts[2];
+        if (!["wiz", "add", "set"].includes(mode)) return bot.sendMessage(chatId, "⚠️ Selector de plataforma inválido.");
+
+        const brand = view === "brand" ? String(parts[3] || "").toLowerCase() : "";
+        const clientId = view === "brand" ? (parts[4] || null) : (parts[3] || null);
+        const compraSel = view === "brand" ? (parts[5] ?? null) : (parts[4] ?? null);
+        const prefix = ({ wiz: "wiz:plat", add: "cli:add:plat", set: "cli:serv:set:plat" })[mode];
+        const brandLabels = {
+          stella: "⭐ STELLA TV",
+          oleada: "🌊 OLEADA TV",
+          lion: "🦁 LION TV",
+          latin: "📡 LATIN TV",
+        };
+        const addContextActions = (keyboard = []) => {
+          const kb = Array.isArray(keyboard) ? keyboard.slice() : [];
+          if (mode === "add" && clientId) kb.push([{ text: "❌ Cancelar", callback_data: `cli:view:${clientId}` }]);
+          if (mode === "set" && clientId && compraSel !== null) kb.push([{ text: "❌ Cancelar", callback_data: `cli:serv:menu:${clientId}:${compraSel}` }]);
+          return kb;
+        };
+
+        if (view === "all") {
+          return upsertPanel(chatId, "📌 *SELECCIONE PLATAFORMA*", addContextActions(kbPlataformasWiz(prefix, clientId, compraSel)));
+        }
+        if (view === "brand" && brandLabels[brand]) {
+          return upsertPanel(
+            chatId,
+            `${brandLabels[brand]}\n\nSeleccione la cantidad de dispositivos:`,
+            addContextActions(kbTvDigitalPlanesWiz(mode, brand, clientId, compraSel))
+          );
+        }
+        return upsertPanel(
+          chatId,
+          "📺 *TV DIGITAL*\n\nSeleccione el servicio:",
+          addContextActions(kbTvDigitalMarcasWiz(mode, clientId, compraSel))
+        );
+      }
 
       if (data.startsWith("wiz:plat:")) {
         const parts = data.split(":");

@@ -126,6 +126,7 @@ function plataformaLabel(v = "") {
     vix: "Vix", appletv: "Apple TV+", universal: "Universal+", spotify: "Spotify",
     youtube: "YouTube Premium", deezer: "Deezer", canva: "Canva", gemini: "Gemini Pro", chatgpt: "ChatGPT",
     office: "Office 365", office2021: "Office 2021",
+    stellatv1: "Stella TV 1", stellatv2: "Stella TV 2", stellatv3: "Stella TV 3",
     oleadatv1: "Oleada TV 1", oleadatv3: "Oleada TV 3",
     latintv1: "LatinTV 1", latintv2: "LatinTV 2", latintv3: "LatinTV 3", latintv4: "LatinTV 4",
     liontv1: "LionTV 1", liontv2: "LionTV 2", liontv3: "LionTV 3", liontv5: "LionTV 5",
