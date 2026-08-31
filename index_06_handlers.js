@@ -3936,9 +3936,10 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
 
       if (data.startsWith("inv:new:plat:")) {
         const plat = normalizarPlataforma(data.split(":")[3]);
+        const identLabel = getIdentLabelLocal(plat);
         pending.set(String(chatId), { mode: "invNewCorreo", plat });
         return upsertPanel(chatId,
-          `➕ *NUEVA CUENTA*\n📌 *Plataforma:* ${String(plat).toUpperCase()}\n\nEscriba el *correo* de la cuenta:`,
+          `➕ *NUEVA CUENTA*\n📌 *Plataforma:* ${String(plat).toUpperCase()}\n\nEscriba el *${identLabel.toLowerCase()}* de la cuenta:`,
           [[{ text: "❌ Cancelar", callback_data: `inv:${plat}:0` }]]
         );
       }
@@ -4167,6 +4168,8 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
       if (data.startsWith("mail_edit_correo|")) {
         const [, plataforma, accesoEnc] = data.split("|");
         const acceso = decodeURIComponent(accesoEnc || "");
+        const identLabel = getIdentLabelLocal(plataforma);
+        const editIcon = identIcon(plataforma);
         const found = await buscarCorreoInventarioPorPlatCorreo(plataforma, acceso);
         if (!found) return bot.sendMessage(chatId, "❌ La cuenta no existe.");
         pending.set(String(chatId), {
@@ -4176,7 +4179,7 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
         });
         return bot.sendMessage(
           chatId,
-          `✉️ *Editar correo de la cuenta*\n\n${identIcon(plataforma)} *${escMD(getIdentLabelLocal(plataforma))}:* ${escMD(acceso)}\n\nEscriba el nuevo correo:`,
+          `${editIcon} *Editar ${identLabel.toLowerCase()} de la cuenta*\n\n${editIcon} *${escMD(identLabel)}:* ${escMD(acceso)}\n\nEscriba el nuevo ${identLabel.toLowerCase()}:`,
           { parse_mode: "Markdown" }
         );
       }
@@ -4234,11 +4237,28 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
         if (!["wiz", "add", "set"].includes(mode)) return bot.sendMessage(chatId, "⚠️ Selector de plataforma inválido.");
 
         const brand = view === "brand" ? String(parts[3] || "").toLowerCase() : "";
-        const clientId = view === "brand" ? (parts[4] || null) : (parts[3] || null);
-        const compraSel = view === "brand" ? (parts[5] ?? null) : (parts[4] ?? null);
+        let clientId = view === "brand" ? (parts[4] || null) : (parts[3] || null);
+        let compraSel = view === "brand" ? (parts[5] ?? null) : (parts[4] ?? null);
+
+        // En "cambiar plataforma" no enviamos clientId/compraSel dentro de
+        // callback_data. Con IDs automáticos de Firestore algunos botones
+        // superaban los 64 bytes permitidos por Telegram (por ejemplo,
+        // Crunchyroll llegaba a 66) y Telegram rechazaba el teclado completo.
+        // El contexto queda ligado al chat mientras se navega por TV Digital.
+        if (mode === "set" && (!clientId || compraSel === null)) {
+          const ctx = pending.get(String(chatId));
+          if (!ctx || ctx.mode !== "cliServSelectPlat") {
+            return bot.sendMessage(chatId, "⚠️ El cambio de plataforma venció. Abra nuevamente la ficha del servicio.");
+          }
+          clientId = ctx.clientId;
+          compraSel = ctx.compraSel;
+        }
+
         const prefix = ({ wiz: "wiz:plat", add: "cli:add:plat", set: "cli:serv:set:plat" })[mode];
+        const callbackClientId = mode === "set" ? null : clientId;
+        const callbackCompraSel = mode === "set" ? null : compraSel;
         const brandLabels = {
-          stella: "⭐ STELLA TV",
+          stella: "🔥 STELLA TV",
           oleada: "🌊 OLEADA TV",
           lion: "🦁 LION TV",
           latin: "📡 LATIN TV",
@@ -4251,19 +4271,19 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
         };
 
         if (view === "all") {
-          return upsertPanel(chatId, "📌 *SELECCIONE PLATAFORMA*", addContextActions(kbPlataformasWiz(prefix, clientId, compraSel)));
+          return upsertPanel(chatId, "📌 *SELECCIONE PLATAFORMA*", addContextActions(kbPlataformasWiz(prefix, callbackClientId, callbackCompraSel)));
         }
         if (view === "brand" && brandLabels[brand]) {
           return upsertPanel(
             chatId,
             `${brandLabels[brand]}\n\nSeleccione la cantidad de dispositivos:`,
-            addContextActions(kbTvDigitalPlanesWiz(mode, brand, clientId, compraSel))
+            addContextActions(kbTvDigitalPlanesWiz(mode, brand, callbackClientId, callbackCompraSel))
           );
         }
         return upsertPanel(
           chatId,
           "📺 *TV DIGITAL*\n\nSeleccione el servicio:",
-          addContextActions(kbTvDigitalMarcasWiz(mode, clientId, compraSel))
+          addContextActions(kbTvDigitalMarcasWiz(mode, callbackClientId, callbackCompraSel))
         );
       }
 
@@ -4358,7 +4378,11 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
       }
 
       if (data.startsWith("cli:serv:list:")) return menuListaServicios(chatId, data.split(":")[3]);
-      if (data.startsWith("cli:serv:menu:")) return menuServicio(chatId, data.split(":")[3], data.split(":")[4]);
+      if (data.startsWith("cli:serv:menu:")) {
+        const estado = pending.get(String(chatId));
+        if (String(estado?.mode || "").startsWith("cliServ")) pending.delete(String(chatId));
+        return menuServicio(chatId, data.split(":")[3], data.split(":")[4]);
+      }
 
       if (data.startsWith("cli:prof:list:")) {
         const parts = data.split(":");
@@ -4479,8 +4503,16 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
         if (idx < 0) return bot.sendMessage(chatId, "⚠️ Esa compra cambió o ya no existe. Abra nuevamente la ficha.");
 
         if (field === "plat") {
+          const actual = servicios[idx] || {};
+          pending.set(String(chatId), {
+            mode: "cliServSelectPlat",
+            clientId,
+            compraSel,
+            idx,
+            compraId: String(actual.compraId || ""),
+          });
           return upsertPanel(chatId, "📌 *Cambiar plataforma*\nSeleccione:", [
-            ...kbPlataformasWiz("cli:serv:set:plat", clientId, compraSel),
+            ...kbPlataformasWiz("cli:serv:set:plat"),
             [{ text: "⬅️ Cancelar", callback_data: `cli:serv:menu:${clientId}:${compraSel}` }],
           ]);
         }
@@ -4521,15 +4553,28 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
       if (data.startsWith("cli:serv:set:plat:")) {
         const parts = data.split(":");
         const plat = normalizarPlataforma(parts[4]);
-        const clientId = parts[5];
-        const compraSel = parts[6];
         if (!esPlataformaValida(plat)) return bot.sendMessage(chatId, "⚠️ Plataforma inválida.");
+
+        // Compatibilidad doble:
+        // - botones nuevos: solo llevan la plataforma y leen el contexto del chat;
+        // - botones antiguos que aún estén visibles: conservan clientId/selector.
+        const tieneContextoLegacy = Boolean(parts[5] && parts[6] !== undefined);
+        const ctx = pending.get(String(chatId));
+        const ctxValido = ctx && ctx.mode === "cliServSelectPlat";
+        const clientId = tieneContextoLegacy ? parts[5] : (ctxValido ? ctx.clientId : "");
+        const compraSel = tieneContextoLegacy ? parts[6] : (ctxValido ? ctx.compraSel : null);
+        if (!clientId || compraSel === null || compraSel === undefined) {
+          return bot.sendMessage(chatId, "⚠️ El cambio de plataforma venció. Abra nuevamente la ficha del servicio.");
+        }
 
         try {
           const c = await getCliente(clientId);
           if (!c) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
           const servicios = Array.isArray(c.servicios) ? c.servicios : [];
-          const idx = resolverIndiceCompraSelectorLocal(servicios, compraSel);
+          let idx = resolverIndiceCompraSelectorLocal(servicios, compraSel);
+          if (idx < 0 && ctxValido && ctx.compraId) {
+            idx = servicios.findIndex((s) => String(s?.compraId || "") === String(ctx.compraId));
+          }
           if (idx < 0) return bot.sendMessage(chatId, "⚠️ Esa compra cambió o ya no existe. Abra nuevamente la ficha.");
 
           const actual = servicios[idx] || {};
@@ -4561,6 +4606,7 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
           }
 
           await patchServicio(clientId, idx, patch, actual.compraId || "");
+          if (ctxValido) pending.delete(String(chatId));
           return menuServicio(chatId, clientId, compraSel);
         } catch (e) {
           const msg = String(e.message || "No se pudo cambiar la plataforma.");
@@ -5597,7 +5643,10 @@ bot.on("message", async (msg) => {
       }
 
       if (p.mode === "mailEditCorreoCuenta") {
-        if (!isEmailLike(t)) return bot.sendMessage(chatId, "⚠️ Correo inválido. Escriba un correo válido.");
+        const identLabel = getIdentLabelLocal(p.plataforma);
+        if (!validateIdentByPlatformLocal(p.plataforma, t)) {
+          return bot.sendMessage(chatId, `⚠️ ${identLabel} inválido. Escriba un ${identLabel.toLowerCase()} válido.`);
+        }
         pending.delete(String(chatId));
       forceNextPanelAtBottom(chatId);
 
@@ -5609,7 +5658,7 @@ bot.on("message", async (msg) => {
         const nuevaDoc = await nuevaRef.get();
 
         if (nuevaDoc.exists && nuevaRef.id !== found.ref.id) {
-          return bot.sendMessage(chatId, "⚠️ Ya existe una cuenta con ese correo en esta plataforma.");
+          return bot.sendMessage(chatId, `⚠️ Ya existe una cuenta con ese ${identLabel.toLowerCase()} en esta plataforma.`);
         }
 
         const dataCuenta = { ...(found.data || {}) };
@@ -5622,7 +5671,7 @@ bot.on("message", async (msg) => {
           await found.ref.delete();
         }
 
-        await bot.sendMessage(chatId, "✅ Correo de la cuenta actualizado.");
+        await bot.sendMessage(chatId, `✅ ${identLabel} de la cuenta actualizado.`);
         return mostrarPanelCorreo(chatId, p.plataforma, nuevoCorreo);
       }
 
@@ -5684,11 +5733,14 @@ bot.on("message", async (msg) => {
       }
 
       if (p.mode === "invNewCorreo") {
-        if (!t) return bot.sendMessage(chatId, "⚠️ Escriba el correo.");
+        const identLabel = getIdentLabelLocal(p.plat);
+        if (!validateIdentByPlatformLocal(p.plat, t)) {
+          return bot.sendMessage(chatId, `⚠️ ${identLabel} inválido. Escriba un ${identLabel.toLowerCase()} válido.`);
+        }
         const correoNorm = normalizeIdentByPlatformLocal(p.plat, t);
         const ref = db.collection("inventario").doc(docIdInventarioLocal(correoNorm, p.plat));
         const doc = await ref.get();
-        if (doc.exists) return bot.sendMessage(chatId, `⚠️ Ya existe una cuenta con ese correo para *${String(p.plat).toUpperCase()}*.`, { parse_mode: "Markdown" });
+        if (doc.exists) return bot.sendMessage(chatId, `⚠️ Ya existe una cuenta con ese ${identLabel.toLowerCase()} para *${String(p.plat).toUpperCase()}*.`, { parse_mode: "Markdown" });
         pending.set(String(chatId), { mode: "invNewClave", plat: p.plat, correo: correoNorm });
         return bot.sendMessage(chatId, `➕ *NUEVA CUENTA*\n📌 ${String(p.plat).toUpperCase()}\n${identIcon(p.plat)} ${escMD(correoNorm)}\n\nEscriba la *clave*:`, { parse_mode: "Markdown" });
       }
@@ -6068,11 +6120,11 @@ bot.on("message", async (msg) => {
           if (inv) {
             const platFinal = normalizarPlataforma(patch.plataforma || platBase);
             const msg = platFinal !== platBase
-              ? `✅ Correo actualizado. También corregí la plataforma a *${humanPlatLabelLocal(platFinal)}* y traje los datos del inventario.`
-              : `✅ Correo actualizado y datos sincronizados desde inventario.`;
+              ? `✅ ${label} actualizado. También corregí la plataforma a *${humanPlatLabelLocal(platFinal)}* y traje los datos del inventario.`
+              : `✅ ${label} actualizado y datos sincronizados desde inventario.`;
             await bot.sendMessage(chatId, msg, { parse_mode: "Markdown" });
           } else {
-            await bot.sendMessage(chatId, "✅ Correo actualizado. ⚠️ No lo encontré en inventario, revise clave/PIN si aplica.");
+            await bot.sendMessage(chatId, `✅ ${label} actualizado. ⚠️ No lo encontré en inventario, revise clave/PIN si aplica.`);
           }
 
           return menuServicio(chatId, p.clientId, p.idx);
