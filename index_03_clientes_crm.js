@@ -1685,6 +1685,7 @@ async function renovarServicioTx(clientId, idx, { dias = 0, fechaExacta = "", co
     ? await registrarEventoSorteosSeguro({
       tipo: "renovacion", clientId: id, compraId: compraEvento, fechaEvento: resultado.fechaNueva,
       eventoId: `renov:${compraEvento}:${resultado.fechaNueva}`,
+      meses: Math.max(1, Math.round(Number(dias || 30) / 30)),
       clienteNombre: resultado.cliente?.nombrePerfil || resultado.cliente?.nombre || resultado.nombreTitular || "Cliente",
       telefono: resultado.cliente?.telefono || "", vendedor: resultado.siguiente?.vendedor || resultado.cliente?.vendedor || "", origen: "Telegram"
     })
@@ -1692,6 +1693,7 @@ async function renovarServicioTx(clientId, idx, { dias = 0, fechaExacta = "", co
 
   await registrarEventoHistorial(id, {
     tipo: "servicio_renovado",
+    compraId: compraEvento,
     descripcion: `Se renovó ${humanPlataforma(resultado.siguiente.plataforma || "")}: ${resultado.fechaAnterior || "-"} → ${resultado.fechaNueva}`,
     plataforma: resultado.siguiente.plataforma || "",
     correo: resultado.siguiente.correo || "",
@@ -1731,6 +1733,7 @@ async function renovarTodosServiciosTx(clientId, { dias = 0, fechaExacta = "" } 
     sorteos.push(await registrarEventoSorteosSeguro({
       tipo: "renovacion", clientId: id, compraId: cambio.compraId, fechaEvento: cambio.fechaNueva,
       eventoId: `renov:${cambio.compraId}:${cambio.fechaNueva}`,
+      meses: Math.max(1, Math.round(Number(dias || 30) / 30)),
       clienteNombre: resultado.cliente?.nombrePerfil || resultado.cliente?.nombre || resultado.nombreTitular || "Cliente",
       telefono: resultado.cliente?.telefono || "", vendedor: cambio.vendedor || resultado.cliente?.vendedor || "", origen: "Telegram"
     }));
@@ -1738,6 +1741,7 @@ async function renovarTodosServiciosTx(clientId, { dias = 0, fechaExacta = "" } 
 
   await registrarEventoHistorial(id, {
     tipo: "servicios_renovados",
+    cambios: (resultado.cambios || []).map(item => ({ compraId: item.compraId, fechaAnterior: item.fechaAnterior, fechaRenovacion: item.fechaNueva, vendedor: item.vendedor })),
     descripcion: `Se renovaron ${resultado.total} servicio(s)${resultado.fechaExacta ? ` a ${resultado.fechaExacta}` : ` por ${Number(dias || 0)} días`}`
   });
   return { ok: true, total: resultado.total, servicios: resultado.servicios, sorteos };

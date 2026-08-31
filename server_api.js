@@ -161,6 +161,7 @@ async function revActualizarFechaCliente({ clienteId, socioNorm, servicioIndex, 
     ? await registrarEventoSorteosSeguro({
       tipo: "renovacion", clientId: id, compraId: compraEvento, fechaEvento: fechaFinal,
       eventoId: `renov:${compraEvento}:${fechaFinal}`,
+      meses: Math.max(1, Number(meses) || 1),
       clienteNombre: c.nombrePerfil || c.nombre || "Cliente", telefono: c.telefono || "",
       vendedor: vendedorEfectivoServicio(svc, c).vendedor || socioNorm || "", origen: "Panel de socios"
     })

@@ -6,7 +6,13 @@
 const { createHash } = require('crypto');
 const { admin, db } = require('./index_01_core');
 
-const DEFAULT_RULES=Object.freeze({compra:1,renovacion:2,oro:3,ciclosOro:6,limitePorCliente:30});
+const DEFAULT_RULES=Object.freeze({compra:1,renovacion:2,bonoNivel:true,limitePorCliente:30});
+const NIVELES=Object.freeze([
+  {id:'inicial',nombre:'Inicial',desde:0,bono:0},{id:'bronce',nombre:'Bronce',desde:1,bono:1},
+  {id:'plata',nombre:'Plata',desde:2,bono:2},{id:'oro',nombre:'Oro',desde:3,bono:3},
+  {id:'diamante',nombre:'Diamante',desde:4,bono:4},{id:'elite',nombre:'Élite',desde:6,bono:5}
+]);
+const loyaltyLevel=cycles=>[...NIVELES].reverse().find(item=>Math.max(0,Number(cycles)||0)>=item.desde)||NIVELES[0];
 const clean=(value,max=300)=>String(value==null?'':value).replace(/[\u0000-\u001F]/g,' ').replace(/\s+/g,' ').trim().slice(0,max);
 const norm=value=>clean(value,160).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ');
 const safeId=value=>clean(value,160).replace(/[^a-zA-Z0-9_-]/g,'');
@@ -30,7 +36,7 @@ const eventIdFor=(raw={},type='')=>{
 function rules(raw={}){
   return {
     compra:integer(raw.compra,0,20,DEFAULT_RULES.compra),renovacion:integer(raw.renovacion,0,20,DEFAULT_RULES.renovacion),
-    oro:integer(raw.oro,0,20,DEFAULT_RULES.oro),ciclosOro:integer(raw.ciclosOro,1,60,DEFAULT_RULES.ciclosOro),
+    bonoNivel:raw.bonoNivel!==false,
     limitePorCliente:integer(raw.limitePorCliente,1,200,DEFAULT_RULES.limitePorCliente)
   };
 }
@@ -46,6 +52,7 @@ function monthHonduras(){
   const parts=new Intl.DateTimeFormat('en-CA',{timeZone:'America/Tegucigalpa',year:'numeric',month:'2-digit'}).formatToParts(new Date());
   const get=type=>parts.find(part=>part.type===type)?.value||'';return `${get('year')}-${get('month')}`;
 }
+function addMonths(month,amount){const m=String(month||'').match(/^(\d{4})-(\d{2})$/);if(!m)return '';return new Date(Date.UTC(Number(m[1]),Number(m[2])-1+Number(amount||0),1)).toISOString().slice(0,7);}
 function activeDraw(draw={},now=Date.now()){
   if(draw.estado!=='activo')return false;
   const start=iso(draw.fechaInicio),end=iso(draw.fechaFin);
@@ -57,26 +64,29 @@ function scopeAllows(scope,vendor){
 }
 function categoryAllows(category,eventType){
   const target=norm(category||'general');
-  if(eventType==='oro')return target==='oro'||target==='general';
+  if(['oro','nivel'].includes(eventType))return target==='oro'||target==='general';
   if(target==='general')return ['compra','renovacion'].includes(eventType);
   return target===eventType||(target==='compras'&&eventType==='compra')||(target==='renovaciones'&&eventType==='renovacion');
 }
 
 async function updateLoyalty(event){
-  const clientId=safeId(event.clientId);if(!clientId)return {ciclos:0,nivel:'regular',oro:false};
-  const clientRef=db.collection('clientes').doc(clientId),month=monthHonduras();
+  const clientId=safeId(event.clientId);if(!clientId)return {ciclos:0,nivel:'inicial',nivelNombre:'Inicial',bono:0};
+  const requestedMonth=/^\d{4}-\d{2}$/.test(String(event.mesFidelidad||''))?String(event.mesFidelidad):'';
+  const clientRef=db.collection('clientes').doc(clientId),month=requestedMonth||monthHonduras();
   const loyaltyRef=db.collection('fidelidad_eventos').doc(hash(`ciclo|${clientId}|${month}`));
   return db.runTransaction(async transaction=>{
     const [clientSnap,eventSnap]=await Promise.all([transaction.get(clientRef),transaction.get(loyaltyRef)]);
-    if(!clientSnap.exists)return {ciclos:0,nivel:'regular',oro:false};
-    const client=clientSnap.data()||{};let cycles=Math.max(0,Number(client.fidelidadCiclos)||0);
+    if(!clientSnap.exists)return {ciclos:0,nivel:'inicial',nivelNombre:'Inicial',bono:0};
+    const client=clientSnap.data()||{};let cycles=Math.max(0,Number(client.fidelidadCiclos)||0);if(!client.fidelidadNivelNombre&&norm(client.nivelCliente)==='oro')cycles=Math.max(cycles,3);
+    const todayMonth=monthHonduras(),secured=[...new Set(Array.isArray(client.fidelidadMesesAsegurados)?client.fidelidadMesesAsegurados.filter(x=>/^\d{4}-\d{2}$/.test(x)):[])];
+    const matured=secured.filter(x=>x<=todayMonth),future=secured.filter(x=>x>todayMonth);cycles+=matured.length;
     if(event.tipo==='renovacion'&&!eventSnap.exists){
       cycles+=1;transaction.set(loyaltyRef,{clientId,mes:month,tipo:'renovacion',eventoId:clean(event.eventoId,300),createdAt:admin.firestore.FieldValue.serverTimestamp()});
     }
-    const goldAt=Math.max(1,Number(event.ciclosOro)||DEFAULT_RULES.ciclosOro);
-    const gold=client.clienteOro===true||norm(client.nivelCliente)==='oro'||cycles>=goldAt;
-    transaction.set(clientRef,{fidelidadCiclos:cycles,nivelCliente:gold?'oro':'regular',fidelidadUpdatedAt:admin.firestore.FieldValue.serverTimestamp()},{merge:true});
-    return {ciclos:cycles,nivel:gold?'oro':'regular',oro:gold};
+    const paidMonths=Math.max(1,Math.min(24,Math.round(Number(event.meses)||1)));for(let offset=1;offset<paidMonths;offset++){const fm=addMonths(month,offset);if(fm&&fm>todayMonth&&!future.includes(fm))future.push(fm);}
+    const level=loyaltyLevel(cycles);
+    transaction.set(clientRef,{fidelidadCiclos:cycles,fidelidadMesesAsegurados:future.sort(),nivelCliente:level.id,fidelidadNivelNombre:level.nombre,fidelidadUpdatedAt:admin.firestore.FieldValue.serverTimestamp()},{merge:true});
+    return {ciclos:cycles,mesesAsegurados:future.sort(),nivel:level.id,nivelNombre:level.nombre,bono:level.bono};
   });
 }
 
@@ -131,14 +141,14 @@ async function registrarEventoSorteos(rawEvent={}){
   if(!vendorEligible(vendorNorm))return {ok:true,omitido:'vendedor_no_elegible',creados:0};
   const event={tipo:type,clientId,eventoId:eventId,clienteNombre:clean(rawEvent.clienteNombre||client.nombrePerfil||client.nombre||'Cliente',120),
     telefono:clean(rawEvent.telefono||client.telefono,40),vendedor:vendor,vendedorNorm:vendorNorm,origen:clean(rawEvent.origen||'Telegram',80)};
-  const loyalty=await updateLoyalty({...event,ciclosOro:rawEvent.ciclosOro});
+  const loyalty=await updateLoyalty({...event,mesFidelidad:rawEvent.mesFidelidad,meses:rawEvent.meses});
   const drawSnap=await db.collection('sorteos').where('estado','==','activo').limit(100).get();
   const draws=drawSnap.docs.map(doc=>({id:doc.id,...(doc.data()||{})})).filter(draw=>activeDraw(draw)&&scopeAllows(draw.alcance,vendorNorm));
   const results=[];
   for(const draw of draws){
     const drawRules=rules(draw.reglas||{});
     if(categoryAllows(draw.categoria,type))results.push({sorteoId:draw.id,tipo:type,...await createEventTickets(draw,event,type==='compra'?drawRules.compra:drawRules.renovacion)});
-    if(loyalty.oro&&categoryAllows(draw.categoria,'oro'))results.push({sorteoId:draw.id,tipo:'oro',...await createEventTickets(draw,{...event,tipo:'oro',eventoId:`oro:${clientId}:${draw.id}`,origen:'Cliente Oro'},drawRules.oro)});
+    if(drawRules.bonoNivel&&loyalty.bono>0&&categoryAllows(draw.categoria,'nivel'))results.push({sorteoId:draw.id,tipo:'nivel',...await createEventTickets(draw,{...event,tipo:'nivel',eventoId:`nivel:${event.eventoId}:${loyalty.nivel}`,origen:`Bono nivel ${loyalty.nivelNombre}`},loyalty.bono)});
   }
   return {ok:true,creados:results.reduce((sum,item)=>sum+Number(item.creados||0),0),fidelidad:loyalty,resultados:results};
 }
@@ -148,4 +158,4 @@ async function registrarEventoSorteosSeguro(event={}){
   catch(error){console.error('SORTEOS_EVENT_ERROR',error?.message||error);return {ok:false,creados:0,error:String(error?.message||error||'Error de sorteos')};}
 }
 
-module.exports={DEFAULT_RULES,dateKey,eventIdFor,vendorGroup,vendorEligible,registrarEventoSorteos,registrarEventoSorteosSeguro};
+module.exports={DEFAULT_RULES,NIVELES,loyaltyLevel,dateKey,eventIdFor,vendorGroup,vendorEligible,registrarEventoSorteos,registrarEventoSorteosSeguro};
