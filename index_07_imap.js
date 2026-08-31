@@ -1,4 +1,4 @@
-/* ✅ SUBLICUENTAS TG BOT — PARTE 7/7 v17
+/* ✅ SUBLICUENTAS TG BOT — PARTE 7/7 v18
    IMAP — CÓDIGOS Y LINKS: NETFLIX / DISNEY / HBO / PRIME / VIX / UNIVERSAL / SPOTIFY
    ----------------------------------------------------------------
    ✅ CAMBIOS v16:
@@ -25,6 +25,50 @@ const IMAP_PASS = process.env.EMAIL_ADMIN_PASS || "";
 // HELPERS BASE
 // ===============================
 function normalizarCorreo(c = "") { return String(c||"").trim().toLowerCase(); }
+
+function normalizarTextoBusqueda(v = "") {
+  return String(v || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[\u200b-\u200d\ufeff]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function decodificarEntidadesHtmlBasicas(v = "") {
+  return String(v || "")
+    .replace(/&#x([0-9a-f]{1,6});/gi, (_, hex) => {
+      const cp = Number.parseInt(hex, 16);
+      return Number.isInteger(cp) && cp > 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : " ";
+    })
+    .replace(/&#([0-9]{1,7});/g, (_, dec) => {
+      const cp = Number.parseInt(dec, 10);
+      return Number.isInteger(cp) && cp > 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : " ";
+    })
+    .replace(/&(?:nbsp|ensp|emsp|thinsp|zwnj|zwj);/gi, " ")
+    .replace(/&amp;/gi, "&");
+}
+
+function htmlATextoVisible(html = "") {
+  return decodificarEntidadesHtmlBasicas(html)
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
+    .replace(/<!--([\s\S]*?)-->/g, " ")
+    .replace(/<(?:br|\/p|\/div|\/td|\/tr|\/li|\/h[1-6])\b[^>]*>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/[\u200b-\u200d\ufeff]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function emailCodigoVigente(email = {}, minutos = 120) {
+  const tsInterno = Number(email.ts || 0);
+  const tsCabecera = new Date(email.date || 0).getTime();
+  const ts = tsInterno > 0 ? tsInterno : tsCabecera;
+  if (!Number.isFinite(ts) || ts <= 0) return true;
+  return Date.now() - ts <= Math.max(1, Number(minutos || 0)) * 60 * 1000;
+}
 
 function formatearFecha(date) {
   try { return new Date(date).toLocaleString("es-HN",{timeZone:"America/Tegucigalpa",day:"2-digit",month:"2-digit",year:"numeric",hour:"2-digit",minute:"2-digit"}); }
@@ -59,6 +103,19 @@ function esNetflixReset(from="",subject=""){
 function esDisney(from="",subject=""){
   const f=from.toLowerCase(); const s=subject.toLowerCase();
   return f.includes("disney")||s.includes("disneyplus")||s.includes("disney plus")||s.includes("disney+");
+}
+
+function esDisneyCodigo(from="", subject="", text="") {
+  if (!esDisney(from, subject)) return false;
+  const s = normalizarTextoBusqueda(`${subject} ${String(text || "").slice(0, 1200)}`);
+  return [
+    "codigo", "one-time code", "one time code", "one-time passcode",
+    "verification code", "access code", "passcode", "otp",
+    // Sueco: "Din engångskod till Disney+"
+    "engangskod", "engangskoden",
+    // Variantes frecuentes en otros idiomas europeos.
+    "einmalcode", "einmaliger code", "code unique", "toegangscode"
+  ].some(k => s.includes(k));
 }
 
 function esHBO(from="",subject=""){
@@ -121,11 +178,7 @@ function esHogar(subject="",text=""){
  */
 function extraerCodigoInteligente(text = "", subject = "", html = "", plataforma = "otro") {
   const basuraAnios = new Set(["2024", "2025", "2026", "2027"]);
-  const htmlVisible = String(html || "")
-    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
-    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
-    .replace(/<!--([\s\S]*?)-->/g, " ")
-    .replace(/<[^>]+>/g, " ");
+  const htmlVisible = htmlATextoVisible(html);
   // El texto plano representa mejor lo que ve el usuario. El HTML queda de respaldo.
   const fuentePrincipal = (subject + " " + text).replace(/\s+/g, " ").trim();
   const fuente = (fuentePrincipal + " " + htmlVisible).replace(/\s+/g, " ");
@@ -167,13 +220,25 @@ function extraerCodigoInteligente(text = "", subject = "", html = "", plataforma
   }
 
   if (plataforma === "disney") {
-    // Prioridad absoluta al código situado junto al texto visible del correo.
-    const contextoDisney = fuentePrincipal.match(/(?:c[oó]digo(?:\s+(?:de\s+)?(?:acceso|verificaci[oó]n))?|one[- ]time code|verification code)[\s\S]{0,100}?(\d{6})(?!\d)/i);
-    if (contextoDisney) return contextoDisney[1];
-    const disneyEsp6 = fuente.match(/\b(\d)\s(\d)\s(\d)\s(\d)\s(\d)\s(\d)\b/g);
-    if (disneyEsp6) {
-      for (const m of disneyEsp6) { const v = esValido(m); if (v) return v; }
+    // Disney localiza el mismo correo a muchos idiomas. Normalizamos acentos
+    // para reconocer, entre otros, el sueco "engångskod".
+    const disneyNormalizado = normalizarTextoBusqueda(`${subject} ${text} ${htmlVisible}`);
+    const contextoDisney = disneyNormalizado.match(/(?:codigo(?:\s+(?:de\s+)?(?:acceso|verificacion))?|one[- ]time (?:code|passcode)|verification code|access code|passcode|otp|engangskod(?:en)?|einmal(?:iger )?code|code unique|toegangscode)[^0-9]{0,220}?((?:\d\s*){6})(?!\d)/i);
+    if (contextoDisney) {
+      const v = esValido(contextoDisney[1]);
+      if (v) return v;
     }
+
+    // Algunas plantillas colocan cada dígito en una celda/span diferente.
+    // Después de limpiar el HTML aceptamos 359458 y también 3 5 9 4 5 8.
+    for (const origen of [fuentePrincipal, htmlVisible]) {
+      const secuencias = origen.match(/(?<!\d)(\d(?:[\s\u00a0\u200b-\u200d\ufeff]*\d){5})(?!\d)/g) || [];
+      for (const secuencia of secuencias) {
+        const v = esValido(secuencia);
+        if (v) return v;
+      }
+    }
+    return null;
   }
 
   if (plataforma === "spotify") {
@@ -389,7 +454,12 @@ async function buscarEmails(correo, limite=15) {
           const bodyHtml = String(p.html    || "").toLowerCase();
           const subj     = String(p.subject || "").toLowerCase();
           const toAddr   = (p.to?.text      || "").toLowerCase();
-          const allText  = bodyText + " " + bodyHtml + " " + subj + " " + toAddr;
+          // En correos reenviados/catch-all, el destinatario original puede
+          // aparecer solo en Delivered-To, X-Original-To o Envelope-To. Esos
+          // encabezados siguen presentes en el source aunque p.to sea admin@.
+          const rawSource = Buffer.isBuffer(data.source) ? data.source.toString("utf8") : String(data.source || "");
+          const rawHeaders = rawSource.split(/\r?\n\r?\n/, 1)[0].toLowerCase();
+          const allText  = bodyText + " " + bodyHtml + " " + subj + " " + toAddr + " " + rawHeaders;
 
           if (!allText.includes(correoBuscar)) continue;
 
@@ -449,6 +519,7 @@ async function cmdCode(chatId, correo){
 
       // ── NETFLIX ──────────────────────────────────────
       if(fromL.includes("netflix") || esNetflix(e.from, e.subject)) {
+        if(!emailCodigoVigente(e, 120)) continue;
         if(subjL.includes("restablecimiento")||subjL.includes("contrase")||subjL.includes("cambio")) continue;
         if(subjL.includes("acceso temporal")||subjL.includes("codigo de acceso")||subjL.includes("temporal")) {
           const linkWeb = extraerLinkObtenerCodigo(e.html);
@@ -469,13 +540,25 @@ async function cmdCode(chatId, correo){
 
       // ── DISNEY+ — 6 dígitos en todos los casos ───────
       if(esDisney(e.from, e.subject)) {
+        // Disney indica que el OTP vence en 15 minutos. Damos 30 minutos de
+        // margen por relojes del servidor, pero jamás devolvemos el de ayer.
+        if(!emailCodigoVigente(e, 30)) continue;
         const codigo = extraerCodigoInteligente(e.text, e.subject, e.html, "disney");
         if(codigo) return bot.sendMessage(chatId,`🏰 *CÓDIGO DISNEY+*\n\n📧 *Correo:* ${escMD(correo)}\n🔑 *Código:* \`${codigo}\`\n📨 *Asunto:* ${escMD(e.subject)}\n🕒 *Fecha:* ${escMD(formatearFecha(e.date))}`,{parse_mode:"Markdown"});
+        // Si el email más nuevo sí anuncia un OTP pero cambió nuevamente su
+        // plantilla, no retroceder a otro código anterior y posiblemente vencido.
+        if(esDisneyCodigo(e.from, e.subject, e.text)) {
+          return bot.sendMessage(chatId,
+            `⚠️ Encontré el correo nuevo de Disney+, pero no pude leer sus 6 dígitos.\n\n📨 *Asunto:* ${escMD(e.subject)}\n🕒 *Fecha:* ${escMD(formatearFecha(e.date))}\n\nUse /debug ${escMD(correo)} para revisarlo; no se entregó un código anterior.`,
+            {parse_mode:"Markdown"}
+          );
+        }
         continue;
       }
 
       // ── HBO MAX — 4 dígitos ───────────────────────────
       if(esHBO(e.from, e.subject)) {
+        if(!emailCodigoVigente(e, 120)) continue;
         if(subjL.includes("restablecimiento")||subjL.includes("reset")||subjL.includes("contrase")||subjL.includes("cambio de correo")) continue;
         const codigo = extraerCodigoInteligente(e.text, e.subject, e.html, "hbo");
         if(codigo) return bot.sendMessage(chatId,`🎞️ *CÓDIGO HBO MAX*\n\n📧 *Correo:* ${escMD(correo)}\n🔑 *Código:* \`${codigo}\`\n📨 *Asunto:* ${escMD(e.subject)}\n🕒 *Fecha:* ${escMD(formatearFecha(e.date))}`,{parse_mode:"Markdown"});
@@ -484,6 +567,7 @@ async function cmdCode(chatId, correo){
 
       // ── PRIME VIDEO — 6 dígitos ───────────────────────
       if(esPrime(e.from, e.subject)) {
+        if(!emailCodigoVigente(e, 120)) continue;
         const codigo = extraerCodigoInteligente(e.text, e.subject, e.html, "prime");
         if(codigo) return bot.sendMessage(chatId,`🎥 *CÓDIGO PRIME VIDEO*\n\n📧 *Correo:* ${escMD(correo)}\n🔑 *Código:* \`${codigo}\`\n📨 *Asunto:* ${escMD(e.subject)}\n🕒 *Fecha:* ${escMD(formatearFecha(e.date))}`,{parse_mode:"Markdown"});
         continue;
@@ -491,6 +575,7 @@ async function cmdCode(chatId, correo){
 
       // ── VIX — código o link ───────────────────────────
       if(esVix(e.from, e.subject)) {
+        if(!emailCodigoVigente(e, 120)) continue;
         const codigo = extraerCodigoInteligente(e.text, e.subject, e.html, "vix");
         if(codigo) return bot.sendMessage(chatId,`📱 *CÓDIGO VIX*\n\n📧 *Correo:* ${escMD(correo)}\n🔑 *Código:* \`${codigo}\`\n📨 *Asunto:* ${escMD(e.subject)}\n🕒 *Fecha:* ${escMD(formatearFecha(e.date))}`,{parse_mode:"Markdown"});
         const link = extraerLink(e.text, e.html);
@@ -500,6 +585,7 @@ async function cmdCode(chatId, correo){
 
       // ── UNIVERSAL+ — código alfanumérico ─────────────
       if(esUniversal(e.from, e.subject)) {
+        if(!emailCodigoVigente(e, 120)) continue;
         const codigo = extraerCodigoInteligente(e.text, e.subject, e.html, "universal");
         if(codigo) return bot.sendMessage(chatId,`🌎 *CÓDIGO UNIVERSAL+*\n\n📧 *Correo:* ${escMD(correo)}\n🔑 *Código:* \`${codigo}\`\n📨 *Asunto:* ${escMD(e.subject)}\n🕒 *Fecha:* ${escMD(formatearFecha(e.date))}`,{parse_mode:"Markdown"});
         continue;
@@ -507,6 +593,7 @@ async function cmdCode(chatId, correo){
 
       // ── SPOTIFY — inicio de sesión: 4 dígitos ───────
       if(esSpotify(e.from, e.subject)) {
+        if(!emailCodigoVigente(e, 120)) continue;
         const codigo = extraerCodigoInteligente(e.text, e.subject, e.html, "spotify");
         if(codigo) return bot.sendMessage(chatId,`🎵 *CÓDIGO SPOTIFY*\n\n📧 *Correo:* ${escMD(correo)}\n🔑 *Código:* \`${codigo}\`\n📨 *Asunto:* ${escMD(e.subject)}\n🕒 *Fecha:* ${escMD(formatearFecha(e.date))}`,{parse_mode:"Markdown"});
         continue;
@@ -649,6 +736,7 @@ async function cmdPrime(chatId, correo){
 
     for(const e of emails){
       if(!esPrime(e.from, e.subject)) continue;
+      if(!emailCodigoVigente(e, 120)) continue;
       const codigo = extraerCodigoInteligente(e.text, e.subject, e.html, "prime");
 
       if(codigo) return bot.sendMessage(chatId,
@@ -709,6 +797,6 @@ bot.onText(/^\/prime\s+(\S+)/i, _imapPrimeHandler);
 bot.onText(/^\/inbox\s+(\S+)/i, _imapInboxHandler);
 bot.onText(/^\/debug\s+(\S+)/i, _imapDebugHandler);
 
-console.log("✅ Módulo IMAP v17 cargado — /code /link /hogar /prime /inbox");
+console.log("✅ Módulo IMAP v18 cargado — /code /link /hogar /prime /inbox");
 
 module.exports = { cmdCode, cmdLink, cmdHogar, cmdPrime, cmdInbox };
