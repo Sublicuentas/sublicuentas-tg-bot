@@ -1,4 +1,4 @@
-/* ✅ SUBLICUENTAS TG BOT — PARTE 7/7 v18
+/* ✅ SUBLICUENTAS TG BOT — PARTE 7/7 v19
    IMAP — CÓDIGOS Y LINKS: NETFLIX / DISNEY / HBO / PRIME / VIX / UNIVERSAL / SPOTIFY
    ----------------------------------------------------------------
    ✅ CAMBIOS v16:
@@ -68,6 +68,10 @@ function decodificarEntidadesHtmlBasicas(v = "") {
 
 function htmlATextoVisible(html = "") {
   return decodificarEntidadesHtmlBasicas(html)
+    // Disney deja OTP anteriores dentro de preheaders/bloques ocultos. Esos
+    // números existen en el HTML, pero no son el código que ve el usuario.
+    .replace(/<([a-z0-9]+)\b[^>]*\b(?:hidden|aria-hidden\s*=\s*["']?true|style\s*=\s*["'][^"']*(?:display\s*:\s*none|visibility\s*:\s*hidden|opacity\s*:\s*0(?:\D|$)|font-size\s*:\s*0|max-height\s*:\s*0)[^"']*["'])[^>]*>[\s\S]*?<\/\1\s*>/gi, " ")
+    .replace(/<[^>]*\b(?:hidden|aria-hidden\s*=\s*["']?true)[^>]*\/?>/gi, " ")
     .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
     .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
     .replace(/<!--([\s\S]*?)-->/g, " ")
@@ -199,38 +203,23 @@ function extraerCodigoInteligente(text = "", subject = "", html = "", plataforma
   const fuentePrincipal = (subject + " " + text).replace(/\s+/g, " ").trim();
   const fuente = (fuentePrincipal + " " + htmlVisible).replace(/\s+/g, " ");
 
-  // REGLA ESTRICTA Y BLINDADA: Universal+
+  // Universal+ usa un OTP numérico de 6 dígitos.
   if (plataforma === "universal") {
-    // 1. Limpiamos enlaces web para matar cosas como idp-services.tbxnet.com
-    const fuenteSinLinks = fuente.replace(/https?:\/\/[^\s]+/gi, " ");
-    
-    // 2. Buscamos bloques de 6 letras (mayúsculas) o números
-    const matchUni = fuenteSinLinks.match(/(?<![a-zA-Z0-9])([A-Z0-9]{6})(?![a-zA-Z0-9])/g);
-    
-    if (matchUni) {
-      // 3. Lista negra de palabras comunes de 6 letras que arruinan la lectura
-      const ignorar = new Set(["CUENTA", "CODIGO", "CORREO", "ACCESO", "TBXNET", "ACTIVA", "ONLINE", "EQUIPO", "PRUEBA"]);
-      
-      // 4. BÚSQUEDA PRIORITARIA: Buscar un código que tenga SÍ o SÍ letras y números (ej. HGB6SE)
-      for (const code of matchUni) {
-        if (!ignorar.has(code) && /[A-Z]/.test(code) && /[0-9]/.test(code)) {
-          return code;
-        }
-      }
-      
-      // 5. BÚSQUEDA SECUNDARIA: Si no hay alfanuméricos puros, tomar el primer bloque válido que no sea basura
-      for (const code of matchUni) {
-        if (!ignorar.has(code)) return code;
-      }
+    for (const origen of [htmlVisible, fuentePrincipal]) {
+      const contexto = origen.match(/(?:c[oó]digo|code|otp|pin|verificaci[oó]n|inicio de sesi[oó]n|acceso)[\s\S]{0,160}?(\d(?:[\s\u00a0]*\d){5})(?!\d)/i);
+      if (contexto) return contexto[1].replace(/\s/g, "");
+      const codigos = origen.match(/(?<!\d)\d{6}(?!\d)/g) || [];
+      const valido = codigos.find(c => !basuraAnios.has(c));
+      if (valido) return valido;
     }
-    return null; 
+    return null;
   }
 
   function esValido(c = "") {
     const s = c.replace(/\s/g, "");
     if (basuraAnios.has(s)) return null;
     if (["disney", "prime", "hbo", "vix"].includes(plataforma) && s.length !== 6) return null;
-    if (plataforma === "spotify" && s.length !== 4) return null;
+    if (plataforma === "spotify" && s.length !== 6) return null;
     if (/^\d{4,6}$/.test(s)) return s;
     return null;
   }
@@ -238,16 +227,16 @@ function extraerCodigoInteligente(text = "", subject = "", html = "", plataforma
   if (plataforma === "disney") {
     // Disney localiza el mismo correo a muchos idiomas. Normalizamos acentos
     // para reconocer, entre otros, el sueco "engångskod".
-    const disneyNormalizado = normalizarTextoBusqueda(`${subject} ${text} ${htmlVisible}`);
-    const contextoDisney = disneyNormalizado.match(/(?:codigo(?:\s+(?:de\s+)?(?:acceso|verificacion))?|one[- ]time (?:code|passcode)|verification code|access code|passcode|otp|engangskod(?:en)?|einmal(?:iger )?code|code unique|toegangscode)[^0-9]{0,220}?((?:\d\s*){6})(?!\d)/i);
-    if (contextoDisney) {
-      const v = esValido(contextoDisney[1]);
-      if (v) return v;
-    }
-
-    // Algunas plantillas colocan cada dígito en una celda/span diferente.
-    // Después de limpiar el HTML aceptamos 359458 y también 3 5 9 4 5 8.
-    for (const origen of [fuentePrincipal, htmlVisible]) {
+    // Primero el HTML visible: el texto plano generado por algunos hostings
+    // incluye preheaders ocultos con un OTP viejo (por ejemplo 814644).
+    for (const origenOriginal of [htmlVisible, fuentePrincipal]) {
+      const origen = normalizarTextoBusqueda(`${subject} ${origenOriginal}`);
+      const contextoDisney = origen.match(/(?:codigo(?:\s+(?:de\s+)?(?:acceso|verificacion))?|one[- ]time (?:code|passcode)|verification code|access code|passcode|otp|engangskod(?:en)?|einmal(?:iger )?code|code unique|toegangscode)[^0-9]{0,220}?((?:\d\s*){6})(?!\d)/i);
+      if (contextoDisney) {
+        const v = esValido(contextoDisney[1]);
+        if (v) return v;
+      }
+      // Algunas plantillas colocan cada dígito en una celda/span diferente.
       const secuencias = origen.match(/(?<!\d)(\d(?:[\s\u00a0\u200b-\u200d\ufeff]*\d){5})(?!\d)/g) || [];
       for (const secuencia of secuencias) {
         const v = esValido(secuencia);
@@ -258,10 +247,10 @@ function extraerCodigoInteligente(text = "", subject = "", html = "", plataforma
   }
 
   if (plataforma === "spotify") {
-    const contextoSpotify = fuentePrincipal.match(/(?:c[oó]digo|code|inicio de sesi[oó]n|log[ -]?in)[\s\S]{0,100}?(\d{4})(?!\d)/i);
+    const contextoSpotify = fuentePrincipal.match(/(?:c[oó]digo|code|otp|inicio de sesi[oó]n|log[ -]?in)[\s\S]{0,120}?(\d{6})(?!\d)/i);
     if (contextoSpotify) return contextoSpotify[1];
-    const codigos4 = fuentePrincipal.match(/(?<!\d)\d{4}(?!\d)/g) || [];
-    for (const c of codigos4) { const v = esValido(c); if (v) return v; }
+    const codigos6 = fuentePrincipal.match(/(?<!\d)\d{6}(?!\d)/g) || [];
+    for (const c of codigos6) { const v = esValido(c); if (v) return v; }
     return null;
   }
 
@@ -525,7 +514,7 @@ async function buscarEmails(correo, limite=15) {
 // COMANDOS
 // ===============================
 
-/** /code — Netflix (4/6 dig), Disney+ (6), HBO Max (4), Prime Video (6), Vix, Universal+ */
+/** /code — Netflix, Disney+ (6), HBO Max, Prime Video, Vix, Universal+ (6), Spotify (6) */
 async function cmdCode(chatId, correo){
   if(!correo) return bot.sendMessage(chatId,"⚠️ Uso: /code correo@dominio.com");
   try{
@@ -634,7 +623,7 @@ async function cmdCode(chatId, correo){
         continue;
       }
 
-      // ── UNIVERSAL+ — código alfanumérico ─────────────
+      // ── UNIVERSAL+ — código numérico de 6 dígitos ────
       if(esUniversal(e.from, e.subject)) {
         if(!emailCodigoVigente(e, 120)) continue;
         const codigo = extraerCodigoInteligente(e.text, e.subject, e.html, "universal");
@@ -642,7 +631,7 @@ async function cmdCode(chatId, correo){
         continue;
       }
 
-      // ── SPOTIFY — inicio de sesión: 4 dígitos ───────
+      // ── SPOTIFY — inicio de sesión: 6 dígitos ───────
       if(esSpotify(e.from, e.subject)) {
         if(!emailCodigoVigente(e, 120)) continue;
         const codigo = extraerCodigoInteligente(e.text, e.subject, e.html, "spotify");
@@ -848,6 +837,6 @@ bot.onText(/^\/prime\s+(\S+)/i, _imapPrimeHandler);
 bot.onText(/^\/inbox\s+(\S+)/i, _imapInboxHandler);
 bot.onText(/^\/debug\s+(\S+)/i, _imapDebugHandler);
 
-console.log("✅ Módulo IMAP v18 cargado — /code /link /hogar /prime /inbox");
+console.log("✅ Módulo IMAP v19 cargado — /code /link /hogar /prime /inbox");
 
-module.exports = { cmdCode, cmdLink, cmdHogar, cmdPrime, cmdInbox };
+module.exports = { cmdCode, cmdLink, cmdHogar, cmdPrime, cmdInbox, extraerCodigoInteligente, htmlATextoVisible };
