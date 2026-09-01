@@ -13,13 +13,29 @@
 const { ImapFlow } = require("imapflow");
 const { simpleParser } = require("mailparser");
 
-const { bot } = require("./index_01_core");
+const { bot, EMAIL_ACCOUNTS } = require("./index_01_core");
 const { isAdmin, logErr, escMD } = require("./index_02_utils_roles");
 
 const IMAP_HOST = process.env.IMAP_HOST_1 || process.env.EMAIL_IMAP_HOST || "premium48.web-hosting.com";
 const IMAP_PORT = Number(process.env.EMAIL_IMAP_PORT || 993);
 const IMAP_USER = process.env.EMAIL_ADMIN_USER || "admin@sublicuentas.com";
 const IMAP_PASS = process.env.EMAIL_ADMIN_PASS || "";
+const disneyUltimoEntregado = global.__SUBLICUENTAS_DISNEY_OTP__ || new Map();
+global.__SUBLICUENTAS_DISNEY_OTP__ = disneyUltimoEntregado;
+const esperar = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+function cuentasImapCodigos() {
+  const legacy = { name: "hosting-principal", host: IMAP_HOST, port: IMAP_PORT, tls: true, user: IMAP_USER, password: IMAP_PASS };
+  const rows = [legacy, ...(Array.isArray(EMAIL_ACCOUNTS) ? EMAIL_ACCOUNTS : [])];
+  const seen = new Set();
+  return rows.filter(row => {
+    const host = String(row?.host || "").trim(), user = String(row?.user || "").trim();
+    const password = String(row?.password || row?.pass || "");
+    const key = `${host.toLowerCase()}|${user.toLowerCase()}`;
+    if (!host || !user || !password || seen.has(key)) return false;
+    seen.add(key); return true;
+  });
+}
 
 // ===============================
 // HELPERS BASE
@@ -379,12 +395,12 @@ async function scrapearCodigoWeb(url) {
 // ===============================
 // LECTURA IMAP — sin SEARCH para compatibilidad con cPanel
 // ===============================
-async function buscarEmails(correo, limite=15) {
+async function buscarEmailsCuenta(correo, limite=15, cuenta={}) {
   const correoBuscar = String(correo||"").trim().toLowerCase();
 
   const client = new ImapFlow({
-    host:IMAP_HOST, port:IMAP_PORT, secure:true,
-    auth:{user:IMAP_USER, pass:IMAP_PASS},
+    host:String(cuenta.host||IMAP_HOST), port:Number(cuenta.port||IMAP_PORT), secure:cuenta.tls!==false,
+    auth:{user:String(cuenta.user||IMAP_USER), pass:String(cuenta.password||cuenta.pass||IMAP_PASS)},
     logger:{
       debug: (obj) => console.log("[IMAP DBG]", obj?.msg || JSON.stringify(obj).slice(0,120)),
       info:  (obj) => console.log("[IMAP INF]", obj?.msg || ""),
@@ -413,8 +429,8 @@ async function buscarEmails(correo, limite=15) {
       const rango  = `${fin}:${inicio}`;
 
       // ✅ Paso 1: traer envelope con internalDate — guardar seq + fecha exacta del servidor
-      const candidatos = []; // { seq, internalDate }
-      for await (const msg of client.fetch(rango, { envelope: true, internalDate: true })) {
+      const candidatos = []; // { seq, uid, ts }
+      for await (const msg of client.fetch(rango, { envelope: true, internalDate: true, uid: true })) {
         try {
           const fecha = msg.internalDate ? new Date(msg.internalDate) : new Date(0);
           if (fecha < fechaLimite) continue;
@@ -434,15 +450,18 @@ async function buscarEmails(correo, limite=15) {
             subjStr.includes("verifica") || subjStr.includes("acceso") ||
             subjStr.includes("contrase") || subjStr.includes("restablec");
 
-          if (esPlatConocida) candidatos.push({ seq: msg.seq, ts: fecha.getTime() });
+          if (esPlatConocida) candidatos.push({ seq: msg.seq, uid: Number(msg.uid || 0), ts: fecha.getTime() });
         } catch(_) {}
       }
 
       // ✅ Ordenar candidatos: más reciente primero (por internalDate del servidor)
-      candidatos.sort((a, b) => b.ts - a.ts);
+      // Algunos hostings guardan dos OTP reenviados dentro del mismo segundo.
+      // En ese caso internalDate empata; UID/sequence más alto es el correo que
+      // llegó último y, para Disney, el único código que sigue siendo válido.
+      candidatos.sort((a, b) => b.ts - a.ts || b.uid - a.uid || b.seq - a.seq);
 
       // ✅ Paso 2: descargar source solo de candidatos, del más reciente al más viejo
-      for (const { seq } of candidatos) {
+      for (const { seq, uid, ts } of candidatos) {
         if (emails.length >= limite) break;
         try {
           const data = await client.fetchOne(String(seq), { source: true });
@@ -468,8 +487,13 @@ async function buscarEmails(correo, limite=15) {
             subject: String(p.subject   || ""),
             text:    String(p.text      || ""),
             html:    String(p.html      || ""),
-            date:    p.date || new Date(),
-            ts:      candidatos.find(x => x.seq === seq)?.ts || 0,
+            // Para ordenar y mostrar usamos la llegada real al hosting. La
+            // cabecera Date puede repetirse, venir retrasada o faltar.
+            date:    ts > 0 ? new Date(ts) : (p.date || new Date(0)),
+            ts:      ts || 0,
+            uid:     uid || 0,
+            seq:     seq || 0,
+            mailbox: String(cuenta.name || cuenta.label || cuenta.user || "hosting"),
           });
         } catch(_) {}
       }
@@ -483,7 +507,18 @@ async function buscarEmails(correo, limite=15) {
 
   // Más reciente primero
   // Ordenar por timestamp del servidor (más preciso que p.date)
-  return emails.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+  return emails.sort((a, b) => (b.ts || 0) - (a.ts || 0) || (b.uid || 0) - (a.uid || 0) || (b.seq || 0) - (a.seq || 0));
+}
+
+async function buscarEmails(correo, limite=15) {
+  const cuentas = cuentasImapCodigos();
+  if (!cuentas.length) throw new Error("No hay una cuenta IMAP válida para consultar códigos.");
+  const results = await Promise.allSettled(cuentas.map(cuenta => buscarEmailsCuenta(correo, limite, cuenta)));
+  const emails = results.flatMap(result => result.status === "fulfilled" ? result.value : []);
+  if (!emails.length && results.every(result => result.status === "rejected")) {
+    throw results.find(result => result.status === "rejected")?.reason || new Error("No se pudo abrir el hosting de correo.");
+  }
+  return emails.sort((a,b)=>(b.ts||0)-(a.ts||0)||(b.uid||0)-(a.uid||0)||(b.seq||0)-(a.seq||0)).slice(0,Math.max(1,limite));
 }
 
 // ===============================
@@ -494,7 +529,14 @@ async function buscarEmails(correo, limite=15) {
 async function cmdCode(chatId, correo){
   if(!correo) return bot.sendMessage(chatId,"⚠️ Uso: /code correo@dominio.com");
   try{
-    const emails = await buscarEmails(correo);
+    let emails = await buscarEmails(correo);
+    // El reenvío hacia el hosting suele tardar unos segundos. Si ya existe un
+    // correo Disney, hacemos una segunda lectura para no contestar con el OTP
+    // anterior justo cuando el nuevo todavía está entrando al buzón.
+    if (emails.some(e => esDisney(e.from, e.subject))) {
+      await esperar(4500);
+      emails = await buscarEmails(correo);
+    }
     if(!emails.length) return bot.sendMessage(chatId,`📬 Sin emails recientes para *${escMD(correo)}*`,{parse_mode:"Markdown"});
 
     for(const e of emails){
@@ -544,7 +586,16 @@ async function cmdCode(chatId, correo){
         // margen por relojes del servidor, pero jamás devolvemos el de ayer.
         if(!emailCodigoVigente(e, 30)) continue;
         const codigo = extraerCodigoInteligente(e.text, e.subject, e.html, "disney");
-        if(codigo) return bot.sendMessage(chatId,`🏰 *CÓDIGO DISNEY+*\n\n📧 *Correo:* ${escMD(correo)}\n🔑 *Código:* \`${codigo}\`\n📨 *Asunto:* ${escMD(e.subject)}\n🕒 *Fecha:* ${escMD(formatearFecha(e.date))}`,{parse_mode:"Markdown"});
+        if(codigo) {
+          const correoKey = normalizarCorreo(correo);
+          const previous = disneyUltimoEntregado.get(correoKey);
+          const marker = `${Number(e.uid || 0)}:${codigo}`;
+          if (previous === marker) {
+            return bot.sendMessage(chatId,`⏳ *DISNEY+ TODAVÍA NO ENVÍA OTRO CÓDIGO*\n\n📧 *Correo:* ${escMD(correo)}\n🔑 El hosting conserva como último el código \`${codigo}\`, que ya fue entregado.\n\nPulse *Reenviar* en Disney y vuelva a usar /code en unos segundos; no repetí el código anterior.`,{parse_mode:"Markdown"});
+          }
+          disneyUltimoEntregado.set(correoKey, marker);
+          return bot.sendMessage(chatId,`🏰 *CÓDIGO DISNEY+*\n\n📧 *Correo:* ${escMD(correo)}\n🔑 *Código:* \`${codigo}\`\n📨 *Asunto:* ${escMD(e.subject)}\n🕒 *Fecha:* ${escMD(formatearFecha(e.date))}`,{parse_mode:"Markdown"});
+        }
         // Si el email más nuevo sí anuncia un OTP pero cambió nuevamente su
         // plantilla, no retroceder a otro código anterior y posiblemente vencido.
         if(esDisneyCodigo(e.from, e.subject, e.text)) {
