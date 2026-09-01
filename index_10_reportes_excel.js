@@ -118,7 +118,7 @@ function dateFromAny(v) {
 }
 
 function extraerFechaMovimiento(data = {}) {
-  return normalizeDMY(data.fecha || data.fecha_dmy || data.fechaMovimiento || data.date || "") ||
+  return normalizeDMY(data.fecha || data.fechaPago || data.fecha_pago || data.fecha_dmy || data.fechaMovimiento || data.date || "") ||
     dmyFromDate(dateFromAny(data.fechaTS || data.fecha_ts || data.createdAt || data.created_at || data.updatedAt || data.updated_at || data.timestamp || data.ts));
 }
 

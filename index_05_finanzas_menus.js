@@ -123,7 +123,7 @@ function parseFechaFlexible(raw = "") {
   return isFechaDMY(s) ? normalizeDMY(s) : null;
 }
 function extraerFechaMovimiento(r = {}) {
-  return normalizeDMY(r.fecha || "") || tsToDMY(r.fechaTS || r.fecha_ts || null) || tsToDMY(r.createdAt || r.created_at || null) || tsToDMY(r.updatedAt || r.updated_at || null) || tsToDMY(r.timestamp || r.ts || null) || "";
+  return normalizeDMY(r.fecha || r.fechaPago || r.fecha_pago || r.fecha_dmy || r.fechaMovimiento || r.date || "") || tsToDMY(r.fechaTS || r.fecha_ts || null) || tsToDMY(r.createdAt || r.created_at || null) || tsToDMY(r.updatedAt || r.updated_at || null) || tsToDMY(r.timestamp || r.ts || null) || "";
 }
 function finTipoLabel(tipo) { return String(tipo || "").toLowerCase() === "egreso" ? "Egreso" : "Ingreso"; }
 function finConceptoLabel(m = {}) {
@@ -532,8 +532,9 @@ async function getMovimientosPorFecha(fechaDMY, _userId = null, _isSuper = false
     if (range) addRowsDedup(map, await queryDocsByFieldRange(col, "fechaTS", range.iniTs, range.finTs));
   }
   let rows = Array.from(map.values()).map((r) => ({ ...r, fecha: extraerFechaMovimiento(r) || r.fecha || "" })).filter((r) => normalizeDMY(String(r.fecha || "")) === fecha).sort((a, b) => dmyToMillis(b.fecha||"") - dmyToMillis(a.fecha||""));
-  if (!rows.length) rows = await scanFinanceDocsFallbackByDate(fecha);
-  return rows;
+  // La lectura completa concilia documentos históricos de Sublichat que sólo
+  // tenían fechaPago/createdAt y no podían aparecer en las consultas indexadas.
+  return await scanFinanceDocsFallbackByDate(fecha);
 }
 
 async function getMovimientosPorMes(monthKey, _userId = null, _isSuper = false) {
@@ -551,8 +552,7 @@ async function getMovimientosPorMes(monthKey, _userId = null, _isSuper = false) 
     if (bounds) addRowsDedup(map, await queryDocsByFieldRange(col, "fecha", bounds.ini, bounds.fin));
   }
   let rows = Array.from(map.values()).map((r) => { const fechaReal = extraerFechaMovimiento(r) || r.fecha || ""; const mesReal = monthKeyFromDMYLocal(fechaReal); return { ...r, fecha: fechaReal, mesKey: normalizeMonthKey(r.mesKey || mesReal || ""), monthKey: normalizeMonthKey(r.monthKey || mesReal || "") }; }).filter((r) => { const mes = normalizeMonthKey(r.mesKey || r.monthKey || monthKeyFromDMYLocal(r.fecha || "")); return mes === key; }).sort((a, b) => dmyToMillis(b.fecha||"") - dmyToMillis(a.fecha||""));
-  if (!rows.length && bounds) rows = await scanFinanceDocsFallbackByRange(bounds.ini, bounds.fin);
-  return rows;
+  return bounds ? await scanFinanceDocsFallbackByRange(bounds.ini, bounds.fin) : rows;
 }
 
 async function getMovimientosPorRango(fechaInicio, fechaFin, _userId = null, _isSuper = false) {
@@ -570,8 +570,7 @@ async function getMovimientosPorRango(fechaInicio, fechaFin, _userId = null, _is
     for (const mk of monthKeys) { const bounds = getMonthBoundsDMY(mk); if (!bounds) continue; addRowsDedup(map, await queryDocsByFieldRange(col, "fecha", bounds.ini, bounds.fin)); }
   }
   let rows = Array.from(map.values()).map((r) => ({ ...r, fecha: extraerFechaMovimiento(r) || r.fecha || "" })).filter((r) => { const ts = dmyToMillis(String(r.fecha||"")); return ts >= iniMs && ts <= finMs; }).sort((a, b) => dmyToMillis(a.fecha||"") - dmyToMillis(b.fecha||""));
-  if (!rows.length) rows = await scanFinanceDocsFallbackByRange(ini, fin);
-  return rows;
+  return await scanFinanceDocsFallbackByRange(ini, fin);
 }
 
 async function eliminarMovimientoFinanzas(id, _userId = null, _isSuper = false) {
