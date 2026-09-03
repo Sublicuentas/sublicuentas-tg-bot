@@ -2262,13 +2262,15 @@ bot.onText(/\/sincronizar_todo/i, async (msg) => {
     // TODO el inventario una sola vez y lo indexamos por correo real, igual
     // que lo hace el backend de Sublichat HQ (renovar.js → ajustarInventario).
     const snapInv = await db.collection("inventario").get();
-    const invPorCorreo = new Map(); // correoNorm -> [{ ref, data }]
+    const invPorAcceso = new Map(); // plataforma__correoNorm -> [{ ref, data }]
     snapInv.forEach((d) => {
       const data = d.data() || {};
-      const correoNorm = String(data.correo || "").trim().toLowerCase();
+      const platNorm = normalizarPlataforma(data.plataforma || "");
+      const correoNorm = normalizeIdentByPlatformLocal(platNorm, data.correo || data.usuario || "");
       if (!correoNorm) return;
-      if (!invPorCorreo.has(correoNorm)) invPorCorreo.set(correoNorm, []);
-      invPorCorreo.get(correoNorm).push({ ref: d.ref, data });
+      const key = `${platNorm}__${correoNorm}`;
+      if (!invPorAcceso.has(key)) invPorAcceso.set(key, []);
+      invPorAcceso.get(key).push({ ref: d.ref, data });
     });
 
     const snapClientes = await db.collection("clientes").get();
@@ -2278,64 +2280,96 @@ bot.onText(/\/sincronizar_todo/i, async (msg) => {
       const servicios = Array.isArray(c.servicios) ? c.servicios : [];
       const nombreCliente = c.nombrePerfil || c.nombre || "Sin Nombre";
 
-      for (const s of servicios) {
-        if (!s.correo || !s.plataforma) continue;
+      for (let servicioIndex = 0; servicioIndex < servicios.length; servicioIndex++) {
+        const s = servicios[servicioIndex] || {};
+        if (!s.plataforma) continue;
+        const platNorm = normalizarPlataforma(s.plataforma || "");
+        const perfiles = perfilesServicioLocal(s, nombreCliente);
 
-        const correoNorm = String(s.correo).trim().toLowerCase();
-        const candidatos = invPorCorreo.get(correoNorm) || [];
+        for (let perfilIndex = 0; perfilIndex < perfiles.length; perfilIndex++) {
+          const perfil = perfiles[perfilIndex] || {};
+          const correoNorm = normalizeIdentByPlatformLocal(platNorm, perfil.correo || s.correo || "");
+          if (!correoNorm) continue;
+          const candidatos = invPorAcceso.get(`${platNorm}__${correoNorm}`) || [];
 
-        if (!candidatos.length) {
-          clientesSinCuenta++;
-          sinCuenta.push(`${nombreCliente} — ${s.plataforma} — ${s.correo}`);
-          continue;
-        }
+          if (!candidatos.length) {
+            clientesSinCuenta++;
+            sinCuenta.push(`${perfil.nombre || nombreCliente} — ${s.plataforma} — ${perfil.correo || s.correo}`);
+            continue;
+          }
 
         // Si el mismo correo quedó duplicado en varias cuentas de inventario,
         // preferimos la que aún tenga espacio; si todas están llenas, la primera.
-        const elegido = candidatos.find((x) => {
-          const cap = Number(x.data.capacidad || x.data.total || 0);
-          const ocup = Array.isArray(x.data.clientes) ? x.data.clientes.length : 0;
-          return cap === 0 || ocup < cap;
-        }) || candidatos[0];
+          const compraId = String(s.compraId || `legacy_compra_${docCli.id}_${servicioIndex}`);
+          const perfilId = String(perfil.perfilId || `legacy_perfil_${docCli.id}_${servicioIndex}_${perfilIndex}`);
+          const elegido = candidatos.find((x) => {
+            const existentes = Array.isArray(x.data.clientes) ? x.data.clientes : [];
+            const yaEsta = existentes.some((item) =>
+              String(item?.perfilId || "") === perfilId
+              || (String(item?.compraId || "") === compraId && String(item?.clienteId || "") === docCli.id)
+            );
+            const cap = Number(x.data.capacidad || x.data.total || 0);
+            return yaEsta || cap === 0 || existentes.length < cap;
+          }) || candidatos[0];
 
-        const invData = elegido.data;
-        let clientesInv = Array.isArray(invData.clientes) ? invData.clientes.slice() : [];
-        const pinCliente = s.pin || s.pinPerfil || "0000";
+          const invData = elegido.data;
+          let clientesInv = Array.isArray(invData.clientes) ? invData.clientes.slice() : [];
+          const pinCliente = perfil.pin || s.pin || s.pinPerfil || "0000";
+          const nombrePerfil = perfil.nombre || nombreCliente;
 
-        const yaExiste = clientesInv.some(
-          (x) => String(x.nombre || "").trim().toLowerCase() === String(nombreCliente).trim().toLowerCase()
-            && String(x.pin || "") === String(pinCliente)
-        );
-        if (yaExiste) continue;
+          let idxExiste = clientesInv.findIndex((x) => String(x?.perfilId || "") === perfilId);
+          if (idxExiste === -1) idxExiste = clientesInv.findIndex((x) =>
+            !String(x?.perfilId || "") && !String(x?.compraId || "")
+            && String(x?.nombre || "").trim().toLowerCase() === String(nombrePerfil).trim().toLowerCase()
+            && String(x?.pin || "") === String(pinCliente)
+          );
 
-        const usados = clientesInv.map((x) => Number(x.slot) || 0);
-        let slot = 1; while (usados.includes(slot)) slot++;
-        clientesInv.push({ nombre: nombreCliente, pin: pinCliente, slot });
+          if (idxExiste !== -1) {
+            const anterior = clientesInv[idxExiste] || {};
+            const actualizado = { ...anterior, nombre: nombrePerfil, pin: pinCliente, clienteId: docCli.id, compraId, perfilId };
+            if (JSON.stringify(anterior) !== JSON.stringify(actualizado)) {
+              clientesInv[idxExiste] = actualizado;
+            } else {
+              continue;
+            }
+          } else {
+            const capacidadActual = Number(invData.capacidad || invData.total || 0);
+            if (capacidadActual > 0 && clientesInv.length >= capacidadActual) {
+              clientesSinCuenta++;
+              sinCuenta.push(`${nombrePerfil} — ${s.plataforma} — ${perfil.correo || s.correo} (cuenta llena)`);
+              continue;
+            }
 
-        const capacidad = Number(invData.capacidad || invData.total || 0);
-        const ocupados = clientesInv.length;
-        const disponibles = capacidad > 0
-          ? Math.max(0, capacidad - ocupados)
-          : Math.max(0, Number(invData.disp || 0) - 1);
-        const estado = disponibles === 0 ? "llena" : "activa";
+            const usados = clientesInv.map((x) => Number(x.slot) || 0);
+            let slot = 1; while (usados.includes(slot)) slot++;
+            clientesInv.push({ nombre: nombrePerfil, pin: pinCliente, slot, clienteId: docCli.id, compraId, perfilId });
+          }
 
-        await elegido.ref.set(
-          { clientes: clientesInv, ocupados, disponibles, disp: disponibles, estado, capacidad, updatedAt: admin.firestore.FieldValue.serverTimestamp() },
-          { merge: true }
-        );
+          const capacidad = Number(invData.capacidad || invData.total || 0);
+          const ocupados = clientesInv.length;
+          const disponibles = capacidad > 0
+            ? Math.max(0, capacidad - ocupados)
+            : Math.max(0, Number(invData.disp || 0) - (idxExiste === -1 ? 1 : 0));
+          const estado = disponibles === 0 ? "llena" : "activa";
+
+          await elegido.ref.set(
+            { clientes: clientesInv, ocupados, disponibles, disp: disponibles, estado, capacidad, updatedAt: admin.firestore.FieldValue.serverTimestamp() },
+            { merge: true }
+          );
 
         // Refresca el índice en memoria por si el mismo correo aparece en otro cliente más abajo.
-        elegido.data = { ...invData, clientes: clientesInv, ocupados, disponibles, capacidad };
+          elegido.data = { ...invData, clientes: clientesInv, ocupados, disponibles, capacidad };
 
-        perfilesEmparejados++;
-        cuentasAfectadas.add(elegido.ref.id);
+          perfilesEmparejados++;
+          cuentasAfectadas.add(elegido.ref.id);
+        }
       }
     }
 
     let resumenFaltantes = "";
     if (sinCuenta.length) {
       const muestra = sinCuenta.slice(0, 15).map((x) => `• ${x}`).join("\n");
-      resumenFaltantes = `\n\n⚠️ ${sinCuenta.length} servicio(s) sin cuenta en inventario (el correo de la ficha no coincide con ninguna cuenta creada en inventario):\n${muestra}${sinCuenta.length > 15 ? `\n…y ${sinCuenta.length - 15} más.` : ""}`;
+      resumenFaltantes = `\n\n⚠️ ${sinCuenta.length} perfil(es) sin cuenta compatible en inventario (deben coincidir plataforma + correo/usuario y debe existir espacio):\n${muestra}${sinCuenta.length > 15 ? `\n…y ${sinCuenta.length - 15} más.` : ""}`;
     }
 
     // ✅ Texto plano: la lista de "sin cuenta" incluye nombres y correos

@@ -493,7 +493,7 @@ async function getInventarioDoc(plataforma = "", acceso = "") {
   return null;
 }
 
-async function syncServicioEnInventario({ clienteNombre = "", plataforma = "", correo = "", clave = "", pin = "" }) {
+async function syncServicioEnInventario({ clienteNombre = "", plataforma = "", correo = "", clave = "", pin = "", clienteId = "", compraId = "", perfilId = "" }) {
   const plat = normalizarPlataforma(plataforma);
   const acceso = normalizeIdentByPlatformLocal(plat, correo);
   const found = await getInventarioDoc(plat, acceso);
@@ -505,11 +505,39 @@ async function syncServicioEnInventario({ clienteNombre = "", plataforma = "", c
     const data = latest.data() || {};
     let clientes = Array.isArray(data.clientes) ? data.clientes.slice() : [];
     const pinNorm = String(pin || "").trim();
-    const idxExiste = clientes.findIndex((x) => normTxt(x?.nombre || "") === normTxt(clienteNombre));
+    const perfilKey = String(perfilId || "").trim();
+    const compraKey = String(compraId || "").trim();
+    const clienteKey = String(clienteId || "").trim();
+    let idxExiste = perfilKey
+      ? clientes.findIndex((x) => String(x?.perfilId || "").trim() === perfilKey)
+      : -1;
+    if (idxExiste === -1 && !perfilKey && compraKey) {
+      idxExiste = clientes.findIndex((x) =>
+        String(x?.compraId || "").trim() === compraKey
+        && (!clienteKey || String(x?.clienteId || "").trim() === clienteKey)
+      );
+    }
+    // Compatibilidad con inventario antiguo: solo adoptamos una fila sin IDs.
+    // Así dos compras reales del mismo cliente y con el mismo PIN no colapsan.
+    if (idxExiste === -1) {
+      idxExiste = clientes.findIndex((x) =>
+        !String(x?.perfilId || "").trim()
+        && !String(x?.compraId || "").trim()
+        && normTxt(x?.nombre || "") === normTxt(clienteNombre)
+        && String(x?.pin || "") === pinNorm
+      );
+    }
     if (idxExiste !== -1) {
       const patch = {};
-      if (pinNorm && String(clientes[idxExiste].pin || "") !== pinNorm) {
-        clientes[idxExiste] = { ...clientes[idxExiste], pin: pinNorm };
+      const identificado = {
+        ...clientes[idxExiste],
+        ...(clienteKey ? { clienteId: clienteKey } : {}),
+        ...(compraKey ? { compraId: compraKey } : {}),
+        ...(perfilKey ? { perfilId: perfilKey } : {}),
+      };
+      if (pinNorm) identificado.pin = pinNorm;
+      if (JSON.stringify(identificado) !== JSON.stringify(clientes[idxExiste])) {
+        clientes[idxExiste] = identificado;
         patch.clientes = clientes;
       }
       const claveNorm = String(clave || "").trim();
@@ -523,7 +551,12 @@ async function syncServicioEnInventario({ clienteNombre = "", plataforma = "", c
 
     const capacidad = Number(data.capacidad || data.total || getTotalPorPlataformaLocal(plat) || 1);
     if (clientes.length >= capacidad) return { ok: false, reason: "full" };
-    clientes.push({ nombre: String(clienteNombre || "").trim(), pin: pinNorm, slot: clientes.length + 1 });
+    clientes.push({
+      nombre: String(clienteNombre || "").trim(), pin: pinNorm, slot: clientes.length + 1,
+      ...(clienteKey ? { clienteId: clienteKey } : {}),
+      ...(compraKey ? { compraId: compraKey } : {}),
+      ...(perfilKey ? { perfilId: perfilKey } : {}),
+    });
     clientes = clientes.map((x, i) => ({ ...x, slot: i + 1 }));
     const ocupados = clientes.length;
     const disponibles = Math.max(0, capacidad - ocupados);
@@ -535,7 +568,7 @@ async function syncServicioEnInventario({ clienteNombre = "", plataforma = "", c
   });
 }
 
-async function removeServicioDeInventario({ clienteNombre = "", plataforma = "", correo = "", pin = "" }) {
+async function removeServicioDeInventario({ clienteNombre = "", plataforma = "", correo = "", pin = "", clienteId = "", compraId = "", perfilId = "" }) {
   const plat = normalizarPlataforma(plataforma);
   const acceso = normalizeIdentByPlatformLocal(plat, correo);
   const found = await getInventarioDoc(plat, acceso);
@@ -548,7 +581,15 @@ async function removeServicioDeInventario({ clienteNombre = "", plataforma = "",
     const data = latest.data() || {};
     let clientes = Array.isArray(data.clientes) ? data.clientes.slice() : [];
     const pinFiltro = String(pin || "").trim();
-    let idx = -1;
+    let idx = String(perfilId || "").trim()
+      ? clientes.findIndex((x) => String(x?.perfilId || "").trim() === String(perfilId).trim())
+      : -1;
+    if (idx === -1 && !String(perfilId || "").trim() && String(compraId || "").trim()) {
+      idx = clientes.findIndex((x) =>
+        String(x?.compraId || "").trim() === String(compraId).trim()
+        && (!String(clienteId || "").trim() || String(x?.clienteId || "").trim() === String(clienteId).trim())
+      );
+    }
     if (pinFiltro) {
       idx = clientes.findIndex((x) => normTxt(x?.nombre || "") === normTxt(clienteNombre) && String(x?.pin || "") === pinFiltro);
     }
@@ -630,22 +671,22 @@ async function sincronizarCompraInventarioLocal(anterior, nuevo, titular = "") {
   try {
     for (const p of antes) {
       if (!nuevas.has(key(p, platAntes))) {
-        const result = await removeServicioDeInventario({ clienteNombre: p.nombre || titular, plataforma: platAntes, correo: p.correo, pin: p.pin });
+        const result = await removeServicioDeInventario({ clienteNombre: p.nombre || titular, plataforma: platAntes, correo: p.correo, pin: p.pin, compraId: anterior?.compraId || "", perfilId: p.perfilId || "" });
         if (result?.removed) removidos.push(p);
       }
     }
     for (const p of despues) {
-      const result = await syncServicioEnInventario({ clienteNombre: p.nombre || titular, plataforma: platNuevo, correo: p.correo, clave: p.clave, pin: p.pin });
+      const result = await syncServicioEnInventario({ clienteNombre: p.nombre || titular, plataforma: platNuevo, correo: p.correo, clave: p.clave, pin: p.pin, compraId: nuevo?.compraId || "", perfilId: p.perfilId || "" });
       if (result?.reason === "full") throw new Error(`La cuenta de ${p.nombre || "ese perfil"} ya está llena.`);
       if (result?.added) agregados.push(p);
     }
     return { ok: true, perfiles: despues.length, agregados: agregados.length, removidos: removidos.length };
   } catch (error) {
     for (const p of agregados) {
-      try { await removeServicioDeInventario({ clienteNombre: p.nombre || titular, plataforma: platNuevo, correo: p.correo, pin: p.pin }); } catch (_) {}
+      try { await removeServicioDeInventario({ clienteNombre: p.nombre || titular, plataforma: platNuevo, correo: p.correo, pin: p.pin, compraId: nuevo?.compraId || "", perfilId: p.perfilId || "" }); } catch (_) {}
     }
     for (const p of removidos) {
-      try { await syncServicioEnInventario({ clienteNombre: p.nombre || titular, plataforma: platAntes, correo: p.correo, clave: p.clave, pin: p.pin }); } catch (_) {}
+      try { await syncServicioEnInventario({ clienteNombre: p.nombre || titular, plataforma: platAntes, correo: p.correo, clave: p.clave, pin: p.pin, compraId: anterior?.compraId || "", perfilId: p.perfilId || "" }); } catch (_) {}
     }
     throw error;
   }
