@@ -315,6 +315,85 @@ function normalizeIdentByPlatformLocal(plataforma = "", ident = "") {
   return v.toLowerCase();
 }
 
+// Sublichat tiene vendedores operativos que no necesariamente poseen una
+// cuenta en la colección `revendedores` del Panel de Socios. La validación
+// anterior consultaba solo esa colección y rechazaba nombres reales como
+// Abner, Yami, Jimena, Heber, Manuel, Elizabeth o Lucy.
+const VENDEDORES_OPERATIVOS_LOCAL = new Map([
+  ["sublicuentas", { nombre: "Sublicuentas", telefono: "89464277" }],
+  ["relojes", { nombre: "Relojes", telefono: "32126332" }],
+  ["libni", { nombre: "Relojes", telefono: "32126332" }],
+  ["yami", { nombre: "Yami", telefono: "96877246" }],
+  ["jimena", { nombre: "Jimena", telefono: "88501036" }],
+  ["heber", { nombre: "Heber", telefono: "32174922" }],
+  ["abner", { nombre: "Abner", telefono: "94306551" }],
+  ["manuel", { nombre: "Manuel", telefono: "87989267" }],
+  ["geisell", { nombre: "Geisell", telefono: "" }],
+  ["geissel", { nombre: "Geisell", telefono: "" }],
+  ["elizabeth", { nombre: "Elizabeth", telefono: "" }],
+  ["lucy", { nombre: "Lucy", telefono: "" }],
+]);
+let vendedoresDescubiertosCache = { expiresAt: 0, items: new Map() };
+
+function vendedorNormCanonicoLocal(value = "") {
+  const n = normVendedor(value);
+  return n === "geissel" ? "geisell" : n;
+}
+
+async function cargarVendedoresDescubiertosLocal() {
+  if (Date.now() < vendedoresDescubiertosCache.expiresAt) return vendedoresDescubiertosCache.items;
+  const items = new Map();
+  try {
+    const [revSnap, cliSnap] = await Promise.all([
+      db.collection("revendedores").get(),
+      db.collection("clientes").get(),
+    ]);
+    revSnap.forEach((doc) => {
+      const data = doc.data() || {};
+      if (data.activo === false) return;
+      const nombre = canonicalVendedor(data.nombre || data.usuario || doc.id);
+      const telefono = String(data.telefono || data.whatsapp || "").trim();
+      [doc.id, data.nombre_norm, data.nombre, data.usuario].forEach((alias) => {
+        const key = vendedorNormCanonicoLocal(alias);
+        if (key) items.set(key, { nombre, telefono, source: "revendedores" });
+      });
+    });
+    cliSnap.forEach((doc) => {
+      const data = doc.data() || {};
+      const candidatos = [{
+        nombre: data.vendedor, norm: data.vendedor_norm,
+        telefono: data.vendedorTelefono,
+      }];
+      (Array.isArray(data.servicios) ? data.servicios : []).forEach((s) => candidatos.push({
+        nombre: s?.vendedor || s?.vendedorNombre,
+        norm: s?.vendedor_norm || s?.vendedorNorm,
+        telefono: s?.vendedorTelefono || s?.vendedor_telefono,
+      }));
+      candidatos.forEach((v) => {
+        const nombre = canonicalVendedor(v.nombre || v.norm || "");
+        const key = vendedorNormCanonicoLocal(v.norm || nombre);
+        if (!key || items.has(key)) return;
+        items.set(key, { nombre, telefono: String(v.telefono || "").trim(), source: "clientes" });
+      });
+    });
+  } catch (error) {
+    logErr("cargarVendedoresDescubiertosLocal", error);
+  }
+  vendedoresDescubiertosCache = { expiresAt: Date.now() + 5 * 60 * 1000, items };
+  return items;
+}
+
+async function resolverVendedorRegistradoLocal(value = "") {
+  const entrada = canonicalVendedor(value);
+  const key = vendedorNormCanonicoLocal(entrada);
+  if (!key) return null;
+  const operativo = VENDEDORES_OPERATIVOS_LOCAL.get(key);
+  if (operativo) return { ...operativo, nombre_norm: vendedorNormCanonicoLocal(operativo.nombre), source: "sublichat" };
+  const descubiertos = await cargarVendedoresDescubiertosLocal();
+  const found = descubiertos.get(key);
+  return found ? { ...found, nombre_norm: key } : null;
+}
+
 function docIdInventarioLocal(ident = "", plataforma = "") {
   const p = normalizarPlataforma(plataforma);
   const i = normalizeIdentByPlatformLocal(p, ident)
@@ -6076,13 +6155,10 @@ bot.on("message", async (msg) => {
       }
 
       if (p.mode === "cliAddServVendedor") {
-        const vendedorEntrada = canonicalVendedor(t);
-        if (!vendedorEntrada) return bot.sendMessage(chatId, "⚠️ Escriba un vendedor válido:");
-        const vendedorNorm = normVendedor(vendedorEntrada) === "geissel" ? "geisell" : normVendedor(vendedorEntrada);
-        const vendedorSnap = await db.collection("revendedores").where("nombre_norm", "==", vendedorNorm).limit(1).get();
-        if (vendedorSnap.empty) return bot.sendMessage(chatId, "⚠️ Ese vendedor no existe. Créelo primero o escriba exactamente su nombre:");
-        const vendedorData = vendedorSnap.docs[0].data() || {};
-        const vendedor = canonicalVendedor(vendedorData.nombre || vendedorEntrada);
+        const vendedorData = await resolverVendedorRegistradoLocal(t);
+        if (!vendedorData) return bot.sendMessage(chatId, "⚠️ No encontré ese vendedor en Sublichat, clientes ni socios. Revise el nombre:");
+        const vendedor = canonicalVendedor(vendedorData.nombre || t);
+        const vendedorNorm = vendedorData.nombre_norm || vendedorNormCanonicoLocal(vendedor);
         pending.delete(String(chatId));
         forceNextPanelAtBottom(chatId);
         try {
@@ -6210,13 +6286,10 @@ bot.on("message", async (msg) => {
       }
 
       if (p.mode === "cliServEditVendedor") {
-        const vendedorEntrada = canonicalVendedor(t);
-        if (!vendedorEntrada) return bot.sendMessage(chatId, "⚠️ Escriba un vendedor válido.");
-        const vendedorNorm = normVendedor(vendedorEntrada) === "geissel" ? "geisell" : normVendedor(vendedorEntrada);
-        const vendedorSnap = await db.collection("revendedores").where("nombre_norm", "==", vendedorNorm).limit(1).get();
-        if (vendedorSnap.empty) return bot.sendMessage(chatId, "⚠️ Ese vendedor no existe. Créelo primero o escriba exactamente su nombre.");
-        const vendedorData = vendedorSnap.docs[0].data() || {};
-        const vendedor = canonicalVendedor(vendedorData.nombre || vendedorEntrada);
+        const vendedorData = await resolverVendedorRegistradoLocal(t);
+        if (!vendedorData) return bot.sendMessage(chatId, "⚠️ No encontré ese vendedor en Sublichat, clientes ni socios. Revise el nombre.");
+        const vendedor = canonicalVendedor(vendedorData.nombre || t);
+        const vendedorNorm = vendedorData.nombre_norm || vendedorNormCanonicoLocal(vendedor);
         pending.delete(String(chatId));
         forceNextPanelAtBottom(chatId);
         try {
