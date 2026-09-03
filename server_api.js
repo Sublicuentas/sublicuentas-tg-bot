@@ -248,14 +248,15 @@ app.get("/rev/avisos", revAuth, async (req, res) => {
   try {
     // ✅ Sin where+orderBy combinado (evita necesitar índice compuesto en Firestore)
     const snap = await db.collection("avisos").orderBy("createdAt", "desc").limit(20).get();
+    const socioNorm = normVendedor(req.rev?.nombre_norm || req.rev?.nombre || "");
     const lista = snap.docs
       .map((d) => {
         const a = d.data();
         const ts = a.createdAt?._seconds ? a.createdAt._seconds * 1000 :
                    a.createdAt?.seconds ? a.createdAt.seconds * 1000 : Date.now();
-        return { id: d.id, texto: a.texto || "", autor: a.autor || "Admin", ts, activo: a.activo !== false };
+        return { id: d.id, texto: a.texto || "", autor: a.autor || "Admin", ts, activo: a.activo !== false, tipo:a.tipo||"aviso", imagenUrl:a.imagenUrl||"", promocionId:a.promocionId||"", destinatarios:Array.isArray(a.destinatarios)?a.destinatarios:[] };
       })
-      .filter((a) => a.activo)
+      .filter((a) => a.activo && (!a.destinatarios.length || a.destinatarios.map(normVendedor).includes(socioNorm)))
       .slice(0, 10);
     res.json(lista);
   } catch (e) { console.error("rev/avisos", e); res.status(500).json({ error: "server" }); }

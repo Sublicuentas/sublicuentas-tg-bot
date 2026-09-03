@@ -16,8 +16,8 @@
    mismo servidor y puerto — no abre nada nuevo).
    ════════════════════════════════════════════════════════════════ */
 
-const { revAdminAuth, generarPinSetup } = require("./index_09_api_auth");
-const { db, admin, CLIENTES_COLLECTION, REVENDEDORES_COLLECTION } = require("./index_01_core");
+const { revAuth, revAdminAuth, generarPinSetup } = require("./index_09_api_auth");
+const { db, admin, bot, CLIENTES_COLLECTION, REVENDEDORES_COLLECTION } = require("./index_01_core");
 const { getCliente, patchServicio, eliminarServicioTx, buscarClienteRobusto } = require("./index_03_clientes_crm");
 const {
   normVendedor,
@@ -41,6 +41,7 @@ const {
 
 const PRECIOS_COLLECTION = "precios";
 const PRECIOS_ESPECIALES_COLLECTION = "precios_especiales";
+const PROMOCIONES_SOCIOS_COLLECTION = "promociones_socios";
 
 const ok = (res, data) => res.json({ ok: true, ...data });
 const fail = (res, code, msg) => res.status(code).json({ ok: false, error: msg });
@@ -51,6 +52,40 @@ const wrap = (fn) => (req, res) => Promise.resolve(fn(req, res)).catch((e) => {
 
 function normNombre(v = "") {
   return String(v || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().replace(/\s+/g, " ");
+}
+
+function clean(v, max = 500) { return String(v == null ? "" : v).replace(/[\u0000-\u001f]/g, " ").trim().slice(0, max); }
+function html(v) { return clean(v, 1000).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+function promoPublica(doc) {
+  const p = doc.data ? doc.data() || {} : doc || {};
+  const ts = (v) => v?.toDate ? v.toDate().toISOString() : clean(v, 50);
+  return { id: doc.id || p.id || "", titulo:clean(p.titulo,120), plataforma:clean(p.plataforma,100), precioNormal:Number(p.precioNormal)||0, precioPromo:Number(p.precioPromo)||0, precioSugerido:Number(p.precioSugerido)||0, cupos:Math.max(0,Number(p.cupos)||0), vigencia:clean(p.vigencia,50), texto:clean(p.texto,1200), imagenUrl:clean(p.imagenUrl,1500), estado:clean(p.estado,30)||"borrador", destinatarios:Array.isArray(p.destinatarios)?p.destinatarios:[], enviados:Number(p.enviados)||0, fallidos:Number(p.fallidos)||0, createdAt:ts(p.createdAt), sentAt:ts(p.sentAt) };
+}
+async function guardarImagenPromo(dataUrl, id) {
+  const match = String(dataUrl || "").match(/^data:((?:image\/jpeg|image\/png|image\/webp));base64,([A-Za-z0-9+/=]+)$/i);
+  if (!match) return "";
+  const buffer = Buffer.from(match[2], "base64");
+  if (!buffer.length || buffer.length > 3500000) throw Object.assign(new Error("imagen_muy_pesada"), { status:400, publicError:"La imagen debe pesar menos de 3.5 MB." });
+  const bucketName = clean(process.env.STORAGE_BUCKET || process.env.FIREBASE_STORAGE_BUCKET || (process.env.FIREBASE_PROJECT_ID ? `${process.env.FIREBASE_PROJECT_ID}.appspot.com` : ""), 200);
+  if (!bucketName) throw Object.assign(new Error("storage_no_configurado"), { status:500, publicError:"Falta configurar STORAGE_BUCKET para subir imágenes." });
+  const ext = match[1].toLowerCase().includes("png") ? "png" : match[1].toLowerCase().includes("webp") ? "webp" : "jpg";
+  const file = admin.storage().bucket(bucketName).file(`promociones-socios/${id}.${ext}`);
+  await file.save(buffer, { resumable:false, metadata:{ contentType:match[1], cacheControl:"public,max-age=31536000" } });
+  const [url] = await file.getSignedUrl({ action:"read", expires:"2035-12-31" });
+  return url;
+}
+
+function captionPromo(p) {
+  const lines=[`🔥 <b>${html(p.titulo || "PROMOCIÓN PARA SOCIOS")}</b>`];
+  if(p.plataforma)lines.push(`📺 <b>${html(p.plataforma)}</b>`);
+  if(p.precioNormal)lines.push(`<s>Precio normal: L ${Number(p.precioNormal).toFixed(0)}</s>`);
+  if(p.precioPromo)lines.push(`💰 <b>Precio socio: L ${Number(p.precioPromo).toFixed(0)}</b>`);
+  if(p.precioSugerido)lines.push(`📈 Venta sugerida: L ${Number(p.precioSugerido).toFixed(0)} · Ganancia L ${Math.max(0,Number(p.precioSugerido)-Number(p.precioPromo)).toFixed(0)}`);
+  if(p.cupos)lines.push(`📦 ${Number(p.cupos)} cupos disponibles`);
+  if(p.vigencia)lines.push(`⏳ Vigente hasta: ${html(p.vigencia)}`);
+  if(p.texto)lines.push("",html(p.texto));
+  lines.push("","Solicite la promoción desde su Panel de Socios.");
+  return lines.join("\n").slice(0,1024);
 }
 
 function tarifaPrecios(req) {
@@ -64,6 +99,53 @@ function coleccionPrecios(req) {
 }
 
 module.exports = function mountAdminPanel(app) {
+  app.get("/rev/promociones", revAuth, wrap(async (req,res) => {
+    const snap=await db.collection(PROMOCIONES_SOCIOS_COLLECTION).limit(100).get();
+    const socio=normNombre(req.rev?.nombre_norm||req.rev?.nombre||"");
+    const now=Date.now();
+    const promociones=snap.docs.map(promoPublica).filter(p=>p.estado==="publicada"&&(!p.destinatarios.length||p.destinatarios.includes(socio))&&(!p.vigencia||new Date(p.vigencia).getTime()>=now)).sort((a,b)=>String(b.createdAt).localeCompare(String(a.createdAt)));
+    ok(res,{promociones});
+  }));
+
+  app.get("/rev/admin/promociones", revAdminAuth, wrap(async (_req,res) => {
+    const snap=await db.collection(PROMOCIONES_SOCIOS_COLLECTION).limit(150).get();
+    const promociones=snap.docs.map(promoPublica).sort((a,b)=>String(b.createdAt).localeCompare(String(a.createdAt)));
+    ok(res,{promociones});
+  }));
+
+  app.post("/rev/admin/promociones", revAdminAuth, wrap(async (req,res) => {
+    const titulo=clean(req.body?.titulo,120), plataforma=clean(req.body?.plataforma,100);
+    if(!titulo||!plataforma)return fail(res,400,"Complete título y plataforma.");
+    const ref=db.collection(PROMOCIONES_SOCIOS_COLLECTION).doc();
+    const imagenUrl=req.body?.imagenData?await guardarImagenPromo(req.body.imagenData,ref.id):clean(req.body?.imagenUrl,1500);
+    const destinatarios=[...new Set((Array.isArray(req.body?.destinatarios)?req.body.destinatarios:[]).map(normNombre).filter(Boolean))];
+    await ref.set({ titulo,plataforma,precioNormal:Math.max(0,Number(req.body?.precioNormal)||0),precioPromo:Math.max(0,Number(req.body?.precioPromo)||0),precioSugerido:Math.max(0,Number(req.body?.precioSugerido)||0),cupos:Math.max(0,Math.round(Number(req.body?.cupos)||0)),vigencia:clean(req.body?.vigencia,50),texto:clean(req.body?.texto,1200),imagenUrl,destinatarios,estado:"borrador",enviados:0,fallidos:0,createdAt:admin.firestore.FieldValue.serverTimestamp(),updatedAt:admin.firestore.FieldValue.serverTimestamp() });
+    ok(res,{id:ref.id});
+  }));
+
+  app.delete("/rev/admin/promociones/:id", revAdminAuth, wrap(async (req,res) => {
+    const ref=db.collection(PROMOCIONES_SOCIOS_COLLECTION).doc(clean(req.params.id,160));const snap=await ref.get();
+    if(!snap.exists)return fail(res,404,"Promoción no encontrada.");
+    await ref.delete();ok(res,{id:ref.id});
+  }));
+
+  app.post("/rev/admin/promociones/:id/enviar", revAdminAuth, wrap(async (req,res) => {
+    const ref=db.collection(PROMOCIONES_SOCIOS_COLLECTION).doc(clean(req.params.id,160)),snap=await ref.get();
+    if(!snap.exists)return fail(res,404,"Promoción no encontrada.");
+    const p={id:snap.id,...(snap.data()||{})},selected=new Set(Array.isArray(p.destinatarios)?p.destinatarios.map(normNombre):[]);
+    const revSnap=await db.collection(REVENDEDORES_COLLECTION).get();
+    const targets=revSnap.docs.map(d=>({id:d.id,...(d.data()||{})})).filter(r=>r.activo!==false&&(!selected.size||selected.has(normNombre(r.nombre_norm||r.nombre||r.id))));
+    let enviados=0,fallidos=0,sinTelegram=[];const caption=captionPromo(p);
+    for(const r of targets){
+      const chatId=String(r.telegramId||"").replace(/[^0-9-]/g,"");
+      if(!chatId){sinTelegram.push(r.nombre||r.nombre_norm||r.id);fallidos+=1;continue;}
+      try{if(p.imagenUrl)await bot.sendPhoto(chatId,p.imagenUrl,{caption,parse_mode:"HTML"});else await bot.sendMessage(chatId,caption,{parse_mode:"HTML"});enviados+=1;}
+      catch(_){fallidos+=1;}
+    }
+    await ref.set({estado:"publicada",enviados,fallidos,sinTelegram,sentAt:admin.firestore.FieldValue.serverTimestamp(),updatedAt:admin.firestore.FieldValue.serverTimestamp()},{merge:true});
+    await db.collection("avisos").add({texto:`${p.titulo}\n${p.plataforma} · L ${Number(p.precioPromo)||0}\n${p.texto||""}`.trim(),autor:"Sublicuentas",tipo:"promocion_socios",promocionId:ref.id,imagenUrl:p.imagenUrl||"",destinatarios:p.destinatarios||[],activo:true,createdAt:admin.firestore.FieldValue.serverTimestamp()});
+    ok(res,{id:ref.id,enviados,fallidos,sinTelegram});
+  }));
   /* ═══════════════ PRECIOS ═══════════════
      ⚠️ CORRECCIÓN (ago-2026): la primera versión de esto asumía que los
      precios eran 1-por-plataforma (llave = key de PLATAFORMAS). Resultó
