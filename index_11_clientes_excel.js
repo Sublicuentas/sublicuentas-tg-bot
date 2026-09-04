@@ -227,7 +227,10 @@ function buildServiceRows(clientes = []) {
 async function obtenerTodosLosClientes() {
   try {
     const snap = await db.collection("clientes").get();
-    return snap.docs.map((doc) => normalizeClient({ id: doc.id, ...(doc.data() || {}) }))
+    return snap.docs
+      .map((doc) => ({ id: doc.id, ...(doc.data() || {}) }))
+      .filter((cliente) => !String(cliente.consolidadoEn || "").trim())
+      .map((cliente) => normalizeClient(cliente))
       .sort((a, b) => a.nombre.localeCompare(b.nombre, "es"));
   } catch (e) {
     logErr("obtenerTodosLosClientes", e);

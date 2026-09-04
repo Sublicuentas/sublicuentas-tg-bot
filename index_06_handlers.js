@@ -52,6 +52,7 @@ const {
   esPlataformaValida,
   isEmailLike,
   onlyDigits,
+  normalizarTelefonoCliente,
   logErr,
   escMD,
   isFechaDMY,
@@ -1358,7 +1359,10 @@ function getClienteEstadoCRM(c = {}) {
 
 async function getClientesRowsLocal() {
   const snap = await db.collection("clientes").get();
-  return snap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
+  return snap.docs
+    .map((d) => ({ id: d.id, ...(d.data() || {}) }))
+    .filter((cliente) => !String(cliente.consolidadoEn || "").trim())
+    .map((cliente) => ({ ...cliente, telefono: normalizarTelefonoCliente(cliente.telefono_norm || cliente.telefono || "") || cliente.telefono || "" }));
 }
 
 async function enviarAgendaSimpleClientesTXT(chatId) {
@@ -1444,7 +1448,7 @@ async function enviarResumenCRMLocal(chatId) {
 async function buscarClientesFallbackLocal(query = "") {
   const qRaw = String(query || "").trim();
   const qNorm = normalizeLooseText(qRaw);
-  const qDigits = onlyDigits(qRaw);
+  const qDigits = normalizarTelefonoCliente(qRaw);
 
   if (!qNorm && !qDigits) return [];
   if (isEmailLike(qRaw)) return [];
@@ -1459,7 +1463,7 @@ async function buscarClientesFallbackLocal(query = "") {
       const vendedores = [x.vendedor, x.vendedor_norm]
         .map((v) => normalizeLooseText(v || ""));
       const telefonos = [x.telefono, x.telefono_norm, x.whatsapp, x.numero]
-        .map((v) => onlyDigits(v || ""));
+        .map((v) => normalizarTelefonoCliente(v || ""));
 
       let match = false;
       if (qDigits && qDigits.length >= 4 && telefonos.some((v) => v.includes(qDigits))) match = true;
@@ -1528,7 +1532,7 @@ async function resolverBusquedaAdmin(chatId, query = "") {
   // no editar el panel anterior que quedó más arriba en el chat
   forceNextPanelAtBottom(chatId);
 
-  const qDigits = onlyDigits(q);
+  const qDigits = normalizarTelefonoCliente(q);
   const qNorm = normalizeLooseText(q);
   const isMail = isEmailLike(q);
 
@@ -5931,7 +5935,7 @@ bot.on("message", async (msg) => {
         const doc = await ref.get();
         if (!doc.exists) return bot.sendMessage(chatId, "⚠️ Esa cuenta no existe en inventario.");
         await ref.set({ clave: t, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
-        const sync = await sincronizarCuentaEnComprasTx({ plataforma: plat, correo: acceso, nuevaClave: t });
+        const sync = await sincronizarCuentaEnComprasTx({ plataforma: plat, correo: acceso, nuevaClave: t, asignaciones: Array.isArray((doc.data() || {}).clientes) ? (doc.data() || {}).clientes : [] });
         if (sync.perfilesActualizados) await bot.sendMessage(chatId, `✅ Clave actualizada también en ${sync.perfilesActualizados} perfil(es) del CRM.`);
         pending.set(String(chatId), { mode: "invSubmenuCtx", plat, correo: acceso });
         return enviarSubmenuInventario(chatId, plat, acceso);
@@ -6002,27 +6006,28 @@ bot.on("message", async (msg) => {
       if (p.mode === "cliEditNombre") {
         const actual = await getCliente(p.clientId);
         if (!actual) { pending.delete(String(chatId)); return bot.sendMessage(chatId, "⚠️ Cliente no encontrado."); }
-        const dup = await clienteDuplicado(t, actual.telefono || "", p.clientId);
+        const dup = await clienteDuplicado(t, actual.telefono || "", actual.id);
         if (dup) return bot.sendMessage(chatId, "⚠️ Ya existe otro cliente con ese mismo nombre y teléfono.");
         pending.delete(String(chatId));
       forceNextPanelAtBottom(chatId);
-        const ref = db.collection("clientes").doc(String(p.clientId));
+        const ref = db.collection("clientes").doc(String(actual.id));
         await ref.set({ nombrePerfil: t, nombre_norm: String(t || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().replace(/\s+/g, " "), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
-        { const { cacheInvalidatePrefix: cIPn } = require("./index_01_core"); cIPn(`clientes:doc:${p.clientId}`); }
-        return menuEditarCliente(chatId, p.clientId);
+        { const { cacheInvalidatePrefix: cIPn } = require("./index_01_core"); cIPn(`clientes:doc:${actual.id}`); }
+        return menuEditarCliente(chatId, actual.id);
       }
 
       if (p.mode === "cliEditTel") {
         const actual = await getCliente(p.clientId);
         if (!actual) { pending.delete(String(chatId)); return bot.sendMessage(chatId, "⚠️ Cliente no encontrado."); }
-        const dup = await clienteDuplicado(actual.nombrePerfil || "", t, p.clientId);
+        const dup = await clienteDuplicado(actual.nombrePerfil || "", t, actual.id);
         if (dup) return bot.sendMessage(chatId, "⚠️ Ya existe otro cliente con ese mismo nombre y teléfono.");
         pending.delete(String(chatId));
       forceNextPanelAtBottom(chatId);
-        const ref = db.collection("clientes").doc(String(p.clientId));
-        await ref.set({ telefono: t, telefono_norm: onlyDigits(t), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
-        { const { cacheInvalidatePrefix: cIPt } = require("./index_01_core"); cIPt(`clientes:doc:${p.clientId}`); }
-        return menuEditarCliente(chatId, p.clientId);
+        const ref = db.collection("clientes").doc(String(actual.id));
+        const telefonoCanonico = normalizarTelefonoCliente(t);
+        await ref.set({ telefono: telefonoCanonico, telefono_norm: telefonoCanonico, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        { const { cacheInvalidatePrefix: cIPt } = require("./index_01_core"); cIPt(`clientes:doc:${actual.id}`); }
+        return menuEditarCliente(chatId, actual.id);
       }
 
       if (p.mode === "cliEditVendedor") {

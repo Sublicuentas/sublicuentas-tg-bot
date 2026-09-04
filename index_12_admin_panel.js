@@ -19,6 +19,7 @@
 const { revAuth, revAdminAuth, generarPinSetup } = require("./index_09_api_auth");
 const { db, admin, bot, CLIENTES_COLLECTION, REVENDEDORES_COLLECTION } = require("./index_01_core");
 const { getCliente, patchServicio, eliminarServicioTx, buscarClienteRobusto } = require("./index_03_clientes_crm");
+const { normalizarTelefonoCliente } = require("./index_02_utils_roles");
 const {
   normVendedor,
   canonicalVendedor,
@@ -500,7 +501,10 @@ module.exports = function mountAdminPanel(app) {
     }
     const vendedor = normVendedor(req.query.vendedor || "");
     const snap = await db.collection(CLIENTES_COLLECTION).limit(500).get();
-    const lista = snap.docs.filter((d) => !vendedor || clientePerteneceAVendedor(d.data() || {}, vendedor)).map((d) => {
+    const lista = snap.docs.filter((d) => {
+      const data = d.data() || {};
+      return !String(data.consolidadoEn || "").trim() && (!vendedor || clientePerteneceAVendedor(data, vendedor));
+    }).map((d) => {
       const c = d.data() || {};
       const servicios = Array.isArray(c.servicios) ? c.servicios : [];
       const resumen = resumenVendedoresCliente(servicios, c);
@@ -531,8 +535,18 @@ module.exports = function mountAdminPanel(app) {
     if (!snap.exists) return fail(res, 404, "no_existe");
 
     const patch = { updatedAt: admin.firestore.FieldValue.serverTimestamp() };
-    if (req.body?.nombrePerfil !== undefined) patch.nombrePerfil = String(req.body.nombrePerfil).trim().slice(0, 120);
-    if (req.body?.telefono !== undefined) patch.telefono = String(req.body.telefono).trim().slice(0, 40);
+    if (req.body?.nombrePerfil !== undefined) {
+      const nombre = String(req.body.nombrePerfil).trim().slice(0, 120);
+      patch.nombrePerfil = nombre;
+      patch.nombre = nombre;
+      patch.nombre_norm = normNombre(nombre);
+    }
+    if (req.body?.telefono !== undefined) {
+      const telefono = normalizarTelefonoCliente(req.body.telefono);
+      if (telefono && telefono.length !== 8) return fail(res, 400, "telefono_invalido");
+      patch.telefono = telefono;
+      patch.telefono_norm = telefono;
+    }
     if (req.body?.vendedor_norm !== undefined) {
       return fail(res, 409, "vendedor_se_asigna_por_servicio");
     }

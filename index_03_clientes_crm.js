@@ -51,6 +51,9 @@ const wizard  = utils.wizard  instanceof Map ? utils.wizard  : new Map();
 const pending = utils.pending instanceof Map ? utils.pending : new Map();
 
 const onlyDigits          = typeof utils.onlyDigits          === "function" ? utils.onlyDigits          : (v = "") => String(v || "").replace(/\D+/g, "");
+const normalizarTelefonoCliente = typeof utils.normalizarTelefonoCliente === "function"
+  ? utils.normalizarTelefonoCliente
+  : (v = "") => { let d = onlyDigits(v); if (d.length === 11 && d.startsWith("504")) d = d.slice(3); return d; };
 const logErr              = typeof utils.logErr              === "function" ? utils.logErr              : (...a) => console.error(...a);
 const isFechaDMY          = typeof utils.isFechaDMY          === "function" ? utils.isFechaDMY          : (v = "") => /^\d{2}\/\d{2}\/\d{4}$/.test(String(v || "").trim());
 const parseMontoNumber    = typeof utils.parseMontoNumber    === "function" ? utils.parseMontoNumber    : (v = "") => { const n = Number(String(v||"").replace(/,/g,"").trim()); return Number.isFinite(n) ? n : NaN; };
@@ -392,6 +395,7 @@ function serviciosConIndiceOriginal(servicios = []) {
 function dedupeClientes(rows = []) {
   const map = new Map();
   for (const r of Array.isArray(rows) ? rows : []) {
+    if (String(r?.consolidadoEn || "").trim()) continue;
     const id = String(r?.id || "").trim();
     if (id && !map.has(id)) map.set(id, r);
   }
@@ -758,7 +762,7 @@ async function generarHistorialTXT(clientId) {
   const c = await getCliente(clientId);
   if (!c) return null;
 
-  const eventos = await getHistorialCliente(clientId);
+  const eventos = await getHistorialCliente(c.id);
   const servicios = Array.isArray(c.servicios) ? c.servicios : [];
   const resumen = resumenGeneralCliente(servicios);
 
@@ -855,8 +859,20 @@ async function getCliente(clientId) {
   const cached = cacheGet(cacheKey);
   if (cached !== null) return cached === "__null__" ? null : cached;
 
-  const doc = await db.collection(CLIENTES_COLLECTION).doc(id).get();
+  let doc = await db.collection(CLIENTES_COLLECTION).doc(id).get();
   if (!doc.exists) { cacheSet(cacheKey, "__null__", 10 * 1000); return null; }
+
+  // Los IDs antiguos siguen siendo válidos después de una consolidación. Esto
+  // evita que botones viejos de Telegram queden rotos.
+  const visited = new Set([doc.id]);
+  for (let hop = 0; hop < 4; hop++) {
+    const target = String(doc.data()?.consolidadoEn || "").trim();
+    if (!target || visited.has(target)) break;
+    visited.add(target);
+    const next = await db.collection(CLIENTES_COLLECTION).doc(target).get();
+    if (!next.exists) break;
+    doc = next;
+  }
 
   const result = { id: doc.id, ...(doc.data() || {}) };
   cacheSet(cacheKey, result, 10 * 1000);
@@ -865,30 +881,26 @@ async function getCliente(clientId) {
 
 async function clienteDuplicado(nombre = "", telefono = "", excludeId = null) {
   const nombreNorm = normTxt(nombre);
-  const telefonoNorm = onlyDigits(telefono);
+  const telefonoNorm = normalizarTelefonoCliente(telefono);
   if (!nombreNorm || !telefonoNorm) return false;
+  const rows = await getClientesBusquedaSnapshot();
+  return rows.some((x) => {
+    if (excludeId && String(x.id) === String(excludeId)) return false;
+    return normTxt(x.nombrePerfil || x.nombre || "") === nombreNorm
+      && normalizarTelefonoCliente(x.telefono_norm || x.telefono || "") === telefonoNorm;
+  });
+}
 
-  try {
-    const snap = await db.collection(CLIENTES_COLLECTION)
-      .where("nombre_norm", "==", nombreNorm)
-      .where("telefono_norm", "==", telefonoNorm)
-      .limit(2)
-      .get();
-
-    for (const d of snap.docs) {
-      if (excludeId && String(d.id) === String(excludeId)) continue;
-      return true;
-    }
-    return false;
-  } catch (_) {
-    const snap = await db.collection(CLIENTES_COLLECTION).get();
-    for (const d of snap.docs) {
-      if (excludeId && String(d.id) === String(excludeId)) continue;
-      const x = d.data() || {};
-      if (normTxt(x.nombrePerfil || "") === nombreNorm && onlyDigits(x.telefono || "") === telefonoNorm) return true;
-    }
-    return false;
-  }
+async function clienteExactoNombreTelefono(nombre = "", telefono = "") {
+  const nombreNorm = normTxt(nombre);
+  const telefonoNorm = normalizarTelefonoCliente(telefono);
+  if (!nombreNorm || telefonoNorm.length !== 8) return null;
+  const rows = (await getClientesBusquedaSnapshot()).filter((x) =>
+    normTxt(x.nombrePerfil || x.nombre || "") === nombreNorm
+    && normalizarTelefonoCliente(x.telefono_norm || x.telefono || "") === telefonoNorm
+  );
+  if (rows.length > 1) throw new Error("Hay varias fichas con ese mismo nombre y teléfono; reinicie el bot para ejecutar la consolidación segura.");
+  return rows[0] || null;
 }
 
 
@@ -905,7 +917,10 @@ async function getClientesBusquedaSnapshot(force = false) {
   }
 
   const snap = await db.collection(CLIENTES_COLLECTION).get();
-  const rows = snap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
+  const rows = snap.docs
+    .map((d) => ({ id: d.id, ...(d.data() || {}) }))
+    .filter((row) => !String(row.consolidadoEn || "").trim())
+    .map((row) => ({ ...row, telefono: normalizarTelefonoCliente(row.telefono_norm || row.telefono || "") || row.telefono || "" }));
   // 20 s: suficientemente corto para altas/ediciones y muy útil para Telegram.
   cacheSet(cacheKey, rows, 20 * 1000);
   return rows;
@@ -921,7 +936,7 @@ function bolsasBusquedaClienteLocal(x = {}) {
   ].map((v) => normTxt(v || "")).filter(Boolean);
 
   const telefonos = [x.telefono, x.telefono_norm, x.whatsapp, x.numero]
-    .map((v) => onlyDigits(v || "")).filter(Boolean);
+    .map((v) => normalizarTelefonoCliente(v || "")).filter(Boolean);
 
   const servicios = Array.isArray(x.servicios) ? x.servicios : [];
   const textoServicios = [];
@@ -948,7 +963,7 @@ function bolsasBusquedaClienteLocal(x = {}) {
         String(perfil?.clave || "").trim().toLowerCase(),
         String(perfil?.pin || "").trim().toLowerCase(),
       );
-      const pt = onlyDigits(perfil?.telefono || perfil?.whatsapp || "");
+      const pt = normalizarTelefonoCliente(perfil?.telefono || perfil?.whatsapp || "");
       if (pt) digitosServicios.push(pt);
     }
   }
@@ -960,7 +975,7 @@ function bolsasBusquedaClienteLocal(x = {}) {
 }
 
 async function buscarPorTelefonoTodos(query = "") {
-  const q = onlyDigits(query);
+  const q = normalizarTelefonoCliente(query);
   if (!q) return [];
 
   const rows = await getClientesBusquedaSnapshot();
@@ -984,7 +999,7 @@ async function buscarPorTelefonoTodos(query = "") {
 async function buscarClienteRobusto(query = "") {
   const q = String(query || "").trim();
   const qNorm = normTxt(q);
-  const qDigits = onlyDigits(q);
+  const qDigits = normalizarTelefonoCliente(q);
   if (!qNorm && !qDigits) return [];
 
   const out = new Map();
@@ -1005,6 +1020,7 @@ async function buscarClienteRobusto(query = "") {
   for (const item of settled) {
     if (item.status !== "fulfilled") continue;
     item.value.forEach((d) => {
+      if (String(d.data()?.consolidadoEn || "").trim()) return;
       if (!out.has(d.id)) out.set(d.id, { id: d.id, ...(d.data() || {}) });
     });
   }
@@ -1612,9 +1628,14 @@ async function eliminarPerfilTx(clientId, idx, perfilIndex, compraId = "", perfi
   return { ok: true, servicio: resultado.siguiente, servicioIndex: resultado.actualIdx, perfilIndex: resultado.actualPerfilIndex, eliminado: resultado.eliminado, sync };
 }
 
-async function sincronizarCuentaEnComprasTx({ plataforma = "", correo = "", nuevaClave, nuevoCorreo } = {}) {
+async function sincronizarCuentaEnComprasTx({ plataforma = "", correo = "", nuevaClave, nuevoCorreo, asignaciones = [] } = {}) {
   const plat = normalizarPlataforma(plataforma);
   const acceso = normalizeIdentByPlatformLocal(plat, correo);
+  const referencias = (Array.isArray(asignaciones) ? asignaciones : []).map((item) => ({
+    clientId: String(item?.clienteId || item?.clientId || "").trim(),
+    compraId: String(item?.compraId || "").trim(),
+    perfilId: String(item?.perfilId || "").trim(),
+  })).filter((item) => item.clientId || item.compraId || item.perfilId);
   const snap = await db.collection(CLIENTES_COLLECTION).get();
   let perfilesActualizados = 0, documentosActualizados = 0;
   for (const doc of snap.docs) {
@@ -1622,14 +1643,21 @@ async function sincronizarCuentaEnComprasTx({ plataforma = "", correo = "", nuev
       const actualDoc = await tx.get(doc.ref);
       if (!actualDoc.exists) return { changed: false, perfilesActualizados: 0 };
       const data = actualDoc.data() || {};
+      if (String(data.consolidadoEn || "").trim()) return { changed: false, perfilesActualizados: 0 };
       const servicios = Array.isArray(data.servicios) ? data.servicios : [];
+      const refsCliente = referencias.filter((item) => !item.clientId || item.clientId === doc.id);
       let changed = false;
       let perfilesCambiados = 0;
       const next = servicios.map((servicio) => {
         if (normalizarPlataforma(servicio?.plataforma || "") !== plat) return servicio;
         const perfiles = Array.isArray(servicio?.perfiles) && servicio.perfiles.length ? servicio.perfiles : null;
+        const compraId = String(servicio?.compraId || "").trim();
+        const enlaceServicio = refsCliente.some((item) =>
+          (item.compraId && compraId && item.compraId === compraId) ||
+          (item.perfilId && Array.isArray(perfiles) && perfiles.some((perfil) => String(perfil?.perfilId || perfil?.id || "").trim() === item.perfilId))
+        );
         if (!perfiles) {
-          if (normalizeIdentByPlatformLocal(plat, servicio?.correo || "") !== acceso) return servicio;
+          if (!enlaceServicio && normalizeIdentByPlatformLocal(plat, servicio?.correo || "") !== acceso) return servicio;
           const copy = { ...servicio };
           if (nuevoCorreo != null) copy.correo = normalizeIdentByPlatformLocal(plat, nuevoCorreo);
           if (nuevaClave != null) copy.clave = String(nuevaClave || "").trim();
@@ -1639,7 +1667,9 @@ async function sincronizarCuentaEnComprasTx({ plataforma = "", correo = "", nuev
         }
         let localChanged = false;
         const nextProfiles = perfiles.map((perfil) => {
-          if (normalizeIdentByPlatformLocal(plat, perfil?.correo ?? servicio?.correo ?? "") !== acceso) return perfil;
+          const perfilId = String(perfil?.perfilId || perfil?.id || "").trim();
+          const enlacePerfil = enlaceServicio || refsCliente.some((item) => item.perfilId && perfilId && item.perfilId === perfilId);
+          if (!enlacePerfil && normalizeIdentByPlatformLocal(plat, perfil?.correo || servicio?.correo || "") !== acceso) return perfil;
           const copy = { ...(perfil || {}) };
           if (nuevoCorreo != null) copy.correo = normalizeIdentByPlatformLocal(plat, nuevoCorreo);
           if (nuevaClave != null) copy.clave = String(nuevaClave || "").trim();
@@ -1943,9 +1973,9 @@ async function wizardNext(chatId, rawText = "") {
   }
 
   if (st.step === 2) {
-    const tel = onlyDigits(t);
+    const tel = normalizarTelefonoCliente(t);
     if (tel.length < 7) return bot.sendMessage(chatId, "⚠️ Teléfono inválido. Escriba al menos 7 dígitos.");
-    st.telefono = t; st.step = 3; wizard.set(String(chatId), st);
+    st.telefono = tel; st.step = 3; wizard.set(String(chatId), st);
     return bot.sendMessage(chatId, "(3/3) Vendedor responsable:");
   }
 
@@ -2007,26 +2037,28 @@ async function wizardNext(chatId, rawText = "") {
 
       let clientId = st.clientId;
       if (!clientId) {
-        const dup = await clienteDuplicado(st.nombre, st.telefono);
-        if (dup) return bot.sendMessage(chatId, "⚠️ Ya existe un cliente con ese nombre y teléfono.");
+        const existente = await clienteExactoNombreTelefono(st.nombre, st.telefono);
+        if (existente) {
+          clientId = existente.id;
+        } else {
+          const ref = db.collection(CLIENTES_COLLECTION).doc();
+          clientId = ref.id;
+          await ref.set({
+            nombrePerfil: st.nombre, nombre_norm: normTxt(st.nombre),
+            telefono: normalizarTelefonoCliente(st.telefono), telefono_norm: normalizarTelefonoCliente(st.telefono),
+            vendedor: canonicalVendedor(st.vendedor), vendedor_norm: normVendedor(st.vendedor),
+            vendedores: [canonicalVendedor(st.vendedor)], vendedores_norm: [normVendedor(st.vendedor)],
+            clienteCompartido: false,
+            servicios: [],
+            createdAt: admin.firestore.FieldValue.serverTimestamp(),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          });
 
-        const ref = db.collection(CLIENTES_COLLECTION).doc();
-        clientId = ref.id;
-        await ref.set({
-          nombrePerfil: st.nombre, nombre_norm: normTxt(st.nombre),
-          telefono: st.telefono, telefono_norm: onlyDigits(st.telefono),
-          vendedor: canonicalVendedor(st.vendedor), vendedor_norm: normVendedor(st.vendedor),
-          vendedores: [canonicalVendedor(st.vendedor)], vendedores_norm: [normVendedor(st.vendedor)],
-          clienteCompartido: false,
-          servicios: [],
-          createdAt: admin.firestore.FieldValue.serverTimestamp(),
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        });
-
-        await registrarEventoHistorial(clientId, {
-          tipo: "cliente_creado",
-          descripcion: `Cliente creado por vendedor: ${st.vendedor}`,
-        });
+          await registrarEventoHistorial(clientId, {
+            tipo: "cliente_creado",
+            descripcion: `Cliente creado por vendedor: ${st.vendedor}`,
+          });
+        }
       }
 
       const guardado = await addServicioTx(clientId, {
@@ -2072,6 +2104,7 @@ async function obtenerRenovacionesPorFecha(fechaDMY, vendedor = null) {
 
   snap.forEach((d) => {
     const c = d.data() || {};
+    if (String(c.consolidadoEn || "").trim()) return;
 
     const servicios = Array.isArray(c.servicios) ? c.servicios : [];
     servicios.forEach((s, idx) => {
@@ -2185,7 +2218,9 @@ async function enviarTXTATodosHoy(chatId) {
 // ===============================
 async function reporteClientesTXTGeneral(chatId) {
   const snap = await db.collection(CLIENTES_COLLECTION).get();
-  const rows = snap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
+  const rows = snap.docs
+    .map((d) => ({ id: d.id, ...(d.data() || {}) }))
+    .filter((c) => !String(c.consolidadoEn || "").trim());
   rows.sort((a, b) => normTxt(a.nombrePerfil || "").localeCompare(normTxt(b.nombrePerfil || ""), "es"));
 
   let txt = "CLIENTES - REPORTE GENERAL\n\n";
@@ -2196,7 +2231,9 @@ async function reporteClientesTXTGeneral(chatId) {
 
 async function reporteClientesSplitPorVendedorTXT(chatId) {
   const snap = await db.collection(CLIENTES_COLLECTION).get();
-  const rows = snap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
+  const rows = snap.docs
+    .map((d) => ({ id: d.id, ...(d.data() || {}) }))
+    .filter((c) => !String(c.consolidadoEn || "").trim());
 
   const groups = {};
   for (const c of rows) {
@@ -2231,6 +2268,7 @@ async function enviarMisClientes(chatId, vendedorNombre = "") {
   const snap = await db.collection(CLIENTES_COLLECTION).get();
   const rows = snap.docs
     .map((d) => ({ id: d.id, ...(d.data() || {}) }))
+    .filter((c) => !String(c.consolidadoEn || "").trim())
     .filter((c) => clientePerteneceAVendedor(c, vendedorNombre))
     .map((c) => filtrarClienteParaVendedor(c, vendedorNombre));
 
@@ -2247,6 +2285,7 @@ async function enviarMisClientesTXT(chatId, vendedorNombre = "") {
   const snap = await db.collection(CLIENTES_COLLECTION).get();
   const rows = snap.docs
     .map((d) => ({ id: d.id, ...(d.data() || {}) }))
+    .filter((c) => !String(c.consolidadoEn || "").trim())
     .filter((c) => clientePerteneceAVendedor(c, vendedorNombre))
     .map((c) => filtrarClienteParaVendedor(c, vendedorNombre));
 

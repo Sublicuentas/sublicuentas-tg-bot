@@ -81,6 +81,14 @@ function onlyDigits(v = "") {
   return String(v || "").replace(/\D+/g, "");
 }
 
+function normalizarTelefonoCliente(v = "") {
+  let digits = onlyDigits(v);
+  // Honduras usa 8 dígitos. El prefijo internacional +504 no forma parte de
+  // la identidad del cliente: +504 8777-7777 === 87777777.
+  if (digits.length === 11 && digits.startsWith("504")) digits = digits.slice(3);
+  return digits;
+}
+
 function isEmailLike(v = "") {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/i.test(String(v || "").trim());
 }
@@ -595,7 +603,7 @@ module.exports = {
   bindPanelFromCallback, upsertPanel, sendCommandAnchoredPanel, markPanelForDeletion,
 
   // text helpers
-  escMD, normTxt, limpiarQuery, onlyDigits, isEmailLike,
+  escMD, normTxt, limpiarQuery, onlyDigits, normalizarTelefonoCliente, isEmailLike,
   normalizarPlataforma, esPlataformaValida,
   humanPlataforma: humanPlataformaFallback,
 

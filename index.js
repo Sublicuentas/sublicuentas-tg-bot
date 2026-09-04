@@ -1,4 +1,5 @@
-const { startBotPollingSafe } = require("./index_01_core");
+const { startBotPollingSafe, db, admin, cacheInvalidatePrefix } = require("./index_01_core");
+const { consolidarClientesDuplicadosPorTelefono } = require("./index_19_consolidar_clientes_telefono");
 
 require("./index_02_utils_roles");
 require("./index_03_clientes_crm");
@@ -42,5 +43,14 @@ keepAliveInicial.unref?.();
 keepAliveRecurrente.unref?.();
 
 (async () => {
+  try {
+    const resultado = await consolidarClientesDuplicadosPorTelefono({ db, admin });
+    cacheInvalidatePrefix?.("clientes:");
+    console.log("✅ Consolidación de teléfonos:", JSON.stringify(resultado));
+  } catch (error) {
+    // Una migración fallida no debe dejar el bot fuera de línea. Como cada
+    // ficha se respalda y cada alias se reanuda, el próximo reinicio reintenta.
+    console.error("⚠️ No se pudo completar la consolidación de teléfonos:", error?.stack || error?.message || error);
+  }
   await startBotPollingSafe();
 })();
