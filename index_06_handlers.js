@@ -1628,6 +1628,82 @@ function pendingReallyExpectsTextLocal(state) {
   return PENDING_TEXT_INPUT_MODES_LOCAL.has(String(state.mode || ""));
 }
 
+// ==========================================================
+// CAMBIO DE PLATAFORMA DIRECTO Y SEGURO
+// ==========================================================
+// El flujo anterior necesitaba un segundo callback para mostrar una
+// confirmación. En algunos despliegues ese segundo callback quedaba sin
+// procesar y la pantalla parecía congelada. Ahora tocar la plataforma
+// ejecuta el movimiento inmediatamente contra Firestore. Los callbacks
+// antiguos mail_move_to siguen funcionando y se enrutan aquí también.
+async function moverCuentaPorTokenYDestinoLocal(chatId, token = "", nuevaRaw = "") {
+  const moveToken = String(token || "").trim();
+  const nuevaPlat = normalizarPlataforma(nuevaRaw || "");
+
+  if (!moveToken) throw new Error("No pude identificar la cuenta. Abra la cuenta nuevamente.");
+  if (!esPlataformaValida(nuevaPlat)) throw new Error("Plataforma destino inválida.");
+
+  const found = await buscarCuentaInventarioPorMoveToken(moveToken);
+  if (!found) throw new Error("La cuenta ya no existe en Bodega.");
+
+  const src = found.data || {};
+  const oldPlat = normalizarPlataforma(src.plataforma || "");
+  const acceso = String(src.correo || src.usuario || src.ident || "").trim();
+  if (!oldPlat || !acceso) throw new Error("La cuenta no tiene plataforma o correo/usuario válido.");
+  if (oldPlat === nuevaPlat) {
+    return { sinCambios: true, anterior: oldPlat, nueva: nuevaPlat, ident: acceso, found };
+  }
+
+  const r = await moverCuentaInventarioPlataforma(found.id, nuevaPlat);
+  pending.delete(String(chatId));
+  forceNextPanelAtBottom(chatId);
+
+  await bot.sendMessage(
+    chatId,
+    `✅ *Cuenta movida correctamente*\n\n${escMD(humanPlataforma(r.anterior))} ➜ *${escMD(humanPlataforma(r.nueva))}*\n${identIcon(r.nueva)} ${escMD(r.ident)}\n👥 Cupos actuales: ${r.ocupados}/${r.capacidad}\n\nAhora ejecute /sincronizar_todo para reconciliar los perfiles vigentes del CRM con Bodega.`,
+    { parse_mode: "Markdown" }
+  );
+  await mostrarPanelCorreo(chatId, r.nueva, r.ident);
+  return r;
+}
+
+async function moverCuentaPorAccesoLocal(chatId, accesoRaw = "", nuevaRaw = "", origenRaw = "") {
+  const acceso = String(accesoRaw || "").trim();
+  const nuevaPlat = normalizarPlataforma(nuevaRaw || "");
+  const origenPlat = origenRaw ? normalizarPlataforma(origenRaw) : "";
+  if (!acceso) throw new Error("Falta el correo/usuario de la cuenta.");
+  if (!esPlataformaValida(nuevaPlat)) throw new Error("Plataforma destino inválida.");
+  if (origenPlat && !esPlataformaValida(origenPlat)) throw new Error("Plataforma origen inválida.");
+
+  const hits = await buscarInventarioPorCorreo(acceso);
+  const exactos = (Array.isArray(hits) ? hits : []).filter((x) => {
+    const p = normalizarPlataforma(x?.plataforma || "");
+    if (origenPlat && p !== origenPlat) return false;
+    const stored = String(x?.correo || x?.usuario || x?.ident || "").trim();
+    return normalizeIdentByPlatformLocal(p, stored) === normalizeIdentByPlatformLocal(p, acceso);
+  });
+
+  if (!exactos.length) throw new Error(`No encontré esa cuenta${origenPlat ? ` en ${humanPlataforma(origenPlat)}` : ""}.`);
+  if (exactos.length > 1) {
+    const plats = [...new Set(exactos.map((x) => humanPlataforma(x.plataforma || "")))].join(", ");
+    throw new Error(`Hay más de una cuenta exacta con ese acceso (${plats}). Use: /movercuenta PLATAFORMA_ORIGEN acceso PLATAFORMA_DESTINO`);
+  }
+
+  const row = exactos[0];
+  const oldPlat = normalizarPlataforma(row.plataforma || "");
+  if (oldPlat === nuevaPlat) throw new Error(`La cuenta ya está en ${humanPlataforma(nuevaPlat)}.`);
+
+  const r = await moverCuentaInventarioPlataforma(row.id, nuevaPlat);
+  pending.delete(String(chatId));
+  forceNextPanelAtBottom(chatId);
+  await bot.sendMessage(
+    chatId,
+    `✅ *Cuenta movida correctamente*\n\n${escMD(humanPlataforma(r.anterior))} ➜ *${escMD(humanPlataforma(r.nueva))}*\n${identIcon(r.nueva)} ${escMD(r.ident)}\n👥 Cupos actuales: ${r.ocupados}/${r.capacidad}`,
+    { parse_mode: "Markdown" }
+  );
+  return mostrarPanelCorreo(chatId, r.nueva, r.ident);
+}
+
 async function resolverBusquedaAdmin(chatId, query = "") {
   const q = String(query || "").trim().replace(/^\/+/, "").trim();
   if (!q) return bot.sendMessage(chatId, "⚠️ Escriba algo para buscar.");
@@ -4496,7 +4572,7 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
           .filter((k) => normalizarPlataforma(k) !== oldPlat)
           .map((k) => ({
             text: `${iconPlataforma(k)} ${humanPlataforma(k)}`,
-            callback_data: `mail_move_to|${token}|${normalizarPlataforma(k)}`,
+            callback_data: `mail_move_now|${token}|${normalizarPlataforma(k)}`,
           }));
         const kb = [];
         for (let i = 0; i < buttons.length; i += 2) kb.push(buttons.slice(i, i + 2));
@@ -4504,9 +4580,28 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
 
         return upsertPanel(
           chatId,
-          `🔄 *CAMBIAR PLATAFORMA DE LA CUENTA*\n\n${identIcon(oldPlat)} *${escMD(getIdentLabelLocal(oldPlat))}:* ${escMD(acceso)}\n📌 *Actual:* ${escMD(humanPlataforma(oldPlat))}\n\nSeleccione la plataforma correcta.`,
+          `🔄 *CAMBIAR PLATAFORMA DE LA CUENTA*\n\n${identIcon(oldPlat)} *${escMD(getIdentLabelLocal(oldPlat))}:* ${escMD(acceso)}\n📌 *Actual:* ${escMD(humanPlataforma(oldPlat))}\n\nSeleccione la plataforma correcta. *Al tocarla, el cambio se aplica de inmediato.*`,
           kb
         );
+      }
+
+      // Tocar una plataforma mueve la cuenta de inmediato. También capturamos
+      // los botones mail_move_to de mensajes viejos para que NO queden muertos.
+      if (data.startsWith("mail_move_now|") || data.startsWith("mail_move_to|")) {
+        const parts = data.split("|");
+        const token = String(parts[1] || "").trim();
+        const nuevaPlat = normalizarPlataforma(parts[2] || "");
+        try {
+          return await moverCuentaPorTokenYDestinoLocal(chatId, token, nuevaPlat);
+        } catch (e) {
+          pending.delete(String(chatId));
+          forceNextPanelAtBottom(chatId);
+          return bot.sendMessage(
+            chatId,
+            `⚠️ No se movió la cuenta: ${escMD(e?.message || "error desconocido")}\n\nPuede buscar otra cuenta inmediatamente o usar /movercuenta.`,
+            { parse_mode: "Markdown" }
+          );
+        }
       }
 
       if (data.startsWith("mail_move_to|")) {
@@ -5628,11 +5723,14 @@ Revise que el correo exista en inventario con esa plataforma o coloque la clave 
       return upsertPanel(chatId, txt, [[{ text: "🏠 Inicio", callback_data: "go:inicio" }]]);
     }
 
-    return bot.sendMessage(chatId, "⚠️ Acción no reconocida.");
+    // Un botón viejo/desconocido no debe dejar un flujo pendiente pegado.
+    pending.delete(String(chatId));
+    return bot.sendMessage(chatId, "⚠️ Ese botón ya no está vigente. Puede hacer otra búsqueda inmediatamente.");
   } catch (err) {
     logErr("callback_query", err?.stack || err?.message || err);
     if (chatId) {
-      try { await bot.sendMessage(chatId, "⚠️ Error interno (revise logs)."); } catch (_) {}
+      try { pending.delete(String(chatId)); } catch (_) {}
+      try { await bot.sendMessage(chatId, "⚠️ Ocurrió un error en esa acción. El bot quedó libre; puede buscar nuevamente sin escribir menu."); } catch (_) {}
     }
   }
 });
@@ -5690,6 +5788,34 @@ bot.on("message", async (msg) => {
         return resolverBusquedaAdmin(chatId, rest);
       }
 
+      if (adminOk && ["movercuenta", "mover_cuenta"].includes(first)) {
+        const args = partsCmd.slice(1);
+        if (args.length < 2) {
+          return bot.sendMessage(
+            chatId,
+            "Uso rápido:\n/movercuenta correo@dominio.com primevideo\n\nSi el mismo acceso existe en varias plataformas:\n/movercuenta disneyp correo@dominio.com primevideo"
+          );
+        }
+
+        let origen = "";
+        let acceso = "";
+        let destino = "";
+        if (args.length === 2) {
+          [acceso, destino] = args;
+        } else {
+          origen = args[0];
+          destino = args[args.length - 1];
+          acceso = args.slice(1, -1).join(" ");
+        }
+
+        try {
+          return await moverCuentaPorAccesoLocal(chatId, acceso, destino, origen);
+        } catch (e) {
+          pending.delete(String(chatId));
+          return bot.sendMessage(chatId, `⚠️ ${e?.message || "No se pudo mover la cuenta."}`);
+        }
+      }
+
       if (adminOk && first === "clientes_excel") {
         try {
           await bot.sendMessage(chatId, "⏳ Generando Excel de clientes...");
@@ -5719,7 +5845,7 @@ bot.on("message", async (msg) => {
         "addvendedor", "delvendedor", "resetpin", "id", "miid", "vincular_vendedor",
         "sincronizar_todo", "sincronizar_claves", "addcorreo", "finanzas", "resumen_fecha", "bancos_mes",
         "top_plataformas_mes", "cierre_caja", "cierre_caja_rango", "excel_finanzas",
-        "editar_movimiento", "clientes_excel",
+        "editar_movimiento", "clientes_excel", "movercuenta", "mover_cuenta",
         // ✅ Diagnóstico / reparación de colisiones (antes faltaban aquí y por eso
         // el buscador genérico también los interceptaba y mandaba "Sin resultados").
         "reparar_colisiones", "auditar_fusiones", "auditar_cliente", "buscar_raw",
