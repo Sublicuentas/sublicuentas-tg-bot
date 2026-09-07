@@ -16,6 +16,8 @@ const {
   PLATAFORMAS,
 } = require("./index_01_core");
 
+const crypto = require("crypto");
+
 const {
   escMD,
   upsertPanel,
@@ -391,6 +393,36 @@ function getMailPanelContext(chatId) {
   return { ...ctx };
 }
 
+// Token corto y estable para callbacks de Telegram.
+// NO depende de memoria RAM/pending: si el bot reinicia entre dos clics,
+// el callback todavía puede resolver la cuenta real desde Firestore.
+function getInventoryMoveToken(docId = "") {
+  const id = String(docId || "").trim();
+  if (!id) return "";
+  return crypto.createHash("sha256").update(id).digest("base64url").slice(0, 16);
+}
+
+async function buscarCuentaInventarioPorMoveToken(token = "") {
+  const wanted = String(token || "").trim();
+  if (!wanted) return null;
+
+  try {
+    const snap = await db.collection("inventario").get();
+    let found = null;
+    for (const doc of snap.docs) {
+      if (getInventoryMoveToken(doc.id) !== wanted) continue;
+      // Una colisión de 96 bits es extremadamente improbable, pero si pasara
+      // preferimos no tocar nada antes que mover la cuenta equivocada.
+      if (found) throw new Error("Token de cuenta ambiguo. Abra nuevamente la cuenta.");
+      found = { id: doc.id, ref: doc.ref, data: doc.data() || {} };
+    }
+    return found;
+  } catch (e) {
+    logErr("buscarCuentaInventarioPorMoveToken", e);
+    throw e;
+  }
+}
+
 async function moverCuentaInventarioPlataforma(docId = "", nuevaPlataforma = "") {
   const id = String(docId || "").trim();
   const nueva = normalizarPlataforma(nuevaPlataforma);
@@ -711,7 +743,8 @@ async function mostrarPanelCorreo(chatId, plataforma = "", acceso = "") {
     kb.push([{ text: "✉️ Editar correo", callback_data: `mail_edit_correo|${plat}|${encodeURIComponent(ident)}` }]);
   }
 
-  kb.push([{ text: "🔄 Cambiar plataforma de esta cuenta", callback_data: "mail_move_platform" }]);
+  const moveToken = getInventoryMoveToken(found.id);
+  kb.push([{ text: "🔄 Cambiar plataforma de esta cuenta", callback_data: `mail_move_platform|${moveToken}` }]);
   kb.push([{ text: "🗑️ Borrar cuenta", callback_data: `mail_delete|${plat}|${encodeURIComponent(ident)}` }]);
 
   kb.push([
@@ -926,5 +959,7 @@ module.exports = {
   getCapacidadCorreo,
   aplicarAutoLleno,
   getMailPanelContext,
+  getInventoryMoveToken,
+  buscarCuentaInventarioPorMoveToken,
   moverCuentaInventarioPlataforma,
 };

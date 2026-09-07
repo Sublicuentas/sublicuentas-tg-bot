@@ -134,6 +134,8 @@ const {
   getCapacidadCorreo,
   aplicarAutoLleno,
   getMailPanelContext,
+  getInventoryMoveToken,
+  buscarCuentaInventarioPorMoveToken,
   moverCuentaInventarioPlataforma,
 } = require("./index_04_inventario_correos");
 
@@ -1524,6 +1526,106 @@ function isNavigationTextLocal(text = "") {
     "analisis",
     "análisis",
   ]).has(s);
+}
+
+// Modos que REALMENTE esperan que el usuario escriba una respuesta.
+// Cualquier otro pending es un selector por botones y jamás debe bloquear
+// una nueva búsqueda escrita (correo, teléfono o nombre).
+const PENDING_TEXT_INPUT_MODES_LOCAL = new Set([
+  "cliAddServClave",
+  "cliAddServFecha",
+  "cliAddServMail",
+  "cliAddServPin",
+  "cliAddServPrecio",
+  "cliAddServVendedor",
+  "cliEditNombre",
+  "cliEditTel",
+  "cliEditVendedor",
+  "cliProfAddKey",
+  "cliProfAddMail",
+  "cliProfAddName",
+  "cliProfAddPin",
+  "cliProfEdit",
+  "cliRenovarFechaManual",
+  "cliRenovarFechaManualAll",
+  "cliServEditClave",
+  "cliServEditFecha",
+  "cliServEditMail",
+  "cliServEditPin",
+  "cliServEditPrecio",
+  "cliServEditVendedor",
+  "cliServSetPlatPin",
+  "finBancosFechaAsk",
+  "finBancosRangoFin",
+  "finBancosRangoInicio",
+  "finCierreCajaAsk",
+  "finCierreCajaRangoFin",
+  "finCierreCajaRangoInicio",
+  "finDetalleBancoFin",
+  "finDetalleBancoInicio",
+  "finDetalleBancoNombreAsk",
+  "finEditBanco",
+  "finEditDetalle",
+  "finEditFecha",
+  "finEditMonto",
+  "finEditMotivo",
+  "finEditPlataforma",
+  "finEgresoDetalle",
+  "finEgresoFecha",
+  "finEgresoMonto",
+  "finEliminarFechaAsk",
+  "finExcelRangoFin",
+  "finExcelRangoInicio",
+  "finIngresoDetalle",
+  "finIngresoFecha",
+  "finIngresoMonto",
+  "finIngresoPlataformaManual",
+  "finResumenBancoMesAsk",
+  "finResumenFechaAsk",
+  "finResumenRangoFin",
+  "finResumenRangoInicio",
+  "finTopCombosRangoFin",
+  "finTopCombosRangoInicio",
+  "finTopPlataformasMesAsk",
+  "finTopPlataformasRangoFin",
+  "finTopPlataformasRangoInicio",
+  "invEditClave",
+  "invNewClave",
+  "invNewCorreo",
+  "invNewPerfiles",
+  "invRestarQty",
+  "invSumarQty",
+  "mailAddClienteNombre",
+  "mailAddClientePin",
+  "mailEditClaveCorreo",
+  "mailEditCorreoCuenta",
+  "mailEditPin",
+  "revAddNombre",
+  "revAddTelegramId",
+  "vendBuscarCliente",
+]);
+
+function interactiveStateAgeMsLocal(state) {
+  const ts = Number(state?._ts || state?.updatedAt || 0);
+  return ts > 0 ? Math.max(0, Date.now() - ts) : 0;
+}
+
+function cleanupStaleInteractiveStateLocal(chatId) {
+  const key = String(chatId);
+  const maxAge = 15 * 60 * 1000;
+  try {
+    const p = pending.get(key);
+    if (p && interactiveStateAgeMsLocal(p) > maxAge) pending.delete(key);
+  } catch (_) {}
+  try {
+    const w = wizard.get(key);
+    if (w && interactiveStateAgeMsLocal(w) > maxAge) wizard.delete(key);
+  } catch (_) {}
+}
+
+function pendingReallyExpectsTextLocal(state) {
+  if (!state) return false;
+  return PENDING_TEXT_INPUT_MODES_LOCAL.has(String(state.mode || ""));
 }
 
 async function resolverBusquedaAdmin(chatId, query = "") {
@@ -3823,6 +3925,11 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
     }
 
     if (adminOk) {
+      // Cambiar de módulo cancela cualquier flujo anterior. Antes un pending
+      // abandonado podía seguir bloqueando búsquedas aunque el usuario ya
+      // estuviera en otra pantalla y obligaba a escribir "menu".
+      if (data.startsWith("menu:")) clearFlowStateKeepPanel(chatId);
+
       if (data === "menu:inventario") return menuInventario(chatId);
       if (data === "menu:dashboard")  return generarDashboard(chatId);
       if (data === "menu:inventario:video") return menuInventarioVideo(chatId);
@@ -4178,11 +4285,13 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
       }
 
       if (data.startsWith("inv:") && !data.startsWith("inv:open:") && !data.startsWith("inv:menu:")) {
+        pending.delete(String(chatId));
         const [, plat, pageStr] = data.split(":");
         return enviarInventarioPlataforma(chatId, plat, Number(pageStr || 0));
       }
 
       if (data.startsWith("inv:open:")) {
+        pending.delete(String(chatId));
         const [, , plat, accesoEnc] = data.split(":");
         const acceso = decodeURIComponent(accesoEnc || "");
         pending.set(String(chatId), { mode: "invSubmenuCtx", plat: normalizarPlataforma(plat), correo: normalizeIdentByPlatformLocal(plat, acceso) });
@@ -4241,6 +4350,7 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
       }
 
       if (data.startsWith("mail_panel|")) {
+        pending.delete(String(chatId));
         const [, plataforma, accesoEnc] = data.split("|");
         return mostrarPanelCorreo(chatId, plataforma, decodeURIComponent(accesoEnc || ""));
       }
@@ -4343,65 +4453,136 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
         return mostrarPanelCorreo(chatId, plataforma, acceso);
       }
 
-      if (data === "mail_move_platform") {
-        const ctx = getMailPanelContext(chatId);
-        if (!ctx?.docId || !ctx?.plataforma || !ctx?.acceso) {
-          return bot.sendMessage(chatId, "⚠️ Abra nuevamente la cuenta en Bodega antes de cambiarle la plataforma.");
+      // ==========================================================
+      // MOVER CUENTA ENTRE PLATAFORMAS — CALLBACK 100% STATELESS
+      // ==========================================================
+      // Antes este flujo dependía de pending/Map en memoria. Si el proceso
+      // reiniciaba o Telegram entregaba el siguiente callback a otra instancia,
+      // aparecía "El cambio venció" aunque el clic fuera inmediato.
+      // Ahora cada botón lleva un token corto derivado del docId y la cuenta se
+      // vuelve a resolver directamente desde Firestore en CADA clic.
+      if (data === "mail_move_platform" || data.startsWith("mail_move_platform|")) {
+        let token = String(data.split("|")[1] || "").trim();
+        let found = null;
+
+        if (token) {
+          try { found = await buscarCuentaInventarioPorMoveToken(token); } catch (e) {
+            return bot.sendMessage(chatId, `⚠️ No pude abrir esa cuenta: ${e.message || "token inválido"}`);
+          }
+        } else {
+          // Compatibilidad con botones viejos que quedaron en mensajes anteriores.
+          const ctx = getMailPanelContext(chatId);
+          if (ctx?.docId) {
+            token = getInventoryMoveToken(ctx.docId);
+            try { found = await buscarCuentaInventarioPorMoveToken(token); } catch (_) {}
+          }
         }
-        pending.set(String(chatId), {
-          mode: "mailMovePlatformPick",
-          docId: ctx.docId,
-          oldPlat: ctx.plataforma,
-          acceso: ctx.acceso,
-        });
+
+        if (!found) {
+          pending.delete(String(chatId));
+          return bot.sendMessage(chatId, "⚠️ Esa pantalla era de una versión anterior. Busque la cuenta otra vez y abra su ficha; el bot ya quedó libre para seguir buscando.");
+        }
+
+        const cuenta = found.data || {};
+        const oldPlat = normalizarPlataforma(cuenta.plataforma || "");
+        const acceso = String(cuenta.correo || cuenta.usuario || cuenta.ident || "").trim();
+        if (!oldPlat || !acceso) return bot.sendMessage(chatId, "⚠️ La cuenta no tiene plataforma o correo/usuario válido.");
+
+        // Importante: el cambio de plataforma ya NO deja pending activo.
+        pending.delete(String(chatId));
 
         const keys = Object.keys(PLATAFORMAS || {}).filter((k) => !["iptv1", "iptv3", "iptv4"].includes(k));
         const buttons = keys
-          .filter((k) => normalizarPlataforma(k) !== normalizarPlataforma(ctx.plataforma))
-          .map((k) => ({ text: `${iconPlataforma(k)} ${humanPlataforma(k)}`, callback_data: `mail_move_to|${k}` }));
+          .filter((k) => normalizarPlataforma(k) !== oldPlat)
+          .map((k) => ({
+            text: `${iconPlataforma(k)} ${humanPlataforma(k)}`,
+            callback_data: `mail_move_to|${token}|${normalizarPlataforma(k)}`,
+          }));
         const kb = [];
         for (let i = 0; i < buttons.length; i += 2) kb.push(buttons.slice(i, i + 2));
-        kb.push([{ text: "❌ Cancelar", callback_data: "mail_move_cancel" }]);
+        kb.push([{ text: "❌ Cancelar", callback_data: `mail_move_cancel|${token}` }]);
+
         return upsertPanel(
           chatId,
-          `🔄 *CAMBIAR PLATAFORMA DE LA CUENTA*\n\n${identIcon(ctx.plataforma)} *${escMD(getIdentLabelLocal(ctx.plataforma))}:* ${escMD(ctx.acceso)}\n📌 *Actual:* ${escMD(humanPlataforma(ctx.plataforma))}\n\nSeleccione la plataforma correcta.`,
+          `🔄 *CAMBIAR PLATAFORMA DE LA CUENTA*\n\n${identIcon(oldPlat)} *${escMD(getIdentLabelLocal(oldPlat))}:* ${escMD(acceso)}\n📌 *Actual:* ${escMD(humanPlataforma(oldPlat))}\n\nSeleccione la plataforma correcta.`,
           kb
         );
       }
 
       if (data.startsWith("mail_move_to|")) {
-        const nuevaPlat = normalizarPlataforma(data.split("|")[1] || "");
-        const p = pending.get(String(chatId));
-        if (!p || p.mode !== "mailMovePlatformPick" || !p.docId) {
-          return bot.sendMessage(chatId, "⚠️ El cambio venció. Abra nuevamente la cuenta.");
+        const parts = data.split("|");
+        const token = String(parts[1] || "").trim();
+        const nuevaPlat = normalizarPlataforma(parts[2] || "");
+
+        // Compatibilidad con botones del flujo anterior: mail_move_to|primevideo
+        if (!parts[2]) {
+          pending.delete(String(chatId));
+          return bot.sendMessage(chatId, "⚠️ Ese botón pertenece a la versión anterior. Abra nuevamente la cuenta y vuelva a tocar Cambiar plataforma.");
         }
         if (!esPlataformaValida(nuevaPlat)) return bot.sendMessage(chatId, "⚠️ Plataforma destino inválida.");
-        pending.set(String(chatId), { ...p, mode: "mailMovePlatformConfirm", nuevaPlat });
+
+        let found;
+        try { found = await buscarCuentaInventarioPorMoveToken(token); } catch (e) {
+          return bot.sendMessage(chatId, `⚠️ No pude resolver la cuenta: ${e.message || "error"}`);
+        }
+        if (!found) return bot.sendMessage(chatId, "⚠️ La cuenta ya no existe. Puede buscar otra cuenta inmediatamente.");
+
+        const src = found.data || {};
+        const oldPlat = normalizarPlataforma(src.plataforma || "");
+        const acceso = String(src.correo || src.usuario || src.ident || "").trim();
+        if (oldPlat === nuevaPlat) return bot.sendMessage(chatId, "ℹ️ La cuenta ya está en esa plataforma.");
+
+        pending.delete(String(chatId));
         return upsertPanel(
           chatId,
-          `⚠️ *CONFIRMAR CAMBIO DE PLATAFORMA*\n\n${identIcon(p.oldPlat)} ${escMD(p.acceso)}\n\n${escMD(humanPlataforma(p.oldPlat))} ➜ *${escMD(humanPlataforma(nuevaPlat))}*\n\nEsto mueve la cuenta de Bodega conservando correo/usuario, clave y perfiles actuales. Después ejecute /sincronizar_todo para reconciliar los perfiles con el CRM.`,
+          `⚠️ *CONFIRMAR CAMBIO DE PLATAFORMA*\n\n${identIcon(oldPlat)} ${escMD(acceso)}\n\n${escMD(humanPlataforma(oldPlat))} ➜ *${escMD(humanPlataforma(nuevaPlat))}*\n\nEsto mueve la cuenta de Bodega conservando correo/usuario, clave y perfiles actuales. Después ejecute /sincronizar_todo para reconciliar los perfiles con el CRM.`,
           [
-            [{ text: "✅ Sí, mover cuenta", callback_data: "mail_move_confirm" }],
-            [{ text: "❌ Cancelar", callback_data: "mail_move_cancel" }],
+            [{ text: "✅ Sí, mover cuenta", callback_data: `mail_move_confirm|${token}|${nuevaPlat}` }],
+            [{ text: "❌ Cancelar", callback_data: `mail_move_cancel|${token}` }],
           ]
         );
       }
 
-      if (data === "mail_move_cancel") {
-        const p = pending.get(String(chatId));
+      if (data === "mail_move_cancel" || data.startsWith("mail_move_cancel|")) {
+        const token = String(data.split("|")[1] || "").trim();
         pending.delete(String(chatId));
-        if (p?.oldPlat && p?.acceso) return mostrarPanelCorreo(chatId, p.oldPlat, p.acceso);
-        return bot.sendMessage(chatId, "Cambio cancelado.");
+        if (token) {
+          try {
+            const found = await buscarCuentaInventarioPorMoveToken(token);
+            if (found) {
+              const d = found.data || {};
+              const plat = normalizarPlataforma(d.plataforma || "");
+              const acceso = String(d.correo || d.usuario || d.ident || "").trim();
+              if (plat && acceso) return mostrarPanelCorreo(chatId, plat, acceso);
+            }
+          } catch (_) {}
+        }
+        return bot.sendMessage(chatId, "Cambio cancelado. Puede buscar otra cuenta inmediatamente.");
       }
 
-      if (data === "mail_move_confirm") {
-        const p = pending.get(String(chatId));
-        if (!p || p.mode !== "mailMovePlatformConfirm" || !p.docId || !p.nuevaPlat) {
-          return bot.sendMessage(chatId, "⚠️ El cambio venció. Abra nuevamente la cuenta.");
-        }
-        try {
-          const r = await moverCuentaInventarioPlataforma(p.docId, p.nuevaPlat);
+      if (data === "mail_move_confirm" || data.startsWith("mail_move_confirm|")) {
+        const parts = data.split("|");
+        const token = String(parts[1] || "").trim();
+        const nuevaPlat = normalizarPlataforma(parts[2] || "");
+
+        if (!token || !nuevaPlat) {
           pending.delete(String(chatId));
+          return bot.sendMessage(chatId, "⚠️ Ese botón pertenece a la versión anterior. Abra nuevamente la cuenta; el bot no quedó bloqueado.");
+        }
+
+        let found;
+        try { found = await buscarCuentaInventarioPorMoveToken(token); } catch (e) {
+          return bot.sendMessage(chatId, `⚠️ No pude resolver la cuenta: ${e.message || "error"}`);
+        }
+        if (!found) {
+          pending.delete(String(chatId));
+          return bot.sendMessage(chatId, "⚠️ La cuenta ya no existe. Puede hacer otra búsqueda sin regresar a Menú.");
+        }
+
+        try {
+          const r = await moverCuentaInventarioPlataforma(found.id, nuevaPlat);
+          pending.delete(String(chatId));
+          forceNextPanelAtBottom(chatId);
           await bot.sendMessage(
             chatId,
             `✅ *Cuenta movida correctamente*\n\n${escMD(humanPlataforma(r.anterior))} ➜ *${escMD(humanPlataforma(r.nueva))}*\n${identIcon(r.nueva)} ${escMD(r.ident)}\n👥 Cupos actuales: ${r.ocupados}/${r.capacidad}\n\nAhora ejecute /sincronizar_todo para quitar asignaciones cruzadas y colocar los perfiles vigentes del CRM en la plataforma correcta.`,
@@ -4409,7 +4590,8 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
           );
           return mostrarPanelCorreo(chatId, r.nueva, r.ident);
         } catch (e) {
-          return bot.sendMessage(chatId, `⚠️ No se movió la cuenta: ${e.message || "error desconocido"}`);
+          pending.delete(String(chatId));
+          return bot.sendMessage(chatId, `⚠️ No se movió la cuenta: ${e.message || "error desconocido"}\n\nEl bot quedó libre; puede buscar otra cuenta inmediatamente.`);
         }
       }
 
@@ -5555,20 +5737,26 @@ bot.on("message", async (msg) => {
       return;
     }
 
-    // ── Búsqueda directa sin / desde cualquier panel ──
-    // Permite buscar correo, nombre o teléfono sin escribir "menu".
-    // Solo se bloquea si hay un flujo que realmente está esperando respuesta.
+    // ── Búsqueda directa sin / desde CUALQUIER panel ──
+    // Un selector que funciona únicamente con botones NUNCA puede dejar pegado
+    // el buscador. Solo bloqueamos cuando el flujo realmente espera texto.
     if (adminOk && !text.startsWith("/")) {
+      cleanupStaleInteractiveStateLocal(chatId);
+
       const tSearch = String(text || "").trim();
-      const pSearch = pending.get(String(chatId));
-      const pendingMode = String(pSearch?.mode || "");
-      const pendingBloqueaBusqueda = !!(pSearch && !["invSubmenuCtx"].includes(pendingMode));
+      const keySearch = String(chatId);
+      const pSearch = pending.get(keySearch);
+      const pendingBloqueaBusqueda = pendingReallyExpectsTextLocal(pSearch);
+      const wizardActivo = wizard.has(keySearch);
       const pareceBusqueda =
         isEmailLike(tSearch) ||
         onlyDigits(tSearch).length >= 7 ||
         normalizeLooseText(tSearch).length >= 2;
 
-      if (pareceBusqueda && !wizard.has(String(chatId)) && !pendingBloqueaBusqueda) {
+      if (pareceBusqueda && !wizardActivo && !pendingBloqueaBusqueda) {
+        // Si quedó un selector por botones abierto/abandonado, se cancela y
+        // la búsqueda nueva toma prioridad sin obligar a escribir "menu".
+        if (pSearch) pending.delete(keySearch);
         return resolverBusquedaAdmin(chatId, tSearch);
       }
     }
