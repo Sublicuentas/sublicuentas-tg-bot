@@ -365,6 +365,110 @@ async function buscarCorreoInventarioPorPlatCorreo(plataforma = "", acceso = "")
 }
 
 // ===============================
+// CONTEXTO DEL PANEL + MOVER CUENTA ENTRE PLATAFORMAS
+// ===============================
+const MAIL_PANEL_CTX = global.__SUBLICUENTAS_MAIL_PANEL_CTX__ || new Map();
+global.__SUBLICUENTAS_MAIL_PANEL_CTX__ = MAIL_PANEL_CTX;
+
+function setMailPanelContext(chatId, ctx = {}) {
+  if (chatId === undefined || chatId === null) return;
+  MAIL_PANEL_CTX.set(String(chatId), {
+    docId: String(ctx.docId || ""),
+    plataforma: normalizarPlataforma(ctx.plataforma || ""),
+    acceso: String(ctx.acceso || "").trim(),
+    updatedAt: Date.now(),
+  });
+}
+
+function getMailPanelContext(chatId) {
+  const ctx = MAIL_PANEL_CTX.get(String(chatId));
+  if (!ctx) return null;
+  // Evita reutilizar una cuenta vieja horas después.
+  if (Date.now() - Number(ctx.updatedAt || 0) > 30 * 60 * 1000) {
+    MAIL_PANEL_CTX.delete(String(chatId));
+    return null;
+  }
+  return { ...ctx };
+}
+
+async function moverCuentaInventarioPlataforma(docId = "", nuevaPlataforma = "") {
+  const id = String(docId || "").trim();
+  const nueva = normalizarPlataforma(nuevaPlataforma);
+  if (!id || !nueva || !PLATFORM_KEYS.includes(nueva)) {
+    throw new Error("Plataforma destino inválida.");
+  }
+
+  const srcRef = db.collection("inventario").doc(id);
+  const srcSnap = await srcRef.get();
+  if (!srcSnap.exists) throw new Error("La cuenta ya no existe en Bodega.");
+
+  const src = srcSnap.data() || {};
+  const anterior = normalizarPlataforma(src.plataforma || "");
+  const ident = getStoredIdent(src);
+  if (!ident) throw new Error("La cuenta no tiene correo/usuario para moverla.");
+  if (anterior === nueva) {
+    return { ok: true, sinCambios: true, anterior, nueva, ident, docId: srcSnap.id, data: src };
+  }
+
+  // No permitir que dos documentos terminen representando la misma cuenta.
+  const exactaDestino = await buscarCorreoInventarioPorPlatCorreo(nueva, ident);
+  if (exactaDestino && exactaDestino.id !== srcSnap.id) {
+    const stored = normalizeAccess(nueva, getStoredIdent(exactaDestino.data || {}));
+    const wanted = normalizeAccess(nueva, ident);
+    if (stored === wanted) {
+      throw new Error(`Ya existe ${humanPlatSafe(nueva)} con ese ${getIdentLabel(nueva).toLowerCase()}. No se movió nada.`);
+    }
+  }
+
+  const clientes = getClientesArray(src);
+  const capActual = Math.max(1, Number(src.capacidad || src.total || 0) || getCapacidadCorreo(src, anterior));
+  const defaultAnterior = getCapacidadCorreo({}, anterior);
+  const defaultNueva = getCapacidadCorreo({}, nueva);
+  // Si la capacidad era exactamente el valor por defecto de la plataforma mal puesta,
+  // adopta el default de la plataforma correcta. Una capacidad personalizada se conserva.
+  const capBase = capActual === defaultAnterior ? defaultNueva : capActual;
+  const capacidad = Math.max(clientes.length, capBase, 1);
+  const ocupados = clientes.length;
+  const disponibles = Math.max(0, capacidad - ocupados);
+
+  const nuevaId = docIdInventario(ident, nueva);
+  const dstRef = db.collection("inventario").doc(nuevaId);
+  const dstSnap = await dstRef.get();
+  if (dstSnap.exists && dstSnap.id !== srcSnap.id) {
+    throw new Error(`Ya existe un documento de ${humanPlatSafe(nueva)} para esa cuenta. No se movió nada.`);
+  }
+
+  const ahora = admin.firestore.FieldValue.serverTimestamp();
+  const destino = {
+    ...src,
+    plataforma: nueva,
+    capacidad,
+    ocupados,
+    disponibles,
+    disp: disponibles,
+    estado: disponibles <= 0 ? "llena" : "activa",
+    movedFromPlatform: anterior,
+    movedFromDocId: srcSnap.id,
+    updatedAt: ahora,
+  };
+
+  // La identidad física del inventario también cambia de docId para que todos
+  // los flujos que usan plataforma+correo encuentren la misma cuenta.
+  await db.runTransaction(async (tx) => {
+    const srcNow = await tx.get(srcRef);
+    if (!srcNow.exists) throw new Error("La cuenta desapareció durante el cambio.");
+    const dstNow = await tx.get(dstRef);
+    if (dstNow.exists && dstRef.id !== srcRef.id) {
+      throw new Error(`Ya existe ${humanPlatSafe(nueva)} con ese acceso.`);
+    }
+    tx.set(dstRef, destino, { merge: false });
+    if (dstRef.id !== srcRef.id) tx.delete(srcRef);
+  });
+
+  return { ok: true, anterior, nueva, ident, docId: dstRef.id, data: destino, capacidad, ocupados, disponibles };
+}
+
+// ===============================
 // VISTAS INVENTARIO
 // ===============================
 async function getInventarioRowsByPlataforma(plataforma = "") {
@@ -573,6 +677,7 @@ async function mostrarPanelCorreo(chatId, plataforma = "", acceso = "") {
 
   const data = found.data || {};
   const ident = getStoredIdent(data) || String(acceso || "");
+  setMailPanelContext(chatId, { docId: found.id, plataforma: plat, acceso: ident });
   const clave = String(data.clave || "").trim();
   const pin = getPinFromAny(data);
   const { capacidad, ocupados, disponibles, estado } = formatCuentaResumen(data, plat);
@@ -606,6 +711,7 @@ async function mostrarPanelCorreo(chatId, plataforma = "", acceso = "") {
     kb.push([{ text: "✉️ Editar correo", callback_data: `mail_edit_correo|${plat}|${encodeURIComponent(ident)}` }]);
   }
 
+  kb.push([{ text: "🔄 Cambiar plataforma de esta cuenta", callback_data: "mail_move_platform" }]);
   kb.push([{ text: "🗑️ Borrar cuenta", callback_data: `mail_delete|${plat}|${encodeURIComponent(ident)}` }]);
 
   kb.push([
@@ -819,4 +925,6 @@ module.exports = {
   responderCodigoNetflix,
   getCapacidadCorreo,
   aplicarAutoLleno,
+  getMailPanelContext,
+  moverCuentaInventarioPlataforma,
 };

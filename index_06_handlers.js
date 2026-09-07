@@ -133,6 +133,8 @@ const {
   responderCodigoNetflix,
   getCapacidadCorreo,
   aplicarAutoLleno,
+  getMailPanelContext,
+  moverCuentaInventarioPlataforma,
 } = require("./index_04_inventario_correos");
 
 const {
@@ -4339,6 +4341,76 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
         await ref.set({ clientes, ocupados, disponibles, disp: disponibles, estado: disponibles === 0 ? "llena" : "activa", capacidad, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
         await bot.sendMessage(chatId, `✅ *Cliente quitado correctamente*\n\n👤 *Nombre:* ${escMD(cliente.nombre || "Sin nombre")}\n🔐 *PIN:* ${escMD(cliente.pin || "----")}\n\n👤 *Ocupados:* ${ocupados}/${capacidad}\n✅ *Disponibles:* ${disponibles}\n📊 *Estado:* ${escMD(disponibles === 0 ? "LLENA" : "CON ESPACIO")}`, { parse_mode: "Markdown" });
         return mostrarPanelCorreo(chatId, plataforma, acceso);
+      }
+
+      if (data === "mail_move_platform") {
+        const ctx = getMailPanelContext(chatId);
+        if (!ctx?.docId || !ctx?.plataforma || !ctx?.acceso) {
+          return bot.sendMessage(chatId, "⚠️ Abra nuevamente la cuenta en Bodega antes de cambiarle la plataforma.");
+        }
+        pending.set(String(chatId), {
+          mode: "mailMovePlatformPick",
+          docId: ctx.docId,
+          oldPlat: ctx.plataforma,
+          acceso: ctx.acceso,
+        });
+
+        const keys = Object.keys(PLATAFORMAS || {}).filter((k) => !["iptv1", "iptv3", "iptv4"].includes(k));
+        const buttons = keys
+          .filter((k) => normalizarPlataforma(k) !== normalizarPlataforma(ctx.plataforma))
+          .map((k) => ({ text: `${iconPlataforma(k)} ${humanPlataforma(k)}`, callback_data: `mail_move_to|${k}` }));
+        const kb = [];
+        for (let i = 0; i < buttons.length; i += 2) kb.push(buttons.slice(i, i + 2));
+        kb.push([{ text: "❌ Cancelar", callback_data: "mail_move_cancel" }]);
+        return upsertPanel(
+          chatId,
+          `🔄 *CAMBIAR PLATAFORMA DE LA CUENTA*\n\n${identIcon(ctx.plataforma)} *${escMD(getIdentLabelLocal(ctx.plataforma))}:* ${escMD(ctx.acceso)}\n📌 *Actual:* ${escMD(humanPlataforma(ctx.plataforma))}\n\nSeleccione la plataforma correcta.`,
+          kb
+        );
+      }
+
+      if (data.startsWith("mail_move_to|")) {
+        const nuevaPlat = normalizarPlataforma(data.split("|")[1] || "");
+        const p = pending.get(String(chatId));
+        if (!p || p.mode !== "mailMovePlatformPick" || !p.docId) {
+          return bot.sendMessage(chatId, "⚠️ El cambio venció. Abra nuevamente la cuenta.");
+        }
+        if (!esPlataformaValida(nuevaPlat)) return bot.sendMessage(chatId, "⚠️ Plataforma destino inválida.");
+        pending.set(String(chatId), { ...p, mode: "mailMovePlatformConfirm", nuevaPlat });
+        return upsertPanel(
+          chatId,
+          `⚠️ *CONFIRMAR CAMBIO DE PLATAFORMA*\n\n${identIcon(p.oldPlat)} ${escMD(p.acceso)}\n\n${escMD(humanPlataforma(p.oldPlat))} ➜ *${escMD(humanPlataforma(nuevaPlat))}*\n\nEsto mueve la cuenta de Bodega conservando correo/usuario, clave y perfiles actuales. Después ejecute /sincronizar_todo para reconciliar los perfiles con el CRM.`,
+          [
+            [{ text: "✅ Sí, mover cuenta", callback_data: "mail_move_confirm" }],
+            [{ text: "❌ Cancelar", callback_data: "mail_move_cancel" }],
+          ]
+        );
+      }
+
+      if (data === "mail_move_cancel") {
+        const p = pending.get(String(chatId));
+        pending.delete(String(chatId));
+        if (p?.oldPlat && p?.acceso) return mostrarPanelCorreo(chatId, p.oldPlat, p.acceso);
+        return bot.sendMessage(chatId, "Cambio cancelado.");
+      }
+
+      if (data === "mail_move_confirm") {
+        const p = pending.get(String(chatId));
+        if (!p || p.mode !== "mailMovePlatformConfirm" || !p.docId || !p.nuevaPlat) {
+          return bot.sendMessage(chatId, "⚠️ El cambio venció. Abra nuevamente la cuenta.");
+        }
+        try {
+          const r = await moverCuentaInventarioPlataforma(p.docId, p.nuevaPlat);
+          pending.delete(String(chatId));
+          await bot.sendMessage(
+            chatId,
+            `✅ *Cuenta movida correctamente*\n\n${escMD(humanPlataforma(r.anterior))} ➜ *${escMD(humanPlataforma(r.nueva))}*\n${identIcon(r.nueva)} ${escMD(r.ident)}\n👥 Cupos actuales: ${r.ocupados}/${r.capacidad}\n\nAhora ejecute /sincronizar_todo para quitar asignaciones cruzadas y colocar los perfiles vigentes del CRM en la plataforma correcta.`,
+            { parse_mode: "Markdown" }
+          );
+          return mostrarPanelCorreo(chatId, r.nueva, r.ident);
+        } catch (e) {
+          return bot.sendMessage(chatId, `⚠️ No se movió la cuenta: ${e.message || "error desconocido"}`);
+        }
       }
 
       if (data.startsWith("mail_edit_pin|")) {
