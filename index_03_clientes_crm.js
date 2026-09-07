@@ -594,7 +594,10 @@ async function removeServicioDeInventario({ clienteNombre = "", plataforma = "",
         && (!String(clienteId || "").trim() || String(x?.clienteId || "").trim() === String(clienteId).trim())
       );
     }
-    if (pinFiltro) {
+    // Si ya encontramos por perfilId/compraId, NO debemos reemplazar esa
+    // coincidencia por nombre+PIN. El código anterior podía terminar quitando
+    // otra fila cuando había PIN repetido o datos legacy parecidos.
+    if (idx === -1 && pinFiltro) {
       idx = clientes.findIndex((x) => normTxt(x?.nombre || "") === normTxt(clienteNombre) && String(x?.pin || "") === pinFiltro);
     }
     if (idx === -1) idx = clientes.findIndex((x) => normTxt(x?.nombre || "") === normTxt(clienteNombre));

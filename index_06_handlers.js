@@ -566,14 +566,15 @@ async function buscarInventarioFlexiblePorServicioLocal(servicio = {}, plataform
   const identOriginal = getIdentServicioSyncLocal(servicio);
   if (!plat || !identOriginal) return null;
 
+  // IMPORTANTE: nunca emparejar únicamente por correo/usuario.
+  // El mismo acceso puede existir en plataformas distintas (por ejemplo,
+  // cocacola@... en Disney y Prime Video). El fallback antiguo por "solo correo"
+  // podía cambiar la plataforma de un servicio o traer la clave/PIN de otra
+  // cuenta. La identidad real de inventario es SIEMPRE plataforma + acceso.
   const index = inventarioIndex || await buildInventarioClaveIndexLocal();
-  let inv = index.findByPlatIdent(plat, identOriginal);
-  if (inv) return { ...inv, plataformaCoincidente: plat, match: "plataforma_correo" };
-
-  inv = index.findByAnyIdent(identOriginal, plat);
+  const inv = index.findByPlatIdent(plat, identOriginal);
   if (!inv) return null;
-
-  return { ...inv, plataformaCoincidente: normalizarPlataforma(inv.plataforma || ""), match: "solo_correo" };
+  return { ...inv, plataformaCoincidente: plat, match: "plataforma_correo" };
 }
 
 async function sincronizarUnServicioDesdeInventarioLocal(clientId, idx) {
@@ -2330,138 +2331,246 @@ bot.onText(/\/sincronizar_todo/i, async (msg) => {
     return bot.sendMessage(chatId, "⛔ Solo ADMIN puede sincronizar la base de datos.");
   }
 
-  await bot.sendMessage(chatId, "🔄 *Iniciando sincronización masiva...*", { parse_mode: "Markdown" });
+  await bot.sendMessage(
+    chatId,
+    "🔄 *Auditando y sincronizando inventario con el CRM...*\n\nSolo se cruzarán perfiles VIGENTES por *plataforma + correo/usuario exactos*. No se mezclan plataformas aunque usen el mismo correo.",
+    { parse_mode: "Markdown" }
+  );
 
-  let perfilesEmparejados = 0;
-  let clientesSinCuenta = 0;
-  const cuentasAfectadas = new Set();
-  const sinCuenta = [];
+  let perfilesVigentes = 0;
+  let perfilesVinculados = 0;
+  let perfilesAgregados = 0;
+  let perfilesDepurados = 0;
+  let cuentasActualizadas = 0;
+  let cuentasDuplicadas = 0;
+  let cuentasSinInventario = 0;
+  let conflictosCapacidad = 0;
+  let legacySinVerificar = 0;
+  const avisosSinCuenta = [];
+  const avisosDuplicados = [];
+  const avisosCapacidad = [];
+  const avisosOtraPlataforma = [];
 
   try {
-    // ✅ FIX: antes se buscaba el inventario adivinando el ID del documento
-    // ("plataforma__correo"), pero las cuentas creadas desde Sublichat HQ usan
-    // IDs autogenerados por Firestore (db.collection("inventario").add(...)),
-    // así que esa búsqueda por ID casi nunca encontraba nada. Ahora cargamos
-    // TODO el inventario una sola vez y lo indexamos por correo real, igual
-    // que lo hace el backend de Sublichat HQ (renovar.js → ajustarInventario).
-    const snapInv = await db.collection("inventario").get();
-    const invPorAcceso = new Map(); // plataforma__correoNorm -> [{ ref, data }]
+    const [snapInv, snapClientes] = await Promise.all([
+      db.collection("inventario").get(),
+      db.collection("clientes").get(),
+    ]);
+
+    // 1) Indexar inventario por la identidad REAL: plataforma + acceso.
+    const invPorKey = new Map();
+    const plataformasPorAcceso = new Map();
     snapInv.forEach((d) => {
       const data = d.data() || {};
-      const platNorm = normalizarPlataforma(data.plataforma || "");
-      const correoNorm = normalizeIdentByPlatformLocal(platNorm, data.correo || data.usuario || "");
-      if (!correoNorm) return;
-      const key = `${platNorm}__${correoNorm}`;
-      if (!invPorAcceso.has(key)) invPorAcceso.set(key, []);
-      invPorAcceso.get(key).push({ ref: d.ref, data });
+      const plat = normalizarPlataforma(data.plataforma || "");
+      const acceso = normalizeIdentByPlatformLocal(plat, getIdentInventarioSyncLocal(data));
+      if (!plat || !acceso) return;
+      const key = `${plat}__${syncIdentKeyLocal(acceso)}`;
+      if (!invPorKey.has(key)) invPorKey.set(key, []);
+      invPorKey.get(key).push({ id: d.id, ref: d.ref, data, plat, acceso });
+
+      const accesoGlobal = syncIdentKeyLocal(acceso);
+      const set = plataformasPorAcceso.get(accesoGlobal) || new Set();
+      set.add(plat);
+      plataformasPorAcceso.set(accesoGlobal, set);
     });
 
-    const snapClientes = await db.collection("clientes").get();
-
+    // 2) Construir lo que DEBE haber en cada cuenta usando solo servicios vigentes.
+    const esperadosPorKey = new Map();
     for (const docCli of snapClientes.docs) {
       const c = docCli.data() || {};
       const servicios = Array.isArray(c.servicios) ? c.servicios : [];
-      const nombreCliente = c.nombrePerfil || c.nombre || "Sin Nombre";
+      const titular = String(c.nombrePerfil || c.nombre || "Sin Nombre").trim();
+      const telefono = String(c.telefono || c.celular || c.phone || "").trim();
 
       for (let servicioIndex = 0; servicioIndex < servicios.length; servicioIndex++) {
         const s = servicios[servicioIndex] || {};
-        if (!s.plataforma) continue;
-        const platNorm = normalizarPlataforma(s.plataforma || "");
-        const perfiles = perfilesServicioLocal(s, nombreCliente);
+        if (!s.plataforma || !servicioVigenteParaSyncLocal(s)) continue;
+        const plat = normalizarPlataforma(s.plataforma || "");
+        if (!plat) continue;
+        const perfiles = perfilesServicioLocal(s, titular);
+        const compraId = String(s.compraId || `legacy_compra_${docCli.id}_${servicioIndex}`);
 
         for (let perfilIndex = 0; perfilIndex < perfiles.length; perfilIndex++) {
           const perfil = perfiles[perfilIndex] || {};
-          const correoNorm = normalizeIdentByPlatformLocal(platNorm, perfil.correo || s.correo || "");
-          if (!correoNorm) continue;
-          const candidatos = invPorAcceso.get(`${platNorm}__${correoNorm}`) || [];
+          const acceso = normalizeIdentByPlatformLocal(plat, perfil.correo || s.correo || "");
+          if (!acceso) continue;
 
-          if (!candidatos.length) {
-            clientesSinCuenta++;
-            sinCuenta.push(`${perfil.nombre || nombreCliente} — ${s.plataforma} — ${perfil.correo || s.correo}`);
-            continue;
-          }
-
-        // Si el mismo correo quedó duplicado en varias cuentas de inventario,
-        // preferimos la que aún tenga espacio; si todas están llenas, la primera.
-          const compraId = String(s.compraId || `legacy_compra_${docCli.id}_${servicioIndex}`);
+          perfilesVigentes++;
           const perfilId = String(perfil.perfilId || `legacy_perfil_${docCli.id}_${servicioIndex}_${perfilIndex}`);
-          const elegido = candidatos.find((x) => {
-            const existentes = Array.isArray(x.data.clientes) ? x.data.clientes : [];
-            const yaEsta = existentes.some((item) =>
-              String(item?.perfilId || "") === perfilId
-              || (String(item?.compraId || "") === compraId && String(item?.clienteId || "") === docCli.id)
-            );
-            const cap = Number(x.data.capacidad || x.data.total || 0);
-            return yaEsta || cap === 0 || existentes.length < cap;
-          }) || candidatos[0];
+          const nombre = String(perfil.nombre || titular || "Sin Nombre").trim();
+          const pin = String(perfil.pin || s.pin || s.pinPerfil || "").trim();
+          const key = `${plat}__${syncIdentKeyLocal(acceso)}`;
+          const row = { nombre, pin, telefono, clienteId: docCli.id, compraId, perfilId, plat, acceso };
+          const arr = esperadosPorKey.get(key) || [];
 
-          const invData = elegido.data;
-          let clientesInv = Array.isArray(invData.clientes) ? invData.clientes.slice() : [];
-          const pinCliente = perfil.pin || s.pin || s.pinPerfil || "0000";
-          const nombrePerfil = perfil.nombre || nombreCliente;
-
-          let idxExiste = clientesInv.findIndex((x) => String(x?.perfilId || "") === perfilId);
-          if (idxExiste === -1) idxExiste = clientesInv.findIndex((x) =>
-            !String(x?.perfilId || "") && !String(x?.compraId || "")
-            && String(x?.nombre || "").trim().toLowerCase() === String(nombrePerfil).trim().toLowerCase()
-            && String(x?.pin || "") === String(pinCliente)
+          // Evitar duplicar el mismo perfil si una ficha vieja repite datos.
+          const ya = arr.some((x) =>
+            String(x.perfilId || "") === perfilId
+            || (String(x.compraId || "") === compraId && String(x.clienteId || "") === docCli.id && normTxt(x.nombre || "") === normTxt(nombre))
           );
-
-          if (idxExiste !== -1) {
-            const anterior = clientesInv[idxExiste] || {};
-            const actualizado = { ...anterior, nombre: nombrePerfil, pin: pinCliente, clienteId: docCli.id, compraId, perfilId };
-            if (JSON.stringify(anterior) !== JSON.stringify(actualizado)) {
-              clientesInv[idxExiste] = actualizado;
-            } else {
-              continue;
-            }
-          } else {
-            const capacidadActual = Number(invData.capacidad || invData.total || 0);
-            if (capacidadActual > 0 && clientesInv.length >= capacidadActual) {
-              clientesSinCuenta++;
-              sinCuenta.push(`${nombrePerfil} — ${s.plataforma} — ${perfil.correo || s.correo} (cuenta llena)`);
-              continue;
-            }
-
-            const usados = clientesInv.map((x) => Number(x.slot) || 0);
-            let slot = 1; while (usados.includes(slot)) slot++;
-            clientesInv.push({ nombre: nombrePerfil, pin: pinCliente, slot, clienteId: docCli.id, compraId, perfilId });
-          }
-
-          const capacidad = Number(invData.capacidad || invData.total || 0);
-          const ocupados = clientesInv.length;
-          const disponibles = capacidad > 0
-            ? Math.max(0, capacidad - ocupados)
-            : Math.max(0, Number(invData.disp || 0) - (idxExiste === -1 ? 1 : 0));
-          const estado = disponibles === 0 ? "llena" : "activa";
-
-          await elegido.ref.set(
-            { clientes: clientesInv, ocupados, disponibles, disp: disponibles, estado, capacidad, updatedAt: admin.firestore.FieldValue.serverTimestamp() },
-            { merge: true }
-          );
-
-        // Refresca el índice en memoria por si el mismo correo aparece en otro cliente más abajo.
-          elegido.data = { ...invData, clientes: clientesInv, ocupados, disponibles, capacidad };
-
-          perfilesEmparejados++;
-          cuentasAfectadas.add(elegido.ref.id);
+          if (!ya) arr.push(row);
+          esperadosPorKey.set(key, arr);
         }
       }
     }
 
-    let resumenFaltantes = "";
-    if (sinCuenta.length) {
-      const muestra = sinCuenta.slice(0, 15).map((x) => `• ${x}`).join("\n");
-      resumenFaltantes = `\n\n⚠️ ${sinCuenta.length} perfil(es) sin cuenta compatible en inventario (deben coincidir plataforma + correo/usuario y debe existir espacio):\n${muestra}${sinCuenta.length > 15 ? `\n…y ${sinCuenta.length - 15} más.` : ""}`;
+    // 3) Diagnosticar servicios vigentes que no tienen cuenta exacta.
+    for (const [key, esperados] of esperadosPorKey.entries()) {
+      if (invPorKey.has(key)) continue;
+      cuentasSinInventario++;
+      const e = esperados[0] || {};
+      const otras = Array.from(plataformasPorAcceso.get(syncIdentKeyLocal(e.acceso || "")) || []).filter((p) => p !== e.plat);
+      if (otras.length) {
+        avisosOtraPlataforma.push(`${humanPlataforma(e.plat)} · ${e.acceso} → ese mismo acceso existe en ${otras.map(humanPlataforma).join(", ")}`);
+      } else {
+        avisosSinCuenta.push(`${humanPlataforma(e.plat)} · ${e.acceso}`);
+      }
     }
 
-    // ✅ Texto plano: la lista de "sin cuenta" incluye nombres y correos
-    // reales de clientes, que pueden traer símbolos que rompen el Markdown
-    // de Telegram y hacen que el mensaje nunca llegue.
-    return bot.sendMessage(
-      chatId,
-      `✅ Sincronización completada con éxito\n\n👤 Perfiles emparejados: ${perfilesEmparejados}\n📦 Cuentas actualizadas: ${cuentasAfectadas.size}${resumenFaltantes}\n\n💡 La base quedó sincronizada.`
-    );
+    // 4) Reconciliar TODAS las cuentas de inventario.
+    //    - añade perfiles vigentes del CRM que faltan;
+    //    - enlaza IDs a filas legacy que sí coinciden;
+    //    - quita únicamente filas con IDs que ya NO corresponden a un servicio
+    //      vigente de esa misma plataforma + acceso (esto limpia contaminación
+    //      creada por sincronizaciones anteriores);
+    //    - conserva filas legacy sin IDs que no podemos demostrar como incorrectas.
+    for (const [key, docs] of invPorKey.entries()) {
+      if (docs.length !== 1) {
+        cuentasDuplicadas++;
+        const d0 = docs[0] || {};
+        avisosDuplicados.push(`${humanPlataforma(d0.plat)} · ${d0.acceso} (${docs.length} documentos)`);
+        continue;
+      }
+
+      const inv = docs[0];
+      const data = inv.data || {};
+      const actuales = Array.isArray(data.clientes) ? data.clientes.slice() : [];
+      const esperados = (esperadosPorKey.get(key) || []).slice();
+      const usados = new Set();
+      const salida = [];
+      let cambios = false;
+
+      const encontrarActual = (e) => {
+        let idx = -1;
+        if (e.perfilId) idx = actuales.findIndex((x, i) => !usados.has(i) && String(x?.perfilId || "") === String(e.perfilId));
+        if (idx === -1 && e.compraId) idx = actuales.findIndex((x, i) => !usados.has(i)
+          && String(x?.compraId || "") === String(e.compraId)
+          && String(x?.clienteId || "") === String(e.clienteId || ""));
+        if (idx === -1) idx = actuales.findIndex((x, i) => !usados.has(i)
+          && !String(x?.perfilId || "").trim()
+          && !String(x?.compraId || "").trim()
+          && normTxt(x?.nombre || "") === normTxt(e.nombre || "")
+          && (!String(e.pin || "").trim() || String(x?.pin || "").trim() === String(e.pin || "").trim()));
+        return idx;
+      };
+
+      for (const e of esperados) {
+        const idx = encontrarActual(e);
+        if (idx !== -1) {
+          usados.add(idx);
+          const anterior = actuales[idx] || {};
+          const unido = {
+            ...anterior,
+            nombre: e.nombre,
+            ...(e.pin ? { pin: e.pin } : {}),
+            ...(e.telefono ? { telefono: e.telefono } : {}),
+            clienteId: e.clienteId,
+            compraId: e.compraId,
+            perfilId: e.perfilId,
+          };
+          if (JSON.stringify(anterior) !== JSON.stringify(unido)) {
+            perfilesVinculados++;
+            cambios = true;
+          }
+          salida.push(unido);
+        } else {
+          salida.push({
+            nombre: e.nombre,
+            pin: e.pin,
+            ...(e.telefono ? { telefono: e.telefono } : {}),
+            clienteId: e.clienteId,
+            compraId: e.compraId,
+            perfilId: e.perfilId,
+          });
+          perfilesAgregados++;
+          cambios = true;
+        }
+      }
+
+      // Lo que sobró en inventario: si tiene IDs, fue enlazado por el sistema y
+      // ya no existe como servicio vigente exacto → se depura. Si es una fila
+      // legacy sin IDs, se conserva para no borrar datos manuales a ciegas.
+      for (let i = 0; i < actuales.length; i++) {
+        if (usados.has(i)) continue;
+        const row = actuales[i] || {};
+        const tieneIds = Boolean(String(row.perfilId || "").trim() || String(row.compraId || "").trim() || String(row.clienteId || "").trim());
+        if (tieneIds) {
+          perfilesDepurados++;
+          cambios = true;
+        } else {
+          salida.push(row);
+          legacySinVerificar++;
+        }
+      }
+
+      const capacidad = Number(data.capacidad || data.total || getTotalPorPlataformaLocal(inv.plat) || 1);
+      if (capacidad > 0 && salida.length > capacidad) {
+        conflictosCapacidad++;
+        avisosCapacidad.push(`${humanPlataforma(inv.plat)} · ${inv.acceso}: ${salida.length}/${capacidad}`);
+        continue; // No tocar una cuenta si la reconciliación excede su capacidad.
+      }
+
+      const normalizados = salida.map((x, i) => ({ ...x, slot: i + 1 }));
+      const ocupados = normalizados.length;
+      const disponibles = Math.max(0, capacidad - ocupados);
+      const estado = disponibles === 0 ? "llena" : "activa";
+      const metadataCambio = Number(data.ocupados) !== ocupados
+        || Number(data.disponibles ?? data.disp) !== disponibles
+        || Number(data.capacidad || data.total || capacidad) !== capacidad
+        || String(data.estado || "") !== estado;
+
+      if (cambios || metadataCambio) {
+        await inv.ref.set({
+          clientes: normalizados,
+          ocupados,
+          disponibles,
+          disp: disponibles,
+          capacidad,
+          estado,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        }, { merge: true });
+        cuentasActualizadas++;
+      }
+    }
+
+    const lineas = [
+      "✅ Sincronización segura completada",
+      "",
+      `👤 Perfiles vigentes revisados: ${perfilesVigentes}`,
+      `🔗 Perfiles enlazados/corregidos: ${perfilesVinculados}`,
+      `➕ Perfiles agregados a su cuenta exacta: ${perfilesAgregados}`,
+      `🧹 Asignaciones antiguas depuradas: ${perfilesDepurados}`,
+      `📦 Cuentas actualizadas: ${cuentasActualizadas}`,
+      `⚠️ Cuentas exactas faltantes: ${cuentasSinInventario}`,
+      `🧬 Cuentas duplicadas (no tocadas): ${cuentasDuplicadas}`,
+      `📏 Conflictos de capacidad (no tocados): ${conflictosCapacidad}`,
+      `🗂 Filas legacy sin IDs conservadas: ${legacySinVerificar}`,
+    ];
+
+    const agregarMuestra = (titulo, arr) => {
+      if (!arr.length) return;
+      lineas.push("", titulo);
+      arr.slice(0, 10).forEach((x) => lineas.push(`• ${x}`));
+      if (arr.length > 10) lineas.push(`…y ${arr.length - 10} más.`);
+    };
+    agregarMuestra("🚫 Servicio CRM sin cuenta de inventario exacta:", avisosSinCuenta);
+    agregarMuestra("🔀 MISMO correo/usuario encontrado en OTRA plataforma (NO se mezcló):", avisosOtraPlataforma);
+    agregarMuestra("🧬 Duplicados de plataforma + acceso (requieren revisión):", avisosDuplicados);
+    agregarMuestra("📏 Capacidad excedida (no se modificó):", avisosCapacidad);
+
+    lineas.push("", "🛡️ Regla nueva: nunca se sincroniza por correo solo. Deben coincidir plataforma + correo/usuario exactos y el servicio debe estar vigente.");
+    return bot.sendMessage(chatId, lineas.join("\n"));
   } catch (error) {
     logErr("sincronizar_todo", error);
     return bot.sendMessage(chatId, "⚠️ Ocurrió un error al sincronizar. Revise los logs del servidor.");
