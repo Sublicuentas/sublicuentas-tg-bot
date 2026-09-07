@@ -1735,6 +1735,7 @@ async function eliminarServicioTx(clientId, idx, compraId = "") {
 
 async function renovarServicioTx(clientId, idx, { dias = 0, fechaExacta = "", compraId = "" } = {}) {
   const id = String(clientId || "").trim();
+  const renovadoAt = new Date();
   const resultado = await mutarServiciosClienteTx(id, ({ cliente, servicios }) => {
     const actualIdx = resolverIndiceCompraLocal(servicios, idx, compraId);
     if (actualIdx === -1) throw new Error("Servicio inválido.");
@@ -1744,7 +1745,7 @@ async function renovarServicioTx(clientId, idx, { dias = 0, fechaExacta = "", co
       ? String(fechaExacta || "").trim()
       : addDaysDMY(isFechaDMY(fechaAnterior) ? fechaAnterior : hoyDMY(), Number(dias || 0));
     if (!isFechaDMY(fechaNueva)) throw new Error("Fecha inválida.");
-    const siguiente = { ...anterior, fechaRenovacion: fechaNueva };
+    const siguiente = { ...anterior, fechaRenovacion: fechaNueva, ultimaRenovacionAt: renovadoAt };
     servicios[actualIdx] = siguiente;
     return { servicios, anterior, siguiente, actualIdx, fechaAnterior, fechaNueva, nombreTitular: cliente.nombrePerfil || "" };
   });
@@ -1769,13 +1770,20 @@ async function renovarServicioTx(clientId, idx, { dias = 0, fechaExacta = "", co
     plataforma: resultado.siguiente.plataforma || "",
     correo: resultado.siguiente.correo || "",
     fechaAnterior: resultado.fechaAnterior,
-    fechaRenovacion: resultado.fechaNueva
+    fechaRenovacion: resultado.fechaNueva,
+    meses: Math.max(1, Math.round(Number(dias || 30) / 30)),
+    vendedor: resultado.siguiente?.vendedor || resultado.cliente?.vendedor || "",
+    servicioIndex: resultado.actualIdx,
+    sorteoOk: sorteo?.ok !== false,
+    boletosCreados: Math.max(0, Number(sorteo?.creados) || 0),
+    origen: "Telegram"
   });
   return { ok: true, servicio: resultado.siguiente, servicioIndex: resultado.actualIdx, fechaAnterior: resultado.fechaAnterior, fechaNueva: resultado.fechaNueva, sorteo };
 }
 
 async function renovarTodosServiciosTx(clientId, { dias = 0, fechaExacta = "" } = {}) {
   const id = String(clientId || "").trim();
+  const renovadoAt = new Date();
   const resultado = await mutarServiciosClienteTx(id, ({ cliente, servicios }) => {
     if (!servicios.length) throw new Error("Este cliente no tiene servicios.");
     const cambios = [];
@@ -1790,29 +1798,43 @@ async function renovarTodosServiciosTx(clientId, { dias = 0, fechaExacta = "" } 
         fechaNueva,
         vendedor: vendedorEfectivoServicio(s, cliente).vendedor,
       });
-      return { ...(s || {}), fechaRenovacion: fechaNueva };
+      return { ...(s || {}), fechaRenovacion: fechaNueva, ultimaRenovacionAt: renovadoAt };
     });
     return { servicios: siguientes, total: siguientes.length, cambios, fechaExacta: String(fechaExacta || ""), nombreTitular: cliente.nombrePerfil || "" };
   });
   cacheInvalidatePrefix(`clientes:doc:${id}`);
 
-  // Sorteos: un boleto automático por cada servicio realmente renovado
+  // Sorteos: dos boletos estrictos por cada servicio realmente renovado
   // (fecha distinta a la anterior) dentro de esta renovación masiva.
   const sorteos = [];
+  const sorteoPorCompra = new Map();
   for (const cambio of resultado.cambios || []) {
     if (cambio.fechaNueva === cambio.fechaAnterior) continue;
-    sorteos.push(await registrarEventoSorteosSeguro({
+    const sorteo = await registrarEventoSorteosSeguro({
       tipo: "renovacion", clientId: id, compraId: cambio.compraId, fechaEvento: cambio.fechaNueva,
       eventoId: `renov:${cambio.compraId}:${cambio.fechaNueva}`,
       meses: Math.max(1, Math.round(Number(dias || 30) / 30)),
       clienteNombre: resultado.cliente?.nombrePerfil || resultado.cliente?.nombre || resultado.nombreTitular || "Cliente",
       telefono: resultado.cliente?.telefono || "", vendedor: cambio.vendedor || resultado.cliente?.vendedor || "", origen: "Telegram"
-    }));
+    });
+    sorteos.push(sorteo);
+    sorteoPorCompra.set(String(cambio.compraId || ""), sorteo);
   }
 
   await registrarEventoHistorial(id, {
     tipo: "servicios_renovados",
-    cambios: (resultado.cambios || []).map(item => ({ compraId: item.compraId, fechaAnterior: item.fechaAnterior, fechaRenovacion: item.fechaNueva, vendedor: item.vendedor })),
+    cambios: (resultado.cambios || []).map((item,index) => {
+      const sorteo = sorteoPorCompra.get(String(item.compraId || ""));
+      return {
+      compraId: item.compraId, servicioIndex: index, fechaAnterior: item.fechaAnterior,
+      fechaRenovacion: item.fechaNueva, vendedor: item.vendedor,
+      meses: Math.max(1, Math.round(Number(dias || 30) / 30)),
+      sorteoOk: sorteo?.ok !== false,
+      boletosCreados: Math.max(0, Number(sorteo?.creados) || 0)
+    };
+    }),
+    vendedor: resultado.cliente?.vendedor || "",
+    origen: "Telegram",
     descripcion: `Se renovaron ${resultado.total} servicio(s)${resultado.fechaExacta ? ` a ${resultado.fechaExacta}` : ` por ${Number(dias || 0)} días`}`
   });
   return { ok: true, total: resultado.total, servicios: resultado.servicios, sorteos };

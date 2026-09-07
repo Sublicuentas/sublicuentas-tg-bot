@@ -166,6 +166,31 @@ async function revActualizarFechaCliente({ clienteId, socioNorm, servicioIndex, 
       vendedor: vendedorEfectivoServicio(svc, c).vendedor || socioNorm || "", origen: "Panel de socios"
     })
     : { ok: true, creados: 0, omitido: "fecha_sin_cambio" };
+  const vendedor = vendedorEfectivoServicio(svc, c).vendedor || socioNorm || "";
+  if (fechaFinal !== fechaAnterior) {
+    try {
+      await db.collection("historial_clientes").add({
+        clientId: id,
+        tipo: "servicio_renovado",
+        compraId: compraEvento,
+        servicioIndex: ix,
+        descripcion: `Renovación confirmada desde Panel de Socios: ${fechaAnterior || "-"} → ${fechaFinal}`,
+        plataforma: svc.plataforma || svc.servicio || svc.nombre || "Servicio",
+        fechaAnterior,
+        fechaRenovacion: fechaFinal,
+        meses: Math.max(1, Number(meses) || 1),
+        vendedor,
+        procesadoPor: socioNorm || "panel_socios",
+        origen: "Panel de socios",
+        sorteoOk: sorteo?.ok !== false,
+        boletosCreados: Math.max(0, Number(sorteo?.creados) || 0),
+        fechaTS: admin.firestore.FieldValue.serverTimestamp(),
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    } catch (error) {
+      console.error("historial renovación panel", error?.message || error);
+    }
+  }
   return {
     actualizado: true,
     clienteId: id,
@@ -173,6 +198,8 @@ async function revActualizarFechaCliente({ clienteId, socioNorm, servicioIndex, 
     campo,
     fechaAnterior,
     nuevaFecha: fechaFinal,
+    compraId: compraEvento,
+    vendedor,
     servicio: svc.plataforma || svc.servicio || svc.nombre || svc.cuenta || "Servicio",
     sorteo,
   };
@@ -413,7 +440,17 @@ app.post("/rev/renovacion", revAuth, async (req, res) => {
       cliente: (cliente || "").toString().slice(0, 120),
       servicio: seleccion.length>1?`${seleccion.length} servicios`:(renovacionFecha?.servicio || seleccion[0]?.servicio || servicio || "").toString().slice(0, 120),
       servicioIndex: seleccion.length===1?seleccion[0].servicioIndex:null,
-      servicios: seleccion.map((x,i)=>({servicioIndex:x.servicioIndex,compraId:x.compraId||"",servicio:renovacionesFecha[i]?.servicio||x.servicio,nuevaFecha:renovacionesFecha[i]?.nuevaFecha||String(nuevaFecha||"")})),
+      servicios: seleccion.map((x,i)=>({
+        servicioIndex:x.servicioIndex,
+        compraId:renovacionesFecha[i]?.compraId||x.compraId||"",
+        servicio:renovacionesFecha[i]?.servicio||x.servicio,
+        vendedor:renovacionesFecha[i]?.vendedor||req.rev.nombre_norm||"",
+        fechaAnterior:renovacionesFecha[i]?.fechaAnterior||"",
+        nuevaFecha:renovacionesFecha[i]?.nuevaFecha||String(nuevaFecha||""),
+        meses:Math.max(1,Number(meses)||1),
+        sorteoOk:renovacionesFecha[i]?.sorteo?.ok!==false,
+        boletosCreados:Math.max(0,Number(renovacionesFecha[i]?.sorteo?.creados)||0)
+      })),
       comentario: com,
       quien: (quien || "").toString().slice(0, 120),
       monto: Number(monto) || 0,
@@ -428,6 +465,7 @@ app.post("/rev/renovacion", revAuth, async (req, res) => {
       nuevaFecha: renovacionFecha?.nuevaFecha || (nuevaFecha || "").toString().slice(0, 20),
       renovado: renovacionesFecha.length>0,
       renovadosCantidad: renovacionesFecha.length,
+      boletosCreados: renovacionesFecha.reduce((sum,item)=>sum+Math.max(0,Number(item?.sorteo?.creados)||0),0),
       createdAt: new Date(),
     };
     const ref = await db.collection("renovaciones").add(doc);
@@ -471,6 +509,7 @@ app.post("/rev/renovar-cliente", revAuth, async (req, res) => {
       cliente: (req.body.cliente || "").toString().slice(0, 120),
       servicio: r.servicio,
       servicioIndex: r.servicioIndex,
+      compraId: r.compraId || "",
       comentario: (req.body.comentario || "Renovación directa desde panel").toString().slice(0, 600),
       quien: (req.body.quien || "Panel socio").toString().slice(0, 120),
       monto: Number(req.body.monto) || 0,
@@ -480,6 +519,10 @@ app.post("/rev/renovar-cliente", revAuth, async (req, res) => {
       fechaAnterior: r.fechaAnterior || "",
       nuevaFecha: r.nuevaFecha || "",
       renovado: true,
+      renovadosCantidad: 1,
+      meses: Math.max(1, Number(req.body.meses) || 1),
+      sorteoOk: r.sorteo?.ok !== false,
+      boletosCreados: Math.max(0, Number(r.sorteo?.creados) || 0),
       createdAt: new Date(),
     });
     res.json({ ok: true, ...r });

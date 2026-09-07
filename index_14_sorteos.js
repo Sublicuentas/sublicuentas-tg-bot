@@ -6,7 +6,9 @@
 const { createHash } = require('crypto');
 const { admin, db } = require('./index_01_core');
 
-const DEFAULT_RULES=Object.freeze({compra:1,renovacion:2,bonoNivel:true,limitePorCliente:30});
+// Regla comercial única en Telegram y Sublichat. Los niveles reconocen
+// fidelidad, pero nunca emiten boletos adicionales.
+const DEFAULT_RULES=Object.freeze({compra:1,renovacion:2,bonoNivel:false,limitePorCliente:30});
 const NIVELES=Object.freeze([
   {id:'inicial',nombre:'Inicial',desde:0,bono:0},{id:'bronce',nombre:'Bronce',desde:1,bono:1},
   {id:'plata',nombre:'Plata',desde:2,bono:2},{id:'oro',nombre:'Oro',desde:3,bono:3},
@@ -35,8 +37,8 @@ const eventIdFor=(raw={},type='')=>{
 
 function rules(raw={}){
   return {
-    compra:integer(raw.compra,0,20,DEFAULT_RULES.compra),renovacion:integer(raw.renovacion,0,20,DEFAULT_RULES.renovacion),
-    bonoNivel:raw.bonoNivel!==false,
+    compra:1,renovacion:2,
+    bonoNivel:false,
     limitePorCliente:integer(raw.limitePorCliente,1,200,DEFAULT_RULES.limitePorCliente)
   };
 }
@@ -63,9 +65,9 @@ function scopeAllows(scope,vendor){
   return target==='ambos'?['sublicuentas','relojes'].includes(group):target===group;
 }
 function categoryAllows(category,eventType){
-  const target=norm(category||'general');
-  if(['oro','nivel'].includes(eventType))return target==='oro'||target==='general';
+  const raw=norm(category||'general'),target=raw==='oro'?'club_vip':raw;
   if(target==='general')return ['compra','renovacion'].includes(eventType);
+  if(target==='club_vip')return ['compra','renovacion'].includes(eventType);
   return target===eventType||(target==='compras'&&eventType==='compra')||(target==='renovaciones'&&eventType==='renovacion');
 }
 
@@ -92,7 +94,7 @@ async function updateLoyalty(event){
 
 async function currentTicketCount(drawId,clientId){
   const snap=await db.collection('sorteo_boletos').where('clientId','==',clientId).get();
-  return snap.docs.reduce((sum,doc)=>sum+(String((doc.data()||{}).sorteoId)===drawId?1:0),0);
+  return snap.docs.reduce((sum,doc)=>{const ticket=doc.data()||{};return sum+(String(ticket.sorteoId)===drawId&&ticket.activo!==false?1:0);},0);
 }
 
 async function createEventTickets(draw,event,quantity){
@@ -109,7 +111,7 @@ async function createEventTickets(draw,event,quantity){
     const counted=counterSnap.exists?Math.max(0,Number((counterSnap.data()||{}).total)||0):existing;
     const total=Math.min(Math.max(0,Number(quantity)||0),Math.max(0,drawRules.limitePorCliente-counted));
     if(!total){
-      transaction.set(eventRef,{sorteoId:drawId,clientId,tipo:event.tipo,eventoId:eventId,cantidad:0,limitado:true,createdAt:admin.firestore.FieldValue.serverTimestamp()});
+      transaction.set(eventRef,{sorteoId:drawId,clientId,tipo:event.tipo,eventoId:eventId,vendedor:event.vendedor,vendedorNorm:event.vendedorNorm,origen:event.origen,cantidad:0,limitado:true,createdAt:admin.firestore.FieldValue.serverTimestamp()});
       transaction.set(counterRef,{sorteoId:drawId,clientId,total:counted,updatedAt:admin.firestore.FieldValue.serverTimestamp()},{merge:true});
       return {creados:0,limite:true};
     }
@@ -122,7 +124,7 @@ async function createEventTickets(draw,event,quantity){
         eventoId:eventId,activo:true,createdAt:admin.firestore.FieldValue.serverTimestamp()
       });codes.push(code);
     }
-    transaction.set(eventRef,{sorteoId:drawId,clientId,tipo:event.tipo,eventoId:eventId,cantidad:total,codigos:codes,createdAt:admin.firestore.FieldValue.serverTimestamp()});
+    transaction.set(eventRef,{sorteoId:drawId,clientId,tipo:event.tipo,eventoId:eventId,vendedor:event.vendedor,vendedorNorm:event.vendedorNorm,origen:event.origen,cantidad:total,codigos:codes,createdAt:admin.firestore.FieldValue.serverTimestamp()});
     transaction.set(counterRef,{sorteoId:drawId,clientId,total:counted+total,updatedAt:admin.firestore.FieldValue.serverTimestamp()},{merge:true});
     transaction.set(drawRef,{ultimoNumero:start+total-1,totalBoletos:admin.firestore.FieldValue.increment(total),updatedAt:admin.firestore.FieldValue.serverTimestamp()},{merge:true});
     return {creados:total,codigos:codes,duplicado:false};
@@ -147,8 +149,9 @@ async function registrarEventoSorteos(rawEvent={}){
   const results=[];
   for(const draw of draws){
     const drawRules=rules(draw.reglas||{});
+    const category=norm(draw.categoria)==='oro'?'club_vip':norm(draw.categoria);
+    if(category==='club_vip'&&!['oro','diamante','elite'].includes(loyalty.nivel))continue;
     if(categoryAllows(draw.categoria,type))results.push({sorteoId:draw.id,tipo:type,...await createEventTickets(draw,event,type==='compra'?drawRules.compra:drawRules.renovacion)});
-    if(drawRules.bonoNivel&&loyalty.bono>0&&categoryAllows(draw.categoria,'nivel'))results.push({sorteoId:draw.id,tipo:'nivel',...await createEventTickets(draw,{...event,tipo:'nivel',eventoId:`nivel:${event.eventoId}:${loyalty.nivel}`,origen:`Bono nivel ${loyalty.nivelNombre}`},loyalty.bono)});
   }
   return {ok:true,creados:results.reduce((sum,item)=>sum+Number(item.creados||0),0),fidelidad:loyalty,resultados:results};
 }
