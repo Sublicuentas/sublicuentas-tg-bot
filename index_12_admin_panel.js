@@ -89,17 +89,86 @@ async function guardarImagenPromo(dataUrl, id) {
   throw Object.assign(lastError||new Error("storage_error"), { status:502, publicError:"No se pudo subir la imagen de la promoción. Revise Storage y vuelva a intentar." });
 }
 
+function formatMoney(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return "";
+  return `L ${n.toLocaleString("es-HN", { maximumFractionDigits: 0 })}`;
+}
+
+function formatPromoDate(v) {
+  if (!v) return "";
+  const d = new Date(v);
+  if (Number.isNaN(d.getTime())) return html(v);
+  return html(d.toLocaleString("es-HN", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }));
+}
+
+function splitPromoText(v) {
+  const raw = clean(v, 1600).replace(/\r/g, "\n");
+  if (!raw) return [];
+  const byLine = raw
+    .split(/\n+/)
+    .map((line) => line.replace(/^[-•*\s]+/, "").trim())
+    .filter(Boolean);
+  if (byLine.length > 1) return byLine.slice(0, 6);
+  const compact = raw.replace(/\s+/g, " ").trim();
+  return compact
+    .split(/(?:\.\s+|!\s+|\?\s+|;\s+)/)
+    .map((line) => line.replace(/^[-•*\s]+/, "").trim())
+    .filter(Boolean)
+    .slice(0, 6);
+}
+
+function fitCaption(lines, limit = 1024) {
+  const normalize = (arr) => arr.filter((line, idx, src) => line || (idx && src[idx - 1])).join("\n").trim();
+  let trimmed = [...lines];
+  let joined = normalize(trimmed);
+  while (joined.length > limit && trimmed.length > 8) {
+    trimmed.splice(trimmed.length - 2, 1);
+    joined = normalize(trimmed);
+  }
+  if (joined.length <= limit) return joined;
+  joined = joined.slice(0, Math.max(0, limit - 1)).trimEnd();
+  if (!joined.endsWith("…")) joined += "…";
+  return joined;
+}
+
 function captionPromo(p) {
-  const lines=[`🔥 <b>${html(p.titulo || "PROMOCIÓN PARA SOCIOS")}</b>`];
-  if(p.plataforma)lines.push(`📺 <b>${html(p.plataforma)}</b>`);
-  if(p.precioNormal)lines.push(`<s>Precio normal: L ${Number(p.precioNormal).toFixed(0)}</s>`);
-  if(p.precioPromo)lines.push(`💰 <b>Precio socio: L ${Number(p.precioPromo).toFixed(0)}</b>`);
-  if(p.precioSugerido)lines.push(`📈 Venta sugerida: L ${Number(p.precioSugerido).toFixed(0)} · Ganancia L ${Math.max(0,Number(p.precioSugerido)-Number(p.precioPromo)).toFixed(0)}`);
-  if(p.cupos)lines.push(`📦 ${Number(p.cupos)} cupos disponibles`);
-  if(p.vigencia)lines.push(`⏳ Vigente hasta: ${html(p.vigencia)}`);
-  if(p.texto)lines.push("",html(p.texto));
-  lines.push("","Solicite la promoción desde su Panel de Socios.");
-  return lines.join("\n").slice(0,1024);
+  const titulo = html(p.titulo || "PROMOCIÓN PARA SOCIOS");
+  const plataforma = html(p.plataforma || "");
+  const profit = Math.max(0, Number(p.precioSugerido || 0) - Number(p.precioPromo || 0));
+  const bullets = splitPromoText(p.texto);
+  const lines = [
+    `🔥 <b>${titulo}</b>`,
+    plataforma ? `🎯 <b>Plataforma:</b> ${plataforma}` : "",
+    "",
+    `<b>💎 Datos de la oferta</b>`,
+    p.precioNormal ? `• <b>Precio normal:</b> <s>${formatMoney(p.precioNormal)}</s>` : "",
+    p.precioPromo ? `• <b>Precio socio:</b> ${formatMoney(p.precioPromo)}` : "",
+    p.precioSugerido ? `• <b>Venta sugerida:</b> ${formatMoney(p.precioSugerido)}` : "",
+    p.precioSugerido ? `• <b>Ganancia estimada:</b> ${formatMoney(profit)}` : "",
+    p.cupos ? `• <b>Cupos disponibles:</b> ${Number(p.cupos)}` : "",
+    p.vigencia ? `• <b>Vigencia:</b> ${formatPromoDate(p.vigencia)}` : "",
+  ].filter(Boolean);
+
+  if (bullets.length) {
+    lines.push("", `<b>✨ Detalles</b>`);
+    bullets.forEach((line) => lines.push(`• ${html(line)}`));
+  }
+
+  lines.push(
+    "",
+    `<b>📲 Cómo solicitar</b>`,
+    `• Compártala por WhatsApp o desde su Panel de Socios.`,
+    `• Disponible también dentro de su Panel de Socios.`
+  );
+
+  return fitCaption(lines, 1024);
 }
 
 
