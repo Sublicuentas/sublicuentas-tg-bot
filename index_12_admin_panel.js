@@ -67,13 +67,26 @@ async function guardarImagenPromo(dataUrl, id) {
   if (!match) return "";
   const buffer = Buffer.from(match[2], "base64");
   if (!buffer.length || buffer.length > 3500000) throw Object.assign(new Error("imagen_muy_pesada"), { status:400, publicError:"La imagen debe pesar menos de 3.5 MB." });
-  const bucketName = clean(process.env.STORAGE_BUCKET || process.env.FIREBASE_STORAGE_BUCKET || (process.env.FIREBASE_PROJECT_ID ? `${process.env.FIREBASE_PROJECT_ID}.appspot.com` : ""), 200);
-  if (!bucketName) throw Object.assign(new Error("storage_no_configurado"), { status:500, publicError:"Falta configurar STORAGE_BUCKET para subir imágenes." });
+  const projectId=clean(process.env.FIREBASE_PROJECT_ID,160);
+  const bucketCandidates=[...new Set([
+    process.env.STORAGE_BUCKET,
+    process.env.FIREBASE_STORAGE_BUCKET,
+    process.env.GCLOUD_STORAGE_BUCKET,
+    projectId?`${projectId}.appspot.com`:"",
+    projectId?`${projectId}.firebasestorage.app`:"",
+  ].map(v=>clean(v,200)).filter(Boolean))];
+  if (!bucketCandidates.length) throw Object.assign(new Error("storage_no_configurado"), { status:500, publicError:"Falta configurar STORAGE_BUCKET para subir imágenes." });
   const ext = match[1].toLowerCase().includes("png") ? "png" : match[1].toLowerCase().includes("webp") ? "webp" : "jpg";
-  const file = admin.storage().bucket(bucketName).file(`promociones-socios/${id}.${ext}`);
-  await file.save(buffer, { resumable:false, metadata:{ contentType:match[1], cacheControl:"public,max-age=31536000" } });
-  const [url] = await file.getSignedUrl({ action:"read", expires:"2035-12-31" });
-  return url;
+  let lastError=null;
+  for(const bucketName of bucketCandidates){
+    try{
+      const file = admin.storage().bucket(bucketName).file(`promociones-socios/${id}.${ext}`);
+      await file.save(buffer, { resumable:false, metadata:{ contentType:match[1], cacheControl:"public,max-age=31536000" } });
+      const [url] = await file.getSignedUrl({ action:"read", expires:"2035-12-31" });
+      return url;
+    }catch(e){lastError=e;console.error("guardarImagenPromo bucket fail",bucketName,e.message)}
+  }
+  throw Object.assign(lastError||new Error("storage_error"), { status:502, publicError:"No se pudo subir la imagen de la promoción. Revise Storage y vuelva a intentar." });
 }
 
 function captionPromo(p) {
@@ -136,16 +149,38 @@ module.exports = function mountAdminPanel(app) {
     const p={id:snap.id,...(snap.data()||{})},selected=new Set(Array.isArray(p.destinatarios)?p.destinatarios.map(normNombre):[]);
     const revSnap=await db.collection(REVENDEDORES_COLLECTION).get();
     const targets=revSnap.docs.map(d=>({id:d.id,...(d.data()||{})})).filter(r=>r.activo!==false&&(!selected.size||selected.has(normNombre(r.nombre_norm||r.nombre||r.id))));
-    let enviados=0,fallidos=0,sinTelegram=[];const caption=captionPromo(p);
-    for(const r of targets){
+    let enviados=0,fallidos=0,fallbackTexto=0;const sinTelegram=[];const caption=captionPromo(p);
+
+    // Telegram se procesa en lotes pequeños. El envío anterior era totalmente
+    // secuencial y podía tardar lo suficiente para que el proxy de Sublichat
+    // venciera aunque la promoción sí se hubiera guardado.
+    const enviarUno=async(r)=>{
       const chatId=String(r.telegramId||"").replace(/[^0-9-]/g,"");
-      if(!chatId){sinTelegram.push(r.nombre||r.nombre_norm||r.id);fallidos+=1;continue;}
-      try{if(p.imagenUrl)await bot.sendPhoto(chatId,p.imagenUrl,{caption,parse_mode:"HTML"});else await bot.sendMessage(chatId,caption,{parse_mode:"HTML"});enviados+=1;}
-      catch(_){fallidos+=1;}
+      if(!chatId){sinTelegram.push(r.nombre||r.nombre_norm||r.id);return {ok:false};}
+      if(p.imagenUrl){
+        try{await bot.sendPhoto(chatId,p.imagenUrl,{caption,parse_mode:"HTML"});return {ok:true};}
+        catch(photoError){
+          // Si Telegram no puede descargar la URL firmada de la imagen, no se
+          // pierde la campaña: se reintenta inmediatamente como mensaje de texto.
+          try{await bot.sendMessage(chatId,caption,{parse_mode:"HTML"});return {ok:true,fallback:true};}
+          catch(textError){console.error("promo telegram fail",r.id,photoError.message,textError.message);return {ok:false};}
+        }
+      }
+      try{await bot.sendMessage(chatId,caption,{parse_mode:"HTML"});return {ok:true};}
+      catch(e){console.error("promo telegram fail",r.id,e.message);return {ok:false};}
+    };
+
+    for(let i=0;i<targets.length;i+=5){
+      const resultados=await Promise.all(targets.slice(i,i+5).map(enviarUno));
+      for(const r of resultados){if(r.ok){enviados+=1;if(r.fallback)fallbackTexto+=1}else fallidos+=1;}
     }
-    await ref.set({estado:"publicada",enviados,fallidos,sinTelegram,sentAt:admin.firestore.FieldValue.serverTimestamp(),updatedAt:admin.firestore.FieldValue.serverTimestamp()},{merge:true});
-    await db.collection("avisos").add({texto:`${p.titulo}\n${p.plataforma} · L ${Number(p.precioPromo)||0}\n${p.texto||""}`.trim(),autor:"Sublicuentas",tipo:"promocion_socios",promocionId:ref.id,imagenUrl:p.imagenUrl||"",destinatarios:p.destinatarios||[],activo:true,createdAt:admin.firestore.FieldValue.serverTimestamp()});
-    ok(res,{id:ref.id,enviados,fallidos,sinTelegram});
+
+    await ref.set({estado:"publicada",enviados,fallidos,sinTelegram,fallbackTexto,sentAt:admin.firestore.FieldValue.serverTimestamp(),updatedAt:admin.firestore.FieldValue.serverTimestamp()},{merge:true});
+    let avisoGuardado=true;
+    try{
+      await db.collection("avisos").add({texto:`${p.titulo}\n${p.plataforma} · L ${Number(p.precioPromo)||0}\n${p.texto||""}`.trim(),autor:"Sublicuentas",tipo:"promocion_socios",promocionId:ref.id,imagenUrl:p.imagenUrl||"",destinatarios:p.destinatarios||[],activo:true,createdAt:admin.firestore.FieldValue.serverTimestamp()});
+    }catch(e){avisoGuardado=false;console.error("promo aviso fail",ref.id,e.message)}
+    ok(res,{id:ref.id,enviados,fallidos,sinTelegram,fallbackTexto,avisoGuardado});
   }));
   /* ═══════════════ PRECIOS ═══════════════
      ⚠️ CORRECCIÓN (ago-2026): la primera versión de esto asumía que los
