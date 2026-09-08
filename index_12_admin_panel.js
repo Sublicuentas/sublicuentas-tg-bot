@@ -60,7 +60,7 @@ function html(v) { return clean(v, 1000).replace(/&/g, "&amp;").replace(/</g, "&
 function promoPublica(doc) {
   const p = doc.data ? doc.data() || {} : doc || {};
   const ts = (v) => v?.toDate ? v.toDate().toISOString() : clean(v, 50);
-  return { id: doc.id || p.id || "", titulo:clean(p.titulo,120), plataforma:clean(p.plataforma,100), precioNormal:Number(p.precioNormal)||0, precioPromo:Number(p.precioPromo)||0, precioSugerido:Number(p.precioSugerido)||0, cupos:Math.max(0,Number(p.cupos)||0), vigencia:clean(p.vigencia,50), texto:clean(p.texto,1200), imagenUrl:clean(p.imagenUrl,1500), estado:clean(p.estado,30)||"borrador", destinatarios:Array.isArray(p.destinatarios)?p.destinatarios:[], enviados:Number(p.enviados)||0, fallidos:Number(p.fallidos)||0, createdAt:ts(p.createdAt), sentAt:ts(p.sentAt) };
+  return { id: doc.id || p.id || "", titulo:clean(p.titulo,120), plataforma:clean(p.plataforma,100), precioNormal:Number(p.precioNormal)||0, precioPromo:Number(p.precioPromo)||0, precioSugerido:Number(p.precioSugerido)||0, cupos:Math.max(0,Number(p.cupos)||0), vigencia:clean(p.vigencia,50), texto:clean(p.texto,1200), imagenUrl:clean(p.imagenUrl,1500), estado:clean(p.estado,30)||"borrador", destinatarios:Array.isArray(p.destinatarios)?p.destinatarios:[], enviados:Number(p.enviados)||0, fallidos:Number(p.fallidos)||0, erroresTelegram:Array.isArray(p.erroresTelegram)?p.erroresTelegram:[], createdAt:ts(p.createdAt), sentAt:ts(p.sentAt) };
 }
 async function guardarImagenPromo(dataUrl, id) {
   const match = String(dataUrl || "").match(/^data:((?:image\/jpeg|image\/png|image\/webp));base64,([A-Za-z0-9+/=]+)$/i);
@@ -100,6 +100,20 @@ function captionPromo(p) {
   if(p.texto)lines.push("",html(p.texto));
   lines.push("","Solicite la promoción desde su Panel de Socios.");
   return lines.join("\n").slice(0,1024);
+}
+
+
+function telegramErrorInfo(e) {
+  const body = e?.response?.body || e?.response?.data || {};
+  const codigo = Number(body?.error_code || e?.response?.statusCode || e?.statusCode || 0) || 0;
+  const motivo = clean(body?.description || e?.message || "Error desconocido de Telegram", 400);
+  let diagnostico = "Telegram rechazó el envío.";
+  const m = motivo.toLowerCase();
+  if (m.includes("chat not found")) diagnostico = "ID incorrecto o esa persona todavía no inició conversación con ESTE bot. Pídale enviar /id al bot y compare el número.";
+  else if (m.includes("bot was blocked") || m.includes("blocked by the user")) diagnostico = "La persona bloqueó el bot. Debe desbloquearlo y enviar /start.";
+  else if (m.includes("user is deactivated")) diagnostico = "La cuenta de Telegram está desactivada.";
+  else if (m.includes("forbidden")) diagnostico = "Telegram no permite que el bot escriba a ese usuario. Revise bloqueo/inicio del bot.";
+  return { codigo, motivo, diagnostico };
 }
 
 function tarifaPrecios(req) {
@@ -149,25 +163,35 @@ module.exports = function mountAdminPanel(app) {
     const p={id:snap.id,...(snap.data()||{})},selected=new Set(Array.isArray(p.destinatarios)?p.destinatarios.map(normNombre):[]);
     const revSnap=await db.collection(REVENDEDORES_COLLECTION).get();
     const targets=revSnap.docs.map(d=>({id:d.id,...(d.data()||{})})).filter(r=>r.activo!==false&&(!selected.size||selected.has(normNombre(r.nombre_norm||r.nombre||r.id))));
-    let enviados=0,fallidos=0,fallbackTexto=0;const sinTelegram=[];const caption=captionPromo(p);
+    let enviados=0,fallidos=0,fallbackTexto=0;const sinTelegram=[],erroresTelegram=[];const caption=captionPromo(p);
 
     // Telegram se procesa en lotes pequeños. El envío anterior era totalmente
     // secuencial y podía tardar lo suficiente para que el proxy de Sublichat
     // venciera aunque la promoción sí se hubiera guardado.
     const enviarUno=async(r)=>{
       const chatId=String(r.telegramId||"").replace(/[^0-9-]/g,"");
-      if(!chatId){sinTelegram.push(r.nombre||r.nombre_norm||r.id);return {ok:false};}
+      const nombre=r.nombre||r.nombre_norm||r.id;
+      if(!chatId){sinTelegram.push(nombre);erroresTelegram.push({nombre,telegramId:"",codigo:0,motivo:"Sin Telegram ID",diagnostico:"Agregue el ID de Telegram en la ficha del vendedor."});return {ok:false};}
       if(p.imagenUrl){
         try{await bot.sendPhoto(chatId,p.imagenUrl,{caption,parse_mode:"HTML"});return {ok:true};}
         catch(photoError){
-          // Si Telegram no puede descargar la URL firmada de la imagen, no se
-          // pierde la campaña: se reintenta inmediatamente como mensaje de texto.
+          // Si solo falla la descarga de la imagen, reintentamos como texto.
           try{await bot.sendMessage(chatId,caption,{parse_mode:"HTML"});return {ok:true,fallback:true};}
-          catch(textError){console.error("promo telegram fail",r.id,photoError.message,textError.message);return {ok:false};}
+          catch(textError){
+            const info=telegramErrorInfo(textError);
+            erroresTelegram.push({nombre,telegramId:chatId,...info});
+            console.error("promo telegram fail",r.id,JSON.stringify(info));
+            return {ok:false,error:info};
+          }
         }
       }
       try{await bot.sendMessage(chatId,caption,{parse_mode:"HTML"});return {ok:true};}
-      catch(e){console.error("promo telegram fail",r.id,e.message);return {ok:false};}
+      catch(e){
+        const info=telegramErrorInfo(e);
+        erroresTelegram.push({nombre,telegramId:chatId,...info});
+        console.error("promo telegram fail",r.id,JSON.stringify(info));
+        return {ok:false,error:info};
+      }
     };
 
     for(let i=0;i<targets.length;i+=5){
@@ -175,12 +199,12 @@ module.exports = function mountAdminPanel(app) {
       for(const r of resultados){if(r.ok){enviados+=1;if(r.fallback)fallbackTexto+=1}else fallidos+=1;}
     }
 
-    await ref.set({estado:"publicada",enviados,fallidos,sinTelegram,fallbackTexto,sentAt:admin.firestore.FieldValue.serverTimestamp(),updatedAt:admin.firestore.FieldValue.serverTimestamp()},{merge:true});
+    await ref.set({estado:"publicada",enviados,fallidos,sinTelegram,fallbackTexto,erroresTelegram,sentAt:admin.firestore.FieldValue.serverTimestamp(),updatedAt:admin.firestore.FieldValue.serverTimestamp()},{merge:true});
     let avisoGuardado=true;
     try{
       await db.collection("avisos").add({texto:`${p.titulo}\n${p.plataforma} · L ${Number(p.precioPromo)||0}\n${p.texto||""}`.trim(),autor:"Sublicuentas",tipo:"promocion_socios",promocionId:ref.id,imagenUrl:p.imagenUrl||"",destinatarios:p.destinatarios||[],activo:true,createdAt:admin.firestore.FieldValue.serverTimestamp()});
     }catch(e){avisoGuardado=false;console.error("promo aviso fail",ref.id,e.message)}
-    ok(res,{id:ref.id,enviados,fallidos,sinTelegram,fallbackTexto,avisoGuardado});
+    ok(res,{id:ref.id,enviados,fallidos,sinTelegram,fallbackTexto,erroresTelegram,avisoGuardado});
   }));
   /* ═══════════════ PRECIOS ═══════════════
      ⚠️ CORRECCIÓN (ago-2026): la primera versión de esto asumía que los
@@ -474,6 +498,24 @@ module.exports = function mountAdminPanel(app) {
     await ref.update(patch);
     const actualizado = await ref.get();
     ok(res, { id: ref.id, ...actualizado.data() });
+  }));
+
+  app.post("/rev/admin/revendedores/:id/testtelegram", revAdminAuth, wrap(async (req, res) => {
+    const ref = db.collection(REVENDEDORES_COLLECTION).doc(req.params.id);
+    const snap = await ref.get();
+    if (!snap.exists) return fail(res, 404, "no_existe");
+    const r = snap.data() || {};
+    const nombre = clean(r.nombre || r.nombre_norm || ref.id, 120);
+    const chatId = String(r.telegramId || "").trim().replace(/[^0-9-]/g, "");
+    if (!chatId) return res.status(400).json({ ok:false, error:"Este vendedor no tiene Telegram ID.", diagnostico:"Edite la ficha y agregue el ID que devuelve /id en el bot." });
+    try {
+      const chat = await bot.getChat(chatId);
+      await bot.sendMessage(chatId, `✅ Prueba Sublicuentas\nHola ${nombre}. Su Telegram está correctamente vinculado para recibir avisos y promociones.`);
+      return ok(res,{nombre,telegramId:chatId,telegramNombre:[chat?.first_name,chat?.last_name].filter(Boolean).join(" "),username:chat?.username||"",diagnostico:"Conexión correcta. Este usuario puede recibir mensajes del bot."});
+    } catch (e) {
+      const info = telegramErrorInfo(e);
+      return res.status(422).json({ ok:false,error:info.motivo,nombre,telegramId:chatId,...info });
+    }
   }));
 
   app.post("/rev/admin/revendedores/:id/resetpin", revAdminAuth, wrap(async (req, res) => {
