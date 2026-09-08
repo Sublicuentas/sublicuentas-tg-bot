@@ -6974,11 +6974,27 @@ function construirMensajeRecordatorio(row) {
   return `${saludo}\n\n${cuerpo}\n\n💰 Monto: *L. ${precio}*\n\n${cierre}`;
 }
 
+// WhatsApp Business (Android): los enlaces https://wa.me no permiten elegir
+// de forma fiable entre WhatsApp normal y WhatsApp Business. Para este bot
+// usamos un puente HTTPS propio que abre explícitamente el paquete Android
+// com.whatsapp.w4b. Así los recordatorios de Sublicuentas van al Business.
+//
+// En Render puede sobreescribirse con WA_BUSINESS_BRIDGE_BASE_URL si cambia
+// el dominio público de la API. RENDER_EXTERNAL_URL se usa automáticamente
+// cuando está disponible.
+const WA_BUSINESS_BRIDGE_BASE_URL = String(
+  process.env.WA_BUSINESS_BRIDGE_BASE_URL ||
+  process.env.RENDER_EXTERNAL_URL ||
+  process.env.PUBLIC_BASE_URL ||
+  "https://sublicuentas-panel-api.onrender.com"
+).trim().replace(/\/+$/, "");
+
 function linkWhatsAppRecordatorio(row) {
   const tel = telefonoWhatsApp(row.telefono || "");
   if (!tel) return "";
   const texto = construirMensajeRecordatorio(row);
-  return `https://wa.me/${tel}?text=${encodeURIComponent(texto)}`;
+  const qs = new URLSearchParams({ phone: tel, text: texto });
+  return `${WA_BUSINESS_BRIDGE_BASE_URL}/wa-business?${qs.toString()}`;
 }
 
 // Estado en memoria del flujo "uno a la vez" por chat+fecha. Mismo patrón
@@ -7031,7 +7047,7 @@ function tarjetaRecordatorio(dmy, estado) {
     `📱 ${escMD(row.telefono || "-")} · vence *hoy*\n\n` +
     "💬 Mensaje que se va a mandar:\n```\n" + construirMensajeRecordatorio(row) + "\n```";
   const kb = [];
-  if (link) kb.push([{ text: "🟢 Abrir WhatsApp y enviar", url: link }]);
+  if (link) kb.push([{ text: "🟢 Abrir WhatsApp Business y enviar", url: link }]);
   kb.push([
     { text: "✅ Ya lo envié → siguiente", callback_data: `rec:next:${dmy}:e` },
     { text: "⏭️ Omitir, siguiente", callback_data: `rec:next:${dmy}:o` },

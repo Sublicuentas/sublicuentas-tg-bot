@@ -117,6 +117,62 @@ app.use(express.json({ limit: "1mb" }));
 app.get("/health", (_req, res) => res.json(getCoreHealth ? getCoreHealth() : { ok: true }));
 app.get("/", (_req, res) => res.send("Sublicuentas API OK"));
 
+// 📲 Puente público para abrir EXCLUSIVAMENTE WhatsApp Business en Android.
+// Telegram solo acepta de forma fiable botones https://; una URL wa.me puede
+// terminar en WhatsApp normal. Este endpoint recibe el clic HTTPS y lanza un
+// Android Intent dirigido al paquete oficial de WhatsApp Business:
+// com.whatsapp.w4b. Si Business no está instalado, abre su ficha de Play Store
+// y nunca hace fallback a WhatsApp normal.
+app.get("/wa-business", (req, res) => {
+  const phone = String(req.query.phone || "").replace(/\D+/g, "").slice(0, 20);
+  const text = String(req.query.text || "").slice(0, 4000);
+  if (!phone) return res.status(400).type("text/plain").send("Falta número de WhatsApp.");
+
+  const query = `phone=${encodeURIComponent(phone)}&text=${encodeURIComponent(text)}`;
+  const playStore = "https://play.google.com/store/apps/details?id=com.whatsapp.w4b";
+  const intentUrl = `intent://send?${query}#Intent;scheme=whatsapp;package=com.whatsapp.w4b;S.browser_fallback_url=${encodeURIComponent(playStore)};end`;
+
+  // JSON.stringify evita romper el script aunque el mensaje lleve comillas,
+  // saltos de línea, emojis u otros caracteres especiales.
+  const intentJs = JSON.stringify(intentUrl);
+  const phoneHtml = phone.replace(/[&<>"']/g, "");
+  res.set("Cache-Control", "no-store, max-age=0");
+  res.type("html").send(`<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<title>Abrir WhatsApp Business</title>
+<style>
+  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;margin:0;background:#f5f7f8;color:#102a43;display:grid;min-height:100vh;place-items:center;padding:22px;box-sizing:border-box}
+  .card{max-width:520px;width:100%;background:#fff;border:1px solid #d9e2ec;border-radius:22px;padding:24px;box-sizing:border-box;box-shadow:0 16px 45px rgba(16,42,67,.12);text-align:center}
+  h1{font-size:22px;margin:0 0 8px} p{line-height:1.45;margin:8px 0 18px;color:#486581}
+  a{display:block;text-decoration:none;background:#25D366;color:#072b17;font-weight:800;padding:15px 18px;border-radius:14px}
+  small{display:block;margin-top:14px;color:#829ab1}
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>WhatsApp Business</h1>
+    <p>Abriendo el chat de <strong>${phoneHtml}</strong> exclusivamente en WhatsApp Business.</p>
+    <a id="open-business" href="#">Abrir WhatsApp Business</a>
+    <small>Si no se abre automáticamente, toque el botón.</small>
+  </div>
+<script>
+(function(){
+  var target = ${intentJs};
+  var btn = document.getElementById('open-business');
+  function abrir(){ window.location.href = target; }
+  btn.addEventListener('click', function(e){ e.preventDefault(); abrir(); });
+  // El clic original vino del botón de Telegram; intentamos abrir de inmediato.
+  // Si el navegador interno bloquea el salto automático, queda el botón manual.
+  setTimeout(abrir, 120);
+})();
+</script>
+</body>
+</html>`);
+});
+
 // 🔒 Candado SOLO ADMIN — aplica a todo lo que empiece con /api
 app.use("/api", async (req, res, next) => {
   try {
