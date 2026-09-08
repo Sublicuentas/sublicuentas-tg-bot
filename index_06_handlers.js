@@ -18,6 +18,7 @@ const {
   bot,
   admin,
   db,
+  ExcelJS,
   TZ,
   PLATAFORMAS,
   FINANZAS_COLLECTION,
@@ -318,6 +319,253 @@ function normalizeIdentByPlatformLocal(plataforma = "", ident = "") {
     return v;
   }
   return v.toLowerCase();
+}
+
+
+// ==========================================================
+// CONTROL MAESTRO · SINCRONIZACIÓN AUTOMÁTICA DESDE TELEGRAM
+// ==========================================================
+// Cuando se quita un cliente desde la cuenta de Bodega en Telegram, también
+// se limpia su fila del Excel privado que usa Control Maestro. Se conserva el
+// correo/usuario y la clave de la cuenta; solo se borran las columnas del
+// cliente, exactamente igual que la acción manual "Borrar del Excel".
+const CM_AUTO_ARCHIVOS = "control_maestro_archivos";
+const CM_AUTO_CONFIG = "control_maestro_config";
+const CM_AUTO_CONFIG_DOC = "principal";
+const CM_AUTO_CHUNK_SIZE = 450000;
+let cmAutoSyncChain = Promise.resolve();
+
+function cmAutoNorm(value = "") {
+  return String(value ?? "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9@.+\s_-]/g, " ").replace(/\s+/g, " ").trim();
+}
+function cmAutoPerson(value = "") {
+  return cmAutoNorm(value).replace(/^(?:(?:perfil|cliente|titular|usuario)\s+)+/, "").trim();
+}
+function cmAutoCellText(value) {
+  if (value == null) return "";
+  if (value instanceof Date) return value.toISOString();
+  if (typeof value === "object") {
+    if (value.result != null) return cmAutoCellText(value.result);
+    if (value.text != null) return String(value.text);
+    if (Array.isArray(value.richText)) return value.richText.map((part) => String(part?.text || "")).join("");
+    if (value.hyperlink && value.text) return String(value.text);
+  }
+  return String(value).trim();
+}
+function cmAutoHeaderKey(value) {
+  return cmAutoNorm(cmAutoCellText(value)).replace(/[^a-z0-9]/g, "").toUpperCase();
+}
+function cmAutoFirstCol(map, names) {
+  for (const name of names) if (map[name]?.length) return map[name][0];
+  return 0;
+}
+function cmAutoFindHeader(ws) {
+  let best = null;
+  const max = Math.min(Math.max(ws.actualRowCount || ws.rowCount || 20, 20), 80);
+  for (let r = 1; r <= max; r += 1) {
+    const map = {};
+    ws.getRow(r).eachCell({ includeEmpty: false }, (cell, col) => {
+      const key = cmAutoHeaderKey(cell.value);
+      if (key) (map[key] || (map[key] = [])).push(col);
+    });
+    const has = (names) => names.some((name) => map[name]?.length);
+    const score =
+      (has(["NOMBRE","CLIENTE","NOMBRECLIENTE","NOMBREDELCLIENTE","CLIENTENOMBRE"]) ? 3 : 0) +
+      (has(["CELULAR","TELEFONO","TELEFONOCLIENTE","TELEFONOWHATSAPP","WHATSAPP","NUMERO","NUMEROTELEFONO","NUMERODETELEFONO"]) ? 3 : 0) +
+      (has(["CORREO","EMAIL","CORREOELECTRONICO","EMAILCUENTA","EMAILDECUENTA","CORREOCUENTA","CORREODECUENTA","CUENTA","USUARIO"]) ? 4 : 0) +
+      (has(["CLAVE","CONTRASENA","PASSWORD","CLAVEDECUENTA","CLAVEDELACUENTA"]) ? 2 : 0) +
+      (has(["PERFIL","PERFILES","NOMBREDEPERFIL","SLOT","CUPO"]) ? 1 : 0) +
+      (has(["EXPIRACION","RENOVACION","VENCIMIENTO","FECHAVENCIMIENTO","FECHADEVENCIMIENTO","FECHARENOVACION","FECHADERENOVACION"]) ? 1 : 0) +
+      (has(["PLATAFORMA","SERVICIO","APLICACION","APP","PRODUCTO"]) ? 2 : 0);
+    if (!best || score > best.score) best = { row: r, map, score };
+  }
+  if (!best || best.score < 3) return null;
+  const m = best.map;
+  return {
+    row: best.row,
+    name: cmAutoFirstCol(m,["NOMBRE","CLIENTE","NOMBRECLIENTE","NOMBREDELCLIENTE","CLIENTENOMBRE"]),
+    seller: cmAutoFirstCol(m,["VENDEDOR","ASESOR"]),
+    phone: cmAutoFirstCol(m,["CELULAR","TELEFONO","TELEFONOCLIENTE","TELEFONOWHATSAPP","WHATSAPP","NUMEROTELEFONO","NUMERODETELEFONO","NUMERO"]),
+    profile: cmAutoFirstCol(m,["PERFIL","PERFILES","NOMBREDEPERFIL","SLOT","CUPO"]),
+    pin: cmAutoFirstCol(m,["PIN","PINPERFIL"]),
+    email: cmAutoFirstCol(m,["CORREO","EMAIL","CORREOELECTRONICO","EMAILCUENTA","EMAILDECUENTA","CORREOCUENTA","CORREODECUENTA","CUENTA","USUARIO"]),
+    password: cmAutoFirstCol(m,["CLAVE","CONTRASENA","PASSWORD","CLAVEDECUENTA","CLAVEDELACUENTA"]),
+    price: cmAutoFirstCol(m,["PRECIO","VALOR","MONTO"]),
+    expiry: cmAutoFirstCol(m,["RENOVACION","EXPIRACION","VENCIMIENTO","FECHAVENCIMIENTO","FECHADEVENCIMIENTO","FECHARENOVACION","FECHADERENOVACION"]),
+    alert: cmAutoFirstCol(m,["ALERTA","ESTADO"]),
+    days: cmAutoFirstCol(m,["DIAS","DIASRESTANTES"]),
+    platform: cmAutoFirstCol(m,["PLATAFORMA","SERVICIO","APLICACION","APP","PRODUCTO"]),
+  };
+}
+function cmAutoFamily(platform = "") {
+  const p = normalizarPlataforma(platform);
+  if (["disneyp","disneys","disney"].includes(p)) return "disney";
+  if (/^stellatv[123]$/.test(p) || p === "stellatv") return "stella";
+  if (/^oleadatv[13]$/.test(p) || p === "oleada") return "oleada";
+  if (/^latintv[1234]$/.test(p) || p === "latintv") return "latintv";
+  if (/^liontv[1235]$/.test(p) || p === "liontv") return "liontv";
+  if (/^iptv[134]$/.test(p) || p === "iptv") return "iptv";
+  return p;
+}
+function cmAutoPlatformsForSheet(name = "") {
+  const n = cmAutoNorm(name);
+  if (n.includes("netflix") && n.includes("vip")) return ["vipnetflix"];
+  if (n.includes("extra")) return ["vipnetflix"];
+  if (n.includes("netflix")) return ["netflix"];
+  if (n.includes("disney")) return ["disney"];
+  if (n.includes("hbo") || /^max$/.test(n)) return ["hbomax"];
+  if (n.includes("prime")) return ["primevideo"];
+  if (n.includes("paramount")) return ["paramount"];
+  if (n.includes("crunch")) return ["crunchyroll"];
+  if (/\bvix\b/.test(n)) return ["vix"];
+  if (n.includes("viki")) return ["viki"];
+  if (n.includes("universal")) return ["universal"];
+  if (n.includes("spotify")) return ["spotify"];
+  if (n.includes("youtube")) return ["youtube"];
+  if (n.includes("deezer")) return ["deezer"];
+  if (n.includes("canva")) return ["canva"];
+  if (n.includes("gemini")) return ["gemini"];
+  if (n.includes("chatgpt") || n.includes("openai")) return ["chatgpt"];
+  if (n.includes("duolingo")) return ["duolingo"];
+  if (n.includes("apple")) return ["appletv"];
+  if (/\bstar\b/.test(n)) return ["star"];
+  if (n.includes("office 2021")) return ["office2021"];
+  if (n.includes("office") || n.includes("microsoft")) return ["office"];
+  if (n.includes("windows 10") || n.includes("win 10")) return ["windows10"];
+  if (n.includes("windows 11") || n.includes("win 11")) return ["windows11"];
+  if (n.includes("adobe")) return ["adobeexpress"];
+  if (n.includes("eset") || n.includes("nod32")) return ["eset"];
+  if (n.includes("stella")) return ["stella"];
+  if (n.includes("oleada")) return ["oleada"];
+  if (n.includes("latin tv") || n.includes("latintv")) return ["latintv"];
+  if (n.includes("lion tv") || n.includes("liontv")) return ["liontv"];
+  if (n.includes("iptv")) return ["iptv"];
+  return [];
+}
+async function cmAutoReadTemplate() {
+  const cfg = await db.collection(CM_AUTO_CONFIG).doc(CM_AUTO_CONFIG_DOC).get();
+  const cfgData = cfg.exists ? (cfg.data() || {}) : {};
+  const templateId = String(cfgData.plantillaId || "").trim();
+  if (!templateId) return null;
+  const doc = await db.collection(CM_AUTO_ARCHIVOS).doc(templateId).get();
+  if (!doc.exists) return null;
+  const meta = doc.data() || {};
+  if (meta.estado && meta.estado !== "listo") throw new Error("La plantilla de Control Maestro todavía no está lista.");
+  const snap = await doc.ref.collection("archivo").orderBy("index", "asc").get();
+  if (!snap.size) throw new Error("La plantilla de Control Maestro no tiene bloques.");
+  const base64 = snap.docs.map((d) => String((d.data() || {}).base64 || "")).join("");
+  if (!base64) throw new Error("La plantilla de Control Maestro está vacía.");
+  return { id: templateId, meta, base64 };
+}
+async function cmAutoSaveTemplate(buffer, previous, audit = {}) {
+  const base64 = Buffer.from(buffer).toString("base64");
+  const chunks = [];
+  for (let i = 0; i < base64.length; i += CM_AUTO_CHUNK_SIZE) chunks.push(base64.slice(i, i + CM_AUTO_CHUNK_SIZE));
+  const now = new Date().toISOString();
+  const ref = db.collection(CM_AUTO_ARCHIVOS).doc();
+  const filename = String(previous?.meta?.filename || "Sublicuentas.xlsx").slice(0, 180);
+  await ref.set({
+    version: "control-maestro-v1-20260804", clase: "plantilla", filename,
+    size: Buffer.byteLength(buffer), mime: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    chunks: chunks.length, base64Length: base64.length, dateKey: now.slice(0, 10), createdAt: now,
+    createdBy: "telegram", motivo: "telegram_quitar_cliente", estado: "guardando", privado: true,
+    owner: "sublicuentas", reemplaza: previous?.id || "", telegramSync: audit,
+  });
+  let batch = db.batch(); let ops = 0;
+  for (let i = 0; i < chunks.length; i += 1) {
+    batch.set(ref.collection("archivo").doc(String(i + 1).padStart(4, "0")), { index: i + 1, totalChunks: chunks.length, base64: chunks[i], createdAt: now });
+    ops += 1;
+    if (ops >= 350) { await batch.commit(); batch = db.batch(); ops = 0; }
+  }
+  if (ops) await batch.commit();
+  await ref.update({ estado: "listo", updatedAt: new Date().toISOString() });
+  await db.collection(CM_AUTO_CONFIG).doc(CM_AUTO_CONFIG_DOC).set({
+    plantillaId: ref.id, plantillaFilename: filename, plantillaUpdatedAt: now,
+    updatedBy: "telegram", version: "control-maestro-v1",
+  }, { merge: true });
+  try {
+    await db.collection("auditoria_eventos").add({
+      tipo: "control_maestro_cliente_borrado_desde_telegram", archivoId: ref.id,
+      archivoAnteriorId: previous?.id || "", filename, usuario: "telegram", rol: "sublicuentas",
+      ...audit, createdAt: now,
+    });
+  } catch (_) {}
+  return ref.id;
+}
+async function cmAutoRemoveClientOnce({ plataforma = "", acceso = "", cliente = {} } = {}) {
+  if (!ExcelJS) return { ok: false, code: "no_exceljs", message: "ExcelJS no disponible." };
+  const previous = await cmAutoReadTemplate();
+  if (!previous) return { ok: false, code: "no_template", message: "No hay plantilla de Control Maestro configurada." };
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(Buffer.from(previous.base64, "base64"));
+  const targetAccount = normalizeIdentByPlatformLocal(plataforma, acceso);
+  const targetName = cmAutoPerson(cliente?.nombre || "");
+  const targetPin = cmAutoNorm(cliente?.pin || "");
+  const targetPhone = String(cliente?.telefono || cliente?.celular || "").replace(/\D/g, "").slice(-8);
+  const targetFamily = cmAutoFamily(plataforma);
+  const candidates = [];
+
+  for (const ws of workbook.worksheets) {
+    const sheetKey = cmAutoNorm(ws.name).replace(/[^a-z0-9_]/g, "");
+    if (["revision","__sublichat_ids","resumen","dashboard","portada","instrucciones","configuracion"].includes(sheetKey)) continue;
+    const h = cmAutoFindHeader(ws); if (!h) continue;
+    const sheetFamilies = cmAutoPlatformsForSheet(ws.name).map(cmAutoFamily);
+    let currentAccount = "";
+    let currentFamily = sheetFamilies[0] || "";
+    const rows = [];
+    ws.eachRow({ includeEmpty: false }, (_row, rowNumber) => { if (rowNumber > h.row) rows.push(rowNumber); });
+    for (const rowNumber of rows) {
+      const row = ws.getRow(rowNumber);
+      const directAccount = h.email ? normalizeIdentByPlatformLocal(plataforma, cmAutoCellText(row.getCell(h.email).value)) : "";
+      if (directAccount) currentAccount = directAccount;
+      if (h.platform) {
+        const rawPlatform = cmAutoCellText(row.getCell(h.platform).value);
+        if (rawPlatform) currentFamily = cmAutoFamily(rawPlatform);
+      }
+      if (!currentAccount || currentAccount !== targetAccount) continue;
+      if (currentFamily && targetFamily && currentFamily !== targetFamily) continue;
+      const rowName = h.name ? cmAutoPerson(cmAutoCellText(row.getCell(h.name).value)) : "";
+      const rowPin = h.pin ? cmAutoNorm(cmAutoCellText(row.getCell(h.pin).value)) : "";
+      const rowPhone = h.phone ? String(cmAutoCellText(row.getCell(h.phone).value)).replace(/\D/g, "").slice(-8) : "";
+      const nameMatch = !!targetName && !!rowName && rowName === targetName;
+      const pinMatch = !!targetPin && !!rowPin && rowPin === targetPin;
+      const phoneMatch = !!targetPhone && !!rowPhone && rowPhone === targetPhone;
+      if (!nameMatch && !pinMatch && !phoneMatch) continue;
+      let score = 100;
+      if (nameMatch) score += 70;
+      if (pinMatch) score += 45;
+      if (phoneMatch) score += 35;
+      if (currentFamily === targetFamily) score += 20;
+      candidates.push({ ws, row, rowNumber, h, score, nameMatch, pinMatch, phoneMatch });
+    }
+  }
+
+  if (!candidates.length) return { ok: false, code: "not_found", message: "No encontré una fila exacta de ese cliente en el Excel." };
+  candidates.sort((a, b) => b.score - a.score);
+  const best = candidates[0];
+  const tied = candidates.filter((c) => c.score === best.score);
+  if (tied.length > 1 && !(best.nameMatch && best.pinMatch)) {
+    return { ok: false, code: "ambiguous", message: "Encontré más de una fila posible y no borré ninguna para evitar un error." };
+  }
+  const columns = [best.h.name,best.h.seller,best.h.phone,best.h.profile,best.h.pin,best.h.price,best.h.expiry,best.h.alert,best.h.days].filter((v, i, arr) => v && arr.indexOf(v) === i);
+  for (const col of columns) {
+    const cell = best.row.getCell(col);
+    cell.value = null;
+    try { cell.note = undefined; } catch (_) {}
+  }
+  const out = await workbook.xlsx.writeBuffer();
+  const newId = await cmAutoSaveTemplate(out, previous, {
+    plataforma: normalizarPlataforma(plataforma), cuenta: targetAccount,
+    cliente: String(cliente?.nombre || "").slice(0, 160), pin: String(cliente?.pin || "").slice(0, 40),
+    hoja: best.ws.name, fila: best.rowNumber,
+  });
+  return { ok: true, code: "deleted", hoja: best.ws.name, fila: best.rowNumber, archivoId: newId };
+}
+function cmAutoRemoveClient(payload) {
+  const run = () => cmAutoRemoveClientOnce(payload);
+  const result = cmAutoSyncChain.then(run, run);
+  cmAutoSyncChain = result.catch(() => null);
+  return result;
 }
 
 // Sublichat tiene vendedores operativos que no necesariamente poseen una
@@ -4691,7 +4939,19 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
         const ocupados = clientes.length;
         const disponibles = Math.max(0, capacidad - ocupados);
         await ref.set({ clientes, ocupados, disponibles, disp: disponibles, estado: disponibles === 0 ? "llena" : "activa", capacidad, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
-        await bot.sendMessage(chatId, `✅ *Cliente quitado correctamente*\n\n👤 *Nombre:* ${escMD(cliente.nombre || "Sin nombre")}\n🔐 *PIN:* ${escMD(cliente.pin || "----")}\n\n👤 *Ocupados:* ${ocupados}/${capacidad}\n✅ *Disponibles:* ${disponibles}\n📊 *Estado:* ${escMD(disponibles === 0 ? "LLENA" : "CON ESPACIO")}`, { parse_mode: "Markdown" });
+
+        // La salida desde Telegram también limpia la fila histórica del Excel
+        // privado de Control Maestro. Si el Excel no puede tocarse, Bodega no
+        // se revierte: se informa el motivo para que nunca parezca que falló la
+        // eliminación principal.
+        let excelSync = null;
+        try { excelSync = await cmAutoRemoveClient({ plataforma, acceso, cliente }); }
+        catch (e) { excelSync = { ok:false, code:"error", message:e?.message || "No se pudo sincronizar el Excel." }; console.error("cmAutoRemoveClient", e); }
+        const excelLine = excelSync?.ok
+          ? `\n📗 *Control Maestro:* eliminado también del Excel.`
+          : `\n⚠️ *Control Maestro:* ${escMD(excelSync?.message || "No se pudo sincronizar el Excel.")}`;
+
+        await bot.sendMessage(chatId, `✅ *Cliente quitado correctamente*\n\n👤 *Nombre:* ${escMD(cliente.nombre || "Sin nombre")}\n🔐 *PIN:* ${escMD(cliente.pin || "----")}\n\n👤 *Ocupados:* ${ocupados}/${capacidad}\n✅ *Disponibles:* ${disponibles}\n📊 *Estado:* ${escMD(disponibles === 0 ? "LLENA" : "CON ESPACIO")}${excelLine}`, { parse_mode: "Markdown" });
         return mostrarPanelCorreo(chatId, plataforma, acceso);
       }
 
