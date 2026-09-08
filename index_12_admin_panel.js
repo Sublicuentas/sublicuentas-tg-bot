@@ -253,6 +253,35 @@ module.exports = function mountAdminPanel(app) {
     ok(res,{id:ref.id});
   }));
 
+  app.put("/rev/admin/promociones/:id", revAdminAuth, wrap(async (req,res) => {
+    const ref=db.collection(PROMOCIONES_SOCIOS_COLLECTION).doc(clean(req.params.id,160));
+    const snap=await ref.get();
+    if(!snap.exists)return fail(res,404,"Promoción no encontrada.");
+    const actual=snap.data()||{};
+    const titulo=clean(req.body?.titulo,120), plataforma=clean(req.body?.plataforma,100);
+    if(!titulo||!plataforma)return fail(res,400,"Complete título y plataforma.");
+    let imagenUrl=clean(req.body?.imagenUrl,1500)||clean(actual.imagenUrl,1500);
+    if(req.body?.imagenData) imagenUrl=await guardarImagenPromo(req.body.imagenData,ref.id);
+    const destinatarios=[...new Set((Array.isArray(req.body?.destinatarios)?req.body.destinatarios:[]).map(normNombre).filter(Boolean))];
+    const payload={
+      titulo,
+      plataforma,
+      precioNormal:Math.max(0,Number(req.body?.precioNormal)||0),
+      precioPromo:Math.max(0,Number(req.body?.precioPromo)||0),
+      precioSugerido:Math.max(0,Number(req.body?.precioSugerido)||0),
+      cupos:Math.max(0,Math.round(Number(req.body?.cupos)||0)),
+      vigencia:clean(req.body?.vigencia,50),
+      texto:clean(req.body?.texto,1200),
+      imagenUrl,
+      destinatarios,
+      estado:clean(actual.estado,30)||"borrador",
+      updatedAt:admin.firestore.FieldValue.serverTimestamp(),
+    };
+    await ref.set(payload,{merge:true});
+    const updated=await ref.get();
+    ok(res,{promocion:promoPublica(updated)});
+  }));
+
   app.delete("/rev/admin/promociones/:id", revAdminAuth, wrap(async (req,res) => {
     const ref=db.collection(PROMOCIONES_SOCIOS_COLLECTION).doc(clean(req.params.id,160));const snap=await ref.get();
     if(!snap.exists)return fail(res,404,"Promoción no encontrada.");
