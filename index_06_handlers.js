@@ -3571,6 +3571,172 @@ bot.onText(/^\/borraraviso\s+(\S+)/i, async (msg, match) => {
   }
 });
 
+
+// ===============================
+// CUSTOM EMOJI PREMIUM — PROMOCIONES
+// ===============================
+const PROMO_EMOJI_CONFIG_COLLECTION_LOCAL = "config";
+const PROMO_EMOJI_CONFIG_DOC_LOCAL = "telegram_promo_emojis";
+const PROMO_EMOJI_ROLES_LOCAL = [
+  { key:"titulo",     label:"Encabezado",       fallback:"🔥" },
+  { key:"plataforma", label:"Plataforma",       fallback:"🎯" },
+  { key:"datos",      label:"Datos de la oferta",fallback:"💎" },
+  { key:"normal",     label:"Precio normal",    fallback:"🧾" },
+  { key:"socio",      label:"Precio socio",     fallback:"💰" },
+  { key:"venta",      label:"Venta sugerida",   fallback:"📈" },
+  { key:"ganancia",   label:"Ganancia",         fallback:"💵" },
+  { key:"cupos",      label:"Cupos",            fallback:"📦" },
+  { key:"vigencia",   label:"Vigencia",         fallback:"⏳" },
+  { key:"detalles",   label:"Detalles",         fallback:"✨" },
+  { key:"solicitar",  label:"Cómo solicitar",   fallback:"📲" },
+];
+
+function extractCustomEmojiLocal(message) {
+  if (!message) return [];
+  const text = typeof message.text === "string" ? message.text : typeof message.caption === "string" ? message.caption : "";
+  const entities = Array.isArray(message.entities) ? message.entities : Array.isArray(message.caption_entities) ? message.caption_entities : [];
+  return entities
+    .filter((e) => e && e.type === "custom_emoji" && e.custom_emoji_id)
+    .sort((a,b) => Number(a.offset||0) - Number(b.offset||0))
+    .map((e) => ({
+      id: String(e.custom_emoji_id || "").replace(/\D/g, ""),
+      alt: text.substring(Number(e.offset)||0, (Number(e.offset)||0) + (Number(e.length)||0)),
+    }))
+    .filter((x) => x.id && x.alt);
+}
+
+function promoEmojiTagLocal(icon, fallback) {
+  const id = String(icon?.id || "").replace(/\D/g, "");
+  const alt = String(icon?.alt || fallback || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+  return id && alt ? `<tg-emoji emoji-id="${id}">${alt}</tg-emoji>` : fallback;
+}
+
+async function loadPromoEmojiConfigLocal() {
+  const snap = await db.collection(PROMO_EMOJI_CONFIG_COLLECTION_LOCAL).doc(PROMO_EMOJI_CONFIG_DOC_LOCAL).get();
+  const d = snap.exists ? (snap.data() || {}) : {};
+  return d.icons && typeof d.icons === "object" ? d.icons : {};
+}
+
+function promoEmojiInstructionsLocal() {
+  return [
+    "💎 *ICONOS PREMIUM PARA PROMOCIONES*",
+    "",
+    "Envíe *11 custom emojis Premium* en un solo mensaje, en este orden:",
+    ...PROMO_EMOJI_ROLES_LOCAL.map((r,i)=>`${i+1}. ${r.fallback} ${r.label}`),
+    "",
+    "Luego responda a ESE mensaje con:",
+    "`/promoemojis guardar`",
+    "",
+    "Comandos:",
+    "• `/promoemojis ver` — ver configuración",
+    "• `/promoemojis probar` — enviar muestra Premium",
+    "• `/promoemojis limpiar` — volver a emojis normales",
+    "",
+    "También puede cambiar solo uno: responda a un único custom emoji con `/promoemoji clave`.",
+    "Claves: `" + PROMO_EMOJI_ROLES_LOCAL.map(r=>r.key).join(", ") + "`",
+    "",
+    "⚠️ Telegram exige que la cuenta que *es dueña del bot en BotFather* tenga Telegram Premium activo.",
+  ].join("\n");
+}
+
+bot.onText(/^\/promoemojis(?:@\w+)?(?:\s+(.*))?$/i, async (msg, match) => {
+  if (!hasRuntimeLock()) return;
+  const chatId = msg.chat.id;
+  const userId = msg.from.id;
+  if (!(await safeIsAdminLocal(userId))) return bot.sendMessage(chatId, "⛔ Solo admin puede configurar los iconos Premium.");
+  const action = String(match?.[1] || "").trim().toLowerCase();
+
+  if (!action) return bot.sendMessage(chatId, promoEmojiInstructionsLocal(), { parse_mode:"Markdown" });
+
+  if (action === "guardar") {
+    const source = msg.reply_to_message;
+    const found = extractCustomEmojiLocal(source);
+    if (found.length < PROMO_EMOJI_ROLES_LOCAL.length) {
+      return bot.sendMessage(chatId, `⚠️ Detecté ${found.length} custom emoji. Necesito ${PROMO_EMOJI_ROLES_LOCAL.length}.\n\nEnvíelos todos en un solo mensaje y responda con /promoemojis guardar.`);
+    }
+    const icons = {};
+    PROMO_EMOJI_ROLES_LOCAL.forEach((role,i)=>{ icons[role.key] = found[i]; });
+    await db.collection(PROMO_EMOJI_CONFIG_COLLECTION_LOCAL).doc(PROMO_EMOJI_CONFIG_DOC_LOCAL).set({
+      icons,
+      activo:true,
+      updatedBy:String(userId),
+      updatedAt:admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge:true });
+    return bot.sendMessage(chatId, "✅ Iconos Premium guardados.\n\nUse /promoemojis probar para verificar que Telegram permita al bot mostrarlos.");
+  }
+
+  if (action === "ver") {
+    const icons = await loadPromoEmojiConfigLocal();
+    const lines = ["💎 <b>Iconos Premium configurados</b>",""];
+    for (const role of PROMO_EMOJI_ROLES_LOCAL) {
+      const x = icons[role.key];
+      lines.push(`${promoEmojiTagLocal(x,role.fallback)} <b>${role.label}:</b> ${x?.id ? `<code>${String(x.id)}</code>` : "sin configurar"}`);
+    }
+    try { return await bot.sendMessage(chatId, lines.join("\n"), { parse_mode:"HTML" }); }
+    catch (e) { return bot.sendMessage(chatId, `⚠️ La configuración existe, pero Telegram rechazó los custom emoji:\n${e?.message||e}`); }
+  }
+
+  if (action === "probar") {
+    const icons = await loadPromoEmojiConfigLocal();
+    const sample = [
+      `${promoEmojiTagLocal(icons.titulo,"🔥")} <b>Oferta Premium de prueba</b>`,
+      `${promoEmojiTagLocal(icons.plataforma,"🎯")} <b>Plataforma:</b> Sublicuentas`,
+      "",
+      `<b>${promoEmojiTagLocal(icons.datos,"💎")} Datos de la oferta</b>`,
+      `• ${promoEmojiTagLocal(icons.socio,"💰")} <b>Precio socio:</b> L 50`,
+      `• ${promoEmojiTagLocal(icons.venta,"📈")} <b>Venta sugerida:</b> L 100`,
+      `• ${promoEmojiTagLocal(icons.ganancia,"💵")} <b>Ganancia:</b> L 50`,
+      `• ${promoEmojiTagLocal(icons.cupos,"📦")} <b>Cupos:</b> 5`,
+      `• ${promoEmojiTagLocal(icons.vigencia,"⏳")} <b>Vigencia:</b> septiembre`,
+      "",
+      `<b>${promoEmojiTagLocal(icons.detalles,"✨")} Detalles</b>`,
+      "• Esta es una prueba de visualización.",
+      "",
+      `<b>${promoEmojiTagLocal(icons.solicitar,"📲")} Cómo solicitar</b>`,
+      "• Desde su Panel de Socios.",
+    ].join("\n");
+    try {
+      await bot.sendMessage(chatId, sample, { parse_mode:"HTML" });
+      return bot.sendMessage(chatId, "✅ Prueba enviada. Si arriba ve los iconos animados/custom, quedó listo.");
+    } catch (e) {
+      return bot.sendMessage(chatId, `❌ Telegram rechazó los custom emoji.\n\n${e?.message||e}\n\nRevise que la cuenta dueña del bot en BotFather tenga Premium activo.`);
+    }
+  }
+
+  if (action === "limpiar") {
+    await db.collection(PROMO_EMOJI_CONFIG_COLLECTION_LOCAL).doc(PROMO_EMOJI_CONFIG_DOC_LOCAL).set({
+      icons:{}, activo:false, updatedBy:String(userId), updatedAt:admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge:true });
+    return bot.sendMessage(chatId, "✅ Custom emojis desactivados. Las promociones volverán a usar emojis normales.");
+  }
+
+  return bot.sendMessage(chatId, promoEmojiInstructionsLocal(), { parse_mode:"Markdown" });
+});
+
+bot.onText(/^\/promoemoji(?:@\w+)?\s+([a-z_]+)$/i, async (msg, match) => {
+  if (!hasRuntimeLock()) return;
+  const chatId = msg.chat.id;
+  const userId = msg.from.id;
+  if (!(await safeIsAdminLocal(userId))) return bot.sendMessage(chatId, "⛔ Solo admin puede configurar los iconos Premium.");
+  const key = String(match?.[1] || "").trim().toLowerCase();
+  const role = PROMO_EMOJI_ROLES_LOCAL.find((r)=>r.key===key);
+  if (!role) return bot.sendMessage(chatId, `⚠️ Clave inválida. Use: ${PROMO_EMOJI_ROLES_LOCAL.map(r=>r.key).join(", ")}`);
+  const found = extractCustomEmojiLocal(msg.reply_to_message);
+  if (!found.length) return bot.sendMessage(chatId, "⚠️ Responda a un mensaje que contenga un custom emoji Premium.");
+  const ref = db.collection(PROMO_EMOJI_CONFIG_COLLECTION_LOCAL).doc(PROMO_EMOJI_CONFIG_DOC_LOCAL);
+  const snap = await ref.get();
+  const current = snap.exists ? (snap.data() || {}) : {};
+  const icons = current.icons && typeof current.icons === "object" ? { ...current.icons } : {};
+  icons[role.key] = found[0];
+  await ref.set({
+    icons,
+    activo:true,
+    updatedBy:String(userId),
+    updatedAt:admin.firestore.FieldValue.serverTimestamp(),
+  }, { merge:true });
+  return bot.sendMessage(chatId, `✅ Icono Premium actualizado: ${role.label}.\nUse /promoemojis probar.`);
+});
+
 // ===============================
 // IDS / VINCULACIÓN
 // ===============================

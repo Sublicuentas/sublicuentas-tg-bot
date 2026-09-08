@@ -43,6 +43,8 @@ const {
 const PRECIOS_COLLECTION = "precios";
 const PRECIOS_ESPECIALES_COLLECTION = "precios_especiales";
 const PROMOCIONES_SOCIOS_COLLECTION = "promociones_socios";
+const PROMO_EMOJI_CONFIG_COLLECTION = "config";
+const PROMO_EMOJI_CONFIG_DOC = "telegram_promo_emojis";
 
 const ok = (res, data) => res.json({ ok: true, ...data });
 const fail = (res, code, msg) => res.status(code).json({ ok: false, error: msg });
@@ -87,6 +89,38 @@ async function guardarImagenPromo(dataUrl, id) {
     }catch(e){lastError=e;console.error("guardarImagenPromo bucket fail",bucketName,e.message)}
   }
   throw Object.assign(lastError||new Error("storage_error"), { status:502, publicError:"No se pudo subir la imagen de la promoción. Revise Storage y vuelva a intentar." });
+}
+
+
+async function loadPromoEmojiConfig() {
+  try {
+    const snap = await db.collection(PROMO_EMOJI_CONFIG_COLLECTION).doc(PROMO_EMOJI_CONFIG_DOC).get();
+    if (!snap.exists) return {};
+    const d = snap.data() || {};
+    const raw = d.icons && typeof d.icons === "object" ? d.icons : {};
+    const out = {};
+    for (const [key, value] of Object.entries(raw)) {
+      const id = clean(value?.id, 40).replace(/\D/g, "");
+      const alt = clean(value?.alt, 16);
+      if (id && alt) out[key] = { id, alt };
+    }
+    return out;
+  } catch (e) {
+    console.error("promo emoji config read", e.message);
+    return {};
+  }
+}
+
+function premiumIcon(icons, key, fallback) {
+  const x = icons && icons[key];
+  if (!x?.id || !x?.alt) return fallback;
+  const id = String(x.id).replace(/\D/g, "");
+  if (!id) return fallback;
+  return `<tg-emoji emoji-id="${id}">${html(x.alt)}</tg-emoji>`;
+}
+
+function hasPremiumIcons(icons) {
+  return Boolean(icons && Object.values(icons).some((x) => x?.id && x?.alt));
 }
 
 function formatMoney(v) {
@@ -138,39 +172,38 @@ function fitCaption(lines, limit = 1024) {
   return joined;
 }
 
-function captionPromo(p) {
+function captionPromo(p, icons = {}) {
   const titulo = html(p.titulo || "PROMOCIÓN PARA SOCIOS");
   const plataforma = html(p.plataforma || "");
   const profit = Math.max(0, Number(p.precioSugerido || 0) - Number(p.precioPromo || 0));
   const bullets = splitPromoText(p.texto);
   const lines = [
-    `🔥 <b>${titulo}</b>`,
-    plataforma ? `🎯 <b>Plataforma:</b> ${plataforma}` : "",
+    `${premiumIcon(icons,"titulo","🔥")} <b>${titulo}</b>`,
+    plataforma ? `${premiumIcon(icons,"plataforma","🎯")} <b>Plataforma:</b> ${plataforma}` : "",
     "",
-    `<b>💎 Datos de la oferta</b>`,
-    p.precioNormal ? `• <b>Precio normal:</b> <s>${formatMoney(p.precioNormal)}</s>` : "",
-    p.precioPromo ? `• <b>Precio socio:</b> ${formatMoney(p.precioPromo)}` : "",
-    p.precioSugerido ? `• <b>Venta sugerida:</b> ${formatMoney(p.precioSugerido)}` : "",
-    p.precioSugerido ? `• <b>Ganancia estimada:</b> ${formatMoney(profit)}` : "",
-    p.cupos ? `• <b>Cupos disponibles:</b> ${Number(p.cupos)}` : "",
-    p.vigencia ? `• <b>Vigencia:</b> ${formatPromoDate(p.vigencia)}` : "",
+    `<b>${premiumIcon(icons,"datos","💎")} Datos de la oferta</b>`,
+    p.precioNormal ? `• ${premiumIcon(icons,"normal","🧾")} <b>Precio normal:</b> <s>${formatMoney(p.precioNormal)}</s>` : "",
+    p.precioPromo ? `• ${premiumIcon(icons,"socio","💰")} <b>Precio socio:</b> ${formatMoney(p.precioPromo)}` : "",
+    p.precioSugerido ? `• ${premiumIcon(icons,"venta","📈")} <b>Venta sugerida:</b> ${formatMoney(p.precioSugerido)}` : "",
+    p.precioSugerido ? `• ${premiumIcon(icons,"ganancia","💵")} <b>Ganancia estimada:</b> ${formatMoney(profit)}` : "",
+    p.cupos ? `• ${premiumIcon(icons,"cupos","📦")} <b>Cupos disponibles:</b> ${Number(p.cupos)}` : "",
+    p.vigencia ? `• ${premiumIcon(icons,"vigencia","⏳")} <b>Vigencia:</b> ${formatPromoDate(p.vigencia)}` : "",
   ].filter(Boolean);
 
   if (bullets.length) {
-    lines.push("", `<b>✨ Detalles</b>`);
+    lines.push("", `<b>${premiumIcon(icons,"detalles","✨")} Detalles</b>`);
     bullets.forEach((line) => lines.push(`• ${html(line)}`));
   }
 
   lines.push(
     "",
-    `<b>📲 Cómo solicitar</b>`,
+    `<b>${premiumIcon(icons,"solicitar","📲")} Cómo solicitar</b>`,
     `• Compártala por WhatsApp o desde su Panel de Socios.`,
     `• Disponible también dentro de su Panel de Socios.`
   );
 
   return fitCaption(lines, 1024);
 }
-
 
 function telegramErrorInfo(e) {
   const body = e?.response?.body || e?.response?.data || {};
@@ -232,20 +265,49 @@ module.exports = function mountAdminPanel(app) {
     const p={id:snap.id,...(snap.data()||{})},selected=new Set(Array.isArray(p.destinatarios)?p.destinatarios.map(normNombre):[]);
     const revSnap=await db.collection(REVENDEDORES_COLLECTION).get();
     const targets=revSnap.docs.map(d=>({id:d.id,...(d.data()||{})})).filter(r=>r.activo!==false&&(!selected.size||selected.has(normNombre(r.nombre_norm||r.nombre||r.id))));
-    let enviados=0,fallidos=0,fallbackTexto=0;const sinTelegram=[],erroresTelegram=[];const caption=captionPromo(p);
+    const promoIcons=await loadPromoEmojiConfig();
+    const premiumEnabled=hasPremiumIcons(promoIcons);
+    const captionPremium=captionPromo(p,promoIcons);
+    const captionRegular=premiumEnabled?captionPromo(p,{}):captionPremium;
+    let enviados=0,fallidos=0,fallbackTexto=0,fallbackEmoji=0;const sinTelegram=[],erroresTelegram=[];
 
-    // Telegram se procesa en lotes pequeños. El envío anterior era totalmente
-    // secuencial y podía tardar lo suficiente para que el proxy de Sublichat
-    // venciera aunque la promoción sí se hubiera guardado.
+    // Telegram se procesa en lotes pequeños. Los custom emoji Premium se
+    // intentan primero; si Telegram los rechaza, el envío se recupera con
+    // emojis normales para no perder la promoción.
     const enviarUno=async(r)=>{
       const chatId=String(r.telegramId||"").replace(/[^0-9-]/g,"");
       const nombre=r.nombre||r.nombre_norm||r.id;
       if(!chatId){sinTelegram.push(nombre);erroresTelegram.push({nombre,telegramId:"",codigo:0,motivo:"Sin Telegram ID",diagnostico:"Agregue el ID de Telegram en la ficha del vendedor."});return {ok:false};}
+
+      const sendTextSmart=async()=>{
+        let premiumError=null;
+        if(premiumEnabled){
+          try{await bot.sendMessage(chatId,captionPremium,{parse_mode:"HTML"});return {ok:true,premium:true};}
+          catch(e){premiumError=e;}
+        }
+        try{await bot.sendMessage(chatId,captionRegular,{parse_mode:"HTML"});return {ok:true,emojiFallback:Boolean(premiumEnabled)};}
+        catch(e){throw e||premiumError;}
+      };
+
       if(p.imagenUrl){
-        try{await bot.sendPhoto(chatId,p.imagenUrl,{caption,parse_mode:"HTML"});return {ok:true};}
-        catch(photoError){
-          // Si solo falla la descarga de la imagen, reintentamos como texto.
-          try{await bot.sendMessage(chatId,caption,{parse_mode:"HTML"});return {ok:true,fallback:true};}
+        if(premiumEnabled){
+          try{await bot.sendPhoto(chatId,p.imagenUrl,{caption:captionPremium,parse_mode:"HTML"});return {ok:true,premium:true};}
+          catch(_premiumPhotoError){
+            try{await bot.sendPhoto(chatId,p.imagenUrl,{caption:captionRegular,parse_mode:"HTML"});return {ok:true,emojiFallback:true};}
+            catch(_regularPhotoError){
+              try{const result=await sendTextSmart();return {...result,fallback:true};}
+              catch(textError){
+                const info=telegramErrorInfo(textError);
+                erroresTelegram.push({nombre,telegramId:chatId,...info});
+                console.error("promo telegram fail",r.id,JSON.stringify(info));
+                return {ok:false,error:info};
+              }
+            }
+          }
+        }
+        try{await bot.sendPhoto(chatId,p.imagenUrl,{caption:captionRegular,parse_mode:"HTML"});return {ok:true};}
+        catch(_photoError){
+          try{const result=await sendTextSmart();return {...result,fallback:true};}
           catch(textError){
             const info=telegramErrorInfo(textError);
             erroresTelegram.push({nombre,telegramId:chatId,...info});
@@ -254,7 +316,8 @@ module.exports = function mountAdminPanel(app) {
           }
         }
       }
-      try{await bot.sendMessage(chatId,caption,{parse_mode:"HTML"});return {ok:true};}
+
+      try{return await sendTextSmart();}
       catch(e){
         const info=telegramErrorInfo(e);
         erroresTelegram.push({nombre,telegramId:chatId,...info});
@@ -265,15 +328,15 @@ module.exports = function mountAdminPanel(app) {
 
     for(let i=0;i<targets.length;i+=5){
       const resultados=await Promise.all(targets.slice(i,i+5).map(enviarUno));
-      for(const r of resultados){if(r.ok){enviados+=1;if(r.fallback)fallbackTexto+=1}else fallidos+=1;}
+      for(const r of resultados){if(r.ok){enviados+=1;if(r.fallback)fallbackTexto+=1;if(r.emojiFallback)fallbackEmoji+=1}else fallidos+=1;}
     }
 
-    await ref.set({estado:"publicada",enviados,fallidos,sinTelegram,fallbackTexto,erroresTelegram,sentAt:admin.firestore.FieldValue.serverTimestamp(),updatedAt:admin.firestore.FieldValue.serverTimestamp()},{merge:true});
+    await ref.set({estado:"publicada",enviados,fallidos,sinTelegram,fallbackTexto,fallbackEmoji,premiumEmojis:premiumEnabled,erroresTelegram,sentAt:admin.firestore.FieldValue.serverTimestamp(),updatedAt:admin.firestore.FieldValue.serverTimestamp()},{merge:true});
     let avisoGuardado=true;
     try{
       await db.collection("avisos").add({texto:`${p.titulo}\n${p.plataforma} · L ${Number(p.precioPromo)||0}\n${p.texto||""}`.trim(),autor:"Sublicuentas",tipo:"promocion_socios",promocionId:ref.id,imagenUrl:p.imagenUrl||"",destinatarios:p.destinatarios||[],activo:true,createdAt:admin.firestore.FieldValue.serverTimestamp()});
     }catch(e){avisoGuardado=false;console.error("promo aviso fail",ref.id,e.message)}
-    ok(res,{id:ref.id,enviados,fallidos,sinTelegram,fallbackTexto,erroresTelegram,avisoGuardado});
+    ok(res,{id:ref.id,enviados,fallidos,sinTelegram,fallbackTexto,fallbackEmoji,premiumEmojis:premiumEnabled,erroresTelegram,avisoGuardado});
   }));
   /* ═══════════════ PRECIOS ═══════════════
      ⚠️ CORRECCIÓN (ago-2026): la primera versión de esto asumía que los
