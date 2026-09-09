@@ -400,9 +400,36 @@ async function isAdmin(userId) {
     if (await isSuperAdmin(uid)) { cacheSet(cacheKey, true); return true; }
 
     const adminDoc = await getAdminDocById(uid);
-    const result = !!(adminDoc && adminDoc.activo !== false);
-    cacheSet(cacheKey, result);
-    return result;
+    if (adminDoc && adminDoc.activo !== false) {
+      cacheSet(cacheKey, true);
+      return true;
+    }
+
+    // Geisell pasa a ser administradora completa del bot. Para evitar depender
+    // de duplicar su Telegram ID en otra colección, usamos el ID que ya existe
+    // en su ficha de revendedor. Geissel se conserva como alias histórico.
+    try {
+      const snap = await db.collection("revendedores").get();
+      let geisellAdmin = false;
+      snap.forEach((d) => {
+        if (geisellAdmin) return;
+        const data = d.data() || {};
+        const nombre = normTxt(data.nombre_norm || data.nombre || d.id);
+        const tg = String(data.telegramId || data.userId || "").trim();
+        if (["geisell", "geissel"].includes(nombre) && data.activo !== false && tg === uid) {
+          geisellAdmin = true;
+        }
+      });
+      if (geisellAdmin) {
+        cacheSet(cacheKey, true);
+        return true;
+      }
+    } catch (e) {
+      logErr("isAdmin.geisell", e);
+    }
+
+    cacheSet(cacheKey, false);
+    return false;
   } catch (e) {
     logErr("isAdmin", e);
     return false;
