@@ -3822,6 +3822,7 @@ bot.onText(/^\/borraraviso\s+(\S+)/i, async (msg, match) => {
 
 // ===============================
 // CUSTOM EMOJI PREMIUM — PROMOCIONES
+// FIX 20260909: una sola ruta antes del buscador, lista directa y reply.
 // ===============================
 const PROMO_EMOJI_CONFIG_COLLECTION_LOCAL = "config";
 const PROMO_EMOJI_CONFIG_DOC_LOCAL = "telegram_promo_emojis";
@@ -3838,11 +3839,44 @@ const PROMO_EMOJI_ROLES_LOCAL = [
   { key:"detalles",   label:"Detalles",         fallback:"✨" },
   { key:"solicitar",  label:"Cómo solicitar",   fallback:"📲" },
 ];
+const promoEmojiSessionsLocal = new Map();
+const PROMO_EMOJI_SESSION_MS_LOCAL = 30 * 60 * 1000;
+
+function promoEmojiSessionKeyLocal(msg) {
+  return `${msg.chat?.id}:${msg.from?.id}:${msg.message_thread_id || 0}`;
+}
+
+function promoEmojiSessionLocal(msg) {
+  const now = Date.now();
+  for (const [key, value] of promoEmojiSessionsLocal) {
+    if (now - value.at >= PROMO_EMOJI_SESSION_MS_LOCAL) promoEmojiSessionsLocal.delete(key);
+  }
+  return promoEmojiSessionsLocal.get(promoEmojiSessionKeyLocal(msg));
+}
+
+function promoEmojiTextLocal(msg) {
+  return typeof msg?.text === "string" ? msg.text : String(msg?.caption || "");
+}
+
+function promoEmojiCommandLocal(msg) {
+  // Acepta el comando solo, antes de la lista o en su última línea.
+  const match = promoEmojiTextLocal(msg).match(/(?:^|\n)[ \t]*\/(promoemojis?)(?:@\w+)?(?=\s|$)(?:[ \t]+([^\r\n]*))?/i);
+  if (!match) return null;
+  return { name:match[1].toLowerCase(), action:String(match[2] || "").trim().split(/\s+/)[0].toLowerCase() };
+}
+
+function promoEmojiListLocal(msg) {
+  const text = promoEmojiTextLocal(msg).replace(/(?:^|\n)[ \t]*\/promoemojis?(?:@\w+)?[^\r\n]*/gi, "");
+  // Una lista de iconos (con o sin numeración) no es un nombre de cliente.
+  return /[\p{Extended_Pictographic}\p{Regional_Indicator}\u20E3]/u.test(text) &&
+    /^[\s\d.,:;()\-]*$/.test(text.replace(/[\p{Emoji}\uFE0F\u200D\u20E3]/gu, ""));
+}
 
 function extractCustomEmojiLocal(message) {
   if (!message) return [];
-  const text = typeof message.text === "string" ? message.text : typeof message.caption === "string" ? message.caption : "";
-  const entities = Array.isArray(message.entities) ? message.entities : Array.isArray(message.caption_entities) ? message.caption_entities : [];
+  const text = promoEmojiTextLocal(message);
+  const rawEntities = typeof message.text === "string" ? message.entities : message.caption_entities;
+  const entities = Array.isArray(rawEntities) ? rawEntities : [];
   return entities
     .filter((e) => e && e.type === "custom_emoji" && e.custom_emoji_id)
     .sort((a,b) => Number(a.offset||0) - Number(b.offset||0))
@@ -3862,55 +3896,73 @@ function promoEmojiTagLocal(icon, fallback) {
 async function loadPromoEmojiConfigLocal() {
   const snap = await db.collection(PROMO_EMOJI_CONFIG_COLLECTION_LOCAL).doc(PROMO_EMOJI_CONFIG_DOC_LOCAL).get();
   const d = snap.exists ? (snap.data() || {}) : {};
-  return d.icons && typeof d.icons === "object" ? d.icons : {};
+  return d.activo !== false && d.icons && typeof d.icons === "object" ? d.icons : {};
 }
 
 function promoEmojiInstructionsLocal() {
   return [
     "💎 *ICONOS PREMIUM PARA PROMOCIONES*",
     "",
-    "Envíe *11 custom emojis Premium* en un solo mensaje, en este orden:",
+    "Envíe *11 custom emojis Premium* en un solo mensaje. Los guardaré automáticamente en este orden:",
     ...PROMO_EMOJI_ROLES_LOCAL.map((r,i)=>`${i+1}. ${r.fallback} ${r.label}`),
     "",
-    "Luego responda a ESE mensaje con:",
-    "`/promoemojis guardar`",
+    "Si ya envió la lista, responda a ella con `/promoemojis guardar`.",
+    "También puede escribir ese comando debajo de la lista, en el mismo mensaje.",
     "",
     "Comandos:",
     "• `/promoemojis ver` — ver configuración",
     "• `/promoemojis probar` — enviar muestra Premium",
     "• `/promoemojis limpiar` — volver a emojis normales",
+    "• `/promoemojis cancelar` — salir sin guardar",
     "",
-    "También puede cambiar solo uno: responda a un único custom emoji con `/promoemoji clave`.",
+    "Para cambiar solo uno, escriba `/promoemoji titulo` y luego envíe el nuevo emoji, o responda al emoji con ese comando.",
     "Claves: `" + PROMO_EMOJI_ROLES_LOCAL.map(r=>r.key).join(", ") + "`",
-    "",
-    "⚠️ Telegram exige que la cuenta que *es dueña del bot en BotFather* tenga Telegram Premium activo.",
   ].join("\n");
 }
 
-bot.onText(/^\/promoemojis(?:@\w+)?(?:\s+(.*))?$/i, async (msg, match) => {
-  if (!hasRuntimeLock()) return;
+function promoEmojiSourceLocal(msg, session) {
+  const inline = extractCustomEmojiLocal(msg);
+  if (inline.length || promoEmojiListLocal(msg)) return inline;
+  if (msg.reply_to_message) return extractCustomEmojiLocal(msg.reply_to_message);
+  return session?.icons || [];
+}
+
+async function savePromoEmojisLocal(msg, found, role = null) {
+  const expected = role ? 1 : PROMO_EMOJI_ROLES_LOCAL.length;
+  if (found.length !== expected) {
+    const help = found.length === 0
+      ? "Telegram no recibió emojis Premium en ese mensaje. Selecciónelos desde el panel de emojis de Telegram; una captura o un sticker separado no sirve."
+      : "Envíe exactamente esa cantidad en un solo mensaje, en el orden indicado.";
+    await bot.sendMessage(msg.chat.id, `⚠️ Detecté ${found.length} emojis Premium; necesito ${expected}.\n\n${help}`);
+    return;
+  }
+  const icons = {};
+  (role ? [role] : PROMO_EMOJI_ROLES_LOCAL).forEach((item,i)=>{ icons[item.key] = found[i]; });
+  await db.collection(PROMO_EMOJI_CONFIG_COLLECTION_LOCAL).doc(PROMO_EMOJI_CONFIG_DOC_LOCAL).set({
+    icons, activo:true, updatedBy:String(msg.from.id), updatedAt:admin.firestore.FieldValue.serverTimestamp(),
+  }, { merge:true });
+  promoEmojiSessionsLocal.delete(promoEmojiSessionKeyLocal(msg));
+  await bot.sendMessage(msg.chat.id, role
+    ? `✅ Icono Premium actualizado: ${role.label}.\nUse /promoemojis probar.`
+    : "✅ Los 11 iconos Premium quedaron guardados.\n\nUse /promoemojis probar para ver la muestra.");
+}
+
+async function runPromoEmojiCommandLocal(msg, command) {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-  if (!(await safeIsAdminLocal(userId))) return bot.sendMessage(chatId, "⛔ Solo admin puede configurar los iconos Premium.");
-  const action = String(match?.[1] || "").trim().toLowerCase();
+  const action = command.action;
+  const key = promoEmojiSessionKeyLocal(msg);
+  const session = promoEmojiSessionLocal(msg);
 
-  if (!action) return bot.sendMessage(chatId, promoEmojiInstructionsLocal(), { parse_mode:"Markdown" });
+  if (!action) {
+    promoEmojiSessionsLocal.set(key, { mode:"all", at:Date.now() });
+    return bot.sendMessage(chatId, promoEmojiInstructionsLocal(), { parse_mode:"Markdown" });
+  }
 
   if (action === "guardar") {
-    const source = msg.reply_to_message;
-    const found = extractCustomEmojiLocal(source);
-    if (found.length < PROMO_EMOJI_ROLES_LOCAL.length) {
-      return bot.sendMessage(chatId, `⚠️ Detecté ${found.length} custom emoji. Necesito ${PROMO_EMOJI_ROLES_LOCAL.length}.\n\nEnvíelos todos en un solo mensaje y responda con /promoemojis guardar.`);
-    }
-    const icons = {};
-    PROMO_EMOJI_ROLES_LOCAL.forEach((role,i)=>{ icons[role.key] = found[i]; });
-    await db.collection(PROMO_EMOJI_CONFIG_COLLECTION_LOCAL).doc(PROMO_EMOJI_CONFIG_DOC_LOCAL).set({
-      icons,
-      activo:true,
-      updatedBy:String(userId),
-      updatedAt:admin.firestore.FieldValue.serverTimestamp(),
-    }, { merge:true });
-    return bot.sendMessage(chatId, "✅ Iconos Premium guardados.\n\nUse /promoemojis probar para verificar que Telegram permita al bot mostrarlos.");
+    const found = promoEmojiSourceLocal(msg, session);
+    promoEmojiSessionsLocal.set(key, { mode:"all", icons:found, at:Date.now() });
+    return savePromoEmojisLocal(msg, found);
   }
 
   if (action === "ver") {
@@ -3926,11 +3978,13 @@ bot.onText(/^\/promoemojis(?:@\w+)?(?:\s+(.*))?$/i, async (msg, match) => {
 
   if (action === "probar") {
     const icons = await loadPromoEmojiConfigLocal();
+    if (!Object.keys(icons).length) return bot.sendMessage(chatId, "Todavía no hay iconos Premium activos. Escriba /promoemojis y envíe los 11 emojis.");
     const sample = [
       `${promoEmojiTagLocal(icons.titulo,"🔥")} <b>Oferta Premium de prueba</b>`,
       `${promoEmojiTagLocal(icons.plataforma,"🎯")} <b>Plataforma:</b> Sublicuentas`,
       "",
       `<b>${promoEmojiTagLocal(icons.datos,"💎")} Datos de la oferta</b>`,
+      `• ${promoEmojiTagLocal(icons.normal,"🧾")} <b>Precio normal:</b> L 100`,
       `• ${promoEmojiTagLocal(icons.socio,"💰")} <b>Precio socio:</b> L 50`,
       `• ${promoEmojiTagLocal(icons.venta,"📈")} <b>Venta sugerida:</b> L 100`,
       `• ${promoEmojiTagLocal(icons.ganancia,"💵")} <b>Ganancia:</b> L 50`,
@@ -3955,35 +4009,60 @@ bot.onText(/^\/promoemojis(?:@\w+)?(?:\s+(.*))?$/i, async (msg, match) => {
     await db.collection(PROMO_EMOJI_CONFIG_COLLECTION_LOCAL).doc(PROMO_EMOJI_CONFIG_DOC_LOCAL).set({
       icons:{}, activo:false, updatedBy:String(userId), updatedAt:admin.firestore.FieldValue.serverTimestamp(),
     }, { merge:true });
+    promoEmojiSessionsLocal.delete(key);
     return bot.sendMessage(chatId, "✅ Custom emojis desactivados. Las promociones volverán a usar emojis normales.");
   }
 
-  return bot.sendMessage(chatId, promoEmojiInstructionsLocal(), { parse_mode:"Markdown" });
-});
+  if (action === "cancelar") {
+    promoEmojiSessionsLocal.delete(key);
+    return bot.sendMessage(chatId, "Configuración cancelada. Los iconos guardados se conservan.");
+  }
 
-bot.onText(/^\/promoemoji(?:@\w+)?\s+([a-z_]+)$/i, async (msg, match) => {
-  if (!hasRuntimeLock()) return;
-  const chatId = msg.chat.id;
-  const userId = msg.from.id;
-  if (!(await safeIsAdminLocal(userId))) return bot.sendMessage(chatId, "⛔ Solo admin puede configurar los iconos Premium.");
-  const key = String(match?.[1] || "").trim().toLowerCase();
-  const role = PROMO_EMOJI_ROLES_LOCAL.find((r)=>r.key===key);
-  if (!role) return bot.sendMessage(chatId, `⚠️ Clave inválida. Use: ${PROMO_EMOJI_ROLES_LOCAL.map(r=>r.key).join(", ")}`);
-  const found = extractCustomEmojiLocal(msg.reply_to_message);
-  if (!found.length) return bot.sendMessage(chatId, "⚠️ Responda a un mensaje que contenga un custom emoji Premium.");
-  const ref = db.collection(PROMO_EMOJI_CONFIG_COLLECTION_LOCAL).doc(PROMO_EMOJI_CONFIG_DOC_LOCAL);
-  const snap = await ref.get();
-  const current = snap.exists ? (snap.data() || {}) : {};
-  const icons = current.icons && typeof current.icons === "object" ? { ...current.icons } : {};
-  icons[role.key] = found[0];
-  await ref.set({
-    icons,
-    activo:true,
-    updatedBy:String(userId),
-    updatedAt:admin.firestore.FieldValue.serverTimestamp(),
-  }, { merge:true });
-  return bot.sendMessage(chatId, `✅ Icono Premium actualizado: ${role.label}.\nUse /promoemojis probar.`);
-});
+  const role = PROMO_EMOJI_ROLES_LOCAL.find((r)=>r.key===action);
+  if (role) {
+    const found = extractCustomEmojiLocal(msg);
+    promoEmojiSessionsLocal.set(key, { mode:"single", role:role.key, at:Date.now() });
+    if (found.length || msg.reply_to_message) return savePromoEmojisLocal(msg, found.length ? found : extractCustomEmojiLocal(msg.reply_to_message), role);
+    return bot.sendMessage(chatId, `Envíe un solo emoji Premium para ${role.label}. Lo guardaré al recibirlo.\nPara salir: /promoemojis cancelar.`);
+  }
+
+  return bot.sendMessage(chatId, `⚠️ Opción no reconocida. Use /promoemojis, /promoemojis ver o /promoemojis probar.\nPara cambiar uno: /promoemoji ${PROMO_EMOJI_ROLES_LOCAL[0].key}.\nClaves: ${PROMO_EMOJI_ROLES_LOCAL.map(r=>r.key).join(", ")}`);
+}
+
+async function handlePromoEmojiMessageLocal(msg) {
+  const command = promoEmojiCommandLocal(msg);
+  const session = promoEmojiSessionLocal(msg);
+  const found = extractCustomEmojiLocal(msg);
+  if (!command && /^\s*\//.test(promoEmojiTextLocal(msg))) {
+    if (/^\s*\/(?:menu|start|cancelar)(?:@\w+)?(?:\s|$)/i.test(promoEmojiTextLocal(msg))) promoEmojiSessionsLocal.delete(promoEmojiSessionKeyLocal(msg));
+    return false;
+  }
+  const list = promoEmojiListLocal(msg);
+  if (!command && !list && !(session?.mode && (found.length || msg.sticker || msg.photo))) return false;
+  if (!(await safeIsAdminLocal(msg.from?.id))) {
+    await bot.sendMessage(msg.chat.id, "⛔ Solo admin puede configurar los iconos Premium.");
+    return true;
+  }
+  try {
+    const currentSession = promoEmojiSessionLocal(msg);
+    if (command) await runPromoEmojiCommandLocal(msg, command);
+    else if (currentSession?.mode) {
+      promoEmojiSessionsLocal.set(promoEmojiSessionKeyLocal(msg), { ...currentSession, icons:found, at:Date.now() });
+      const role = currentSession.mode === "single" ? PROMO_EMOJI_ROLES_LOCAL.find(r=>r.key===currentSession.role) : null;
+      await savePromoEmojisLocal(msg, found, role);
+    } else {
+      // Retener solo los IDs de este usuario y chat; nunca guardar sin comando.
+      promoEmojiSessionsLocal.set(promoEmojiSessionKeyLocal(msg), { icons:found, at:Date.now() });
+      await bot.sendMessage(msg.chat.id, found.length
+        ? `Recibí ${found.length} emojis Premium. Para aplicar los 11 iconos de promociones, envíe /promoemojis guardar.`
+        : "Ese mensaje contiene emojis normales. Para configurar los Premium, escriba /promoemojis y envíelos desde el panel de emojis de Telegram.");
+    }
+  } catch (error) {
+    logErr("promoemojis", error?.message || error);
+    await bot.sendMessage(msg.chat.id, "⚠️ No pude completar la configuración de emojis. Vuelva a enviar el comando; si estaba guardando una lista, responda a ella con /promoemojis guardar.");
+  }
+  return true;
+}
 
 // ===============================
 // IDS / VINCULACIÓN
@@ -6176,10 +6255,14 @@ bot.on("message", async (msg) => {
   // Modo app: los textos de navegación los atienden los atajos bot.onText.
   // Aquí se detienen para que NO disparen búsqueda ni "Sin resultados".
   if (isNavigationTextLocal(textClean)) {
+    promoEmojiSessionsLocal.delete(promoEmojiSessionKeyLocal(msg));
     return sendBottomMainMenu(chatId, userId, true);
   }
 
   try {
+    // Los comandos y listas de emojis se consumen aquí una sola vez, antes
+    // de los flujos de clientes y de la búsqueda libre (incluye captions).
+    if (await handlePromoEmojiMessageLocal(msg)) return;
     if (!(await userHasAccessFromMessage(msg))) return;
 
     // Modo app: mantener el panel anclado, no crear mensaje nuevo.
@@ -6279,6 +6362,7 @@ bot.on("message", async (msg) => {
         "code", "link", "hogar", "prime", "inbox", "debug",
         // ✅ Buzón de avisos web revendedores
         "aviso", "avisos", "borraraviso",
+        "promoemoji", "promoemojis",
         ...PLATFORM_KEYS,
       ]);
 
