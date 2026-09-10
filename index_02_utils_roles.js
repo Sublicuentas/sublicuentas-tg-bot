@@ -611,7 +611,11 @@ async function enviarTxtComoArchivo(chatId, contenido = "", nombre = `archivo_${
 // ===============================
 // EXPORTS
 // ===============================
+const { createPremiumIcons } = require("./index_20_premium_icons");
+const premiumIcons = createPremiumIcons({ bot, db, admin, isAdmin });
+
 module.exports = {
+  premiumIcons,
   // state
   panelMsgId, pending, wizard,
 

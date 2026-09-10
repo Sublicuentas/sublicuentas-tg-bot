@@ -37,6 +37,7 @@ const { canonicalVendedor, normVendedor, clientePerteneceAVendedor, vendedorEfec
 
 const {
   isAdmin,
+  premiumIcons,
   isSuperAdmin,
   isVendedor,
   getRevendedorPorTelegramId,
@@ -4357,6 +4358,7 @@ bot.on("callback_query", async (q) => {
     await answerCallbackSilentlySafe(q);
 
     if (!chatId) return;
+    if (await premiumIcons?.handleCallback?.(q)) return;
     if (!(await userHasAccessById(chatId, userId))) return;
 
     bindPanelFromCallback(q);
@@ -6256,12 +6258,17 @@ bot.on("message", async (msg) => {
   // Aquí se detienen para que NO disparen búsqueda ni "Sin resultados".
   if (isNavigationTextLocal(textClean)) {
     promoEmojiSessionsLocal.delete(promoEmojiSessionKeyLocal(msg));
+    premiumIcons?.cancelSession?.(msg);
     return sendBottomMainMenu(chatId, userId, true);
   }
 
   try {
     // Los comandos y listas de emojis se consumen aquí una sola vez, antes
     // de los flujos de clientes y de la búsqueda libre (incluye captions).
+    if (await premiumIcons?.handleMessage?.(msg)) {
+      promoEmojiSessionsLocal.delete(promoEmojiSessionKeyLocal(msg));
+      return;
+    }
     if (await handlePromoEmojiMessageLocal(msg)) return;
     if (!(await userHasAccessFromMessage(msg))) return;
 

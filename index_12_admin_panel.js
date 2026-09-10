@@ -19,7 +19,7 @@
 const { revAuth, revAdminAuth, generarPinSetup } = require("./index_09_api_auth");
 const { db, admin, bot, CLIENTES_COLLECTION, REVENDEDORES_COLLECTION } = require("./index_01_core");
 const { getCliente, patchServicio, eliminarServicioTx, buscarClienteRobusto } = require("./index_03_clientes_crm");
-const { normalizarTelefonoCliente } = require("./index_02_utils_roles");
+const { normalizarTelefonoCliente, premiumIcons } = require("./index_02_utils_roles");
 const {
   normVendedor,
   canonicalVendedor,
@@ -93,6 +93,7 @@ async function guardarImagenPromo(dataUrl, id) {
 
 
 async function loadPromoEmojiConfig() {
+  await premiumIcons.loadConfig();
   try {
     const snap = await db.collection(PROMO_EMOJI_CONFIG_COLLECTION).doc(PROMO_EMOJI_CONFIG_DOC).get();
     if (!snap.exists) return {};
@@ -172,14 +173,14 @@ function fitCaption(lines, limit = 1024) {
   return joined;
 }
 
-function captionPromo(p, icons = {}) {
+function captionPromo(p, icons = {}, usePlatformLogo = true) {
   const titulo = html(p.titulo || "PROMOCIÓN PARA SOCIOS");
   const plataforma = html(p.plataforma || "");
   const profit = Math.max(0, Number(p.precioSugerido || 0) - Number(p.precioPromo || 0));
   const bullets = splitPromoText(p.texto);
   const lines = [
     `${premiumIcon(icons,"titulo","🔥")} <b>${titulo}</b>`,
-    plataforma ? `${premiumIcon(icons,"plataforma","🎯")} <b>Plataforma:</b> ${plataforma}` : "",
+    plataforma ? `${(usePlatformLogo && premiumIcons.platformTag(p.plataforma)) || premiumIcon(icons,"plataforma","🎯")} <b>Plataforma:</b> ${plataforma}` : "",
     "",
     `<b>${premiumIcon(icons,"datos","💎")} Datos de la oferta</b>`,
     p.precioNormal ? `• ${premiumIcon(icons,"normal","🧾")} <b>Precio normal:</b> <s>${formatMoney(p.precioNormal)}</s>` : "",
@@ -295,9 +296,9 @@ module.exports = function mountAdminPanel(app) {
     const revSnap=await db.collection(REVENDEDORES_COLLECTION).get();
     const targets=revSnap.docs.map(d=>({id:d.id,...(d.data()||{})})).filter(r=>r.activo!==false&&(!selected.size||selected.has(normNombre(r.nombre_norm||r.nombre||r.id))));
     const promoIcons=await loadPromoEmojiConfig();
-    const premiumEnabled=hasPremiumIcons(promoIcons);
+    const premiumEnabled=hasPremiumIcons(promoIcons)||Boolean(premiumIcons.platformTag(p.plataforma));
     const captionPremium=captionPromo(p,promoIcons);
-    const captionRegular=premiumEnabled?captionPromo(p,{}):captionPremium;
+    const captionRegular=premiumEnabled?captionPromo(p,{},false):captionPremium;
     let enviados=0,fallidos=0,fallbackTexto=0,fallbackEmoji=0;const sinTelegram=[],erroresTelegram=[];
 
     // Telegram se procesa en lotes pequeños. Los custom emoji Premium se
