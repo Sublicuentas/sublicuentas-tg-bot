@@ -287,6 +287,21 @@ function renderCredencialesServicioLocal(servicio = {}, markdown = true, indent 
   return out;
 }
 
+// ✅ Distingue si una compra/servicio es para el CLIENTE TITULAR o para un
+// TERCERO (otra persona/beneficiario). Sublichat HQ guarda esto por servicio
+// como beneficiarioTipo ("titular" | "tercero") + beneficiarioNombre, pero el
+// bot mostraba todo en una sola lista sin marcarlo. Esta etiqueta se usa en
+// todas las fichas/listas para que quede claro cuál compra es de un tercero.
+function etiquetaBeneficiarioServicioLocal(servicio = {}) {
+  const tipo = String(servicio.beneficiarioTipo || "").trim().toLowerCase();
+  if (tipo !== "tercero") {
+    return { esTercero: false, texto: "Titular", corto: "👤 Titular" };
+  }
+  const nombre = String(servicio.beneficiarioNombre || servicio.beneficiario || "").trim();
+  const texto = nombre ? `Tercero: ${nombre}` : "Tercero";
+  return { esTercero: true, texto, corto: `🔑 ${texto}` };
+}
+
 function validateIdentByPlatformLocal(plataforma = "", ident = "") {
   const p = normalizarPlataforma(plataforma);
   const v = String(ident || "").trim();
@@ -791,7 +806,9 @@ async function generarHistorialTXT(clientId) {
   } else {
     servicios.forEach((s, i) => {
       const est = getEstadoServicio(s.fechaRenovacion || "");
+      const benef = etiquetaBeneficiarioServicioLocal(s);
       txt += `\n${i + 1}) ${humanPlataforma(s.plataforma || "")}\n`;
+      txt += `Uso: ${benef.texto}\n`;
       txt += renderCredencialesServicioLocal(s, false, "");
       txt += `Precio: ${Number(s.precio || 0).toFixed(2)} Lps\n`;
       txt += `Renovacion: ${s.fechaRenovacion || "-"}\n`;
@@ -955,6 +972,9 @@ function bolsasBusquedaClienteLocal(x = {}) {
       normTxt(s?.vendedor_norm || ""),
       String(s?.clave || "").trim().toLowerCase(),
       String(s?.pin || "").trim().toLowerCase(),
+      // Permite encontrar al cliente buscando el nombre del TERCERO/beneficiario
+      // (ej. "Sorixth Godoy"), no solo el nombre del titular de la cuenta.
+      normTxt(s?.beneficiarioNombre || s?.beneficiario || ""),
     );
 
     for (const perfil of perfilesServicioLocal(s, titular)) {
@@ -1067,7 +1087,9 @@ function clienteResumenTXT(c = {}) {
   } else {
     servicios.forEach((s, i) => {
       const est = getEstadoServicio(s.fechaRenovacion || "");
+      const benef = etiquetaBeneficiarioServicioLocal(s);
       txt += `\n${i + 1}) ${humanPlataforma(s.plataforma || "")}\n`;
+      txt += `Uso: ${benef.texto}\n`;
       txt += `Vendedor responsable: ${vendedorEfectivoServicio(s, c).vendedor || "-"}\n`;
       txt += renderCredencialesServicioLocal(s, false, "");
       txt += `Precio: ${Number(s.precio || 0).toFixed(2)} Lps\n`;
@@ -1098,7 +1120,8 @@ function renderFichaClienteMarkdown(c = {}) {
   } else {
     servicios.forEach((s, i) => {
       const est = getEstadoServicio(s.fechaRenovacion || "");
-      txt += `\n\n${i + 1}) ${iconPlataforma(s.plataforma || "")} *${escMD(humanPlataforma(s.plataforma || ""))}*\n`;
+      const benef = etiquetaBeneficiarioServicioLocal(s);
+      txt += `\n\n${i + 1}) ${iconPlataforma(s.plataforma || "")} *${escMD(humanPlataforma(s.plataforma || ""))}* — ${benef.esTercero ? "🔑" : "👤"} ${escMD(benef.texto)}\n`;
       txt += `🧾 *Vendedor responsable:* ${escMD(vendedorEfectivoServicio(s, c).vendedor || "-")}\n`;
       txt += renderCredencialesServicioLocal(s, true, "");
       txt += `💵 *Precio:* ${escMD(`${Number(s.precio || 0).toFixed(2)} Lps`)}\n`;
@@ -1148,7 +1171,8 @@ async function enviarFichaClienteVendedor(chatId, clientId, backCb = "vend:clien
   } else {
     servicios.forEach((s, i) => {
       const est = getEstadoServicio(s.fechaRenovacion || "");
-      txt += `*${i + 1}.* *${escMD(humanPlataforma(s.plataforma || ""))}*\n`;
+      const benef = etiquetaBeneficiarioServicioLocal(s);
+      txt += `*${i + 1}.* *${escMD(humanPlataforma(s.plataforma || ""))}* — ${benef.esTercero ? "🔑" : "👤"} ${escMD(benef.texto)}\n`;
       txt += renderCredencialesServicioLocal(s, true, "   ");
       txt += `   📅 ${escMD(s.fechaRenovacion || "-")} ${est.emoji}\n`;
       txt += `   💵 ${escMD(Number(s.precio || 0).toFixed(2))} Lps\n\n`;
@@ -1202,7 +1226,14 @@ async function menuListaServicios(chatId, clientId) {
     ]);
   }
 
-  const kb = servicios.map((s, i) => [{ text: safeBtnLabel(`${i + 1}) ${humanPlataforma(s.plataforma || "")} • ${cantidadPerfilesServicioLocal(s, c.nombrePerfil || "")} perfil(es)`), callback_data: `cli:serv:menu:${clientId}:${compraSelectorLocal(s, s.idxOriginal)}` }]);
+  const kb = servicios.map((s, i) => {
+    const benef = etiquetaBeneficiarioServicioLocal(s);
+    const etiqueta = benef.esTercero ? ` • 🔑 ${benef.texto}` : "";
+    return [{
+      text: safeBtnLabel(`${i + 1}) ${humanPlataforma(s.plataforma || "")} • ${cantidadPerfilesServicioLocal(s, c.nombrePerfil || "")} perfil(es)${etiqueta}`),
+      callback_data: `cli:serv:menu:${clientId}:${compraSelectorLocal(s, s.idxOriginal)}`,
+    }];
+  });
   kb.push([{ text: "➕ Agregar servicio", callback_data: `cli:serv:add:${clientId}` }]);
   kb.push([{ text: "⬅️ Volver Ficha",   callback_data: `cli:view:${clientId}` }]);
   kb.push([{ text: "🏠 Inicio",          callback_data: "go:inicio" }]);
@@ -1221,9 +1252,11 @@ async function menuServicio(chatId, clientId, selector) {
   const s = servicios[idx] || {};
   const compraSel = compraSelectorLocal(s, idx);
   const est = getEstadoServicio(s.fechaRenovacion || "");
+  const benef = etiquetaBeneficiarioServicioLocal(s);
   let txt =
     `🧩 *SERVICIO #${idx + 1}*\n\n` +
-    `${iconPlataforma(s.plataforma || "")} *Plataforma:* ${escMD(humanPlataforma(s.plataforma || ""))}\n`;
+    `${iconPlataforma(s.plataforma || "")} *Plataforma:* ${escMD(humanPlataforma(s.plataforma || ""))}\n` +
+    `${benef.esTercero ? "🔑" : "👤"} *Uso:* ${escMD(benef.texto)}\n`;
 
   txt += renderCredencialesServicioLocal(s, true, "");
   txt += `🧾 *Vendedor responsable:* ${escMD(vendedorEfectivoServicio(s, c).vendedor || "-")}\n`;
@@ -2380,4 +2413,5 @@ module.exports = {
   obtenerRenovacionesPorFecha, renovacionesTexto, enviarTXT, enviarTXTATodosHoy,
   perfilesServicioLocal, cantidadPerfilesServicioLocal,
   compraSelectorLocal, perfilSelectorLocal, resolverIndiceCompraSelectorLocal, resolverIndicePerfilSelectorLocal,
+  etiquetaBeneficiarioServicioLocal,
 };
