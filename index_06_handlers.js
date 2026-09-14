@@ -4341,6 +4341,84 @@ bot.onText(/\/addcorreo\s+(\S+)\s+(\S+)(?:\s+(\d+))?/i, async (msg, match) => {
 });
 
 // ===============================
+// 💬 RESPUESTAS DE TICKETS / AVISOS DESDE TELEGRAM
+// El mensaje fue creado en Sublichat (api/tickets.js). El socio puede tocar
+// "Responder" o usar la respuesta nativa de Telegram. Todo queda en el mismo
+// documento tickets_auditoria y vuelve a verse en Sublichat.
+// ===============================
+const ticketReplyState = global.__SUBLICUENTAS_TICKET_REPLY_STATE__ = global.__SUBLICUENTAS_TICKET_REPLY_STATE__ || new Map();
+function ticketReplyStateKey(chatId){return String(chatId||'');}
+function ticketDestNorm(v){return normVendedor(String(v||'')).replace(/^geissel$/,'geisell');}
+function ticketActorAliases(rev={}){
+  const vals=[rev.id,rev.nombre_norm,rev.nombre,rev.usuario,rev.username].filter(Boolean);
+  const nombre=String(rev.nombre||'').trim();if(nombre)vals.push(nombre.split(/\s+/)[0]);
+  return [...new Set(vals.map(ticketDestNorm).filter(Boolean))];
+}
+function ticketCanTelegramAccess(ticket={},rev=null,adminOk=false){
+  if(adminOk)return true;
+  if(!rev)return false;
+  const aliases=ticketActorAliases(rev),dest=(Array.isArray(ticket.destinos)?ticket.destinos:[]).map(ticketDestNorm);
+  const creator=ticketDestNorm(ticket.creadoPorRol||'');
+  return aliases.some(a=>dest.includes(a)||a===creator);
+}
+function ticketTelegramLinkKey(chatId,messageId){
+  const safeChat=String(chatId||'').replace(/[^0-9-]/g,'').slice(0,40);
+  return `${safeChat}_${Number(messageId)||0}`;
+}
+async function ticketResolveIdFromTelegramReply(msg){
+  const mid=msg?.reply_to_message?.message_id;if(!mid)return '';
+  try{const snap=await db.collection('ticket_telegram_messages').doc(ticketTelegramLinkKey(msg.chat?.id,mid)).get();return snap.exists?String((snap.data()||{}).ticketId||''):'';}catch(_){return '';}
+}
+function ticketStorageBucketsLocal(){
+  const projectId=process.env.FIREBASE_PROJECT_ID||'';
+  return [...new Set([process.env.TICKETS_FIREBASE_STORAGE_BUCKET,process.env.FIREBASE_STORAGE_BUCKET,process.env.STORAGE_BUCKET,projectId?`${projectId}.firebasestorage.app`:'',projectId?`${projectId}.appspot.com`:''].map(x=>String(x||'').trim()).filter(Boolean))];
+}
+async function ticketTelegramPhotoUrl(msg,ticketId){
+  const photos=Array.isArray(msg?.photo)?msg.photo:[];if(!photos.length)return '';
+  const best=photos[photos.length-1];if(!best?.file_id)return '';
+  let stream;try{stream=bot.getFileStream(best.file_id);}catch(e){throw new Error('No pude descargar la foto de Telegram.');}
+  const chunks=[];for await(const chunk of stream)chunks.push(Buffer.from(chunk));const buffer=Buffer.concat(chunks);
+  if(!buffer.length||buffer.length>8*1024*1024)throw new Error('La foto de Telegram pesa demasiado.');
+  const path=`tickets/respuestas-telegram/${String(ticketId||'sin-ticket').replace(/[^a-zA-Z0-9_-]/g,'').slice(0,80)}/${Date.now()}-${Math.random().toString(36).slice(2,9)}.jpg`;
+  let last=null;
+  for(const bucketName of ticketStorageBucketsLocal()){
+    try{const file=admin.storage().bucket(bucketName).file(path);await file.save(buffer,{contentType:'image/jpeg',resumable:false,metadata:{cacheControl:'public,max-age=31536000'}});const [url]=await file.getSignedUrl({action:'read',expires:'2099-12-31'});return url;}catch(e){last=e;}
+  }
+  throw new Error('No pude guardar la evidencia en Storage. '+String(last?.message||''));
+}
+async function ticketAppendTelegramReply({ticketId,msg,rev,adminOk}){
+  const ref=db.collection('tickets_auditoria').doc(String(ticketId||''));
+  const snap=await ref.get();if(!snap.exists)throw new Error('Ese ticket ya no existe.');
+  const old=snap.data()||{};if(!ticketCanTelegramAccess(old,rev,adminOk))throw new Error('Este ticket no corresponde a su usuario.');
+  const texto=String(msg?.text||msg?.caption||'').trim().slice(0,3000);
+  const imagenUrl=await ticketTelegramPhotoUrl(msg,ticketId);
+  if(!texto&&!imagenUrl)throw new Error('Envíe texto o una foto como respuesta.');
+  const actor=rev?.nombre||rev?.nombre_norm||(adminOk?'Admin Telegram':'Socio');
+  const actorRol=rev?ticketDestNorm(rev.nombre_norm||rev.id||rev.nombre):'sublicuentas';
+  const entry={texto:texto||(imagenUrl?'Evidencia adjunta':''),por:String(actor).slice(0,100),porRol:actorRol,imagenUrl,origen:'telegram',telegramUserId:String(msg?.from?.id||''),at:new Date().toISOString()};
+  await db.runTransaction(async tx=>{const fresh=await tx.get(ref);if(!fresh.exists)throw new Error('Ese ticket ya no existe.');const data=fresh.data()||{},respuestas=Array.isArray(data.respuestas)?data.respuestas.slice():[];respuestas.push(entry);tx.set(ref,{respuestas,ultimaRespuesta:entry.texto,ultimaRespuestaPor:entry.por,estado:String(data.estado||'abierto')==='resuelto'?'resuelto':'respondido',updatedAt:new Date().toISOString()},{merge:true});});
+  const label=String(old.tipo||'').toLowerCase()==='aviso'?`aviso "${old.titulo||'Sin título'}"`:`ticket #${old.numero||String(ticketId).slice(-4)}`;
+  const aviso=`💬 *Respuesta desde Telegram*\n👤 ${escMD(entry.por)}\n🎫 ${escMD(label)}\n\n${escMD(entry.texto||'Evidencia adjunta')}`;
+  const admins=await getActiveAdminIdsLocal();
+  for(const id of admins){if(String(id)===String(msg?.chat?.id))continue;try{if(imagenUrl)await bot.sendPhoto(id,imagenUrl,{caption:aviso,parse_mode:'Markdown'});else await bot.sendMessage(id,aviso,{parse_mode:'Markdown'});}catch(e){logErr('ticket:notify-admin',e?.message||e);}}
+  return {old,entry};
+}
+async function ticketStartTelegramReply(chatId,userId,ticketId,adminOk,vend){
+  const ref=db.collection('tickets_auditoria').doc(String(ticketId||''));const snap=await ref.get();if(!snap.exists)return bot.sendMessage(chatId,'⚠️ Ese ticket ya no existe.');const t=snap.data()||{};
+  if(!ticketCanTelegramAccess(t,vend,adminOk))return bot.sendMessage(chatId,'⛔ Ese ticket no corresponde a su usuario.');
+  ticketReplyState.set(ticketReplyStateKey(chatId),{ticketId:String(ticketId),at:Date.now()});
+  return bot.sendMessage(chatId,`💬 Respondiendo ${String(t.tipo||'').toLowerCase()==='aviso'?'al aviso':`al ticket #${t.numero||'—'}`}\n\nEscriba su respuesta. También puede enviar una foto con comentario como evidencia.\n\n/cancelar para salir.`);
+}
+async function ticketTryConsumeTelegramReply(msg,adminOk,vend){
+  const chatId=msg.chat?.id,key=ticketReplyStateKey(chatId),pendingReply=ticketReplyState.get(key);
+  const nativeTicketId=await ticketResolveIdFromTelegramReply(msg);
+  const ticketId=String(nativeTicketId||(pendingReply&&pendingReply.ticketId)||'');if(!ticketId)return false;
+  const raw=String(msg.text||'').trim().toLowerCase();if(['/cancelar','cancelar','cancel'].includes(raw)){ticketReplyState.delete(key);await bot.sendMessage(chatId,'✅ Respuesta cancelada.');return true;}
+  if(raw.startsWith('/')&&!nativeTicketId)return false;
+  try{const {old}=await ticketAppendTelegramReply({ticketId,msg,rev:vend,adminOk});ticketReplyState.delete(key);await bot.sendMessage(chatId,`✅ Su respuesta quedó agregada ${String(old.tipo||'').toLowerCase()==='aviso'?'al aviso':`al ticket #${old.numero||'—'}`}. Sublicuentas la verá en la misma conversación.`);return true;}catch(e){ticketReplyState.delete(key);await bot.sendMessage(chatId,'⚠️ '+String(e?.message||'No pude guardar la respuesta.'));return true;}
+}
+
+// ===============================
 // CALLBACKS
 // ===============================
 bot.on("callback_query", async (q) => {
@@ -4364,6 +4442,10 @@ bot.on("callback_query", async (q) => {
     const vendOk = !!(vend && vend.nombre);
 
     if (!adminOk && !vendOk) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+    if (data.startsWith("tk:reply:")) {
+      const ticketId=data.slice("tk:reply:".length).trim();
+      return ticketStartTelegramReply(chatId,userId,ticketId,adminOk,vend);
+    }
     if (data === "noop") return;
 
     if (data.startsWith("sync:clave:serv:")) {
@@ -6271,7 +6353,10 @@ bot.on("message", async (msg) => {
     // Modo app: mantener el panel anclado, no crear mensaje nuevo.
 
     const adminOk = await safeIsAdminLocal(userId);
-    const vendOk = await safeIsVendedorLocal(userId);
+    const vend = await safeGetRevendedorLocal(userId);
+    const vendOk = !!(vend && vend.nombre);
+
+    if ((adminOk || vendOk) && await ticketTryConsumeTelegramReply(msg,adminOk,vend)) return;
 
     // Si hay wizard activo y mandan un comando que no sea menu/start, avisar
     if (wizard.has(String(chatId)) && text.startsWith("/")) {

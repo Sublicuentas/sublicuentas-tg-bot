@@ -62,7 +62,7 @@ app.use(cors());
 app.use(express.json({ limit: "15mb" }));
 
 // keepalive / health (para que Render lo mantenga vivo)
-const PANEL_API_VERSION = "socios-20260914-2";
+const PANEL_API_VERSION = "socios-20260914-3";
 app.get("/", (_req, res) => res.type("text/plain").send(`Sublicuentas Panel API OK ${PANEL_API_VERSION}`));
 app.get("/rev/ping", (_req, res) => res.json({ v: PANEL_API_VERSION, gemini: !!process.env.GEMINI_API_KEY, anthropic: !!process.env.ANTHROPIC_API_KEY, storageBuckets: STORAGE_BUCKET_CANDIDATES }));
 app.get("/health", (_req, res) => res.json({ ok: true, version: PANEL_API_VERSION, ts: Date.now() }));
@@ -343,41 +343,93 @@ app.get("/rev/me", revAuth, async (req, res) => {
 });
 
 // ── CLIENTES del revendedor ──
+// Caché corto del escaneo de clientes. Los campos vendedores_norm / vendedor_norm
+// son índices de conveniencia, pero la fuente autoritativa sigue siendo servicios[].
+// Esto evita que un cliente desaparezca del Panel de Socios cuando el resumen
+// superior quedó viejo (caso típico: Telegram sí avisa la renovación, pero el panel
+// no la muestra). El escaneo se comparte 30 s entre socios para no multiplicar lecturas.
+let _revClientesScanCache = { at: 0, docs: [] };
+async function revAllClientDocsCached(maxAgeMs = 30000) {
+  const now = Date.now();
+  if (_revClientesScanCache.docs.length && now - _revClientesScanCache.at < maxAgeMs) return _revClientesScanCache.docs;
+  const snap = await db.collection("clientes").get();
+  const docs = snap.docs.slice();
+  _revClientesScanCache = { at: now, docs };
+  return docs;
+}
+function revSocioAliases(live = {}, tokenRev = {}) {
+  const values = [
+    live.nombre_norm, live.nombre, live.usuario, live.username, live.id,
+    tokenRev.nombre_norm, tokenRev.nombre, tokenRev.usuario, tokenRev.username, tokenRev.id,
+    ...(Array.isArray(live.aliases) ? live.aliases : []),
+  ];
+  const out = new Set();
+  values.forEach((v) => {
+    const n = revNormKey(v);
+    if (n) out.add(n);
+  });
+  if (out.has("geisell")) out.add("geissel");
+  if (out.has("geissel")) out.add("geisell");
+  return [...out];
+}
+function revFiltrarClientePorAliases(cliente = {}, aliases = []) {
+  for (const alias of aliases) {
+    const visible = filtrarClienteParaVendedor(cliente, alias);
+    if (Array.isArray(visible.servicios) && visible.servicios.length) return visible;
+  }
+  return { ...cliente, servicios: [] };
+}
+async function revRepairClientVendorSummary(doc, data) {
+  try {
+    const servicios = heredarVendedorServicios(Array.isArray(data.servicios) ? data.servicios : [], data);
+    const resumen = camposResumenVendedores(servicios, data);
+    const oldNorm = Array.isArray(data.vendedores_norm) ? data.vendedores_norm.map(revNormKey).filter(Boolean).sort() : [];
+    const newNorm = Array.isArray(resumen.vendedores_norm) ? resumen.vendedores_norm.map(revNormKey).filter(Boolean).sort() : [];
+    if (JSON.stringify(oldNorm) === JSON.stringify(newNorm) && revNormKey(data.vendedor_norm) === revNormKey(resumen.vendedor_norm)) return;
+    await doc.ref.set({ ...resumen, servicios, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+  } catch (e) {
+    console.error("revRepairClientVendorSummary", doc.id, e?.message || e);
+  }
+}
+
 app.get("/rev/clientes", revAuth, async (req, res) => {
   try {
     const live = await revLiveProfile(req.rev);
     if (!revCap(live, "canViewClients", true)) return res.status(403).json({ error: "sin_permiso_clientes" });
-    const vendedorNormRaw = normVendedor(req.rev.nombre_norm || req.rev.nombre || "");
-    const vendedorNorm = vendedorNormRaw === "geissel" ? "geisell" : vendedorNormRaw;
-    const aliases = vendedorNorm === "geisell" ? ["geisell", "geissel"] : [vendedorNorm];
-    const nombresLegacy = vendedorNorm === "geisell" ? ["Geisell", "Geissel", "geisell", "geissel"] : [];
-    const consultas = await Promise.allSettled([
-      ...aliases.flatMap(alias => [
+    const aliases = revSocioAliases(live, req.rev);
+    const vendedorNorm = aliases[0] || revNormKey(req.rev.nombre_norm || req.rev.nombre || "");
+    if (!vendedorNorm) return res.json([]);
+
+    // 1) Índices rápidos para la mayoría de los clientes.
+    const consultas = await Promise.allSettled(aliases.flatMap(alias => [
       db.collection("clientes").where("vendedores_norm", "array-contains", alias).get(),
       db.collection("clientes").where("vendedor_norm", "==", alias).get(),
-      ]),
-      ...nombresLegacy.flatMap(nombre => [
-        db.collection("clientes").where("vendedores", "array-contains", nombre).get(),
-        db.collection("clientes").where("vendedor", "==", nombre).get(),
-      ]),
-    ]);
+    ]));
     const docs = new Map();
     consultas.forEach((resultado) => {
       if (resultado.status !== "fulfilled") return;
       resultado.value.docs.forEach((d) => docs.set(d.id, d));
     });
-    // Respaldo para datos muy antiguos que solo guardaron vendedor dentro de
-    // servicios[]. Se usa únicamente si los campos indexados no encontraron nada.
-    if (!docs.size && vendedorNorm === "geisell") {
-      const legacySnap = await db.collection("clientes").get();
-      legacySnap.docs.forEach((d) => {
-        const visible = filtrarClienteParaVendedor(d.data() || {}, vendedorNorm);
-        if (visible.servicios.length) docs.set(d.id, d);
-      });
-    }
+
+    // 2) Verificación autoritativa por servicios[]. Se ejecuta para TODOS los socios,
+    // no solo Geisell. Así Jimena, Relojes, Yami, etc. ven exactamente las mismas
+    // renovaciones que el bot detecta al recorrer servicios[].
+    const allDocs = await revAllClientDocsCached();
+    const reparaciones = [];
+    allDocs.forEach((d) => {
+      if (docs.has(d.id)) return;
+      const raw = d.data() || {};
+      const visible = revFiltrarClientePorAliases(raw, aliases);
+      if (!visible.servicios.length) return;
+      docs.set(d.id, d);
+      if (reparaciones.length < 25) reparaciones.push(revRepairClientVendorSummary(d, raw));
+    });
+    if (reparaciones.length) Promise.allSettled(reparaciones).catch(() => {});
+
     const lista = Array.from(docs.values())
-      .map((d) => ({ id: d.id, ...filtrarClienteParaVendedor(d.data() || {}, vendedorNorm) }))
+      .map((d) => ({ id: d.id, ...revFiltrarClientePorAliases(d.data() || {}, aliases) }))
       .filter((cliente) => cliente.servicios.length > 0);
+    res.set("Cache-Control", "no-store");
     res.json(lista);
   } catch (e) { console.error("rev/clientes", e); res.status(500).json({ error: "server" }); }
 });
