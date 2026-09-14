@@ -62,7 +62,7 @@ function html(v) { return clean(v, 1000).replace(/&/g, "&amp;").replace(/</g, "&
 function promoPublica(doc) {
   const p = doc.data ? doc.data() || {} : doc || {};
   const ts = (v) => v?.toDate ? v.toDate().toISOString() : clean(v, 50);
-  return { id: doc.id || p.id || "", titulo:clean(p.titulo,120), plataforma:clean(p.plataforma,100), precioNormal:Number(p.precioNormal)||0, precioPromo:Number(p.precioPromo)||0, precioSugerido:Number(p.precioSugerido)||0, cupos:Math.max(0,Number(p.cupos)||0), vigencia:clean(p.vigencia,50), texto:clean(p.texto,1200), imagenUrl:clean(p.imagenUrl,1500), estado:clean(p.estado,30)||"borrador", destinatarios:Array.isArray(p.destinatarios)?p.destinatarios:[], enviados:Number(p.enviados)||0, fallidos:Number(p.fallidos)||0, erroresTelegram:Array.isArray(p.erroresTelegram)?p.erroresTelegram:[], createdAt:ts(p.createdAt), sentAt:ts(p.sentAt) };
+  return { id: doc.id || p.id || "", titulo:clean(p.titulo,120), plataforma:clean(p.plataforma,100), precioNormal:Number(p.precioNormal)||0, precioPromo:Number(p.precioPromo)||0, cupos:Math.max(0,Number(p.cupos)||0), vigencia:clean(p.vigencia,50), texto:clean(p.texto,1200), imagenUrl:clean(p.imagenUrl,1500), estado:clean(p.estado,30)||"borrador", destinatarios:Array.isArray(p.destinatarios)?p.destinatarios:[], enviados:Number(p.enviados)||0, fallidos:Number(p.fallidos)||0, erroresTelegram:Array.isArray(p.erroresTelegram)?p.erroresTelegram:[], createdAt:ts(p.createdAt), sentAt:ts(p.sentAt) };
 }
 async function guardarImagenPromo(dataUrl, id) {
   const match = String(dataUrl || "").match(/^data:((?:image\/jpeg|image\/png|image\/webp));base64,([A-Za-z0-9+/=]+)$/i);
@@ -176,7 +176,6 @@ function fitCaption(lines, limit = 1024) {
 function captionPromo(p, icons = {}, usePlatformLogo = true) {
   const titulo = html(p.titulo || "PROMOCIÓN PARA SOCIOS");
   const plataforma = html(p.plataforma || "");
-  const profit = Math.max(0, Number(p.precioSugerido || 0) - Number(p.precioPromo || 0));
   const bullets = splitPromoText(p.texto);
   const lines = [
     `${premiumIcon(icons,"titulo","🔥")} <b>${titulo}</b>`,
@@ -185,8 +184,6 @@ function captionPromo(p, icons = {}, usePlatformLogo = true) {
     `<b>${premiumIcon(icons,"datos","💎")} Datos de la oferta</b>`,
     p.precioNormal ? `• ${premiumIcon(icons,"normal","🧾")} <b>Precio normal:</b> <s>${formatMoney(p.precioNormal)}</s>` : "",
     p.precioPromo ? `• ${premiumIcon(icons,"socio","💰")} <b>Precio socio:</b> ${formatMoney(p.precioPromo)}` : "",
-    p.precioSugerido ? `• ${premiumIcon(icons,"venta","📈")} <b>Venta sugerida:</b> ${formatMoney(p.precioSugerido)}` : "",
-    p.precioSugerido ? `• ${premiumIcon(icons,"ganancia","💵")} <b>Ganancia estimada:</b> ${formatMoney(profit)}` : "",
     p.cupos ? `• ${premiumIcon(icons,"cupos","📦")} <b>Cupos disponibles:</b> ${Number(p.cupos)}` : "",
     p.vigencia ? `• ${premiumIcon(icons,"vigencia","⏳")} <b>Vigencia:</b> ${formatPromoDate(p.vigencia)}` : "",
   ].filter(Boolean);
@@ -250,7 +247,7 @@ module.exports = function mountAdminPanel(app) {
     const ref=db.collection(PROMOCIONES_SOCIOS_COLLECTION).doc();
     const imagenUrl=req.body?.imagenData?await guardarImagenPromo(req.body.imagenData,ref.id):clean(req.body?.imagenUrl,1500);
     const destinatarios=[...new Set((Array.isArray(req.body?.destinatarios)?req.body.destinatarios:[]).map(normNombre).filter(Boolean))];
-    await ref.set({ titulo,plataforma,precioNormal:Math.max(0,Number(req.body?.precioNormal)||0),precioPromo:Math.max(0,Number(req.body?.precioPromo)||0),precioSugerido:Math.max(0,Number(req.body?.precioSugerido)||0),cupos:Math.max(0,Math.round(Number(req.body?.cupos)||0)),vigencia:clean(req.body?.vigencia,50),texto:clean(req.body?.texto,1200),imagenUrl,destinatarios,estado:"borrador",enviados:0,fallidos:0,createdAt:admin.firestore.FieldValue.serverTimestamp(),updatedAt:admin.firestore.FieldValue.serverTimestamp() });
+    await ref.set({ titulo,plataforma,precioNormal:Math.max(0,Number(req.body?.precioNormal)||0),precioPromo:Math.max(0,Number(req.body?.precioPromo)||0),cupos:Math.max(0,Math.round(Number(req.body?.cupos)||0)),vigencia:clean(req.body?.vigencia,50),texto:clean(req.body?.texto,1200),imagenUrl,destinatarios,estado:"borrador",enviados:0,fallidos:0,createdAt:admin.firestore.FieldValue.serverTimestamp(),updatedAt:admin.firestore.FieldValue.serverTimestamp() });
     ok(res,{id:ref.id});
   }));
 
@@ -269,7 +266,6 @@ module.exports = function mountAdminPanel(app) {
       plataforma,
       precioNormal:Math.max(0,Number(req.body?.precioNormal)||0),
       precioPromo:Math.max(0,Number(req.body?.precioPromo)||0),
-      precioSugerido:Math.max(0,Number(req.body?.precioSugerido)||0),
       cupos:Math.max(0,Math.round(Number(req.body?.cupos)||0)),
       vigencia:clean(req.body?.vigencia,50),
       texto:clean(req.body?.texto,1200),

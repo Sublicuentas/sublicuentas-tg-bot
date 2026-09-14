@@ -62,7 +62,7 @@ app.use(cors());
 app.use(express.json({ limit: "15mb" }));
 
 // keepalive / health (para que Render lo mantenga vivo)
-const PANEL_API_VERSION = "socios-20260914-1";
+const PANEL_API_VERSION = "socios-20260914-2";
 app.get("/", (_req, res) => res.type("text/plain").send(`Sublicuentas Panel API OK ${PANEL_API_VERSION}`));
 app.get("/rev/ping", (_req, res) => res.json({ v: PANEL_API_VERSION, gemini: !!process.env.GEMINI_API_KEY, anthropic: !!process.env.ANTHROPIC_API_KEY, storageBuckets: STORAGE_BUCKET_CANDIDATES }));
 app.get("/health", (_req, res) => res.json({ ok: true, version: PANEL_API_VERSION, ts: Date.now() }));
@@ -483,11 +483,6 @@ app.get("/rev/metricas", revAuth, async (req, res) => {
       ...renovaciones.filter(enMes).map(x=>({...x,_tipo:"renovacion"})),
     ];
     const costoMes = ops.reduce((a,x)=>a+Math.max(0,revMoneyNumber(x.monto)),0);
-    const conVenta = ops.filter(x=>revMoneyNumber(x.ventaCliente)>0);
-    const conUtilidad = conVenta.filter(x=>revMoneyNumber(x.monto)>0);
-    const ventasMes = conVenta.reduce((a,x)=>a+revMoneyNumber(x.ventaCliente),0);
-    const utilidadMes = conUtilidad.length ? conUtilidad.reduce((a,x)=>a+(revMoneyNumber(x.ventaCliente)-revMoneyNumber(x.monto)),0) : null;
-    const ticketPromedio = conVenta.length ? ventasMes / conVenta.length : null;
     const counts = new Map();
     ops.forEach(x=>{const k=String(x.servicio||"Servicio").trim()||"Servicio";counts.set(k,(counts.get(k)||0)+1)});
     const topServicio = [...counts.entries()].sort((a,b)=>b[1]-a[1])[0] || null;
@@ -497,13 +492,6 @@ app.get("/rev/metricas", revAuth, async (req, res) => {
       periodo:`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}`,
       operacionesMes:ops.length, comprasMes:ops.filter(x=>x._tipo==="compra").length, renovacionesMes:ops.filter(x=>x._tipo==="renovacion").length,
       costoMes, operadoMes:costoMes,
-      ventasMes:conVenta.length?ventasMes:null,
-      utilidadMes,
-      ticketPromedio,
-      ventasCoberturaPct:ops.length?Math.round(conVenta.length*100/ops.length):0,
-      utilidadCoberturaPct:ops.length?Math.round(conUtilidad.length*100/ops.length):0,
-      operacionesConVenta:conVenta.length,
-      operacionesConUtilidad:conUtilidad.length,
       pedidosPendientes:pendientes,
       topServicio:topServicio?{nombre:topServicio[0],operaciones:topServicio[1]}:null,
     });
@@ -525,7 +513,7 @@ app.get("/rev/compras/mias", revAuth, async (req, res) => {
     const limit=Math.min(50,Math.max(1,Number(req.query.limit)||20));
     const items=[...m.values()].sort((a,b)=>revDateMs(b.createdAt)-revDateMs(a.createdAt)).slice(0,limit).map(x=>({
       id:x.id, servicio:x.servicio||"Compra", estado:x.estado||"pendiente", detalleEstado:x.detalleEstado||"", destino:x.destino||"", destinoLabel:x.destinoLabel||"",
-      monto:revMoneyNumber(x.monto), ventaCliente:revMoneyNumber(x.ventaCliente)||null, utilidadEstimada:x.utilidadEstimada==null?null:revMoneyNumber(x.utilidadEstimada),
+      monto:revMoneyNumber(x.monto),
       createdAt:x.createdAt, estadoUpdatedAt:x.estadoUpdatedAt||x.updatedAt||x.createdAt, estadoHistorial:Array.isArray(x.estadoHistorial)?x.estadoHistorial.slice(-10):[],
     }));
     res.json({ok:true,items});
@@ -690,8 +678,6 @@ app.post("/rev/renovacion", revAuth, async (req, res) => {
     })).filter(x=>(x.compraId||Number.isInteger(x.servicioIndex))&&(x.compraId||x.servicioIndex>=0)).slice(0,30);
     if(!seleccionEntrada.length)return res.status(400).json({error:"sin_servicios"});
     const seleccion=await revResolverSeleccionCliente({clienteId,socioNorm:live.nombre_norm||req.rev.nombre_norm||"",seleccion:seleccionEntrada});
-    const ventaClienteIngresada = revMoneyNumber(req.body?.ventaCliente);
-    const ventaCliente = ventaClienteIngresada > 0 ? ventaClienteIngresada : seleccion.reduce((sum, item) => sum + revMoneyNumber(item.precioCliente), 0);
     const renovacionesFecha=[];
     if (nuevaFecha || meses) {
       for(const item of seleccion) renovacionesFecha.push(await revActualizarFechaCliente({clienteId,socioNorm:live.nombre_norm||req.rev.nombre_norm||"",servicioIndex:item.servicioIndex,compraId:item.compraId,nuevaFecha,meses}));
@@ -720,8 +706,6 @@ app.post("/rev/renovacion", revAuth, async (req, res) => {
       comentario: com,
       quien: (quien || "").toString().slice(0, 120),
       monto: revMoneyNumber(monto),
-      ventaCliente,
-      utilidadEstimada: ventaCliente > 0 && revMoneyNumber(monto) > 0 ? ventaCliente - revMoneyNumber(monto) : null,
       socio,
       socio_norm: live.nombre_norm || req.rev.nombre_norm || "",
       imagenUrl,
@@ -745,8 +729,7 @@ app.post("/rev/renovacion", revAuth, async (req, res) => {
       `🙍 Cliente: ${cleanTg(doc.cliente || "—", 120)}`,
       `📦 Servicios: ${doc.servicios.map(x=>x.servicio||('Servicio '+(x.servicioIndex+1))).join(', ')}`,
       doc.renovado ? `📅 Nueva fecha: ${cleanTg(doc.nuevaFecha || "—", 30)} · ${doc.renovadosCantidad} renovado(s)` : "",
-      doc.monto ? `💵 Costo: Lps. ${doc.monto}` : "",
-      doc.ventaCliente ? `📈 Venta cliente: Lps. ${doc.ventaCliente}${doc.utilidadEstimada != null ? ` · Utilidad est.: Lps. ${doc.utilidadEstimada}` : ""}` : "",
+      doc.monto ? `💵 Monto pagado: Lps. ${doc.monto}` : "",
       doc.quien ? `🔁 Renovó: ${cleanTg(doc.quien, 80)}` : "",
       com ? `📝 Nota: ${cleanTg(com, 260)}` : "",
       (imagenUrl || imagenObj.buffer) ? `📎 Comprobante adjunto` : `⚠️ Sin comprobante`,
@@ -784,8 +767,6 @@ app.post("/rev/renovar-cliente", revAuth, async (req, res) => {
       comentario: (req.body.comentario || "Renovación directa desde panel").toString().slice(0, 600),
       quien: (req.body.quien || "Panel socio").toString().slice(0, 120),
       monto: revMoneyNumber(req.body.monto),
-      ventaCliente: revMoneyNumber(req.body.ventaCliente) || revMoneyNumber(r.precioCliente),
-      utilidadEstimada: (revMoneyNumber(req.body.ventaCliente) || revMoneyNumber(r.precioCliente)) > 0 && revMoneyNumber(req.body.monto) > 0 ? (revMoneyNumber(req.body.ventaCliente) || revMoneyNumber(r.precioCliente)) - revMoneyNumber(req.body.monto) : null,
       socio: live.nombre || live.nombre_norm || req.rev.nombre || req.rev.nombre_norm || "Revendedor",
       socio_norm: live.nombre_norm || req.rev.nombre_norm || "",
       imagenUrl: "",
@@ -899,8 +880,6 @@ app.post("/rev/compra", revAuth, async (req, res) => {
     const descuentoCombo = Math.min(Math.max(conPrecio - 1, 0), 4) * 10; // 2=10, 3=20, 4=30, 5+=40
     const totalCombo = Math.max(0, subtotalCatalogo - descuentoCombo);
     const monto = revMoneyNumber(b.monto) || totalCombo || 0;
-    const ventaCliente = Math.max(0, revMoneyNumber(b.ventaCliente));
-    const utilidadEstimada = ventaCliente > 0 && monto > 0 ? ventaCliente - monto : null;
     const servicio = productos.length > 1
       ? `Combo ${productos.length} plataformas`
       : productos[0].servicio;
@@ -937,8 +916,6 @@ app.post("/rev/compra", revAuth, async (req, res) => {
       marcaTv: productos[0].marcaTv || "",
       comentario,
       monto,
-      ventaCliente,
-      utilidadEstimada,
       destino: destino.key,
       destinoLabel: destino.label,
       socio,
@@ -985,9 +962,8 @@ app.post("/rev/compra", revAuth, async (req, res) => {
       ...productoLineas,
       ``,
       productos.length > 1
-        ? `💰 Subtotal: Lps. ${subtotalCatalogo}\n🏷️ Descuento combo: Lps. ${descuentoCombo}\n✅ Total sugerido: Lps. ${totalCombo}\n💵 Costo pagado: ${monto ? `Lps. ${monto}` : "—"}`
-        : `💵 Costo pagado: ${monto ? `Lps. ${monto}` : "—"}${productos[0].precioCatalogo !== null ? ` | Catálogo: Lps. ${productos[0].precioCatalogo}` : ""}`,
-      ventaCliente ? `📈 Venta al cliente: Lps. ${ventaCliente}${utilidadEstimada != null ? ` · Utilidad est.: Lps. ${utilidadEstimada}` : ""}` : "",
+        ? `💰 Subtotal: Lps. ${subtotalCatalogo}\n🏷️ Descuento combo: Lps. ${descuentoCombo}\n✅ Total sugerido: Lps. ${totalCombo}\n💵 Monto pagado: ${monto ? `Lps. ${monto}` : "—"}`
+        : `💵 Monto pagado: ${monto ? `Lps. ${monto}` : "—"}${productos[0].precioCatalogo !== null ? ` | Catálogo: Lps. ${productos[0].precioCatalogo}` : ""}`,
       comentario ? `📝 Nota: ${cleanTg(comentario, 220)}` : "",
       (imagenUrl || imagenObj.buffer) ? `📎 Comprobante adjunto` : `⚠️ Sin comprobante`,
       `🆔 Ref: ${ref.id.slice(-6)}`,
@@ -998,7 +974,7 @@ app.post("/rev/compra", revAuth, async (req, res) => {
     if (!ids.length) ids = await getAdminChatIds();
     await Promise.all(ids.map((id) => sendTelegramImageSmart(id, imagenObj, cap)));
 
-    res.json({ ok: true, id: ref.id, imagenUrl, destino: destino.key, destinoLabel: destino.label, totalCombo, descuentoCombo, ventaCliente, utilidadEstimada, estado: "pendiente" });
+    res.json({ ok: true, id: ref.id, imagenUrl, destino: destino.key, destinoLabel: destino.label, totalCombo, descuentoCombo, estado: "pendiente" });
   } catch (e) {
     console.error("rev/compra", e);
     res.status(e.status || 500).json({ error: e.publicError || "server", detail: e.message });
@@ -1153,8 +1129,6 @@ app.get("/rev/admin/compras", revAdminAuth, async (req, res) => {
         key: r.key || "",
         comentario: r.comentario || "",
         monto: revMoneyNumber(r.monto),
-        ventaCliente: revMoneyNumber(r.ventaCliente) || 0,
-        utilidadEstimada: r.utilidadEstimada == null ? null : revMoneyNumber(r.utilidadEstimada),
         destino: r.destino || "sublicuentas",
         destinoLabel: r.destinoLabel || destinoInfo(r.destino).label,
         socio: r.socio || "",

@@ -3833,8 +3833,6 @@ const PROMO_EMOJI_ROLES_LOCAL = [
   { key:"datos",      label:"Datos de la oferta",fallback:"💎" },
   { key:"normal",     label:"Precio normal",    fallback:"🧾" },
   { key:"socio",      label:"Precio socio",     fallback:"💰" },
-  { key:"venta",      label:"Venta sugerida",   fallback:"📈" },
-  { key:"ganancia",   label:"Ganancia",         fallback:"💵" },
   { key:"cupos",      label:"Cupos",            fallback:"📦" },
   { key:"vigencia",   label:"Vigencia",         fallback:"⏳" },
   { key:"detalles",   label:"Detalles",         fallback:"✨" },
@@ -3979,7 +3977,7 @@ async function runPromoEmojiCommandLocal(msg, command) {
 
   if (action === "probar") {
     const icons = await loadPromoEmojiConfigLocal();
-    if (!Object.keys(icons).length) return bot.sendMessage(chatId, "Todavía no hay iconos Premium activos. Escriba /promoemojis y envíe los 11 emojis.");
+    if (!Object.keys(icons).length) return bot.sendMessage(chatId, "Todavía no hay iconos Premium activos. Escriba /promoemojis y envíe los emojis configurables.");
     const sample = [
       `${promoEmojiTagLocal(icons.titulo,"🔥")} <b>Oferta Premium de prueba</b>`,
       `${promoEmojiTagLocal(icons.plataforma,"🎯")} <b>Plataforma:</b> Sublicuentas`,
@@ -3987,8 +3985,6 @@ async function runPromoEmojiCommandLocal(msg, command) {
       `<b>${promoEmojiTagLocal(icons.datos,"💎")} Datos de la oferta</b>`,
       `• ${promoEmojiTagLocal(icons.normal,"🧾")} <b>Precio normal:</b> L 100`,
       `• ${promoEmojiTagLocal(icons.socio,"💰")} <b>Precio socio:</b> L 50`,
-      `• ${promoEmojiTagLocal(icons.venta,"📈")} <b>Venta sugerida:</b> L 100`,
-      `• ${promoEmojiTagLocal(icons.ganancia,"💵")} <b>Ganancia:</b> L 50`,
       `• ${promoEmojiTagLocal(icons.cupos,"📦")} <b>Cupos:</b> 5`,
       `• ${promoEmojiTagLocal(icons.vigencia,"⏳")} <b>Vigencia:</b> septiembre`,
       "",
