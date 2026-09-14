@@ -62,7 +62,7 @@ app.use(cors());
 app.use(express.json({ limit: "15mb" }));
 
 // keepalive / health (para que Render lo mantenga vivo)
-const PANEL_API_VERSION = "socios-20260914-3";
+const PANEL_API_VERSION = "socios-20260914-4";
 app.get("/", (_req, res) => res.type("text/plain").send(`Sublicuentas Panel API OK ${PANEL_API_VERSION}`));
 app.get("/rev/ping", (_req, res) => res.json({ v: PANEL_API_VERSION, gemini: !!process.env.GEMINI_API_KEY, anthropic: !!process.env.ANTHROPIC_API_KEY, storageBuckets: STORAGE_BUCKET_CANDIDATES }));
 app.get("/health", (_req, res) => res.json({ ok: true, version: PANEL_API_VERSION, ts: Date.now() }));
@@ -1242,6 +1242,134 @@ app.patch("/rev/admin/compras/:id/estado", revAdminAuth, async (req, res) => {
     }
     res.json({ ok:true, id:ref.id, estado, detalleEstado:detalle, estadoUpdatedAt:at.toISOString() });
   } catch(e){console.error("rev/admin/compras estado",e);res.status(500).json({error:"server"})}
+});
+
+
+// ── ADMIN: canal Telegram para Tickets y Avisos de Sublichat ───────────────
+// Sublichat guarda la conversación en Firestore, pero el envío se ejecuta en
+// este servicio porque aquí ya vive el bot real y BOT_TOKEN. De esta forma no
+// hace falta duplicar TELEGRAM_BOT_TOKEN en Vercel y los errores de Telegram
+// se devuelven con su causa real por destinatario.
+function revTicketDestKey(value = "") {
+  const raw = revNormKey(value);
+  return raw === "geissel" ? "geisell" : raw;
+}
+function revTicketAliasSet(data = {}, docId = "") {
+  const out = new Set();
+  [docId, data.nombre_norm, data.nombre, data.usuario, data.username].forEach((value) => {
+    const full = revTicketDestKey(value);
+    if (!full) return;
+    out.add(full);
+    const first = full.split(/\s+/)[0];
+    if (first) out.add(first);
+  });
+  if (out.has("geissel")) out.add("geisell");
+  return out;
+}
+const REV_TICKET_CHAT_IDS = {
+  sublicuentas: String(process.env.TELEGRAM_CHAT_ID_SUBLICUENTAS || SUPER_ADMIN || "").trim(),
+  relojes: String(process.env.TELEGRAM_CHAT_ID_RELOJES || "").trim(),
+  geisell: String(process.env.TELEGRAM_CHAT_ID_GEISELL || process.env.TELEGRAM_CHAT_ID_GEISSEL || "").trim(),
+  magdiel: String(process.env.TELEGRAM_CHAT_ID_MAGDIEL || "").trim(),
+};
+async function revResolveTicketTelegram(role) {
+  const wanted = revTicketDestKey(role);
+  if (!wanted) return { chatId:"", source:"missing", reason:"destino_invalido" };
+  const envId = String(REV_TICKET_CHAT_IDS[wanted] || "").trim();
+  if (envId) return { chatId:envId, source:"env" };
+
+  try {
+    // Ruta rápida: nombre_norm exacto.
+    const aliases = wanted === "geisell" ? ["geisell", "geissel"] : [wanted];
+    for (const alias of aliases) {
+      const snap = await db.collection("revendedores").where("nombre_norm", "==", alias).limit(2).get();
+      for (const doc of snap.docs) {
+        const d = doc.data() || {};
+        if (d.activo === false) continue;
+        const tg = String(d.telegramId || d.telegramID || d.telegramChatId || d.chatId || d.userId || "").trim();
+        if (tg) return { chatId:tg, source:"revendedores", revendedorId:doc.id };
+      }
+    }
+
+    // Compatibilidad con documentos viejos o nombres completos: acepta el
+    // nombre completo y también su primer nombre (Heber, Jimena, etc.).
+    const snap = await db.collection("revendedores").get();
+    let found = null;
+    snap.forEach((doc) => {
+      if (found) return;
+      const d = doc.data() || {};
+      if (d.activo === false) return;
+      const aliasesDoc = revTicketAliasSet(d, doc.id);
+      if (!aliasesDoc.has(wanted)) return;
+      const tg = String(d.telegramId || d.telegramID || d.telegramChatId || d.chatId || d.userId || "").trim();
+      if (tg) found = { chatId:tg, source:"revendedores", revendedorId:doc.id };
+    });
+    return found || { chatId:"", source:"missing", reason:"chat_id_missing" };
+  } catch (e) {
+    console.error("revResolveTicketTelegram", wanted, e?.message || e);
+    return { chatId:"", source:"error", reason:"resolver_error", error:String(e?.message || e).slice(0,240) };
+  }
+}
+function revTelegramFriendlyError(err) {
+  const description = String(err?.response?.body?.description || err?.message || err || "Error desconocido de Telegram").trim();
+  const lower = description.toLowerCase();
+  let code = "telegram_error";
+  if (lower.includes("bot was blocked") || lower.includes("blocked by the user")) code = "bot_bloqueado";
+  else if (lower.includes("chat not found")) code = "chat_no_encontrado";
+  else if (lower.includes("user is deactivated")) code = "usuario_desactivado";
+  else if (lower.includes("forbidden")) code = "telegram_prohibido";
+  else if (lower.includes("wrong file identifier") || lower.includes("failed to get http url content")) code = "imagen_no_disponible";
+  return { code, error:description.slice(0,300) };
+}
+async function revSendTicketTelegramOne(chatId, payload = {}) {
+  const text = String(payload.text || "").slice(0, 3900);
+  const imageUrl = String(payload.imageUrl || "").trim();
+  const replyMarkup = payload.replyMarkup && typeof payload.replyMarkup === "object" ? payload.replyMarkup : undefined;
+  const opts = { parse_mode:"HTML", ...(replyMarkup ? { reply_markup:replyMarkup } : {}) };
+  if (imageUrl) {
+    const msg = await bot.sendPhoto(chatId, imageUrl, { ...opts, caption:text.slice(0,1000) });
+    return { ok:true, messageId:Number(msg?.message_id || 0) };
+  }
+  const msg = await bot.sendMessage(chatId, text, { ...opts, disable_web_page_preview:true });
+  return { ok:true, messageId:Number(msg?.message_id || 0) };
+}
+app.post("/rev/admin/tickets-telegram", revAdminAuth, async (req, res) => {
+  try {
+    const body = req.body || {};
+    const destinos = [...new Set((Array.isArray(body.destinos) ? body.destinos : [body.destino])
+      .map(revTicketDestKey).filter(Boolean))].slice(0,100);
+    if (!destinos.length) return res.status(400).json({ ok:false, error:"sin_destinatarios" });
+    const text = String(body.text || "").trim();
+    if (!text) return res.status(400).json({ ok:false, error:"sin_texto" });
+
+    const results = [];
+    for (const role of destinos) {
+      const resolved = await revResolveTicketTelegram(role);
+      if (!resolved.chatId) {
+        results.push({ ok:false, skipped:true, reason:resolved.reason || "chat_id_missing", error:resolved.error || "", roles:[role] });
+        continue;
+      }
+      try {
+        const sent = await revSendTicketTelegramOne(resolved.chatId, body);
+        results.push({ ...sent, chatId:String(resolved.chatId), roles:[role], source:resolved.source });
+      } catch (e) {
+        const detail = revTelegramFriendlyError(e);
+        results.push({ ok:false, reason:detail.code, error:detail.error, roles:[role], source:resolved.source });
+      }
+    }
+    const deliveredRoles = destinos.filter(role => results.some(r => r.ok && (r.roles || []).includes(role)));
+    const failedRoles = destinos.filter(role => !deliveredRoles.includes(role));
+    return res.json({
+      ok: failedRoles.length === 0,
+      partial: deliveredRoles.length > 0 && failedRoles.length > 0,
+      results,
+      deliveredRoles,
+      failedRoles,
+    });
+  } catch (e) {
+    console.error("rev/admin/tickets-telegram", e);
+    return res.status(500).json({ ok:false, error:"telegram_bridge_error", detail:String(e?.message || e).slice(0,240) });
+  }
 });
 
 // ── ADMIN: "ver como" ──
