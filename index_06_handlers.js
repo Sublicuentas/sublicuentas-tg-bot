@@ -1462,6 +1462,7 @@ async function enviarExcelClientesGeneralBot(chatId) {
           "📊 Excel CRM Clientes — Nivel Saiyajin\n" +
           "✅ Resumen\n" +
           "✅ Clientes vigentes\n" +
+          "✅ Recuperar clientes (no vigentes)\n" +
           "✅ Clientes top\n" +
           "✅ Pagos y servicios\n" +
           "✅ Vendedores"

@@ -1,6 +1,6 @@
 /* ✅ SUBLICUENTAS — EXCEL CLIENTES NIVEL SAIYAJIN
    Reporte profesional para CRM / Clientes:
-   - 5 hojas: Resumen, Clientes Vigentes, Clientes Top, Pagos y Servicios, Vendedores
+   - 6 hojas: Resumen, Clientes Vigentes, Recuperar Clientes, Clientes Top, Pagos y Servicios, Vendedores
    - KPI cards, barras visuales, filtros, freeze panes, fórmulas y formato Lps 1,234.56
    - Compatible con ExcelJS y Firestore del bot
 */
@@ -372,6 +372,132 @@ async function crearResumen(ws, clientes, servicios) {
   ws.getCell(`B${chartStart}`).note = "Barras visuales hechas con caracteres para máxima compatibilidad en Telegram/ExcelJS.";
 }
 
+function servicioPrecio(s = {}) {
+  return num(s.precio || s.monto || s.total);
+}
+
+function datosRecuperacionCliente(c) {
+  const servicios = Array.isArray(c.servicios) ? c.servicios : [];
+  const cuentas = [];
+  const vendedores = new Set();
+  const detalles = [];
+  const vencimientos = [];
+
+  servicios.forEach((s) => {
+    const plataforma = plataformaLabel(s.plataforma || s.servicio || s.nombre || "");
+    const vendedor = vendedorEfectivoServicio(s, c.raw || c).vendedor || c.vendedor || "Sin vendedor";
+    const precio = servicioPrecio(s);
+    const fechaRaw = s.fechaRenovacion || s.vencimiento || s.vence || s.fechaFin || "";
+    const fecha = toDate(fechaRaw);
+    if (fecha) vencimientos.push(fecha);
+    if (plataforma) cuentas.push(plataforma);
+    if (vendedor) vendedores.add(vendedor);
+
+    const partes = [plataforma];
+    if (precio > 0) partes.push(`Lps ${precio.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
+    if (vendedor) partes.push(vendedor);
+    if (fecha) partes.push(`venció ${dateToDMY(fecha)}`);
+    detalles.push(partes.filter(Boolean).join(" — "));
+  });
+
+  const conteo = new Map();
+  cuentas.forEach((x) => conteo.set(x, (conteo.get(x) || 0) + 1));
+  const cuentasResumen = Array.from(conteo.entries())
+    .map(([nombre, cantidad]) => cantidad > 1 ? `${nombre} x${cantidad}` : nombre)
+    .join(", ") || "Sin servicio registrado";
+
+  const ultimaVencida = vencimientos.length
+    ? vencimientos.slice().sort((a, b) => b - a)[0]
+    : null;
+  const dias = ultimaVencida ? Math.max(0, -(daysFromToday(ultimaVencida) || 0)) : null;
+  let prioridad = "⚫ REVISAR";
+  if (dias != null) {
+    if (dias <= 7) prioridad = "🔥 URGENTE";
+    else if (dias <= 30) prioridad = "🟠 ALTA";
+    else if (dias <= 90) prioridad = "🟡 MEDIA";
+    else prioridad = "⚪ ANTIGUA";
+  }
+
+  return {
+    cuentasResumen,
+    vendedores: Array.from(vendedores).join(" + ") || c.vendedor || "Sin vendedor",
+    detalle: detalles.join(" | ") || "Sin detalle de cuentas registrado",
+    ultimaVencida,
+    dias,
+    prioridad,
+  };
+}
+
+async function crearClientesNoVigentes(ws, clientes) {
+  const rows = clientes
+    .filter((c) => c.estado !== "Vigente")
+    .map((c) => ({ c, rec: datosRecuperacionCliente(c) }))
+    .sort((a, b) => {
+      const da = a.rec.dias == null ? Number.MAX_SAFE_INTEGER : a.rec.dias;
+      const db = b.rec.dias == null ? Number.MAX_SAFE_INTEGER : b.rec.dias;
+      if (da !== db) return da - db;
+      return b.c.totalMensual - a.c.totalMensual;
+    });
+
+  const totalPotencial = rows.reduce((sum, x) => sum + x.c.totalMensual, 0);
+  const recientes30 = rows.filter((x) => x.rec.dias != null && x.rec.dias <= 30).length;
+  const recientes90 = rows.filter((x) => x.rec.dias != null && x.rec.dias <= 90).length;
+
+  ws.columns = [
+    { width: 5 }, { width: 28 }, { width: 18 }, { width: 24 }, { width: 34 }, { width: 16 },
+    { width: 18 }, { width: 16 }, { width: 16 }, { width: 58 }, { width: 18 }, { width: 28 },
+  ];
+  setTitle(ws, "RECUPERAR CLIENTES — NO VIGENTES", 12);
+  setSubTitle(ws, "Clientes sin servicios activos. Priorice los vencidos recientemente para aumentar la probabilidad de recuperación.", 12);
+  ws.addRow([]);
+
+  addKpi(ws, 4, 2, "🔴 No vigentes", rows.length, C.rojoOsc, "#,##0");
+  addKpi(ws, 4, 3, "💰 Potencial mensual", totalPotencial, C.azul, MONEY_FMT);
+  addKpi(ws, 4, 4, "🔥 Vencidos ≤ 30 días", recientes30, C.naranja, "#,##0");
+  addKpi(ws, 4, 5, "🟡 Vencidos ≤ 90 días", recientes90, C.amarillo, "#,##0");
+
+  ws.addRow([]);
+  ws.addRow([]);
+  const headerNo = ws.rowCount + 1;
+  const header = ws.addRow([
+    "#", "Cliente", "Número", "Vendedor(es)", "Cuentas contratadas", "Lo que pagaba",
+    "Último vencimiento", "Días sin renovar", "Prioridad", "Detalle de cuentas", "Seguimiento", "Notas",
+  ]);
+  styleHeader(header);
+
+  rows.forEach(({ c, rec }, i) => {
+    const r = ws.addRow([
+      i + 1, c.nombre, c.telefono, rec.vendedores, rec.cuentasResumen, c.totalMensual,
+      excelDate(rec.ultimaVencida), rec.dias == null ? "" : rec.dias, rec.prioridad, rec.detalle, "Pendiente", "",
+    ]);
+    styleBodyRow(r, i % 2 === 1);
+    applyCurrency(r.getCell(6));
+    r.getCell(7).numFmt = DATE_FMT;
+    r.getCell(8).numFmt = "0";
+    const p = normTxt(rec.prioridad);
+    if (p.includes("urgente")) {
+      r.getCell(9).font = { bold: true, color: { argb: C.rojoOsc } };
+      r.getCell(9).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFE5E5" } };
+    } else if (p.includes("alta")) {
+      r.getCell(9).font = { bold: true, color: { argb: C.naranja } };
+      r.getCell(9).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFF3E0" } };
+    } else if (p.includes("media")) {
+      r.getCell(9).font = { bold: true, color: { argb: "FF9A6700" } };
+      r.getCell(9).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFF8D6" } };
+    }
+    r.getCell(10).alignment = { vertical: "middle", wrapText: true };
+  });
+
+  addTableFilter(ws, headerNo, ws.rowCount, "L");
+  if (ws.rowCount >= headerNo + 1) {
+    try {
+      ws.getColumn(11).eachCell((cell, rowNumber) => {
+        if (rowNumber > headerNo) cell.dataValidation = { type: "list", allowBlank: true, formulae: ['"Pendiente,Contactado,Interesado,Recuperado,No interesado"'] };
+      });
+    } catch (_) {}
+  }
+}
+
 function groupByVendedor(clientes) {
   const map = new Map();
   clientes.forEach((c) => {
@@ -519,6 +645,7 @@ async function generarExcelClientesGeneral() {
 
     await crearResumen(workbook.addWorksheet("Resumen"), clientes, servicios);
     await crearClientesVigentes(workbook.addWorksheet("Clientes Vigentes"), clientes);
+    await crearClientesNoVigentes(workbook.addWorksheet("Recuperar Clientes"), clientes);
     await crearClientesTop(workbook.addWorksheet("Clientes Top"), clientes);
     await crearPagosServicios(workbook.addWorksheet("Pagos Servicios"), servicios);
     await crearVendedores(workbook.addWorksheet("Vendedores"), clientes);

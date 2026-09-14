@@ -2382,7 +2382,7 @@ bot.onText(/^\/clientes_excel$/, async (msg) => {
       contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     });
 
-    await bot.sendMessage(chatId, `✅ Excel de clientes generado\n👥 Incluye:\n- Resumen general\n- Listado completo (con filtros)\n- Análisis por vendedor`);
+    await bot.sendMessage(chatId, `✅ Excel de clientes generado\n👥 Incluye:\n- Resumen general\n- Clientes vigentes\n- Recuperar clientes no vigentes\n- Pagos y servicios\n- Análisis por vendedor`);
   } catch (e) {
     logErr("clientes_excel", e);
     bot.sendMessage(chatId, `❌ Error: ${e.message}`);
