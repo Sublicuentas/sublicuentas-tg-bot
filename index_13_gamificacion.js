@@ -32,6 +32,37 @@ function nivel(ventas) {
   if (ventas >= 10) return "Leyenda";
   return "Diamante";
 }
+const AVATAR_STORAGE_BUCKETS=[...new Set([
+  process.env.STORAGE_BUCKET,
+  process.env.FIREBASE_STORAGE_BUCKET,
+  process.env.GCLOUD_STORAGE_BUCKET,
+  process.env.FIREBASE_PROJECT_ID ? `${process.env.FIREBASE_PROJECT_ID}.firebasestorage.app` : "",
+  process.env.FIREBASE_PROJECT_ID ? `${process.env.FIREBASE_PROJECT_ID}.appspot.com` : "",
+].map(v=>String(v||"").trim()).filter(Boolean))];
+
+async function guardarAvatarSocio(docId, avatarData) {
+  const raw=String(avatarData||"");
+  if(!raw)return "";
+  const m=raw.match(/^data:(image\/(?:jpeg|png|webp));base64,(.+)$/i);
+  if(!m || raw.length>760000)throw Object.assign(new Error("foto_invalida"),{publicError:"foto_invalida"});
+  const mime=m[1].toLowerCase(),buffer=Buffer.from(m[2],"base64");
+  if(!buffer.length || buffer.length>560000)throw Object.assign(new Error("foto_invalida"),{publicError:"foto_invalida"});
+  const ext=mime.includes("png")?"png":mime.includes("webp")?"webp":"jpg";
+  const safeId=String(docId||"socio").replace(/[^a-z0-9_-]/gi,"_").slice(0,80)||"socio";
+  const path=`socios-avatares/${safeId}_${Date.now()}.${ext}`;
+  for(const bucketName of AVATAR_STORAGE_BUCKETS){
+    try{
+      const file=admin.storage().bucket(bucketName).file(path);
+      await file.save(buffer,{resumable:false,contentType:mime,metadata:{cacheControl:"public,max-age=31536000"}});
+      const [url]=await file.getSignedUrl({action:"read",expires:"2099-12-31"});
+      if(url)return url;
+    }catch(e){console.error("avatar storage",bucketName,e?.message||e);}
+  }
+  // Fallback: si Storage no está habilitado, conservamos la foto comprimida
+  // dentro del documento del revendedor. Así el perfil no queda bloqueado.
+  return raw;
+}
+
 function rachaDias(rows) {
   const days = new Set(rows.map(x => {
     const ms = dateMs(x.createdAt); if (!ms) return "";
@@ -88,22 +119,57 @@ module.exports = function mountGamificacion(app) {
 
   app.post("/rev/perfil", revAuth, async (req,res) => {
     try {
-      const ref = db.collection("revendedores").doc(req.rev.id);
-      const patch={perfilUpdatedAt:admin.firestore.FieldValue.serverTimestamp()};
-      if(Object.prototype.hasOwnProperty.call(req.body||{},"avatarData")){
-        const avatarData=String(req.body?.avatarData||"");
-        if (avatarData && (!/^data:image\/(jpeg|png|webp);base64,/.test(avatarData) || avatarData.length > 700000)) return res.status(413).json({error:"foto_invalida"});
-        patch.avatarData=avatarData;
+      // Algunos tokens antiguos no traían id; resolvemos el documento por nombre
+      // para que la foto/perfil siga guardando sin obligar al socio a cerrar sesión.
+      let ref = null;
+      const tokenId = String(req.rev?.id || "").trim();
+      if (tokenId) ref = db.collection("revendedores").doc(tokenId);
+      if (!ref) {
+        const wanted = normVendedor(req.rev?.nombre_norm || req.rev?.nombre || "");
+        if (!wanted) return res.status(400).json({error:"perfil_no_identificado"});
+        const aliases = wanted === "geisell" ? ["geisell","geissel"] : [wanted];
+        let found = null;
+        for (const alias of aliases) {
+          const snap = await db.collection("revendedores").where("nombre_norm","==",alias).limit(1).get();
+          if (!snap.empty) { found = snap.docs[0]; break; }
+        }
+        if (!found) return res.status(404).json({error:"perfil_no_existe"});
+        ref = found.ref;
       }
-      if(Object.prototype.hasOwnProperty.call(req.body||{},"nombreMostrar")){
-        const nombreMostrar=String(req.body?.nombreMostrar||"").trim().replace(/[<>]/g,"").slice(0,45);
+
+      const body=req.body||{};
+      const patch={perfilUpdatedAt:admin.firestore.FieldValue.serverTimestamp()};
+      const response={ok:true,updatedAt:new Date().toISOString()};
+
+      if(Object.prototype.hasOwnProperty.call(body,"avatarData")){
+        const avatarData=String(body.avatarData||"");
+        try{
+          const avatarGuardado=avatarData ? await guardarAvatarSocio(ref.id,avatarData) : "";
+          patch.avatarData=avatarGuardado;
+          response.avatar=avatarGuardado;
+        }catch(e){
+          if(e?.publicError==="foto_invalida")return res.status(413).json({error:"foto_invalida"});
+          throw e;
+        }
+      }
+      if(Object.prototype.hasOwnProperty.call(body,"nombreMostrar")){
+        const nombreMostrar=String(body.nombreMostrar||"").trim().replace(/[<>]/g,"").slice(0,45);
         if(nombreMostrar.length<2)return res.status(400).json({error:"nombre_invalido"});
         patch.nombreMostrar=nombreMostrar;
+        response.nombreMostrar=nombreMostrar;
       }
+      if(Object.keys(patch).length===1)return res.status(400).json({error:"sin_cambios"});
+
       await ref.set(patch,{merge:true});
-      res.json({ok:true,...patch});
-    } catch(e) { console.error("rev/perfil",e); res.status(500).json({error:"server"}); }
+      // No devolvemos FieldValue.serverTimestamp(): ese objeto especial no es
+      // una respuesta JSON y era la causa de guardados que terminaban en 500.
+      return res.json(response);
+    } catch(e) {
+      console.error("rev/perfil",e);
+      return res.status(500).json({error:"server"});
+    }
   });
+
   app.post("/rev/curso-completado", revAuth, async (req,res) => {
     try {
       const caps=await liveCaps(req.rev);
