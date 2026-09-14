@@ -93,6 +93,55 @@ const TV_DIGITAL_URLS_LOCAL = {
   liontv: "http://liontv.es:80",
   evoutouch: "http://smarterstv99.dyndns.tv:25461/",
 };
+
+// Planes reales de duración. El número guardado representa la vigencia TOTAL
+// que recibe el cliente, incluyendo los meses promocionales gratis.
+const TV_DIGITAL_MESES_VALIDOS_LOCAL = Object.freeze({
+  latintv: [1, 4, 8, 12],      // 3 + 1 gratis = 4
+  liontv: [1, 3, 5, 12],       // 10 + 2 gratis = 12
+  stellatv: [1, 3, 7],         // 6 + 1 gratis = 7
+  oleadatv: [1, 3, 7, 14],     // 6 + 1 = 7 / 12 + 2 = 14
+  evoutouch: [1, 3],
+});
+
+function familiaTvDigitalMesesLocal(plataforma = "") {
+  const p = normalizarPlataforma(plataforma);
+  if (p.startsWith("latintv")) return "latintv";
+  if (p.startsWith("liontv")) return "liontv";
+  if (p.startsWith("stellatv")) return "stellatv";
+  if (p.startsWith("oleadatv")) return "oleadatv";
+  if (p.startsWith("evoutouch")) return "evoutouch";
+  return "";
+}
+
+function mesesValidosTvDigitalLocal(plataforma = "") {
+  return TV_DIGITAL_MESES_VALIDOS_LOCAL[familiaTvDigitalMesesLocal(plataforma)] || [];
+}
+
+function validarMesesTvDigitalLocal(plataforma = "", meses = 1) {
+  const permitidos = mesesValidosTvDigitalLocal(plataforma);
+  const n = Math.max(1, Math.min(24, Math.round(Number(meses) || 1)));
+  if (!permitidos.length) return n;
+  if (!permitidos.includes(n)) {
+    const nombre = humanPlataforma(plataforma) || plataforma;
+    throw new Error(`${nombre}: plan de ${n} meses no válido. Use ${permitidos.join(", ")} meses.`);
+  }
+  return n;
+}
+
+// Solo para registros antiguos que guardaron meses pagados en vez de la
+// vigencia total. Las fechas nuevas siguen validándose contra el plan real.
+function normalizarMesesLegacyTvDigitalLocal(plataforma = "", meses = 1) {
+  const familia = familiaTvDigitalMesesLocal(plataforma);
+  const n = Math.max(1, Math.min(24, Math.round(Number(meses) || 1)));
+  const bonus = {
+    latintv: { 3: 4 },
+    liontv: { 10: 12 },
+    stellatv: { 6: 7 },
+    oleadatv: { 6: 7, 12: 14 },
+  };
+  return bonus[familia]?.[n] || n;
+}
 function tvDigitalUrlLocal(servicio = {}) {
   const p = normalizarPlataforma(servicio.plataforma || "");
   if (p.startsWith("latintv")) return String(servicio.iptvProveedor || "") === "latintv2" ? TV_DIGITAL_URLS_LOCAL.latintv2 : TV_DIGITAL_URLS_LOCAL.latintv;
@@ -686,10 +735,10 @@ function normalizarCompraLocal(servicio = {}, titular = "", anterior = {}) {
   const fechaNueva = String(servicio.fechaRenovacion ?? anterior.fechaRenovacion ?? "").trim();
   const mesesExplicitos = Number(servicio.mesesContratados);
   const mesesPrevios = Number(anterior.mesesContratados);
-  const mesesContratados = Number.isFinite(mesesExplicitos) && mesesExplicitos > 0
+  let mesesContratados = Number.isFinite(mesesExplicitos) && mesesExplicitos > 0
     ? Math.max(1, Math.min(24, Math.round(mesesExplicitos)))
     : (Number.isFinite(mesesPrevios) && mesesPrevios > 0 && fechaNueva === String(anterior.fechaRenovacion || "").trim()
-        ? Math.max(1, Math.min(24, Math.round(mesesPrevios)))
+        ? normalizarMesesLegacyTvDigitalLocal(plat, mesesPrevios)
         : (isFechaDMY(fechaNueva) ? mesesContratadosDesdeFechaLocal(fechaNueva) : 1));
   return {
     ...anterior,
@@ -709,6 +758,7 @@ function normalizarCompraLocal(servicio = {}, titular = "", anterior = {}) {
 function validarCompraLocal(compra = {}) {
   const plat = normalizarPlataforma(compra.plataforma || "");
   if (!esPlataformaValida(plat)) throw new Error("Plataforma inválida.");
+  compra.mesesContratados = validarMesesTvDigitalLocal(plat, compra.mesesContratados || 1);
   const perfiles = perfilesServicioLocal(compra, "");
   if (!perfiles.length) throw new Error("Agregue al menos un perfil.");
   perfiles.forEach((p, index) => {
@@ -1303,7 +1353,8 @@ async function menuServicio(chatId, clientId, selector) {
   txt += `💰 *Precio:* ${escMD(`${Number(s.precio || 0).toFixed(2)} Lps`)}\n`;
   txt += `📅 *Renovación:* ${escMD(s.fechaRenovacion || "-")}\n`;
   if (TV_DIGITAL_KEYS_LOCAL.has(normalizarPlataforma(s.plataforma || ""))) {
-    const meses = Math.max(1, Number(s.mesesContratados || (isFechaDMY(s.fechaRenovacion || "") ? mesesContratadosDesdeFechaLocal(s.fechaRenovacion) : 1)) || 1);
+    const mesesRaw = Math.max(1, Number(s.mesesContratados || (isFechaDMY(s.fechaRenovacion || "") ? mesesContratadosDesdeFechaLocal(s.fechaRenovacion) : 1)) || 1);
+    const meses = normalizarMesesLegacyTvDigitalLocal(s.plataforma || "", mesesRaw);
     txt += `🗓️ *Plan contratado:* ${meses} mes${meses === 1 ? "" : "es"}\n`;
     const urlServidor = tvDigitalUrlLocal(s);
     if (urlServidor) txt += `🌐 *Servidor:* ${escMD(urlServidor)}\n`;
@@ -1574,6 +1625,7 @@ async function patchServicio(clientId, idx, patch = {}, compraId = "") {
   }
   const siguiente = normalizarCompraLocal(entrada, cliente.nombrePerfil || "", actual);
   if (!esPlataformaValida(siguiente.plataforma)) throw new Error("Plataforma inválida.");
+  siguiente.mesesContratados = validarMesesTvDigitalLocal(siguiente.plataforma, siguiente.mesesContratados || 1);
   const credencialesTocadas = ["plataforma", "correo", "clave", "pin", "pinPerfil", "perfiles"].some((k) => Object.prototype.hasOwnProperty.call(patchLimpio, k));
   if (credencialesTocadas) validarCompraLocal(siguiente);
     servicios[actualIdx] = siguiente;
@@ -1827,7 +1879,8 @@ async function renovarServicioTx(clientId, idx, { dias = 0, fechaExacta = "", co
       ? String(fechaExacta || "").trim()
       : addDaysDMY(isFechaDMY(fechaAnterior) ? fechaAnterior : hoyDMY(), Number(dias || 0));
     if (!isFechaDMY(fechaNueva)) throw new Error("Fecha inválida.");
-    const mesesContratados = mesesEntreDMYLocal(isFechaDMY(fechaAnterior) ? fechaAnterior : hoyDMY(), fechaNueva);
+    const mesesCalculados = mesesEntreDMYLocal(isFechaDMY(fechaAnterior) ? fechaAnterior : hoyDMY(), fechaNueva);
+    const mesesContratados = validarMesesTvDigitalLocal(anterior.plataforma || "", mesesCalculados);
     const siguiente = { ...anterior, fechaRenovacion: fechaNueva, mesesContratados, ultimaRenovacionAt: renovadoAt };
     servicios[actualIdx] = siguiente;
     return { servicios, anterior, siguiente, actualIdx, fechaAnterior, fechaNueva, nombreTitular: cliente.nombrePerfil || "" };
@@ -1881,7 +1934,8 @@ async function renovarTodosServiciosTx(clientId, { dias = 0, fechaExacta = "" } 
         fechaNueva,
         vendedor: vendedorEfectivoServicio(s, cliente).vendedor,
       });
-      const mesesContratados = mesesEntreDMYLocal(isFechaDMY(fechaAnterior) ? fechaAnterior : hoyDMY(), fechaNueva);
+      const mesesCalculados = mesesEntreDMYLocal(isFechaDMY(fechaAnterior) ? fechaAnterior : hoyDMY(), fechaNueva);
+      const mesesContratados = validarMesesTvDigitalLocal(s?.plataforma || "", mesesCalculados);
       return { ...(s || {}), fechaRenovacion: fechaNueva, mesesContratados, ultimaRenovacionAt: renovadoAt };
     });
     return { servicios: siguientes, total: siguientes.length, cambios, fechaExacta: String(fechaExacta || ""), nombreTitular: cliente.nombrePerfil || "" };

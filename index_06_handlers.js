@@ -5428,6 +5428,14 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
           oleada: "🌊 OLEADA TV",
           lion: "🦁 LION TV",
           latin: "📡 LATIN TV",
+          evoutouch: "📺 EVOUTOUCH",
+        };
+        const brandDuraciones = {
+          stella: "1, 3 y 7 meses (6 + 1 gratis)",
+          oleada: "1, 3, 7 y 14 meses (6 + 1 / 12 + 2)",
+          lion: "1, 3, 5 y 12 meses (10 + 2 gratis)",
+          latin: "1, 4, 8 y 12 meses (3 + 1 gratis = 4)",
+          evoutouch: "1 y 3 meses",
         };
         const addContextActions = (keyboard = []) => {
           const kb = Array.isArray(keyboard) ? keyboard.slice() : [];
@@ -5442,7 +5450,7 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
         if (view === "brand" && brandLabels[brand]) {
           return upsertPanel(
             chatId,
-            `${brandLabels[brand]}\n\nSeleccione la cantidad de dispositivos:`,
+            `${brandLabels[brand]}\n\n🗓️ Planes: *${brandDuraciones[brand]}*\n\nSeleccione la cantidad de dispositivos:`,
             addContextActions(kbTvDigitalPlanesWiz(mode, brand, callbackClientId, callbackCompraSel))
           );
         }
