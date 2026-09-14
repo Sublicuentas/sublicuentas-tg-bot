@@ -138,6 +138,7 @@ const PLATAFORMAS = {
   liontv2:     { key: "liontv2",     nombre: "LionTV (2 dispositivos)",  categoria: "iptv", acceso: "usuario_clave", capacidadDefault: 2, requiereCorreo: false, requiereClave: true, requierePin: false, permiteUsuario: true },
   liontv3:     { key: "liontv3",     nombre: "LionTV (3 dispositivos)",  categoria: "iptv", acceso: "usuario_clave", capacidadDefault: 3, requiereCorreo: false, requiereClave: true, requierePin: false, permiteUsuario: true },
   liontv5:     { key: "liontv5",     nombre: "LionTV (5 dispositivos)",  categoria: "iptv", acceso: "usuario_clave", capacidadDefault: 5, requiereCorreo: false, requiereClave: true, requierePin: false, permiteUsuario: true },
+  evoutouch4:   { key: "evoutouch4",   nombre: "EvouTouch (4 dispositivos)", categoria: "iptv", acceso: "usuario_clave", capacidadDefault: 4, requiereCorreo: false, requiereClave: true, requierePin: false, permiteUsuario: true },
   // Compatibilidad con fichas antiguas sin marca. Ya no se ofrecen para altas nuevas.
   iptv1:       { key: "iptv1",       nombre: "IPTV 1",          categoria: "iptv",      acceso: "usuario_clave",    capacidadDefault: 1,  requiereCorreo: false, requiereClave: true,  requierePin: false, permiteUsuario: true  },
   iptv3:       { key: "iptv3",       nombre: "IPTV 3",          categoria: "iptv",      acceso: "usuario_clave",    capacidadDefault: 3,  requiereCorreo: false, requiereClave: true,  requierePin: false, permiteUsuario: true  },

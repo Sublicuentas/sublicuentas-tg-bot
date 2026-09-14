@@ -76,6 +76,7 @@ function humanPlatSafe(key = "") {
     liontv2: "LionTV (2 dispositivos)",
     liontv3: "LionTV (3 dispositivos)",
     liontv5: "LionTV (5 dispositivos)",
+    evoutouch4: "EvouTouch (4 dispositivos)",
     iptv1: "IPTV anterior (1)",
     iptv3: "IPTV anterior (3)",
     iptv4: "IPTV anterior (4)",
@@ -94,6 +95,7 @@ function isUserPlatform(plataforma = "") {
     "oleadatv1", "oleadatv3",
     "latintv1", "latintv2", "latintv3", "latintv4",
     "liontv1", "liontv2", "liontv3", "liontv5",
+    "evoutouch4",
     "iptv1", "iptv3", "iptv4",
   ].includes(p);
 }
@@ -203,6 +205,7 @@ function getCapacidadCorreo(data = {}, plataforma = "") {
     liontv2: 2,
     liontv3: 3,
     liontv5: 5,
+    evoutouch4: 4,
     iptv1: 1,
     iptv3: 3,
     iptv4: 4,

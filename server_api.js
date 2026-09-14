@@ -62,7 +62,7 @@ app.use(cors());
 app.use(express.json({ limit: "15mb" }));
 
 // keepalive / health (para que Render lo mantenga vivo)
-const PANEL_API_VERSION = "socios-20260914-4";
+const PANEL_API_VERSION = "socios-20260914-5";
 app.get("/", (_req, res) => res.type("text/plain").send(`Sublicuentas Panel API OK ${PANEL_API_VERSION}`));
 app.get("/rev/ping", (_req, res) => res.json({ v: PANEL_API_VERSION, gemini: !!process.env.GEMINI_API_KEY, anthropic: !!process.env.ANTHROPIC_API_KEY, storageBuckets: STORAGE_BUCKET_CANDIDATES }));
 app.get("/health", (_req, res) => res.json({ ok: true, version: PANEL_API_VERSION, ts: Date.now() }));
@@ -148,13 +148,14 @@ function revCanonInventory(v) {
     spotify:"spotify", youtube:"youtube", youtubepremium:"youtube", canva:"canva", gemini:"gemini",
     chatgpt:"chatgpt", duolingo:"duolingo", office365:"office", microsoft365:"office", office:"office",
     office2021:"office2021", esetnod32:"nod32", nod32:"nod32", stellatv:"stellatv", stella:"stellatv",
-    oleadatv:"oleada", oleada:"oleada", latintv:"latintv", liontv:"liontv", iptv:"iptv"
+    oleadatv:"oleada", oleada:"oleada", latintv:"latintv", liontv:"liontv", evoutouch:"evoutouch4", evoutouch4:"evoutouch4", iptv:"iptv"
   };
   if (aliases[key]) return aliases[key];
   const stella = key.match(/^stella(?:tv)?([123])/); if (stella) return `stellatv${stella[1]}`;
   const oleada = key.match(/^oleada(?:tv)?([13])/); if (oleada) return `oleadatv${oleada[1]}`;
   const latin = key.match(/^latintv([1234])/); if (latin) return `latintv${latin[1]}`;
   const lion = key.match(/^liontv([1235])/); if (lion) return `liontv${lion[1]}`;
+  if (/^evoutouch(?:4)?/.test(key)) return "evoutouch4";
   return key;
 }
 function revCatalogInventoryKeys(item = {}) {
@@ -168,8 +169,9 @@ function revCatalogInventoryKeys(item = {}) {
   if (raw.includes("oleada") && qty) keys.push(`oleadatv${qty}`);
   if (raw.includes("latin") && qty) keys.push(`latintv${qty}`);
   if (raw.includes("lion") && qty) keys.push(`liontv${qty}`);
+  if (raw.includes("evoutouch") || raw.includes("evou touch")) keys.push("evoutouch4");
   if (base) keys.push(base);
-  if (base && /^(stellatv|oleadatv|latintv|liontv)\d$/.test(base)) keys.push(base.replace(/\d$/, ""));
+  if (base && /^(stellatv|oleadatv|latintv|liontv|evoutouch)\d$/.test(base)) keys.push(base.replace(/\d$/, ""));
   return [...new Set(keys.filter(Boolean))];
 }
 

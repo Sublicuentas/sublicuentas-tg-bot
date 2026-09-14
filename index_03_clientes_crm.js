@@ -74,6 +74,7 @@ const IPTV_USUARIO_KEYS_LOCAL = new Set([
   "oleadatv1", "oleadatv3",
   "latintv1", "latintv2", "latintv3", "latintv4",
   "liontv1", "liontv2", "liontv3", "liontv5",
+  "evoutouch4",
   // Compatibilidad de solo lectura/edición con registros anteriores.
   "iptv1", "iptv3", "iptv4",
 ]);
@@ -83,8 +84,22 @@ const TV_DIGITAL_BRANDS_LOCAL = {
   oleada: { label: "Oleada TV", icon: "🌊", keys: ["oleadatv1", "oleadatv3"] },
   lion: { label: "Lion TV", icon: "🦁", keys: ["liontv1", "liontv2", "liontv3", "liontv5"] },
   latin: { label: "Latin TV", icon: "📡", keys: ["latintv1", "latintv2", "latintv3", "latintv4"] },
+  evoutouch: { label: "EvouTouch", icon: "📺", keys: ["evoutouch4"] },
 };
 const TV_DIGITAL_KEYS_LOCAL = new Set(Object.values(TV_DIGITAL_BRANDS_LOCAL).flatMap((marca) => marca.keys));
+const TV_DIGITAL_URLS_LOCAL = {
+  latintv: "http://latgt.com:8080",
+  latintv2: "http://enlatv.com",
+  liontv: "http://liontv.es:80",
+  evoutouch: "http://smarterstv99.dyndns.tv:25461/",
+};
+function tvDigitalUrlLocal(servicio = {}) {
+  const p = normalizarPlataforma(servicio.plataforma || "");
+  if (p.startsWith("latintv")) return String(servicio.iptvProveedor || "") === "latintv2" ? TV_DIGITAL_URLS_LOCAL.latintv2 : TV_DIGITAL_URLS_LOCAL.latintv;
+  if (p.startsWith("liontv")) return TV_DIGITAL_URLS_LOCAL.liontv;
+  if (p.startsWith("evoutouch")) return TV_DIGITAL_URLS_LOCAL.evoutouch;
+  return "";
+}
 
 // ===============================
 // HELPERS GENERALES
@@ -103,7 +118,7 @@ function humanPlataforma(key = "") {
     stellatv1:"Stella TV (1 dispositivo)", stellatv2:"Stella TV (2 dispositivos)", stellatv3:"Stella TV (3 dispositivos)",
     oleadatv1:"Oleada TV (1 dispositivo)", oleadatv3:"Oleada TV (3 dispositivos)",
     latintv1:"LatinTV (1 dispositivo)", latintv2:"LatinTV (2 dispositivos)", latintv3:"LatinTV (3 dispositivos)", latintv4:"LatinTV (4 dispositivos)",
-    liontv1:"LionTV (1 dispositivo)", liontv2:"LionTV (2 dispositivos)", liontv3:"LionTV (3 dispositivos)", liontv5:"LionTV (5 dispositivos)",
+    liontv1:"LionTV (1 dispositivo)", liontv2:"LionTV (2 dispositivos)", liontv3:"LionTV (3 dispositivos)", liontv5:"LionTV (5 dispositivos)", evoutouch4:"EvouTouch (4 dispositivos)",
     iptv1:"IPTV anterior (1)", iptv3:"IPTV anterior (3)", iptv4:"IPTV anterior (4)",
   };
   return map[k] || String(key || "");
@@ -111,7 +126,7 @@ function humanPlataforma(key = "") {
 
 function iconPlataforma(key = "") {
   const k = normalizarPlataforma(key);
-  const map = { netflix:"📺", vipnetflix:"🔥", disneyp:"🏰", disneys:"🎬", hbomax:"🎞️", primevideo:"🎥", paramount:"💿", crunchyroll:"🍥", vix:"📱", appletv:"🍎", universal:"🌍", spotify:"🎵", youtube:"▶️", office:"📎", deezer:"🎧", canva:"🎨", gemini:"✨", chatgpt:"🤖", duolingo:"🦉", stellatv1:"⭐", stellatv2:"⭐", stellatv3:"⭐", oleadatv1:"🌊", oleadatv3:"🌊", latintv1:"📡", latintv2:"📡", latintv3:"📡", latintv4:"📡", liontv1:"🦁", liontv2:"🦁", liontv3:"🦁", liontv5:"🦁", iptv1:"📡", iptv3:"📡", iptv4:"📡" };
+  const map = { netflix:"📺", vipnetflix:"🔥", disneyp:"🏰", disneys:"🎬", hbomax:"🎞️", primevideo:"🎥", paramount:"💿", crunchyroll:"🍥", vix:"📱", appletv:"🍎", universal:"🌍", spotify:"🎵", youtube:"▶️", office:"📎", deezer:"🎧", canva:"🎨", gemini:"✨", chatgpt:"🤖", duolingo:"🦉", stellatv1:"⭐", stellatv2:"⭐", stellatv3:"⭐", oleadatv1:"🌊", oleadatv3:"🌊", latintv1:"📡", latintv2:"📡", latintv3:"📡", latintv4:"📡", liontv1:"🦁", liontv2:"🦁", liontv3:"🦁", liontv5:"🦁", evoutouch4:"📺", iptv1:"📡", iptv3:"📡", iptv4:"📡" };
   return map[k] || "📦";
 }
 
@@ -324,7 +339,7 @@ function docIdInventarioLocal(ident = "", plataforma = "") {
 
 function getTotalPorPlataformaLocal(plat = "") {
   const p = normalizarPlataforma(plat);
-  const map = { netflix:5, vipnetflix:1, disneyp:6, disneys:3, hbomax:5, primevideo:5, paramount:5, crunchyroll:5, vix:4, appletv:4, universal:4, spotify:1, youtube:1, deezer:1, stellatv1:1, stellatv2:2, stellatv3:3, oleadatv1:1, oleadatv3:3, latintv1:1, latintv2:2, latintv3:3, latintv4:4, liontv1:1, liontv2:2, liontv3:3, liontv5:5, iptv1:1, iptv3:3, iptv4:4, canva:1, gemini:1, chatgpt:1, duolingo:1, office:1, office2021:1 };
+  const map = { netflix:5, vipnetflix:1, disneyp:6, disneys:3, hbomax:5, primevideo:5, paramount:5, crunchyroll:5, vix:4, appletv:4, universal:4, spotify:1, youtube:1, deezer:1, stellatv1:1, stellatv2:2, stellatv3:3, oleadatv1:1, oleadatv3:3, latintv1:1, latintv2:2, latintv3:3, latintv4:4, liontv1:1, liontv2:2, liontv3:3, liontv5:5, evoutouch4:4, iptv1:1, iptv3:3, iptv4:4, canva:1, gemini:1, chatgpt:1, duolingo:1, office:1, office2021:1 };
   return map[p] || 1;
 }
 
@@ -346,6 +361,21 @@ function addDaysDMY(baseDmy = "", days = 0) {
   const dt = parseDMYtoDate(baseDmy) || parseDMYtoDate(hoyDMY());
   dt.setDate(dt.getDate() + Number(days || 0));
   return `${String(dt.getDate()).padStart(2,"0")}/${String(dt.getMonth()+1).padStart(2,"0")}/${dt.getFullYear()}`;
+}
+
+function mesesEntreDMYLocal(inicio = "", fin = "") {
+  const a = parseDMYtoDate(inicio);
+  const b = parseDMYtoDate(fin);
+  if (!a || !b || b <= a) return 1;
+  let meses = (b.getFullYear() - a.getFullYear()) * 12 + (b.getMonth() - a.getMonth());
+  const corte = new Date(a.getFullYear(), a.getMonth() + meses, a.getDate(), 12, 0, 0, 0);
+  if (corte < b) meses += 1;
+  return Math.max(1, Math.min(24, meses || 1));
+}
+
+function mesesContratadosDesdeFechaLocal(fechaRenovacion = "", fechaBase = "") {
+  const base = isFechaDMY(fechaBase) ? fechaBase : hoyDMY();
+  return mesesEntreDMYLocal(base, fechaRenovacion);
 }
 
 function safeBtnLabel(txt = "", max = 58) {
@@ -653,12 +683,21 @@ function normalizarCompraLocal(servicio = {}, titular = "", anterior = {}) {
     };
   });
   const principal = perfiles[0] || {};
+  const fechaNueva = String(servicio.fechaRenovacion ?? anterior.fechaRenovacion ?? "").trim();
+  const mesesExplicitos = Number(servicio.mesesContratados);
+  const mesesPrevios = Number(anterior.mesesContratados);
+  const mesesContratados = Number.isFinite(mesesExplicitos) && mesesExplicitos > 0
+    ? Math.max(1, Math.min(24, Math.round(mesesExplicitos)))
+    : (Number.isFinite(mesesPrevios) && mesesPrevios > 0 && fechaNueva === String(anterior.fechaRenovacion || "").trim()
+        ? Math.max(1, Math.min(24, Math.round(mesesPrevios)))
+        : (isFechaDMY(fechaNueva) ? mesesContratadosDesdeFechaLocal(fechaNueva) : 1));
   return {
     ...anterior,
     ...servicio,
     compraId: String(servicio.compraId || anterior.compraId || recordIdLocal("compra")),
     modalidad: perfiles.length > 1 ? "multiperfil" : "individual",
     plataforma: plat,
+    mesesContratados,
     correo: principal.correo || "",
     clave: principal.clave || "",
     pin: principal.pin || "",
@@ -1262,7 +1301,14 @@ async function menuServicio(chatId, clientId, selector) {
   txt += `🧾 *Vendedor responsable:* ${escMD(vendedorEfectivoServicio(s, c).vendedor || "-")}\n`;
   txt += `🛒 *Compra:* ${cantidadPerfilesServicioLocal(s, c.nombrePerfil || "")} perfil(es) · un solo precio\n`;
   txt += `💰 *Precio:* ${escMD(`${Number(s.precio || 0).toFixed(2)} Lps`)}\n`;
-  txt += `📅 *Renovación:* ${escMD(s.fechaRenovacion || "-")}\n📊 *Estado:* ${est.emoji} ${escMD(est.texto)}`;
+  txt += `📅 *Renovación:* ${escMD(s.fechaRenovacion || "-")}\n`;
+  if (TV_DIGITAL_KEYS_LOCAL.has(normalizarPlataforma(s.plataforma || ""))) {
+    const meses = Math.max(1, Number(s.mesesContratados || (isFechaDMY(s.fechaRenovacion || "") ? mesesContratadosDesdeFechaLocal(s.fechaRenovacion) : 1)) || 1);
+    txt += `🗓️ *Plan contratado:* ${meses} mes${meses === 1 ? "" : "es"}\n`;
+    const urlServidor = tvDigitalUrlLocal(s);
+    if (urlServidor) txt += `🌐 *Servidor:* ${escMD(urlServidor)}\n`;
+  }
+  txt += `📊 *Estado:* ${est.emoji} ${escMD(est.texto)}`;
 
   const kb = [
     [{ text: "👥 Gestionar perfiles", callback_data: `cli:prof:list:${clientId}:${compraSel}` }],
@@ -1781,7 +1827,8 @@ async function renovarServicioTx(clientId, idx, { dias = 0, fechaExacta = "", co
       ? String(fechaExacta || "").trim()
       : addDaysDMY(isFechaDMY(fechaAnterior) ? fechaAnterior : hoyDMY(), Number(dias || 0));
     if (!isFechaDMY(fechaNueva)) throw new Error("Fecha inválida.");
-    const siguiente = { ...anterior, fechaRenovacion: fechaNueva, ultimaRenovacionAt: renovadoAt };
+    const mesesContratados = mesesEntreDMYLocal(isFechaDMY(fechaAnterior) ? fechaAnterior : hoyDMY(), fechaNueva);
+    const siguiente = { ...anterior, fechaRenovacion: fechaNueva, mesesContratados, ultimaRenovacionAt: renovadoAt };
     servicios[actualIdx] = siguiente;
     return { servicios, anterior, siguiente, actualIdx, fechaAnterior, fechaNueva, nombreTitular: cliente.nombrePerfil || "" };
   });
@@ -1834,7 +1881,8 @@ async function renovarTodosServiciosTx(clientId, { dias = 0, fechaExacta = "" } 
         fechaNueva,
         vendedor: vendedorEfectivoServicio(s, cliente).vendedor,
       });
-      return { ...(s || {}), fechaRenovacion: fechaNueva, ultimaRenovacionAt: renovadoAt };
+      const mesesContratados = mesesEntreDMYLocal(isFechaDMY(fechaAnterior) ? fechaAnterior : hoyDMY(), fechaNueva);
+      return { ...(s || {}), fechaRenovacion: fechaNueva, mesesContratados, ultimaRenovacionAt: renovadoAt };
     });
     return { servicios: siguientes, total: siguientes.length, cambios, fechaExacta: String(fechaExacta || ""), nombreTitular: cliente.nombrePerfil || "" };
   });

@@ -73,6 +73,7 @@ const CATALOGO_PROPIETARIOS = Object.freeze([
   item("latintv_2", "📡 IPTV y TV", 2, 8, "LatinTV", "2 dispositivos", 149, "Plan LatinTV · 2 dispositivos"),
   item("latintv_3", "📡 IPTV y TV", 2, 9, "LatinTV", "3 dispositivos", 199, "Plan LatinTV · 3 dispositivos"),
   item("latintv_4", "📡 IPTV y TV", 2, 10, "LatinTV", "4 dispositivos", 249, "Plan LatinTV · 4 dispositivos"),
+  item("evoutouch_4", "📡 IPTV y TV", 2, 11, "EvouTouch", "Cuenta completa · 4 dispositivos", 150, "Usuario y clave · URL incluida · 4 dispositivos"),
 
   item("spotify", "🎵 Música", 3, 1, "Spotify Premium", "1 mes", 110, "Acceso Premium mensual"),
   item("deezer", "🎵 Música", 3, 2, "Deezer Premium", "1 mes", 90, "Acceso Premium mensual"),
@@ -225,7 +226,8 @@ function precioEspecialParaServicio(servicio = {}) {
     const mapa = { 1: 250, 2: 275, 3: 300, 5: 350 };
     return mapa[cantidad] ? { precio: mapa[cantidad], regla: `LionTV · ${cantidad} dispositivo(s)` } : { ambiguo: true, regla: "LionTV sin cantidad válida" };
   }
-  if (t.includes("latin") || t.includes("latvgt") || t.includes("enlatv")) {
+  if (t.includes("evoutouch") || t.includes("evou touch")) return { precio: 150, regla: "EvouTouch · cuenta completa · 4 dispositivos" };
+  if (t.includes("latin") || t.includes("latvgt") || t.includes("latgt") || t.includes("enlatv")) {
     const mapa = { 1: 99, 2: 149, 3: 199, 4: 249 };
     return mapa[cantidad] ? { precio: mapa[cantidad], regla: `LatinTV · ${cantidad} dispositivo(s)` } : { ambiguo: true, regla: "LatinTV sin cantidad válida" };
   }

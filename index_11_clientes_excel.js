@@ -129,7 +129,7 @@ function plataformaLabel(v = "") {
     stellatv1: "Stella TV 1", stellatv2: "Stella TV 2", stellatv3: "Stella TV 3",
     oleadatv1: "Oleada TV 1", oleadatv3: "Oleada TV 3",
     latintv1: "LatinTV 1", latintv2: "LatinTV 2", latintv3: "LatinTV 3", latintv4: "LatinTV 4",
-    liontv1: "LionTV 1", liontv2: "LionTV 2", liontv3: "LionTV 3", liontv5: "LionTV 5",
+    liontv1: "LionTV 1", liontv2: "LionTV 2", liontv3: "LionTV 3", liontv5: "LionTV 5", evoutouch4: "EvouTouch 4",
     iptv1: "IPTV anterior 1", iptv3: "IPTV anterior 3", iptv4: "IPTV anterior 4",
   };
   return map[k] || safe(v) || "Servicio";

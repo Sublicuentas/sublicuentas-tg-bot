@@ -56,7 +56,7 @@ function categoryOfPlat(key = "") {
   if (["video","musica","iptv","diseno_ia"].includes(c)) return c;
   if (["netflix","vipnetflix","disneyp","disneys","hbomax","primevideo","paramount","crunchyroll","vix","appletv","universal"].includes(k)) return "video";
   if (["spotify","youtube","deezer"].includes(k)) return "musica";
-  if (["stellatv1","stellatv2","stellatv3","oleadatv1","oleadatv3","latintv1","latintv2","latintv3","latintv4","liontv1","liontv2","liontv3","liontv5","iptv1","iptv3","iptv4"].includes(k)) return "iptv";
+  if (["stellatv1","stellatv2","stellatv3","oleadatv1","oleadatv3","latintv1","latintv2","latintv3","latintv4","liontv1","liontv2","liontv3","liontv5","evoutouch4","iptv1","iptv3","iptv4"].includes(k)) return "iptv";
   if (["canva","gemini","chatgpt","duolingo"].includes(k)) return "diseno_ia";
   return "video";
 }
@@ -388,6 +388,7 @@ const TV_DIGITAL_INVENTARIO_MARCAS = {
   oleada: { label: "Oleada TV", icon: "🌊", prefix: "oleadatv" },
   lion: { label: "Lion TV", icon: "🦁", prefix: "liontv" },
   latin: { label: "Latin TV", icon: "📡", prefix: "latintv" },
+  evoutouch: { label: "EvouTouch", icon: "📺", prefix: "evoutouch" },
 };
 async function menuInventarioIptv(chatId) {
   const kb = pairButtons(Object.entries(TV_DIGITAL_INVENTARIO_MARCAS).map(([key, marca]) => ({
