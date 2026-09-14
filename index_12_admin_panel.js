@@ -196,8 +196,8 @@ function captionPromo(p, icons = {}, usePlatformLogo = true) {
   lines.push(
     "",
     `<b>${premiumIcon(icons,"solicitar","📲")} Cómo solicitar</b>`,
-    `• Compártala por WhatsApp o desde su Panel de Socios.`,
-    `• Disponible también dentro de su Panel de Socios.`
+    `• Solicítela desde su Panel de Socios.`,
+    `• Si necesita apoyo, escriba a Sublicuentas.`
   );
 
   return fitCaption(lines, 1024);
