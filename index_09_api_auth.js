@@ -49,9 +49,47 @@ function safeEqualStr(a, b) {
  * conserva el nombre `soloCatalogo` para aceptar tokens y datos anteriores.
  */
 function esRevSoloCatalogo(rev = {}) {
+  const caps = (rev && typeof rev.capabilities === "object" && rev.capabilities) ||
+    (rev && typeof rev.permisos === "object" && rev.permisos) || null;
+  // Si ya existe configuración explícita de permisos, ella manda. El fallback
+  // por nombre solo conserva compatibilidad con cuentas antiguas.
+  if (caps && typeof caps.canBuy === "boolean") return !caps.canBuy;
+  if (caps && typeof caps.comprar === "boolean") return !caps.comprar;
   const nombre = String(rev.nombre_norm || rev.nombre || rev.usuario || rev.id || "")
     .trim().toLowerCase();
-  return rev.soloCatalogo === true || nombre === "geisell" || nombre === "geissel";
+  return rev.soloCatalogo === true || rev.sinCompras === true || nombre === "geisell" || nombre === "geissel";
+}
+
+function capacidadesRevendedor(rev = {}) {
+  const soloCatalogo = esRevSoloCatalogo(rev);
+  const src = (rev && typeof rev.capabilities === "object" && rev.capabilities) ||
+    (rev && typeof rev.permisos === "object" && rev.permisos) || {};
+  const defaults = {
+    inicio: true,
+    clientes: true,
+    catalogo: true,
+    renovar: true,
+    comprar: !soloCatalogo,
+    aula: !soloCatalogo,
+    perfil: true,
+    recompensas: !soloCatalogo,
+    buzon: !soloCatalogo,
+    canViewClients: true,
+    canRenew: true,
+    canBuy: !soloCatalogo,
+    canUseAI: !soloCatalogo,
+  };
+  const out = { ...defaults };
+  Object.keys(defaults).forEach((k) => { if (typeof src[k] === "boolean") out[k] = src[k]; });
+  // Alias UI/API siempre coherentes.
+  if (typeof src.canBuy === "boolean" && typeof src.comprar !== "boolean") out.comprar = src.canBuy;
+  if (typeof src.comprar === "boolean" && typeof src.canBuy !== "boolean") out.canBuy = src.comprar;
+  if (typeof src.canRenew === "boolean" && typeof src.renovar !== "boolean") out.renovar = src.canRenew;
+  if (typeof src.renovar === "boolean" && typeof src.canRenew !== "boolean") out.canRenew = src.renovar;
+  if (typeof src.canViewClients === "boolean" && typeof src.clientes !== "boolean") out.clientes = src.canViewClients;
+  if (typeof src.clientes === "boolean" && typeof src.canViewClients !== "boolean") out.canViewClients = src.clientes;
+  if (typeof src.canUseAI === "boolean" && typeof src.aula !== "boolean") out.aula = src.canUseAI;
+  return out;
 }
 
 /**
@@ -196,7 +234,7 @@ function createRevLoginHandler({ db, bot, SUPER_ADMIN }) {
           return res.status(429).json({ error: "demasiados_intentos", retryAfterSeconds: throttle.retryAfterSeconds });
         }
         clearLoginThrottle(db, usuario).catch(() => {});
-        const token = jwt.sign({ admin: true, nombre: "Admin" }, JWT_SECRET, { expiresIn: "30d" });
+        const token = jwt.sign({ admin: true, nombre: "Admin" }, JWT_SECRET, { expiresIn: "6h" });
         return res.json({ token, admin: true, nombre: "Admin" });
       }
 
@@ -280,12 +318,17 @@ function createRevLoginHandler({ db, bot, SUPER_ADMIN }) {
       }
 
       clearLoginThrottle(db, usuario).catch(() => {});
-      const soloCatalogo = esRevSoloCatalogo({ id: doc.id, ...d });
       const nombreNorm = usuario === "geisell" ? "geisell" : (d.nombre_norm || usuario);
       const nombre = nombreNorm === "geisell" ? "Geisell" : (d.nombre || usuario);
-      const sinCompras = soloCatalogo;
-      const token = jwt.sign({ id: doc.id, nombre, nombre_norm: nombreNorm, soloCatalogo, sinCompras }, JWT_SECRET, { expiresIn: "30d" });
-      res.json({ token, nombre, nombre_norm: nombreNorm, soloCatalogo, sinCompras });
+      const capabilities = capacidadesRevendedor({ id: doc.id, ...d, nombre, nombre_norm: nombreNorm });
+      const soloCatalogo = !capabilities.canBuy;
+      const sinCompras = !capabilities.canBuy;
+      const tarifaId = String(d.tarifaId || d.tarifa_id || "general");
+      const nombreMostrar = String(d.nombreMostrar || "").trim().slice(0, 60);
+      const etiquetaRenovacion = String(d.etiquetaRenovacion || "").trim().slice(0, 60);
+      const tokenPayload = { id: doc.id, nombre, nombre_norm: nombreNorm, soloCatalogo, sinCompras, capabilities, tarifaId, nombreMostrar, etiquetaRenovacion };
+      const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: "14d" });
+      res.json({ token, nombre, nombre_norm: nombreNorm, soloCatalogo, sinCompras, capabilities, tarifaId, priceTier: tarifaId, nombreMostrar, etiquetaRenovacion });
     } catch (e) {
       console.error("rev/login", e);
       res.status(500).json({ error: "server" });
@@ -373,6 +416,7 @@ module.exports = {
   getJwtSecret,
   safeEqualStr,
   esRevSoloCatalogo,
+  capacidadesRevendedor,
   revAuth,
   revAdminAuth,
   revLoginIpLimiter,

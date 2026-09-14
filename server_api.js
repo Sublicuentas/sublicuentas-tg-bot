@@ -25,7 +25,7 @@ const jwt = require("jsonwebtoken");
 // ✅ Usar módulo de auth compartido (elimina duplicación con index_08_api.js)
 const {
   revAuth, revAdminAuth, revParseFecha, revDiasRest, revFechaISO, revParseFechaInput,
-  getJwtSecret, revLoginIpLimiter, createRevLoginHandler, esRevSoloCatalogo,
+  getJwtSecret, revLoginIpLimiter, createRevLoginHandler, esRevSoloCatalogo, capacidadesRevendedor,
 } = require("./index_09_api_auth");
 
 // Reusa Firebase ya inicializado en el core (no arranca el bot)
@@ -34,6 +34,7 @@ const { registrarEventoSorteosSeguro } = require("./index_14_sorteos");
 const {
   obtenerCatalogoSocio,
   buscarProductoCatalogo,
+  catalogoPlano,
 } = require("./index_15_catalogo_socios");
 const {
   normVendedor,
@@ -61,9 +62,116 @@ app.use(cors());
 app.use(express.json({ limit: "15mb" }));
 
 // keepalive / health (para que Render lo mantenga vivo)
-app.get("/", (_req, res) => res.type("text/plain").send("Sublicuentas Panel API OK v2-ia"));
-app.get("/rev/ping", (_req, res) => res.json({ v: "6-fotos-combos", gemini: !!process.env.GEMINI_API_KEY, anthropic: !!process.env.ANTHROPIC_API_KEY, storageBuckets: STORAGE_BUCKET_CANDIDATES }));
-app.get("/health", (_req, res) => res.json({ ok: true, ts: Date.now() }));
+const PANEL_API_VERSION = "socios-20260914-1";
+app.get("/", (_req, res) => res.type("text/plain").send(`Sublicuentas Panel API OK ${PANEL_API_VERSION}`));
+app.get("/rev/ping", (_req, res) => res.json({ v: PANEL_API_VERSION, gemini: !!process.env.GEMINI_API_KEY, anthropic: !!process.env.ANTHROPIC_API_KEY, storageBuckets: STORAGE_BUCKET_CANDIDATES }));
+app.get("/health", (_req, res) => res.json({ ok: true, version: PANEL_API_VERSION, ts: Date.now() }));
+
+// ── perfil/permisos vivos del socio ──
+const _revLiveCache = new Map();
+function revNormKey(v) {
+  return normVendedor(String(v || "")) === "geissel" ? "geisell" : normVendedor(String(v || ""));
+}
+async function revLiveProfile(tokenRev = {}, maxAgeMs = 30000) {
+  const id = String(tokenRev?.id || "").trim();
+  const cacheKey = id || revNormKey(tokenRev?.nombre_norm || tokenRev?.nombre || "");
+  const now = Date.now();
+  const cached = cacheKey ? _revLiveCache.get(cacheKey) : null;
+  if (cached && now - cached.at < maxAgeMs) return cached.value;
+  let data = {};
+  try {
+    if (id) {
+      const snap = await db.collection("revendedores").doc(id).get();
+      if (snap.exists) data = { id: snap.id, ...snap.data() };
+    }
+    if (!Object.keys(data).length) {
+      const key = revNormKey(tokenRev?.nombre_norm || tokenRev?.nombre || "");
+      if (key) {
+        const snap = await db.collection("revendedores").where("nombre_norm", "==", key).limit(1).get();
+        if (!snap.empty) data = { id: snap.docs[0].id, ...snap.docs[0].data() };
+      }
+    }
+  } catch (e) {
+    console.error("revLiveProfile", e?.message || e);
+  }
+  const merged = { ...tokenRev, ...data };
+  const capabilities = capacidadesRevendedor(merged);
+  const value = {
+    ...merged,
+    nombre_norm: revNormKey(merged.nombre_norm || merged.nombre || tokenRev?.nombre_norm || ""),
+    capabilities,
+    permisos: capabilities,
+    soloCatalogo: !capabilities.canBuy,
+    sinCompras: !capabilities.canBuy,
+    tarifaId: String(merged.tarifaId || merged.tarifa_id || tokenRev?.tarifaId || "general"),
+    priceTier: String(merged.tarifaId || merged.tarifa_id || tokenRev?.tarifaId || "general"),
+  };
+  if (cacheKey) _revLiveCache.set(cacheKey, { at: now, value });
+  return value;
+}
+function revCap(profile, key, fallback = true) {
+  const caps = profile?.capabilities || profile?.permisos || {};
+  return typeof caps[key] === "boolean" ? caps[key] : fallback;
+}
+function revMoneyNumber(v) {
+  if (v == null || v === "") return 0;
+  if (typeof v === "number") return Number.isFinite(v) ? v : 0;
+  let s = String(v).replace(/[^\d,.-]/g, "").trim();
+  if (!s) return 0;
+  const c = s.lastIndexOf(","), d = s.lastIndexOf(".");
+  if (c > -1 && d > -1) s = c > d ? s.replace(/\./g, "").replace(",", ".") : s.replace(/,/g, "");
+  else if (c > -1) s = s.length - c - 1 === 2 ? s.replace(",", ".") : s.replace(/,/g, "");
+  else if (d > -1 && s.length - d - 1 !== 2) s = s.replace(/\./g, "");
+  const n = Number.parseFloat(s);
+  return Number.isFinite(n) ? n : 0;
+}
+function revDateMs(v) {
+  if (!v) return 0;
+  if (typeof v === "number") return v < 1e12 ? v * 1000 : v;
+  if (typeof v === "object") {
+    if (typeof v.toDate === "function") return v.toDate().getTime();
+    if (v._seconds) return Number(v._seconds) * 1000;
+    if (v.seconds) return Number(v.seconds) * 1000;
+  }
+  const d = new Date(v);
+  return Number.isNaN(d.getTime()) ? 0 : d.getTime();
+}
+function revCanonInventory(v) {
+  const raw = String(v || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  const key = raw.replace(/[^a-z0-9]/g, "");
+  const aliases = {
+    netflixpremium:"netflix", netflix:"netflix", netflixvip:"vipnetflix", vipnetflix:"vipnetflix",
+    disneyplus:"disney", disneypremium:"disney", disneystandard:"disney", disney:"disney",
+    hbomax:"hbomax", max:"hbomax", hbo:"hbomax", primevideo:"primevideo", prime:"primevideo",
+    crunchyroll:"crunchyroll", crunchy:"crunchyroll", paramountplus:"paramount", paramount:"paramount",
+    vix:"vix", vikirakuten:"viki", viki:"viki", universalplus:"universal", universal:"universal",
+    spotify:"spotify", youtube:"youtube", youtubepremium:"youtube", canva:"canva", gemini:"gemini",
+    chatgpt:"chatgpt", duolingo:"duolingo", office365:"office", microsoft365:"office", office:"office",
+    office2021:"office2021", esetnod32:"nod32", nod32:"nod32", stellatv:"stellatv", stella:"stellatv",
+    oleadatv:"oleada", oleada:"oleada", latintv:"latintv", liontv:"liontv", iptv:"iptv"
+  };
+  if (aliases[key]) return aliases[key];
+  const stella = key.match(/^stella(?:tv)?([123])/); if (stella) return `stellatv${stella[1]}`;
+  const oleada = key.match(/^oleada(?:tv)?([13])/); if (oleada) return `oleadatv${oleada[1]}`;
+  const latin = key.match(/^latintv([1234])/); if (latin) return `latintv${latin[1]}`;
+  const lion = key.match(/^liontv([1235])/); if (lion) return `liontv${lion[1]}`;
+  return key;
+}
+function revCatalogInventoryKeys(item = {}) {
+  const text = `${item.n || item.nombre || ""} ${item.s || item.variante || ""}`.trim();
+  const base = revCanonInventory(text);
+  const raw = String(text).toLowerCase();
+  const qty = Number((raw.match(/([1-9])\s*(?:dispositivo|pantalla)/) || [])[1] || 0);
+  const keys = [];
+  if (raw.includes("netflix") && raw.includes("vip")) keys.push("vipnetflix");
+  if (raw.includes("stella") && qty) keys.push(`stellatv${qty}`);
+  if (raw.includes("oleada") && qty) keys.push(`oleadatv${qty}`);
+  if (raw.includes("latin") && qty) keys.push(`latintv${qty}`);
+  if (raw.includes("lion") && qty) keys.push(`liontv${qty}`);
+  if (base) keys.push(base);
+  if (base && /^(stellatv|oleadatv|latintv|liontv)\d$/.test(base)) keys.push(base.replace(/\d$/, ""));
+  return [...new Set(keys.filter(Boolean))];
+}
 
 // ── helpers ──
 // Autenticación y fechas compartidas vienen de index_09_api_auth.js.
@@ -104,6 +212,7 @@ async function revResolverSeleccionCliente({ clienteId, socioNorm, seleccion = [
       servicioIndex: ix,
       compraId: String(servicio.compraId || compraId || ""),
       servicio: item?.servicio || servicio.plataforma || servicio.servicio || servicio.nombre || "Servicio",
+      precioCliente: revMoneyNumber(servicio.precioCliente ?? servicio.precioVenta ?? servicio.precio ?? servicio.monto ?? 0),
     };
   });
   const vistos = new Set();
@@ -201,6 +310,7 @@ async function revActualizarFechaCliente({ clienteId, socioNorm, servicioIndex, 
     compraId: compraEvento,
     vendedor,
     servicio: svc.plataforma || svc.servicio || svc.nombre || svc.cuenta || "Servicio",
+    precioCliente: revMoneyNumber(svc.precioCliente ?? svc.precioVenta ?? svc.precio ?? svc.monto ?? 0),
     sorteo,
   };
 }
@@ -208,9 +318,35 @@ async function revActualizarFechaCliente({ clienteId, socioNorm, servicioIndex, 
 // ── LOGIN (revendedor o admin) ── handler compartido: ver index_09_api_auth.js
 app.post("/rev/login", revLoginIpLimiter, createRevLoginHandler({ db, bot, SUPER_ADMIN }));
 
+// Devuelve permisos/configuración vigentes aunque el JWT se haya emitido antes
+// de un cambio hecho desde Sublichat.
+app.get("/rev/me", revAuth, async (req, res) => {
+  try {
+    const live = await revLiveProfile(req.rev, 0);
+    res.json({
+      id: live.id || req.rev.id || "",
+      nombre: live.nombre || req.rev.nombre || "",
+      nombre_norm: live.nombre_norm || req.rev.nombre_norm || "",
+      nombreMostrar: live.nombreMostrar || "",
+      capabilities: live.capabilities,
+      permisos: live.capabilities,
+      soloCatalogo: live.soloCatalogo,
+      sinCompras: live.sinCompras,
+      tarifaId: live.tarifaId,
+      priceTier: live.tarifaId,
+      etiquetaRenovacion: live.etiquetaRenovacion || "",
+    });
+  } catch (e) {
+    console.error("rev/me", e);
+    res.status(500).json({ error: "server" });
+  }
+});
+
 // ── CLIENTES del revendedor ──
 app.get("/rev/clientes", revAuth, async (req, res) => {
   try {
+    const live = await revLiveProfile(req.rev);
+    if (!revCap(live, "canViewClients", true)) return res.status(403).json({ error: "sin_permiso_clientes" });
     const vendedorNormRaw = normVendedor(req.rev.nombre_norm || req.rev.nombre || "");
     const vendedorNorm = vendedorNormRaw === "geissel" ? "geisell" : vendedorNormRaw;
     const aliases = vendedorNorm === "geisell" ? ["geisell", "geissel"] : [vendedorNorm];
@@ -264,10 +400,136 @@ app.get("/rev/precios", revAuth, async (req, res) => {
     res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
     res.set("Pragma", "no-cache");
     res.set("Expires", "0");
-    const catalogo = await obtenerCatalogoSocio(db, req.rev);
+    const live = await revLiveProfile(req.rev);
+    const catalogo = await obtenerCatalogoSocio(db, live);
     res.set("X-Catalogo-Tarifa", catalogo.tarifaId);
     res.json(catalogo.grupos);
   } catch (e) { console.error("rev/precios", e); res.status(500).json({ error: "server" }); }
+});
+
+// ── INVENTARIO REAL DEL CATÁLOGO ──
+// Combina la bodega real (colección inventario) con un override manual que
+// puede configurarse por ítem desde Sublichat.
+app.get("/rev/inventario", revAuth, async (req, res) => {
+  try {
+    res.set("Cache-Control", "no-store");
+    const live = await revLiveProfile(req.rev);
+    const [catalogo, invSnap] = await Promise.all([
+      obtenerCatalogoSocio(db, live),
+      db.collection("inventario").get(),
+    ]);
+    const agregados = new Map();
+    invSnap.docs.forEach((doc) => {
+      const d = doc.data() || {};
+      const key = revCanonInventory(d.plataforma || d.servicio || d.tipo || "");
+      if (!key) return;
+      const estado = String(d.estado || "activa").trim().toLowerCase();
+      const cap = Math.max(0, revMoneyNumber(d.capacidad));
+      const ocupados = Math.max(0, revMoneyNumber(d.ocupados));
+      let disponibles = d.disponibles == null || d.disponibles === "" ? Math.max(0, cap - ocupados) : Math.max(0, revMoneyNumber(d.disponibles));
+      if (["inactiva", "inactivo", "suspendida", "suspendido", "bloqueada", "bloqueado"].includes(estado)) disponibles = 0;
+      const prev = agregados.get(key) || { docs: 0, disponibles: 0, capacidad: 0, ocupados: 0 };
+      prev.docs += 1; prev.disponibles += disponibles; prev.capacidad += cap; prev.ocupados += ocupados;
+      agregados.set(key, prev);
+    });
+
+    const items = catalogoPlano(catalogo.grupos).map((item) => {
+      const stockModo = String(item.stockModo || "auto").toLowerCase();
+      const manualEstado = String(item.stockEstado || "").toLowerCase();
+      const manualCantidad = item.stockCantidad == null ? null : Number(item.stockCantidad);
+      if (stockModo === "manual") {
+        let estado = ["disponible", "bajo", "agotado", "consultar"].includes(manualEstado) ? manualEstado : "consultar";
+        if (!manualEstado && Number.isFinite(manualCantidad)) estado = manualCantidad <= 0 ? "agotado" : manualCantidad <= 2 ? "bajo" : "disponible";
+        return { id:item.id, catalogId:item.id, nombre:item.nombreCompleto, estado, stock:Number.isFinite(manualCantidad)?manualCantidad:null, origen:"manual" };
+      }
+      const keys = revCatalogInventoryKeys(item);
+      let docs = 0, disponibles = 0, capacidad = 0, ocupados = 0, plataforma = "";
+      for (const key of keys) {
+        const row = agregados.get(key);
+        if (!row) continue;
+        if (!plataforma) plataforma = key;
+        docs += row.docs; disponibles += row.disponibles; capacidad += row.capacidad; ocupados += row.ocupados;
+      }
+      if (!docs) return { id:item.id, catalogId:item.id, nombre:item.nombreCompleto, estado:"consultar", stock:null, origen:"sin_bodega" };
+      const estado = disponibles <= 0 ? "agotado" : disponibles <= 2 ? "bajo" : "disponible";
+      return { id:item.id, catalogId:item.id, nombre:item.nombreCompleto, estado, stock:disponibles, capacidad, ocupados, plataforma, origen:"bodega" };
+    });
+    res.json({ ok:true, tarifaId:catalogo.tarifaId, items, updatedAt:Date.now() });
+  } catch (e) {
+    console.error("rev/inventario", e);
+    res.status(500).json({ error:"server" });
+  }
+});
+
+// ── MÉTRICAS DEL SOCIO ──
+app.get("/rev/metricas", revAuth, async (req, res) => {
+  try {
+    res.set("Cache-Control", "no-store");
+    const live = await revLiveProfile(req.rev);
+    const socioNorm = revNormKey(live.nombre_norm || live.nombre || "");
+    const aliases = socioNorm === "geisell" ? ["geisell", "geissel"] : [socioNorm];
+    const [compraSnaps, renovSnaps] = await Promise.all([
+      Promise.all(aliases.map((a) => db.collection("compras").where("socio_norm", "==", a).get())),
+      Promise.all(aliases.map((a) => db.collection("renovaciones").where("socio_norm", "==", a).get())),
+    ]);
+    const dedupe = (snaps) => { const m=new Map(); snaps.forEach(snap=>snap.docs.forEach(d=>m.set(d.id,{id:d.id,...d.data()}))); return [...m.values()]; };
+    const compras = dedupe(compraSnaps), renovaciones = dedupe(renovSnaps);
+    const now = new Date();
+    const start = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+    const end = new Date(now.getFullYear(), now.getMonth()+1, 1).getTime();
+    const enMes = (x) => { const t=revDateMs(x.createdAt || x.fecha || x.ts); return t>=start && t<end; };
+    const ops = [
+      ...compras.filter(enMes).map(x=>({...x,_tipo:"compra"})),
+      ...renovaciones.filter(enMes).map(x=>({...x,_tipo:"renovacion"})),
+    ];
+    const costoMes = ops.reduce((a,x)=>a+Math.max(0,revMoneyNumber(x.monto)),0);
+    const conVenta = ops.filter(x=>revMoneyNumber(x.ventaCliente)>0);
+    const conUtilidad = conVenta.filter(x=>revMoneyNumber(x.monto)>0);
+    const ventasMes = conVenta.reduce((a,x)=>a+revMoneyNumber(x.ventaCliente),0);
+    const utilidadMes = conUtilidad.length ? conUtilidad.reduce((a,x)=>a+(revMoneyNumber(x.ventaCliente)-revMoneyNumber(x.monto)),0) : null;
+    const ticketPromedio = conVenta.length ? ventasMes / conVenta.length : null;
+    const counts = new Map();
+    ops.forEach(x=>{const k=String(x.servicio||"Servicio").trim()||"Servicio";counts.set(k,(counts.get(k)||0)+1)});
+    const topServicio = [...counts.entries()].sort((a,b)=>b[1]-a[1])[0] || null;
+    const pendientes = compras.filter(x=>!["entregado","completado","cancelado"].includes(String(x.estado||"pendiente").toLowerCase())).length;
+    res.json({
+      ok:true,
+      periodo:`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}`,
+      operacionesMes:ops.length, comprasMes:ops.filter(x=>x._tipo==="compra").length, renovacionesMes:ops.filter(x=>x._tipo==="renovacion").length,
+      costoMes, operadoMes:costoMes,
+      ventasMes:conVenta.length?ventasMes:null,
+      utilidadMes,
+      ticketPromedio,
+      ventasCoberturaPct:ops.length?Math.round(conVenta.length*100/ops.length):0,
+      utilidadCoberturaPct:ops.length?Math.round(conUtilidad.length*100/ops.length):0,
+      operacionesConVenta:conVenta.length,
+      operacionesConUtilidad:conUtilidad.length,
+      pedidosPendientes:pendientes,
+      topServicio:topServicio?{nombre:topServicio[0],operaciones:topServicio[1]}:null,
+    });
+  } catch (e) {
+    console.error("rev/metricas", e);
+    res.status(500).json({ error:"server" });
+  }
+});
+
+// ── MIS PEDIDOS / SEGUIMIENTO ──
+app.get("/rev/compras/mias", revAuth, async (req, res) => {
+  try {
+    const live = await revLiveProfile(req.rev);
+    if (!revCap(live, "canBuy", true)) return res.json({ ok:true, items:[] });
+    const socioNorm = revNormKey(live.nombre_norm || live.nombre || "");
+    const aliases = socioNorm === "geisell" ? ["geisell", "geissel"] : [socioNorm];
+    const snaps = await Promise.all(aliases.map(a=>db.collection("compras").where("socio_norm","==",a).get()));
+    const m=new Map();snaps.forEach(snap=>snap.docs.forEach(d=>m.set(d.id,{id:d.id,...d.data()})));
+    const limit=Math.min(50,Math.max(1,Number(req.query.limit)||20));
+    const items=[...m.values()].sort((a,b)=>revDateMs(b.createdAt)-revDateMs(a.createdAt)).slice(0,limit).map(x=>({
+      id:x.id, servicio:x.servicio||"Compra", estado:x.estado||"pendiente", detalleEstado:x.detalleEstado||"", destino:x.destino||"", destinoLabel:x.destinoLabel||"",
+      monto:revMoneyNumber(x.monto), ventaCliente:revMoneyNumber(x.ventaCliente)||null, utilidadEstimada:x.utilidadEstimada==null?null:revMoneyNumber(x.utilidadEstimada),
+      createdAt:x.createdAt, estadoUpdatedAt:x.estadoUpdatedAt||x.updatedAt||x.createdAt, estadoHistorial:Array.isArray(x.estadoHistorial)?x.estadoHistorial.slice(-10):[],
+    }));
+    res.json({ok:true,items});
+  } catch(e){console.error("rev/compras/mias",e);res.status(500).json({error:"server"})}
 });
 
 // ── AVISOS — buzón publicado desde Telegram (/aviso) ──
@@ -414,8 +676,10 @@ async function uploadPanelImage(imagen, folder = "comprobantes") {
 // ── Comprobante de renovación: sube la foto + opcionalmente actualiza la fecha del servicio ──
 app.post("/rev/renovacion", revAuth, async (req, res) => {
   try {
+    const live = await revLiveProfile(req.rev);
+    if (!revCap(live, "canRenew", true)) return res.status(403).json({ error: "sin_permiso_renovar" });
     const { clienteId, cliente, servicio, comentario, quien, monto, imagen, servicioIndex, nuevaFecha, meses } = req.body;
-    const socio = req.rev.nombre || req.rev.nombre_norm || "Revendedor";
+    const socio = live.nombre || live.nombre_norm || req.rev.nombre || req.rev.nombre_norm || "Revendedor";
     const com = (comentario || "").toString().trim().slice(0, 600);
 
     const seleccionRaw=Array.isArray(req.body.servicios)&&req.body.servicios.length?req.body.servicios:[{servicioIndex,servicio}];
@@ -425,10 +689,12 @@ app.post("/rev/renovacion", revAuth, async (req, res) => {
       servicio:String(x.servicio||"").slice(0,120)
     })).filter(x=>(x.compraId||Number.isInteger(x.servicioIndex))&&(x.compraId||x.servicioIndex>=0)).slice(0,30);
     if(!seleccionEntrada.length)return res.status(400).json({error:"sin_servicios"});
-    const seleccion=await revResolverSeleccionCliente({clienteId,socioNorm:req.rev.nombre_norm||"",seleccion:seleccionEntrada});
+    const seleccion=await revResolverSeleccionCliente({clienteId,socioNorm:live.nombre_norm||req.rev.nombre_norm||"",seleccion:seleccionEntrada});
+    const ventaClienteIngresada = revMoneyNumber(req.body?.ventaCliente);
+    const ventaCliente = ventaClienteIngresada > 0 ? ventaClienteIngresada : seleccion.reduce((sum, item) => sum + revMoneyNumber(item.precioCliente), 0);
     const renovacionesFecha=[];
     if (nuevaFecha || meses) {
-      for(const item of seleccion) renovacionesFecha.push(await revActualizarFechaCliente({clienteId,socioNorm:req.rev.nombre_norm||"",servicioIndex:item.servicioIndex,compraId:item.compraId,nuevaFecha,meses}));
+      for(const item of seleccion) renovacionesFecha.push(await revActualizarFechaCliente({clienteId,socioNorm:live.nombre_norm||req.rev.nombre_norm||"",servicioIndex:item.servicioIndex,compraId:item.compraId,nuevaFecha,meses}));
     }
     const renovacionFecha=renovacionesFecha[0]||null;
 
@@ -444,7 +710,7 @@ app.post("/rev/renovacion", revAuth, async (req, res) => {
         servicioIndex:x.servicioIndex,
         compraId:renovacionesFecha[i]?.compraId||x.compraId||"",
         servicio:renovacionesFecha[i]?.servicio||x.servicio,
-        vendedor:renovacionesFecha[i]?.vendedor||req.rev.nombre_norm||"",
+        vendedor:renovacionesFecha[i]?.vendedor||live.nombre_norm||req.rev.nombre_norm||"",
         fechaAnterior:renovacionesFecha[i]?.fechaAnterior||"",
         nuevaFecha:renovacionesFecha[i]?.nuevaFecha||String(nuevaFecha||""),
         meses:Math.max(1,Number(meses)||1),
@@ -453,9 +719,11 @@ app.post("/rev/renovacion", revAuth, async (req, res) => {
       })),
       comentario: com,
       quien: (quien || "").toString().slice(0, 120),
-      monto: Number(monto) || 0,
+      monto: revMoneyNumber(monto),
+      ventaCliente,
+      utilidadEstimada: ventaCliente > 0 && revMoneyNumber(monto) > 0 ? ventaCliente - revMoneyNumber(monto) : null,
       socio,
-      socio_norm: req.rev.nombre_norm || "",
+      socio_norm: live.nombre_norm || req.rev.nombre_norm || "",
       imagenUrl,
       // Si Storage falla, Telegram recibe la foto por buffer; para que Panel Dios también la vea,
       // guardamos una copia liviana en Firestore cuando no hay URL pública.
@@ -477,7 +745,8 @@ app.post("/rev/renovacion", revAuth, async (req, res) => {
       `🙍 Cliente: ${cleanTg(doc.cliente || "—", 120)}`,
       `📦 Servicios: ${doc.servicios.map(x=>x.servicio||('Servicio '+(x.servicioIndex+1))).join(', ')}`,
       doc.renovado ? `📅 Nueva fecha: ${cleanTg(doc.nuevaFecha || "—", 30)} · ${doc.renovadosCantidad} renovado(s)` : "",
-      doc.monto ? `💵 Pago: Lps. ${doc.monto}` : "",
+      doc.monto ? `💵 Costo: Lps. ${doc.monto}` : "",
+      doc.ventaCliente ? `📈 Venta cliente: Lps. ${doc.ventaCliente}${doc.utilidadEstimada != null ? ` · Utilidad est.: Lps. ${doc.utilidadEstimada}` : ""}` : "",
       doc.quien ? `🔁 Renovó: ${cleanTg(doc.quien, 80)}` : "",
       com ? `📝 Nota: ${cleanTg(com, 260)}` : "",
       (imagenUrl || imagenObj.buffer) ? `📎 Comprobante adjunto` : `⚠️ Sin comprobante`,
@@ -496,9 +765,11 @@ app.post("/rev/renovacion", revAuth, async (req, res) => {
 // ── Renovación directa sin foto: actualiza fecha del servicio del cliente ──
 app.post("/rev/renovar-cliente", revAuth, async (req, res) => {
   try {
+    const live = await revLiveProfile(req.rev);
+    if (!revCap(live, "canRenew", true)) return res.status(403).json({ error: "sin_permiso_renovar" });
     const r = await revActualizarFechaCliente({
       clienteId: req.body.clienteId,
-      socioNorm: req.rev.nombre_norm || "",
+      socioNorm: live.nombre_norm || req.rev.nombre_norm || "",
       servicioIndex: req.body.servicioIndex,
       compraId: req.body.compraId,
       nuevaFecha: req.body.nuevaFecha,
@@ -512,9 +783,11 @@ app.post("/rev/renovar-cliente", revAuth, async (req, res) => {
       compraId: r.compraId || "",
       comentario: (req.body.comentario || "Renovación directa desde panel").toString().slice(0, 600),
       quien: (req.body.quien || "Panel socio").toString().slice(0, 120),
-      monto: Number(req.body.monto) || 0,
-      socio: req.rev.nombre || req.rev.nombre_norm || "Revendedor",
-      socio_norm: req.rev.nombre_norm || "",
+      monto: revMoneyNumber(req.body.monto),
+      ventaCliente: revMoneyNumber(req.body.ventaCliente) || revMoneyNumber(r.precioCliente),
+      utilidadEstimada: (revMoneyNumber(req.body.ventaCliente) || revMoneyNumber(r.precioCliente)) > 0 && revMoneyNumber(req.body.monto) > 0 ? (revMoneyNumber(req.body.ventaCliente) || revMoneyNumber(r.precioCliente)) - revMoneyNumber(req.body.monto) : null,
+      socio: live.nombre || live.nombre_norm || req.rev.nombre || req.rev.nombre_norm || "Revendedor",
+      socio_norm: live.nombre_norm || req.rev.nombre_norm || "",
       imagenUrl: "",
       fechaAnterior: r.fechaAnterior || "",
       nuevaFecha: r.nuevaFecha || "",
@@ -536,13 +809,14 @@ app.post("/rev/renovar-cliente", revAuth, async (req, res) => {
 // ── COMPRA NUEVA / COMBO: socio envía solicitud + comprobante; avisa a Telegram según destino ──
 app.post("/rev/compra", revAuth, async (req, res) => {
   try {
-    if (esRevSoloCatalogo(req.rev)) return res.status(403).json({ error: "solo_catalogo" });
+    const live = await revLiveProfile(req.rev);
+    if (!revCap(live, "canBuy", !esRevSoloCatalogo(req.rev))) return res.status(403).json({ error: "sin_permiso_comprar" });
     const b = req.body || {};
-    const socio = req.rev.nombre || req.rev.nombre_norm || "Revendedor";
+    const socio = live.nombre || live.nombre_norm || req.rev.nombre || req.rev.nombre_norm || "Revendedor";
     const destino = destinoInfo(b.destino);
     // El navegador nunca decide el precio final. Se vuelve a consultar la
     // tarifa del socio autenticado para impedir valores viejos o manipulados.
-    const catalogoSocio = await obtenerCatalogoSocio(db, req.rev);
+    const catalogoSocio = await obtenerCatalogoSocio(db, live);
 
     const productosRaw = Array.isArray(b.productos) && b.productos.length
       ? b.productos.slice(0, 20)
@@ -624,7 +898,9 @@ app.post("/rev/compra", revAuth, async (req, res) => {
     const conPrecio = productos.filter((p) => p.precioCatalogo !== null).length;
     const descuentoCombo = Math.min(Math.max(conPrecio - 1, 0), 4) * 10; // 2=10, 3=20, 4=30, 5+=40
     const totalCombo = Math.max(0, subtotalCatalogo - descuentoCombo);
-    const monto = Number(b.monto) || totalCombo || 0;
+    const monto = revMoneyNumber(b.monto) || totalCombo || 0;
+    const ventaCliente = Math.max(0, revMoneyNumber(b.ventaCliente));
+    const utilidadEstimada = ventaCliente > 0 && monto > 0 ? ventaCliente - monto : null;
     const servicio = productos.length > 1
       ? `Combo ${productos.length} plataformas`
       : productos[0].servicio;
@@ -661,10 +937,12 @@ app.post("/rev/compra", revAuth, async (req, res) => {
       marcaTv: productos[0].marcaTv || "",
       comentario,
       monto,
+      ventaCliente,
+      utilidadEstimada,
       destino: destino.key,
       destinoLabel: destino.label,
       socio,
-      socio_norm: req.rev.nombre_norm || "",
+      socio_norm: live.nombre_norm || req.rev.nombre_norm || "",
       tarifaId: catalogoSocio.tarifaId,
       imagenUrl,
       // Si Storage falla, Telegram recibe la foto por buffer; para que Panel Dios también la vea,
@@ -672,7 +950,10 @@ app.post("/rev/compra", revAuth, async (req, res) => {
       imagenData: imagenUrl ? "" : (imagenObj.dataUri && imagenObj.dataUri.length < 850000 ? imagenObj.dataUri : ""),
       imagenStorageError: imagenObj.storageError || "",
       estado: "pendiente",
+      detalleEstado: "Pedido recibido",
+      estadoHistorial: [{ estado: "pendiente", detalle: "Pedido recibido", at: new Date().toISOString(), por: "sistema" }],
       createdAt: new Date(),
+      estadoUpdatedAt: new Date(),
     };
     const ref = await db.collection("compras").add(doc);
 
@@ -704,8 +985,9 @@ app.post("/rev/compra", revAuth, async (req, res) => {
       ...productoLineas,
       ``,
       productos.length > 1
-        ? `💰 Subtotal: Lps. ${subtotalCatalogo}\n🏷️ Descuento combo: Lps. ${descuentoCombo}\n✅ Total sugerido: Lps. ${totalCombo}\n💵 Pagado: ${monto ? `Lps. ${monto}` : "—"}`
-        : `💵 Pagado: ${monto ? `Lps. ${monto}` : "—"}${productos[0].precioCatalogo !== null ? ` | Catálogo: Lps. ${productos[0].precioCatalogo}` : ""}`,
+        ? `💰 Subtotal: Lps. ${subtotalCatalogo}\n🏷️ Descuento combo: Lps. ${descuentoCombo}\n✅ Total sugerido: Lps. ${totalCombo}\n💵 Costo pagado: ${monto ? `Lps. ${monto}` : "—"}`
+        : `💵 Costo pagado: ${monto ? `Lps. ${monto}` : "—"}${productos[0].precioCatalogo !== null ? ` | Catálogo: Lps. ${productos[0].precioCatalogo}` : ""}`,
+      ventaCliente ? `📈 Venta al cliente: Lps. ${ventaCliente}${utilidadEstimada != null ? ` · Utilidad est.: Lps. ${utilidadEstimada}` : ""}` : "",
       comentario ? `📝 Nota: ${cleanTg(comentario, 220)}` : "",
       (imagenUrl || imagenObj.buffer) ? `📎 Comprobante adjunto` : `⚠️ Sin comprobante`,
       `🆔 Ref: ${ref.id.slice(-6)}`,
@@ -716,7 +998,7 @@ app.post("/rev/compra", revAuth, async (req, res) => {
     if (!ids.length) ids = await getAdminChatIds();
     await Promise.all(ids.map((id) => sendTelegramImageSmart(id, imagenObj, cap)));
 
-    res.json({ ok: true, id: ref.id, imagenUrl, destino: destino.key, destinoLabel: destino.label, totalCombo, descuentoCombo });
+    res.json({ ok: true, id: ref.id, imagenUrl, destino: destino.key, destinoLabel: destino.label, totalCombo, descuentoCombo, ventaCliente, utilidadEstimada, estado: "pendiente" });
   } catch (e) {
     console.error("rev/compra", e);
     res.status(e.status || 500).json({ error: e.publicError || "server", detail: e.message });
@@ -725,6 +1007,8 @@ app.post("/rev/compra", revAuth, async (req, res) => {
 
 app.post("/rev/sugerencia", revAuth, async (req, res) => {
   try {
+    const live = await revLiveProfile(req.rev);
+    if (!revCap(live, "buzon", true)) return res.status(403).json({ error: "sin_permiso_buzon" });
     const texto = (req.body.texto || "").toString().trim().slice(0, 1000);
     if (!texto) return res.status(400).json({ error: "falta_texto" });
     const nombre = req.rev.nombre || req.rev.nombre_norm || "Revendedor";
@@ -772,16 +1056,21 @@ app.get("/rev/admin/revendedores", revAdminAuth, async (req, res) => {
       const rawKey = normVendedor(r.nombre_norm || r.nombre || d.id);
       const k = rawKey === "geissel" ? "geisell" : rawKey;
       const stats = porVend[k] || { clientesIds: new Set(), servicios: 0, vencidos: 0, porVencer: 0 };
+      const capabilities = capacidadesRevendedor({ id: d.id, ...r, nombre_norm: k });
       const item = {
         id: d.id,
         nombre: k === "geisell" ? "Geisell" : (r.nombre || d.id),
         nombre_norm: k,
+        nombreMostrar: r.nombreMostrar || "",
         activo: r.activo !== false,
-        soloCatalogo: esRevSoloCatalogo({ id: d.id, ...r, nombre_norm: k }),
-        sinCompras: esRevSoloCatalogo({ id: d.id, ...r, nombre_norm: k }),
+        soloCatalogo: !capabilities.canBuy,
+        sinCompras: !capabilities.canBuy,
+        capabilities,
+        permisos: capabilities,
         telegramId: r.telegramId || "",
         telefono: r.telefono || "",
         tarifaId: r.tarifaId || "general",
+        etiquetaRenovacion: r.etiquetaRenovacion || "",
         clientes: stats.clientesIds.size,
         servicios: stats.servicios,
         vencidos: stats.vencidos,
@@ -863,18 +1152,70 @@ app.get("/rev/admin/compras", revAdminAuth, async (req, res) => {
         serial: r.serial || "",
         key: r.key || "",
         comentario: r.comentario || "",
-        monto: Number(r.monto) || 0,
+        monto: revMoneyNumber(r.monto),
+        ventaCliente: revMoneyNumber(r.ventaCliente) || 0,
+        utilidadEstimada: r.utilidadEstimada == null ? null : revMoneyNumber(r.utilidadEstimada),
         destino: r.destino || "sublicuentas",
         destinoLabel: r.destinoLabel || destinoInfo(r.destino).label,
         socio: r.socio || "",
         socio_norm: r.socio_norm || "",
         imagenUrl: r.imagenUrl || r.imagenData || "",
         estado: r.estado || "pendiente",
+        detalleEstado: r.detalleEstado || "",
+        estadoUpdatedAt: r.estadoUpdatedAt || r.updatedAt || r.createdAt || "",
+        estadoHistorial: Array.isArray(r.estadoHistorial) ? r.estadoHistorial.slice(-15) : [],
         ts,
       };
     });
     res.json(lista);
   } catch (e) { console.error("rev/admin/compras", e); res.status(500).json({ error: "server" }); }
+});
+
+// ── ADMIN: cambiar estado de un pedido y avisar al socio ──
+app.patch("/rev/admin/compras/:id/estado", revAdminAuth, async (req, res) => {
+  try {
+    const estado = String(req.body?.estado || "").trim().toLowerCase();
+    const allowed = new Set(["pendiente", "en proceso", "falta información", "entregado", "cancelado"]);
+    if (!allowed.has(estado)) return res.status(400).json({ error: "estado_invalido" });
+    const detalle = cleanTg(req.body?.detalle || "", 300);
+    const ref = db.collection("compras").doc(String(req.params.id || ""));
+    const snap = await ref.get();
+    if (!snap.exists) return res.status(404).json({ error: "no_existe" });
+    const compra = snap.data() || {};
+    const at = new Date();
+    const hist = { estado, detalle, at: at.toISOString(), por: cleanTg(req.admin?.nombre || "Admin", 80) };
+    await ref.update({
+      estado,
+      detalleEstado: detalle,
+      estadoUpdatedAt: at,
+      estadoHistorial: admin.firestore.FieldValue.arrayUnion(hist),
+      updatedAt: at,
+    });
+
+    const socioNorm = revNormKey(compra.socio_norm || compra.socio || "");
+    const estadoLabel = estado.charAt(0).toUpperCase() + estado.slice(1);
+    const texto = `🛒 Pedido ${String(compra.servicio || "").trim() || ref.id.slice(-6)}: ${estadoLabel}${detalle ? ` · ${detalle}` : ""}`;
+    if (socioNorm) {
+      await db.collection("avisos").add({
+        texto, autor:"Sublicuentas", tipo:"pedido_estado", compraId:ref.id,
+        destinatarios:[socioNorm], activo:true, createdAt:admin.firestore.FieldValue.serverTimestamp(),
+      }).catch(()=>{});
+      try {
+        const revAliases = socioNorm === "geisell" ? ["geisell", "geissel"] : [socioNorm];
+        let revDoc = null;
+        for (const alias of revAliases) {
+          const revSnap = await db.collection("revendedores").where("nombre_norm", "==", alias).limit(1).get();
+          if (!revSnap.empty) { revDoc = revSnap.docs[0]; break; }
+        }
+        if (revDoc) {
+          const rd = revDoc.data() || {};
+          const chatId = String(rd.telegramId || "").trim();
+          if (chatId) await sendTelegramMessage(chatId, `🛒 *Actualización de pedido*\n${cleanTg(compra.servicio || "Pedido", 120)}\nEstado: *${cleanTg(estadoLabel, 80)}*${detalle ? `\n${detalle}` : ""}`);
+        }
+      } catch (_) {}
+    }
+    res.json({ ok:true, id:ref.id, estado, detalleEstado:detalle, estadoUpdatedAt:at.toISOString() });
+  } catch(e){console.error("rev/admin/compras estado",e);res.status(500).json({error:"server"})}
 });
 
 // ── ADMIN: "ver como" ──
@@ -905,10 +1246,12 @@ app.post("/rev/admin/impersonate", revAdminAuth, async (req, res) => {
     const rawNorm = normVendedor(data.nombre_norm || data.nombre || doc.id);
     const nn = rawNorm === "geissel" ? "geisell" : rawNorm;
     const nombre = nn === "geisell" ? "Geisell" : (data.nombre || doc.id);
-    const soloCatalogo = esRevSoloCatalogo({ id: doc.id, ...data, nombre_norm: nn });
-    const sinCompras = soloCatalogo;
-    const token = jwt.sign({ id: doc.id, nombre, nombre_norm: nn, soloCatalogo, sinCompras }, JWT_SECRET, { expiresIn: "6h" });
-    res.json({ token, nombre, nombre_norm: nn, soloCatalogo, sinCompras });
+    const capabilities = capacidadesRevendedor({ id: doc.id, ...data, nombre_norm: nn });
+    const soloCatalogo = !capabilities.canBuy;
+    const sinCompras = !capabilities.canBuy;
+    const tarifaId = String(data.tarifaId || data.tarifa_id || "general");
+    const token = jwt.sign({ id: doc.id, nombre, nombre_norm: nn, soloCatalogo, sinCompras, capabilities, tarifaId, nombreMostrar:data.nombreMostrar||"", etiquetaRenovacion:data.etiquetaRenovacion||"" }, JWT_SECRET, { expiresIn: "6h" });
+    res.json({ token, nombre, nombre_norm: nn, soloCatalogo, sinCompras, capabilities, tarifaId, priceTier:tarifaId, nombreMostrar:data.nombreMostrar||"", etiquetaRenovacion:data.etiquetaRenovacion||"" });
   } catch (e) { console.error("rev/impersonate", e); res.status(500).json({ error: "server" }); }
 });
 
@@ -952,6 +1295,8 @@ async function aiGenerate(prompt) {
 
 app.post("/rev/ask", revAuth, async (req, res) => {
   try {
+    const live = await revLiveProfile(req.rev);
+    if (!revCap(live, "canUseAI", true)) return res.status(403).json({ error: "sin_permiso_ia" });
     const prompt = (req.body.prompt || "").toString().slice(0, 4000);
     if (!prompt) return res.status(400).json({ error: "falta_prompt" });
     const text = await aiGenerate(prompt);

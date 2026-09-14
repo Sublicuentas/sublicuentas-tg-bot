@@ -1,5 +1,5 @@
 /* Panel de Socios · perfil, ranking y gamificación compartida */
-const { revAuth, revAdminAuth } = require("./index_09_api_auth");
+const { revAuth, revAdminAuth, capacidadesRevendedor } = require("./index_09_api_auth");
 const { db, admin, bot, SUPER_ADMIN } = require("./index_01_core");
 const { normVendedor, vendedorEfectivoServicio } = require("./index_17_vendedores_servicio");
 const RECOMPENSAS = {
@@ -14,6 +14,18 @@ function dateMs(v) {
   if (v._seconds || v.seconds) return Number(v._seconds || v.seconds) * 1000;
   const n = new Date(v).getTime(); return Number.isFinite(n) ? n : 0;
 }
+
+async function liveCaps(rev = {}) {
+  let live = { ...rev };
+  try {
+    if (rev.id) {
+      const snap = await db.collection("revendedores").doc(String(rev.id)).get();
+      if (snap.exists) live = { ...live, id:snap.id, ...snap.data() };
+    }
+  } catch (_) {}
+  return capacidadesRevendedor(live);
+}
+
 function nivel(ventas) {
   if (ventas < 1) return "Sin nivel";
   if (ventas >= 26) return "Inmortal";
@@ -94,6 +106,8 @@ module.exports = function mountGamificacion(app) {
   });
   app.post("/rev/curso-completado", revAuth, async (req,res) => {
     try {
+      const caps=await liveCaps(req.rev);
+      if(!caps.aula && !caps.canUseAI)return res.status(403).json({error:"sin_permiso_aula"});
       const cursoId=String(req.body?.cursoId||"").replace(/[^a-z0-9_-]/gi,"").slice(0,60);
       if(!cursoId)return res.status(400).json({error:"curso_invalido"});
       await db.collection("revendedores").doc(req.rev.id).set({cursosCompletados:admin.firestore.FieldValue.arrayUnion(cursoId),cursoUpdatedAt:admin.firestore.FieldValue.serverTimestamp()},{merge:true});
@@ -102,6 +116,8 @@ module.exports = function mountGamificacion(app) {
   });
   app.post("/rev/recompensa", revAuth, async (req,res) => {
     try {
+      const caps=await liveCaps(req.rev);
+      if(!caps.recompensas)return res.status(403).json({error:"sin_permiso_recompensas"});
       const [revDoc,cliSnap]=await Promise.all([db.collection("revendedores").doc(req.rev.id).get(),db.collection("clientes").get()]);
       const vendedorNorm = normVendedor(req.rev.nombre_norm || req.rev.nombre || "");
       const ventas=cliSnap.docs.reduce((total,d)=>{

@@ -421,6 +421,9 @@ module.exports = function mountAdminPanel(app) {
       precio, // null = "Por comisión" (mismo significado que it.p===null en el catálogo original)
       detalle: String(b.detalle || "").trim().slice(0, 600),
       activo: b.activo !== false,
+      stockModo: ["auto","manual"].includes(String(b.stockModo || "auto").toLowerCase()) ? String(b.stockModo || "auto").toLowerCase() : "auto",
+      stockEstado: ["disponible","bajo","agotado","consultar",""] .includes(String(b.stockEstado || "").toLowerCase()) ? String(b.stockEstado || "").toLowerCase() : "",
+      stockCantidad: b.stockCantidad === null || b.stockCantidad === "" || b.stockCantidad === undefined ? null : Math.max(0, Number(b.stockCantidad) || 0),
       orden: Number.isFinite(Number(b.orden)) ? Number(b.orden) : 999,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedBy: req.admin?.nombre || "Admin",
@@ -447,6 +450,9 @@ module.exports = function mountAdminPanel(app) {
     if (b.variante !== undefined) patch.variante = String(b.variante).trim();
     if (b.detalle !== undefined) patch.detalle = String(b.detalle).trim().slice(0, 600);
     if (b.activo !== undefined) patch.activo = !!b.activo;
+    if (b.stockModo !== undefined) { const m=String(b.stockModo||"auto").toLowerCase(); if(!["auto","manual"].includes(m)) return fail(res,400,"stock_modo_invalido"); patch.stockModo=m; }
+    if (b.stockEstado !== undefined) { const st=String(b.stockEstado||"").toLowerCase(); if(!["disponible","bajo","agotado","consultar",""] .includes(st)) return fail(res,400,"stock_estado_invalido"); patch.stockEstado=st; }
+    if (b.stockCantidad !== undefined) patch.stockCantidad = b.stockCantidad === null || b.stockCantidad === "" ? null : Math.max(0, Number(b.stockCantidad) || 0);
     if (b.orden !== undefined) patch.orden = Number(b.orden) || 999;
     if (b.precio !== undefined) {
       const precio = b.precio === null || b.precio === "" ? null : Number(b.precio);
@@ -622,6 +628,7 @@ module.exports = function mountAdminPanel(app) {
     await ref.set({
       nombre, nombre_norm: docId, telegramId, telefono, activo: true, autoLastSent: "",
       tarifaId: tarifaIdParaSocio({ nombre, nombre_norm: docId }),
+      capabilities: { inicio:true, clientes:true, catalogo:true, renovar:true, comprar:true, aula:true, perfil:true, recompensas:true, buzon:true, canViewClients:true, canRenew:true, canBuy:true, canUseAI:true },
       pinSetupHash, pinSetupCreatedAt: admin.firestore.FieldValue.serverTimestamp(),
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -656,6 +663,19 @@ module.exports = function mountAdminPanel(app) {
       patch.telefono = tel;
     }
     if (req.body?.activo !== undefined) patch.activo = !!req.body.activo;
+    if (req.body?.tarifaId !== undefined) patch.tarifaId = String(req.body.tarifaId || "general").trim().slice(0,80) || "general";
+    if (req.body?.etiquetaRenovacion !== undefined) patch.etiquetaRenovacion = String(req.body.etiquetaRenovacion || "").trim().slice(0,60);
+    if (req.body?.capabilities && typeof req.body.capabilities === "object") {
+      const permitidas=["inicio","clientes","catalogo","renovar","comprar","aula","perfil","recompensas","buzon","canViewClients","canRenew","canBuy","canUseAI"];
+      const caps={};
+      permitidas.forEach(k=>{if(typeof req.body.capabilities[k]==="boolean")caps[k]=req.body.capabilities[k]});
+      if(typeof caps.canBuy==="boolean" && typeof caps.comprar!=="boolean")caps.comprar=caps.canBuy;
+      if(typeof caps.comprar==="boolean" && typeof caps.canBuy!=="boolean")caps.canBuy=caps.comprar;
+      if(typeof caps.canRenew==="boolean" && typeof caps.renovar!=="boolean")caps.renovar=caps.canRenew;
+      if(typeof caps.canViewClients==="boolean" && typeof caps.clientes!=="boolean")caps.clientes=caps.canViewClients;
+      if(typeof caps.canUseAI==="boolean" && typeof caps.aula!=="boolean")caps.aula=caps.canUseAI;
+      patch.capabilities=caps;
+    }
 
     await ref.update(patch);
     const actualizado = await ref.get();

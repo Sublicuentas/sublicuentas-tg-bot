@@ -116,6 +116,9 @@ function agruparCatalogo(rows = []) {
       s: p.variante || "",
       p: p.precio == null ? null : Number(p.precio),
       d: p.detalle || "",
+      stockModo: String(p.stockModo || p.stock_modo || "auto"),
+      stockEstado: String(p.stockEstado || p.stock_estado || ""),
+      stockCantidad: p.stockCantidad == null || p.stockCantidad === "" ? null : Number(p.stockCantidad),
     });
   }
   return grupos;
