@@ -203,6 +203,11 @@ function parseFechaFlexible(raw = "") {
   if (s.toLowerCase() === "hoy") return hoyDMY();
   return parseFechaFinanceInput(s) || null;
 }
+function fechaDMYCompatLocal(v = "") {
+  const raw = String(v || "").trim();
+  if (!raw) return "";
+  return parseFechaFinanceInput(raw) || raw;
+}
 
 // ✅ Valida que una fecha de finanzas no sea de un mes futuro
 // Permite el mes actual y meses pasados, bloquea meses futuros
@@ -1582,7 +1587,7 @@ async function enviarResumenVendedorPro(chatId, vendedorNombre = "") {
     if (servicios.length) clientesActivos++;
 
     servicios.forEach((s) => {
-      const fecha = String(s.fechaRenovacion || "").trim();
+      const fecha = fechaDMYCompatLocal(s.fechaRenovacion || "");
       const ts = parseDMYtoTS(fecha);
 
       totalMensual += Number(s.precio || 0);
@@ -1609,7 +1614,7 @@ function getClienteEstadoCRM(c = {}) {
   const hoyTs = parseDMYtoTS(hoyDMY());
 
   for (const s of servicios) {
-    const fecha = String(s.fechaRenovacion || "").trim();
+    const fecha = fechaDMYCompatLocal(s.fechaRenovacion || "");
     const ts = parseDMYtoTS(fecha);
     if (ts && ts >= hoyTs) return "vigente";
   }
@@ -2279,7 +2284,7 @@ function diffDaysFromTodayLocal(fechaDMY = "") {
 // Comparar strings dd/mm/yyyy directamente es seguro porque el formato es fijo.
 function dmyToSortKey(dmy = "") {
   // Convierte "dd/mm/yyyy" a "yyyy-mm-dd" para comparación lexicográfica correcta
-  const s = String(dmy || "").trim();
+  const s = fechaDMYCompatLocal(dmy);
   const m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
   if (!m) return "";
   return `${m[3]}-${m[2]}-${m[1]}`;
@@ -2298,7 +2303,7 @@ async function getAlertaClientesLocal(tipo = "hoy") {
       const servicios = Array.isArray(c.servicios) ? c.servicios : [];
 
       servicios.forEach((s) => {
-        const fecha = String(s?.fechaRenovacion || "").trim();
+        const fecha = fechaDMYCompatLocal(s?.fechaRenovacion || "");
         if (!isFechaDMY(fecha)) return;
 
         const fechaKey = dmyToSortKey(fecha);

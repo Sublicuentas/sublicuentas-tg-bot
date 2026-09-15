@@ -392,8 +392,22 @@ function getTotalPorPlataformaLocal(plat = "") {
   return map[p] || 1;
 }
 
+function fechaDMYLocal(v = "") {
+  const raw = String(v || "").trim();
+  if (!raw) return "";
+  if (isFechaDMY(raw)) return raw;
+  const parsed = typeof utils.parseFechaFinanceInput === "function" ? utils.parseFechaFinanceInput(raw) : null;
+  if (parsed && isFechaDMY(parsed)) return parsed;
+  const m = raw.match(/^(\d{4})-(\d{2})-(\d{2})(?:[T\s].*)?$/);
+  if (m) {
+    const dmy = `${m[3]}/${m[2]}/${m[1]}`;
+    return isFechaDMY(dmy) ? dmy : "";
+  }
+  return "";
+}
+
 function parseDMYtoDate(dmy = "") {
-  const s = String(dmy || "").trim();
+  const s = fechaDMYLocal(dmy);
   if (!isFechaDMY(s)) return null;
   const [dd, mm, yyyy] = s.split("/").map(Number);
   const dt = new Date(yyyy, mm - 1, dd, 12, 0, 0, 0);
@@ -450,7 +464,7 @@ function resumenGeneralCliente(servicios = []) {
 
   for (const s of rows) {
     total += Number(s.precio || 0);
-    const fecha = String(s.fechaRenovacion || "").trim();
+    const fecha = fechaDMYLocal(s.fechaRenovacion || "");
     const ts = parseDMYtoTS(fecha);
     if (ts && ts < proximaTS) { proximaTS = ts; proxima = fecha; }
     const est = getEstadoServicio(fecha);
@@ -900,7 +914,7 @@ async function generarHistorialTXT(clientId) {
       txt += `Uso: ${benef.texto}\n`;
       txt += renderCredencialesServicioLocal(s, false, "");
       txt += `Precio: ${Number(s.precio || 0).toFixed(2)} Lps\n`;
-      txt += `Renovacion: ${s.fechaRenovacion || "-"}\n`;
+      txt += `Renovacion: ${fechaDMYLocal(s.fechaRenovacion || "") || "-"}\n`;
       txt += `Vendedor responsable: ${vendedorEfectivoServicio(s, c).vendedor || "-"}\n`;
       txt += `Estado: ${est.texto}\n`;
     });
@@ -984,6 +998,7 @@ async function getCliente(clientId) {
   }
 
   const result = { id: doc.id, ...(doc.data() || {}) };
+  if (Array.isArray(result.servicios)) result.servicios = result.servicios.map((sv) => ({ ...sv, fechaRenovacion: fechaDMYLocal(sv?.fechaRenovacion || "") || sv?.fechaRenovacion || "" }));
   cacheSet(cacheKey, result, 10 * 1000);
   return result;
 }
@@ -1029,7 +1044,7 @@ async function getClientesBusquedaSnapshot(force = false) {
   const rows = snap.docs
     .map((d) => ({ id: d.id, ...(d.data() || {}) }))
     .filter((row) => !String(row.consolidadoEn || "").trim())
-    .map((row) => ({ ...row, telefono: normalizarTelefonoCliente(row.telefono_norm || row.telefono || "") || row.telefono || "" }));
+    .map((row) => ({ ...row, servicios: Array.isArray(row.servicios) ? row.servicios.map((sv) => ({ ...sv, fechaRenovacion: fechaDMYLocal(sv?.fechaRenovacion || "") || sv?.fechaRenovacion || "" })) : [], telefono: normalizarTelefonoCliente(row.telefono_norm || row.telefono || "") || row.telefono || "" }));
   // 20 s: suficientemente corto para altas/ediciones y muy útil para Telegram.
   cacheSet(cacheKey, rows, 20 * 1000);
   return rows;
@@ -1182,7 +1197,7 @@ function clienteResumenTXT(c = {}) {
       txt += `Vendedor responsable: ${vendedorEfectivoServicio(s, c).vendedor || "-"}\n`;
       txt += renderCredencialesServicioLocal(s, false, "");
       txt += `Precio: ${Number(s.precio || 0).toFixed(2)} Lps\n`;
-      txt += `Renovacion: ${s.fechaRenovacion || "-"}\nEstado: ${est.texto}\n`;
+      txt += `Renovacion: ${fechaDMYLocal(s.fechaRenovacion || "") || "-"}\nEstado: ${est.texto}\n`;
     });
   }
 
@@ -1214,7 +1229,7 @@ function renderFichaClienteMarkdown(c = {}) {
       txt += `🧾 *Vendedor responsable:* ${escMD(vendedorEfectivoServicio(s, c).vendedor || "-")}\n`;
       txt += renderCredencialesServicioLocal(s, true, "");
       txt += `💵 *Precio:* ${escMD(`${Number(s.precio || 0).toFixed(2)} Lps`)}\n`;
-      txt += `📅 *Renovación:* ${escMD(s.fechaRenovacion || "-")} — ${est.emoji} ${escMD(est.texto)}`;
+      txt += `📅 *Renovación:* ${escMD(fechaDMYLocal(s.fechaRenovacion || "") || "-")} — ${est.emoji} ${escMD(est.texto)}`;
     });
   }
 
@@ -1263,7 +1278,7 @@ async function enviarFichaClienteVendedor(chatId, clientId, backCb = "vend:clien
       const benef = etiquetaBeneficiarioServicioLocal(s);
       txt += `*${i + 1}.* *${escMD(humanPlataforma(s.plataforma || ""))}* — ${benef.esTercero ? "🔑" : "👤"} ${escMD(benef.texto)}\n`;
       txt += renderCredencialesServicioLocal(s, true, "   ");
-      txt += `   📅 ${escMD(s.fechaRenovacion || "-")} ${est.emoji}\n`;
+      txt += `   📅 ${escMD(fechaDMYLocal(s.fechaRenovacion || "") || "-")} ${est.emoji}\n`;
       txt += `   💵 ${escMD(Number(s.precio || 0).toFixed(2))} Lps\n\n`;
     });
   }
@@ -1351,7 +1366,7 @@ async function menuServicio(chatId, clientId, selector) {
   txt += `🧾 *Vendedor responsable:* ${escMD(vendedorEfectivoServicio(s, c).vendedor || "-")}\n`;
   txt += `🛒 *Compra:* ${cantidadPerfilesServicioLocal(s, c.nombrePerfil || "")} perfil(es) · un solo precio\n`;
   txt += `💰 *Precio:* ${escMD(`${Number(s.precio || 0).toFixed(2)} Lps`)}\n`;
-  txt += `📅 *Renovación:* ${escMD(s.fechaRenovacion || "-")}\n`;
+  txt += `📅 *Renovación:* ${escMD(fechaDMYLocal(s.fechaRenovacion || "") || "-")}\n`;
   if (TV_DIGITAL_KEYS_LOCAL.has(normalizarPlataforma(s.plataforma || ""))) {
     const mesesRaw = Math.max(1, Number(s.mesesContratados || (isFechaDMY(s.fechaRenovacion || "") ? mesesContratadosDesdeFechaLocal(s.fechaRenovacion) : 1)) || 1);
     const meses = normalizarMesesLegacyTvDigitalLocal(s.plataforma || "", mesesRaw);
@@ -1399,7 +1414,7 @@ async function menuListaPerfilesServicio(chatId, clientId, selector) {
   kb.push([{ text: "➕ Añadir otro perfil", callback_data: `cli:prof:add:${clientId}:${compraSel}` }]);
   kb.push([{ text: "⬅️ Volver compra", callback_data: `cli:serv:menu:${clientId}:${compraSel}` }]);
   return upsertPanel(chatId,
-    `👥 *PERFILES DE LA COMPRA*\n\n👤 Titular: *${escMD(c.nombrePerfil || "Cliente")}*\n📦 ${escMD(humanPlataforma(s.plataforma || ""))}\n💰 Un solo precio: *${escMD(Number(s.precio || 0).toFixed(2))} Lps*\n📅 Una sola renovación: *${escMD(s.fechaRenovacion || "-")}*\n\nSeleccione un perfil:`,
+    `👥 *PERFILES DE LA COMPRA*\n\n👤 Titular: *${escMD(c.nombrePerfil || "Cliente")}*\n📦 ${escMD(humanPlataforma(s.plataforma || ""))}\n💰 Un solo precio: *${escMD(Number(s.precio || 0).toFixed(2))} Lps*\n📅 Una sola renovación: *${escMD(fechaDMYLocal(s.fechaRenovacion || "") || "-")}*\n\nSeleccione un perfil:`,
     kb
   );
 }
@@ -1653,7 +1668,7 @@ async function patchServicio(clientId, idx, patch = {}, compraId = "") {
   if (patchLimpio.precio !== undefined && patchLimpio.precio !== actual.precio)
     cambios.push(`Precio: ${Number(actual.precio || 0).toFixed(2)} → ${Number(patchLimpio.precio || 0).toFixed(2)} Lps`);
   if (patchLimpio.fechaRenovacion && patchLimpio.fechaRenovacion !== actual.fechaRenovacion)
-    cambios.push(`Fecha: ${actual.fechaRenovacion || "-"} → ${patchLimpio.fechaRenovacion}`);
+    cambios.push(`Fecha: ${fechaDMYLocal(actual.fechaRenovacion || "") || "-"} → ${fechaDMYLocal(patchLimpio.fechaRenovacion || "") || patchLimpio.fechaRenovacion}`);
   if (patchLimpio.plataforma && normalizarPlataforma(patchLimpio.plataforma) !== normalizarPlataforma(actual.plataforma || ""))
     cambios.push(`Plataforma: ${humanPlataforma(actual.plataforma)} → ${humanPlataforma(patchLimpio.plataforma)}`);
   const vendedorAnterior = vendedorEfectivoServicio(actual, resultado.cliente || {}).vendedor;
@@ -2065,7 +2080,7 @@ async function menuRenovacionServicio(chatId, clientId, selector) {
     `${iconPlataforma(s.plataforma || "")} *${escMD(humanPlataforma(s.plataforma || ""))}*\n` +
     renderCredencialesServicioLocal(s, true, "") +
     `💰 ${escMD(`${Number(s.precio || 0).toFixed(2)} Lps`)}\n` +
-    `📅 Vence: ${escMD(s.fechaRenovacion || "-")} — ${est.emoji} ${escMD(est.texto)}\n\n` +
+    `📅 Vence: ${escMD(fechaDMYLocal(s.fechaRenovacion || "") || "-")} — ${est.emoji} ${escMD(est.texto)}\n\n` +
     `¿Qué pasó con este servicio?`;
 
   return upsertPanel(chatId, txt, [
@@ -2268,7 +2283,8 @@ async function obtenerRenovacionesPorFecha(fechaDMY, vendedor = null) {
 
     const servicios = Array.isArray(c.servicios) ? c.servicios : [];
     servicios.forEach((s, idx) => {
-      if (String(s?.fechaRenovacion || "").trim() !== fecha) return;
+      const fechaServicio = fechaDMYLocal(s?.fechaRenovacion || "");
+      if (fechaServicio !== fecha) return;
       const vendedorServicio = vendedorEfectivoServicio(s, c).vendedor;
       if (vendedorNorm && normVendedor(vendedorServicio) !== normVendedor(vendedorNorm)) return;
       out.push({
@@ -2283,7 +2299,7 @@ async function obtenerRenovacionesPorFecha(fechaDMY, vendedor = null) {
         perfiles: perfilesServicioLocal(s, c.nombrePerfil || ""),
         cantidadPerfiles: cantidadPerfilesServicioLocal(s, c.nombrePerfil || ""),
         precio: Number(s.precio || 0),
-        fechaRenovacion: s.fechaRenovacion || fecha,
+        fechaRenovacion: fechaServicio || fecha,
       });
     });
   });

@@ -62,7 +62,7 @@ app.use(cors());
 app.use(express.json({ limit: "15mb" }));
 
 // keepalive / health (para que Render lo mantenga vivo)
-const PANEL_API_VERSION = "socios-20260914-5";
+const PANEL_API_VERSION = "socios-20260914-6";
 app.get("/", (_req, res) => res.type("text/plain").send(`Sublicuentas Panel API OK ${PANEL_API_VERSION}`));
 app.get("/rev/ping", (_req, res) => res.json({ v: PANEL_API_VERSION, gemini: !!process.env.GEMINI_API_KEY, anthropic: !!process.env.ANTHROPIC_API_KEY, storageBuckets: STORAGE_BUCKET_CANDIDATES }));
 app.get("/health", (_req, res) => res.json({ ok: true, version: PANEL_API_VERSION, ts: Date.now() }));
@@ -148,14 +148,13 @@ function revCanonInventory(v) {
     spotify:"spotify", youtube:"youtube", youtubepremium:"youtube", canva:"canva", gemini:"gemini",
     chatgpt:"chatgpt", duolingo:"duolingo", office365:"office", microsoft365:"office", office:"office",
     office2021:"office2021", esetnod32:"nod32", nod32:"nod32", stellatv:"stellatv", stella:"stellatv",
-    oleadatv:"oleada", oleada:"oleada", latintv:"latintv", liontv:"liontv", evoutouch:"evoutouch4", evoutouch4:"evoutouch4", iptv:"iptv"
+    oleadatv:"oleada", oleada:"oleada", latintv:"latintv", liontv:"liontv", iptv:"iptv"
   };
   if (aliases[key]) return aliases[key];
   const stella = key.match(/^stella(?:tv)?([123])/); if (stella) return `stellatv${stella[1]}`;
   const oleada = key.match(/^oleada(?:tv)?([13])/); if (oleada) return `oleadatv${oleada[1]}`;
   const latin = key.match(/^latintv([1234])/); if (latin) return `latintv${latin[1]}`;
   const lion = key.match(/^liontv([1235])/); if (lion) return `liontv${lion[1]}`;
-  if (/^evoutouch(?:4)?/.test(key)) return "evoutouch4";
   return key;
 }
 function revCatalogInventoryKeys(item = {}) {
@@ -169,9 +168,8 @@ function revCatalogInventoryKeys(item = {}) {
   if (raw.includes("oleada") && qty) keys.push(`oleadatv${qty}`);
   if (raw.includes("latin") && qty) keys.push(`latintv${qty}`);
   if (raw.includes("lion") && qty) keys.push(`liontv${qty}`);
-  if (raw.includes("evoutouch") || raw.includes("evou touch")) keys.push("evoutouch4");
   if (base) keys.push(base);
-  if (base && /^(stellatv|oleadatv|latintv|liontv|evoutouch)\d$/.test(base)) keys.push(base.replace(/\d$/, ""));
+  if (base && /^(stellatv|oleadatv|latintv|liontv)\d$/.test(base)) keys.push(base.replace(/\d$/, ""));
   return [...new Set(keys.filter(Boolean))];
 }
 
@@ -189,6 +187,13 @@ function revAddMonths(base, months) {
   d.setMonth(d.getMonth() + Number(months || 1));
   if (d.getDate() !== day) d.setDate(0);
   return d;
+}
+function revFechaDMY(d) {
+  if (!d) return "";
+  const x = new Date(d);
+  if (Number.isNaN(x.getTime())) return "";
+  x.setHours(12, 0, 0, 0);
+  return `${String(x.getDate()).padStart(2, "0")}/${String(x.getMonth() + 1).padStart(2, "0")}/${x.getFullYear()}`;
 }
 async function revResolverSeleccionCliente({ clienteId, socioNorm, seleccion = [] }) {
   const id = String(clienteId || "").trim();
@@ -253,7 +258,7 @@ async function revActualizarFechaCliente({ clienteId, socioNorm, servicioIndex, 
     if (!nf || isNaN(nf)) throw Object.assign(new Error("fecha_invalida"), { status: 400, publicError: "fecha_invalida" });
 
     const ahora = new Date();
-    svc[campo] = revFechaISO(nf);
+    svc[campo] = revFechaDMY(nf);
     svc.ultimaRenovacionAt = ahora;
     const procesadorNorm = normVendedor(socioNorm);
     svc.ultimaRenovacionProcesadaPor = procesadorNorm === "geissel" ? "geisell" : procesadorNorm;
@@ -264,7 +269,7 @@ async function revActualizarFechaCliente({ clienteId, socioNorm, servicioIndex, 
       updatedAt: ahora,
       ultimaRenovacionAt: ahora,
     });
-    return { c, svc, ix, campo, fechaFinal: revFechaISO(nf), fechaAnterior: anterior ? revFechaISO(anterior) : "" };
+    return { c, svc, ix, campo, fechaFinal: revFechaDMY(nf), fechaAnterior: anterior ? revFechaDMY(anterior) : "" };
   });
   const { c, svc, ix, campo, fechaFinal, fechaAnterior } = mutation;
   const compraEvento = String(svc.compraId || `servicio-${ix}`);
@@ -721,6 +726,7 @@ app.post("/rev/renovacion", revAuth, async (req, res) => {
     const live = await revLiveProfile(req.rev);
     if (!revCap(live, "canRenew", true)) return res.status(403).json({ error: "sin_permiso_renovar" });
     const { clienteId, cliente, servicio, comentario, quien, monto, imagen, servicioIndex, nuevaFecha, meses } = req.body;
+    const destino = destinoInfo(req.body?.destino);
     const socio = live.nombre || live.nombre_norm || req.rev.nombre || req.rev.nombre_norm || "Revendedor";
     const com = (comentario || "").toString().trim().slice(0, 600);
 
@@ -762,6 +768,8 @@ app.post("/rev/renovacion", revAuth, async (req, res) => {
       monto: revMoneyNumber(monto),
       socio,
       socio_norm: live.nombre_norm || req.rev.nombre_norm || "",
+      destino: destino.key,
+      destinoLabel: destino.label,
       imagenUrl,
       // Si Storage falla, Telegram recibe la foto por buffer; para que Panel Dios también la vea,
       // guardamos una copia liviana en Firestore cuando no hay URL pública.
@@ -780,6 +788,7 @@ app.post("/rev/renovacion", revAuth, async (req, res) => {
       `🧾 *RENOVACIÓN RECIBIDA*`,
       `━━━━━━━━━━━━━━`,
       `👤 Socio: ${cleanTg(socio, 80)}`,
+      `📍 Pago para: ${destino.label}`,
       `🙍 Cliente: ${cleanTg(doc.cliente || "—", 120)}`,
       `📦 Servicios: ${doc.servicios.map(x=>x.servicio||('Servicio '+(x.servicioIndex+1))).join(', ')}`,
       doc.renovado ? `📅 Nueva fecha: ${cleanTg(doc.nuevaFecha || "—", 30)} · ${doc.renovadosCantidad} renovado(s)` : "",
@@ -789,10 +798,10 @@ app.post("/rev/renovacion", revAuth, async (req, res) => {
       (imagenUrl || imagenObj.buffer) ? `📎 Comprobante adjunto` : `⚠️ Sin comprobante`,
       `🆔 Ref: ${ref.id.slice(-6)}`,
     ].filter(Boolean).join("\n");
-    const ids = await getAdminChatIds();
+    const ids = await getDestinoChatIds(destino.key);
     await Promise.all(ids.map((id) => sendTelegramImageSmart(id, imagenObj, cap)));
 
-    res.json({ ok: true, id: ref.id, imagenUrl, renovado: doc.renovado, renovadosCantidad:doc.renovadosCantidad, nuevaFecha: doc.nuevaFecha });
+    res.json({ ok: true, id: ref.id, imagenUrl, renovado: doc.renovado, renovadosCantidad:doc.renovadosCantidad, nuevaFecha: doc.nuevaFecha, destino: destino.key, destinoLabel: destino.label });
   } catch (e) {
     console.error("rev/renovacion", e);
     res.status(e.status || 500).json({ error: e.publicError || "server", detail: e.message });
@@ -1024,8 +1033,7 @@ app.post("/rev/compra", revAuth, async (req, res) => {
     ].filter((x) => x !== "");
     const cap = capLineas.join("\n").slice(0, 950);
 
-    let ids = await getDestinoChatIds(destino.key);
-    if (!ids.length) ids = await getAdminChatIds();
+    const ids = await getDestinoChatIds(destino.key);
     await Promise.all(ids.map((id) => sendTelegramImageSmart(id, imagenObj, cap)));
 
     res.json({ ok: true, id: ref.id, imagenUrl, destino: destino.key, destinoLabel: destino.label, totalCombo, descuentoCombo, estado: "pendiente" });
