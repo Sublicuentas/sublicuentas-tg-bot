@@ -5163,7 +5163,7 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
         // Importante: el cambio de plataforma ya NO deja pending activo.
         pending.delete(String(chatId));
 
-        const keys = Object.keys(PLATAFORMAS || {}).filter((k) => !["iptv1", "iptv3", "iptv4"].includes(k));
+        const keys = Object.keys(PLATAFORMAS || {}).filter((k) => !["iptv1", "iptv3", "iptv4", "evoutouch4"].includes(k));
         const buttons = keys
           .filter((k) => normalizarPlataforma(k) !== oldPlat)
           .map((k) => ({
@@ -5440,7 +5440,7 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
           oleada: "1, 3, 7 y 14 meses (6 + 1 / 12 + 2)",
           lion: "1, 3, 5 y 12 meses (10 + 2 gratis)",
           latin: "1, 4, 8 y 12 meses (3 + 1 gratis = 4)",
-          evoutouch: "1 y 3 meses",
+          evoutouch: "1, 3, 6 y 12 meses",
         };
         const addContextActions = (keyboard = []) => {
           const kb = Array.isArray(keyboard) ? keyboard.slice() : [];

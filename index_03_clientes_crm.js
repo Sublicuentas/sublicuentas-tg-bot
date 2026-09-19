@@ -87,6 +87,9 @@ const TV_DIGITAL_BRANDS_LOCAL = {
   evoutouch: { label: "Nanotech", icon: "📺", keys: ["evoutouch1","evoutouch2","evoutouch3"] },
 };
 const TV_DIGITAL_KEYS_LOCAL = new Set(Object.values(TV_DIGITAL_BRANDS_LOCAL).flatMap((marca) => marca.keys));
+// Claves que solo existen para LEER registros viejos. Nunca se ofrecen como botón:
+// evoutouch4 era un "Nanotech 1" duplicado que aparecía suelto fuera de TV Digital.
+const PLATAFORMAS_ALIAS_OCULTAS_LOCAL = new Set(["iptv1", "iptv3", "iptv4", "evoutouch4"]);
 const TV_DIGITAL_URLS_LOCAL = {
   latintv: "http://latgt.com:8080",
   latintv2: "http://enlatv.com",
@@ -101,7 +104,7 @@ const TV_DIGITAL_MESES_VALIDOS_LOCAL = Object.freeze({
   liontv: [1, 3, 5, 12],       // 10 + 2 gratis = 12
   stellatv: [1, 3, 7],         // 6 + 1 gratis = 7
   oleadatv: [1, 3, 7, 14],     // 6 + 1 = 7 / 12 + 2 = 14
-  evoutouch: [1, 3],
+  evoutouch: [1, 3, 6, 12],    // Nanotech: 1, 3, 6 y 12 meses (sin meses gratis)
 });
 
 function familiaTvDigitalMesesLocal(plataforma = "") {
@@ -580,8 +583,10 @@ function kbPlataformasWiz(prefix = "wiz:plat", clientId = null, idx = null) {
   const mode = modoSelectorPlataformasLocal(prefix);
   let grupoAgregado = false;
 
-  PLATFORM_KEYS.filter((k) => !["iptv1", "iptv3", "iptv4"].includes(k)).forEach((k) => {
-    if (TV_DIGITAL_KEYS_LOCAL.has(k) && mode) {
+  PLATFORM_KEYS.filter((k) => !PLATAFORMAS_ALIAS_OCULTAS_LOCAL.has(k)).forEach((k) => {
+    // Cualquier clave de TV Digital (Stella, Oleada, Lion, Latin, Nanotech) vive dentro
+    // del grupo "📺 TV Digital"; nunca como botón suelto en la lista general.
+    if ((TV_DIGITAL_KEYS_LOCAL.has(k) || familiaTvDigitalMesesLocal(k)) && mode) {
       if (!grupoAgregado) {
         items.push({
           text: "📺 TV Digital",
@@ -766,7 +771,7 @@ function normalizarCompraLocal(servicio = {}, titular = "", anterior = {}) {
     : (Number.isFinite(mesesPrevios) && mesesPrevios > 0 && fechaNueva === String(anterior.fechaRenovacion || "").trim()
         ? normalizarMesesLegacyTvDigitalLocal(plat, mesesPrevios)
         : (isFechaDMY(fechaNueva) ? mesesContratadosDesdeFechaLocal(fechaNueva) : 1));
-  return {
+  const compraFinal = {
     ...anterior,
     ...servicio,
     compraId: String(servicio.compraId || anterior.compraId || recordIdLocal("compra")),
@@ -779,6 +784,14 @@ function normalizarCompraLocal(servicio = {}, titular = "", anterior = {}) {
     perfil: principal.perfil || principal.nombre || titular || "",
     perfiles
   };
+  // Nanotech: mismos campos que guarda Sublichat HQ (proveedor + dispositivos), para que
+  // una cuenta creada en Telegram se abra completa en la ficha del CRM y viceversa.
+  if (plat.startsWith("evoutouch")) {
+    const mDisp = plat.match(/([123])$/);
+    compraFinal.iptvProveedor = "evoutouch";
+    compraFinal.iptvPantallas = mDisp ? Number(mDisp[1]) : 1;
+  }
+  return compraFinal;
 }
 
 function validarCompraLocal(compra = {}) {

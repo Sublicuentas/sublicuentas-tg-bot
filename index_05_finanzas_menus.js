@@ -36,6 +36,8 @@ const FIN_MOTIVOS_EGRESO_LOCAL = [
 ];
 
 const PLATFORM_KEYS = Array.isArray(PLATAFORMAS) ? PLATAFORMAS : Object.keys(PLATAFORMAS || {});
+// Alias legados que solo se leen de registros viejos; no deben salir como botón.
+const PLATAFORMAS_ALIAS_OCULTAS = new Set(["evoutouch4"]);
 
 const FINANCE_COLLECTION_PRIMARY = String(FINANZAS_COLLECTION || "").trim() || "finanzas_movimientos";
 const FINANCE_COLLECTIONS_READ = Array.from(new Set([FINANCE_COLLECTION_PRIMARY, "finanzas_movimientos", "finanzas"].filter(Boolean)));
@@ -402,7 +404,7 @@ async function menuInventarioIptv(chatId) {
 async function menuInventarioTvDigitalMarca(chatId, brand = "") {
   const marca = TV_DIGITAL_INVENTARIO_MARCAS[String(brand || "").toLowerCase()];
   if (!marca) return menuInventarioIptv(chatId);
-  const items = PLATFORM_KEYS.filter((x) => String(x || "").startsWith(marca.prefix));
+  const items = PLATFORM_KEYS.filter((x) => String(x || "").startsWith(marca.prefix) && !PLATAFORMAS_ALIAS_OCULTAS.has(String(x || "")));
   const kb = kbFromItems(items);
   kb.push([{ text: "⬅️ TV Digital", callback_data: "menu:inventario:iptv" }, { text: "🏠 Inicio", callback_data: "go:inicio" }]);
   return upsertPanel(chatId, `${marca.icon} *${marca.label.toUpperCase()}*\n\nSeleccione la cantidad de dispositivos:`, kb);

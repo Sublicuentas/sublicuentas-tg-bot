@@ -194,7 +194,7 @@ app.get("/api/catalogos", wrap((_req, res) => ok(res, {
   bancos: FIN_BANCOS,
   motivos: FIN_MOTIVOS_EGRESO,
   plataformas: Object.values(PLATAFORMAS)
-    .filter((p) => !["iptv1", "iptv3", "iptv4"].includes(p.key))
+    .filter((p) => !["iptv1", "iptv3", "iptv4", "evoutouch4"].includes(p.key))
     .map((p) => ({ key: p.key, nombre: p.nombre, categoria: p.categoria })),
 })));
 

@@ -655,8 +655,9 @@ async function mostrarStockGeneral(chatId) {
 
     snap.forEach((doc) => {
       const data = doc.data() || {};
-      const plat = normalizarPlataforma(data.plataforma || "");
+      let plat = normalizarPlataforma(data.plataforma || "");
       if (!plat) return;
+      if (plat === "evoutouch4") plat = "evoutouch1"; // alias legado = Nanotech 1 dispositivo
       if (!map[plat]) {
         map[plat] = {
           cuentas: 0,

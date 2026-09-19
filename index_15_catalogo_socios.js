@@ -79,6 +79,12 @@ const CATALOGO_PROPIETARIOS = Object.freeze([
   item("evoutouch_1_3m", "📡 IPTV y TV", 2, 14, "Nanotech", "3 meses · 1 dispositivo", null, "Usuario y clave · URL incluida · precio manual"),
   item("evoutouch_2_3m", "📡 IPTV y TV", 2, 15, "Nanotech", "3 meses · 2 dispositivos", null, "Usuario y clave · URL incluida · precio manual"),
   item("evoutouch_3_3m", "📡 IPTV y TV", 2, 16, "Nanotech", "3 meses · 3 dispositivos", null, "Usuario y clave · URL incluida · precio manual"),
+  item("evoutouch_1_6m", "📡 IPTV y TV", 2, 17, "Nanotech", "6 meses · 1 dispositivo", null, "Usuario y clave · URL incluida · precio manual"),
+  item("evoutouch_2_6m", "📡 IPTV y TV", 2, 18, "Nanotech", "6 meses · 2 dispositivos", null, "Usuario y clave · URL incluida · precio manual"),
+  item("evoutouch_3_6m", "📡 IPTV y TV", 2, 19, "Nanotech", "6 meses · 3 dispositivos", null, "Usuario y clave · URL incluida · precio manual"),
+  item("evoutouch_1_12m", "📡 IPTV y TV", 2, 20, "Nanotech", "12 meses · 1 dispositivo", null, "Usuario y clave · URL incluida · precio manual"),
+  item("evoutouch_2_12m", "📡 IPTV y TV", 2, 21, "Nanotech", "12 meses · 2 dispositivos", null, "Usuario y clave · URL incluida · precio manual"),
+  item("evoutouch_3_12m", "📡 IPTV y TV", 2, 22, "Nanotech", "12 meses · 3 dispositivos", null, "Usuario y clave · URL incluida · precio manual"),
 
   item("spotify", "🎵 Música", 3, 1, "Spotify Premium", "1 mes", 110, "Acceso Premium mensual"),
   item("deezer", "🎵 Música", 3, 2, "Deezer Premium", "1 mes", 90, "Acceso Premium mensual"),
@@ -232,7 +238,7 @@ function precioEspecialParaServicio(servicio = {}) {
     return mapa[cantidad] ? { precio: mapa[cantidad], regla: `LionTV · ${cantidad} dispositivo(s)` } : { ambiguo: true, regla: "LionTV sin cantidad válida" };
   }
   // Nanotech usa precio manual; no se fuerza ningún monto desde el catálogo.
-  if (t.includes("evoutouch") || t.includes("evou touch")) return null;
+  if (t.includes("evoutouch") || t.includes("evou touch") || t.includes("nanotech")) return null;
   if (t.includes("latin") || t.includes("latvgt") || t.includes("latgt") || t.includes("enlatv")) {
     const mapa = { 1: 99, 2: 149, 3: 199, 4: 249 };
     return mapa[cantidad] ? { precio: mapa[cantidad], regla: `LatinTV · ${cantidad} dispositivo(s)` } : { ambiguo: true, regla: "LatinTV sin cantidad válida" };
