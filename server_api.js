@@ -322,6 +322,24 @@ async function revActualizarFechaCliente({ clienteId, socioNorm, servicioIndex, 
   };
 }
 
+async function revVerificarRenovacionesCliente(clienteId, renovaciones = []) {
+  const id = String(clienteId || "").trim();
+  if (!id || !renovaciones.length) return { ok: false, error: "sin_renovaciones" };
+  const snap = await db.collection("clientes").doc(id).get();
+  if (!snap.exists) return { ok: false, error: "cliente_no_existe" };
+  const c = snap.data() || {};
+  const servicios = Array.isArray(c.servicios) ? c.servicios : [];
+  const detalle = renovaciones.map((r) => {
+    const compraId = String(r?.compraId || "").trim();
+    const ix = compraId ? servicios.findIndex((x) => String(x?.compraId || "").trim() === compraId) : Number(r?.servicioIndex);
+    const svc = ix >= 0 ? servicios[ix] || {} : {};
+    const campo = revCampoFechaServicio(svc);
+    const fecha = String(svc[campo] || svc.fechaRenovacion || svc.vencimiento || svc.vence || svc.fechaFin || "").trim();
+    return { compraId, servicioIndex: ix, esperada: String(r?.nuevaFecha || ""), guardada: fecha, ok: ix >= 0 && fecha === String(r?.nuevaFecha || "") };
+  });
+  return { ok: detalle.every((x) => x.ok), detalle };
+}
+
 // ── LOGIN (revendedor o admin) ── handler compartido: ver index_09_api_auth.js
 app.post("/rev/login", revLoginIpLimiter, createRevLoginHandler({ db, bot, SUPER_ADMIN }));
 
@@ -664,19 +682,32 @@ function cleanTg(v, max = 300) {
   return (v == null ? "" : String(v)).replace(/[\*_`\[\]]/g, "").trim().slice(0, max);
 }
 function destinoInfo(destinoRaw) {
-  const destino = String(destinoRaw || "sublicuentas").trim().toLowerCase();
-  if (destino === "relojes") return { key: "relojes", label: "⌚ Relojes", fallback: "411539492", env: "RELOJES_CHAT_ID" };
-  return { key: "sublicuentas", label: "🟣 Sublicuentas", fallback: "5728675990", env: "SUBLICUENTAS_CHAT_ID" };
+  const destino = revNormKey(String(destinoRaw || "sublicuentas")).replace(/^geissel$/, "geisell");
+  const destinos = {
+    relojes: { key: "relojes", label: "⌚ Relojes", fallback: "411539492", env: "RELOJES_CHAT_ID" },
+    sublicuentas: { key: "sublicuentas", label: "🟣 Sublicuentas", fallback: "5728675990", env: "SUBLICUENTAS_CHAT_ID" },
+    geisell: { key: "geisell", label: "👤 Geisell", fallback: "", env: "GEISELL_CHAT_ID" },
+  };
+  const info = destinos[destino];
+  if (!info) {
+    const err = new Error("destino_invalido");
+    err.status = 400; err.publicError = "destino_invalido";
+    throw err;
+  }
+  return info;
 }
 async function getDestinoChatIds(destinoRaw) {
   const info = destinoInfo(destinoRaw);
   const envIds = String(process.env[info.env] || "").split(",").map((s) => s.trim()).filter(Boolean);
-  if (envIds.length) return envIds;
+  if (envIds.length) return [envIds[0]]; // destinatario específico: nunca abanicar un comprobante a varios chats
   if (info.key === "sublicuentas") {
     const superIds = String(process.env.SUPER_ADMIN || "").split(",").map((s) => s.trim()).filter(Boolean);
-    if (superIds.length) return superIds;
+    if (superIds.length) return [superIds[0]];
   }
-  return [info.fallback].filter(Boolean);
+  if (info.fallback) return [info.fallback];
+  const err = new Error(`destino_sin_chat_id:${info.key}`);
+  err.status = 503; err.publicError = "destino_sin_configurar";
+  throw err;
 }
 function parsePanelImage(imagen) {
   if (!imagen) return null;
@@ -743,6 +774,12 @@ app.post("/rev/renovacion", revAuth, async (req, res) => {
       for(const item of seleccion) renovacionesFecha.push(await revActualizarFechaCliente({clienteId,socioNorm:live.nombre_norm||req.rev.nombre_norm||"",servicioIndex:item.servicioIndex,compraId:item.compraId,nuevaFecha,meses}));
     }
     const renovacionFecha=renovacionesFecha[0]||null;
+    const verificacion = renovacionesFecha.length ? await revVerificarRenovacionesCliente(clienteId, renovacionesFecha) : { ok:true, detalle:[] };
+    if (renovacionesFecha.length && !verificacion.ok) {
+      const err = new Error("renovacion_no_confirmada_en_ficha");
+      err.status = 409; err.publicError = "renovacion_no_confirmada";
+      throw err;
+    }
 
     const imagenObj = await uploadPanelImage(imagen, "renovaciones");
     const imagenUrl = imagenObj.url || "";
@@ -779,6 +816,8 @@ app.post("/rev/renovacion", revAuth, async (req, res) => {
       nuevaFecha: renovacionFecha?.nuevaFecha || (nuevaFecha || "").toString().slice(0, 20),
       renovado: renovacionesFecha.length>0,
       renovadosCantidad: renovacionesFecha.length,
+      operacionDiaKey: `${revNormKey(live.nombre_norm||req.rev.nombre_norm||"")}:${String(clienteId||"").trim()}:${revFechaDMY(new Date())}`,
+      verificacionFicha: verificacion.ok === true,
       boletosCreados: renovacionesFecha.reduce((sum,item)=>sum+Math.max(0,Number(item?.sorteo?.creados)||0),0),
       createdAt: new Date(),
     };
@@ -801,7 +840,7 @@ app.post("/rev/renovacion", revAuth, async (req, res) => {
     const ids = await getDestinoChatIds(destino.key);
     await Promise.all(ids.map((id) => sendTelegramImageSmart(id, imagenObj, cap)));
 
-    res.json({ ok: true, id: ref.id, imagenUrl, renovado: doc.renovado, renovadosCantidad:doc.renovadosCantidad, nuevaFecha: doc.nuevaFecha, destino: destino.key, destinoLabel: destino.label });
+    res.json({ ok: true, id: ref.id, imagenUrl, renovado: doc.renovado, renovadosCantidad:doc.renovadosCantidad, nuevaFecha: doc.nuevaFecha, destino: destino.key, destinoLabel: destino.label, verificacionFicha: verificacion.ok === true, operacionDiaKey: doc.operacionDiaKey });
   } catch (e) {
     console.error("rev/renovacion", e);
     res.status(e.status || 500).json({ error: e.publicError || "server", detail: e.message });
@@ -821,6 +860,10 @@ app.post("/rev/renovar-cliente", revAuth, async (req, res) => {
       nuevaFecha: req.body.nuevaFecha,
       meses: req.body.meses,
     });
+    const verificacion = await revVerificarRenovacionesCliente(req.body.clienteId, [r]);
+    if (!verificacion.ok) {
+      const err = new Error("renovacion_no_confirmada_en_ficha"); err.status = 409; err.publicError = "renovacion_no_confirmada"; throw err;
+    }
     await db.collection("renovaciones").add({
       clienteId: (req.body.clienteId || "").toString(),
       cliente: (req.body.cliente || "").toString().slice(0, 120),
