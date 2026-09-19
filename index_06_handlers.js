@@ -6334,7 +6334,10 @@ Revise que el correo exista en inventario con esa plataforma o coloque la clave 
     logErr("callback_query", err?.stack || err?.message || err);
     if (chatId) {
       try { pending.delete(String(chatId)); } catch (_) {}
-      try { await bot.sendMessage(chatId, "⚠️ Ocurrió un error en esa acción. El bot quedó libre; puede buscar nuevamente sin escribir menu."); } catch (_) {}
+      try {
+        const detalle = String(err?.message || "Error interno").replace(/\s+/g, " ").trim().slice(0, 180);
+        await bot.sendMessage(chatId, `⚠️ No se pudo completar la acción: ${detalle}\n\nEl bot quedó libre; puede buscar nuevamente sin escribir menu.`);
+      } catch (_) {}
     }
   }
 });

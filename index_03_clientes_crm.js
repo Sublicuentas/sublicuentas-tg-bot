@@ -430,10 +430,12 @@ function mesesEntreDMYLocal(inicio = "", fin = "") {
   const a = parseDMYtoDate(inicio);
   const b = parseDMYtoDate(fin);
   if (!a || !b || b <= a) return 1;
-  let meses = (b.getFullYear() - a.getFullYear()) * 12 + (b.getMonth() - a.getMonth());
-  const corte = new Date(a.getFullYear(), a.getMonth() + meses, a.getDate(), 12, 0, 0, 0);
-  if (corte < b) meses += 1;
-  return Math.max(1, Math.min(24, meses || 1));
+  // Una renovación de +30/+31 días representa 1 mes comercial.
+  // El cálculo calendario anterior convertía +31 días en 2 meses cuando
+  // cruzaba un mes corto (p. ej. 19/09 -> 20/10), haciendo fallar IPTV
+  // porque 2 meses no es un plan permitido para Stella/Latin/Lion/Oleada.
+  const dias = Math.max(1, Math.round((b.getTime() - a.getTime()) / 86400000));
+  return Math.max(1, Math.min(24, Math.round(dias / 30) || 1));
 }
 
 function mesesContratadosDesdeFechaLocal(fechaRenovacion = "", fechaBase = "") {
