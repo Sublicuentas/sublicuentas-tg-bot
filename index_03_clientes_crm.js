@@ -549,13 +549,23 @@ function kbTvDigitalPlanesWiz(mode = "wiz", brand = "", clientId = null, idx = n
   const prefix = prefijoSelectorPlataformasLocal(mode);
   if (!marca || !prefix) return [];
   const rows = [];
+  // El selector de TV Digital se construye desde las claves canónicas de la marca,
+  // no desde aliases legacy del inventario. Además deduplicamos por cantidad para
+  // que un registro viejo (p. ej. evoutouch4) nunca vuelva a crear un segundo botón.
+  const vistos = new Set();
   const planes = marca.keys.map((key) => {
-    const cantidad = Number(PLATAFORMAS?.[key]?.capacidadDefault || 1);
-    return {
-      text: `${cantidad} dispositivo${cantidad === 1 ? "" : "s"}`,
-      callback_data: appendCallbackContextLocal(`${prefix}:${key}`, clientId, idx),
-    };
-  });
+    const m = String(key || "").match(/([1-5])$/);
+    const cantidad = m ? Number(m[1]) : Number(PLATAFORMAS?.[key]?.capacidadDefault || 1);
+    return { key, cantidad };
+  }).filter(({ key, cantidad }) => {
+    if (String(brand || "").toLowerCase() === "evoutouch" && ![1,2,3].includes(cantidad)) return false;
+    if (vistos.has(cantidad)) return false;
+    vistos.add(cantidad);
+    return Boolean(PLATAFORMAS?.[key]);
+  }).map(({ key, cantidad }) => ({
+    text: `${cantidad} dispositivo${cantidad === 1 ? "" : "s"}`,
+    callback_data: appendCallbackContextLocal(`${prefix}:${key}`, clientId, idx),
+  }));
   for (let i = 0; i < planes.length; i += 2) rows.push(planes.slice(i, i + 2));
   rows.push([{
     text: "⬅️ TV Digital",
