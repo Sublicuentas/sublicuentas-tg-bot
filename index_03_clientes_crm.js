@@ -74,7 +74,7 @@ const IPTV_USUARIO_KEYS_LOCAL = new Set([
   "oleadatv1", "oleadatv3",
   "latintv1", "latintv2", "latintv3", "latintv4",
   "liontv1", "liontv2", "liontv3", "liontv5",
-  "evoutouch4",
+  "evoutouch1", "evoutouch2", "evoutouch3",
   // Compatibilidad de solo lectura/edición con registros anteriores.
   "iptv1", "iptv3", "iptv4",
 ]);
@@ -84,7 +84,7 @@ const TV_DIGITAL_BRANDS_LOCAL = {
   oleada: { label: "Oleada TV", icon: "🌊", keys: ["oleadatv1", "oleadatv3"] },
   lion: { label: "Lion TV", icon: "🦁", keys: ["liontv1", "liontv2", "liontv3", "liontv5"] },
   latin: { label: "Latin TV", icon: "📡", keys: ["latintv1", "latintv2", "latintv3", "latintv4"] },
-  evoutouch: { label: "EvouTouch", icon: "📺", keys: ["evoutouch4"] },
+  evoutouch: { label: "Nanotech", icon: "📺", keys: ["evoutouch1","evoutouch2","evoutouch3"] },
 };
 const TV_DIGITAL_KEYS_LOCAL = new Set(Object.values(TV_DIGITAL_BRANDS_LOCAL).flatMap((marca) => marca.keys));
 const TV_DIGITAL_URLS_LOCAL = {
@@ -167,7 +167,7 @@ function humanPlataforma(key = "") {
     stellatv1:"Stella TV (1 dispositivo)", stellatv2:"Stella TV (2 dispositivos)", stellatv3:"Stella TV (3 dispositivos)",
     oleadatv1:"Oleada TV (1 dispositivo)", oleadatv3:"Oleada TV (3 dispositivos)",
     latintv1:"LatinTV (1 dispositivo)", latintv2:"LatinTV (2 dispositivos)", latintv3:"LatinTV (3 dispositivos)", latintv4:"LatinTV (4 dispositivos)",
-    liontv1:"LionTV (1 dispositivo)", liontv2:"LionTV (2 dispositivos)", liontv3:"LionTV (3 dispositivos)", liontv5:"LionTV (5 dispositivos)", evoutouch4:"EvouTouch (4 dispositivos)",
+    liontv1:"LionTV (1 dispositivo)", liontv2:"LionTV (2 dispositivos)", liontv3:"LionTV (3 dispositivos)", liontv5:"LionTV (5 dispositivos)", evoutouch1:"Nanotech (1 dispositivo)", evoutouch2:"Nanotech (2 dispositivos)", evoutouch3:"Nanotech (3 dispositivos)", evoutouch4:"Nanotech (1 dispositivo)",
     iptv1:"IPTV anterior (1)", iptv3:"IPTV anterior (3)", iptv4:"IPTV anterior (4)",
   };
   return map[k] || String(key || "");
@@ -175,7 +175,7 @@ function humanPlataforma(key = "") {
 
 function iconPlataforma(key = "") {
   const k = normalizarPlataforma(key);
-  const map = { netflix:"📺", vipnetflix:"🔥", disneyp:"🏰", disneys:"🎬", hbomax:"🎞️", primevideo:"🎥", paramount:"💿", crunchyroll:"🍥", vix:"📱", appletv:"🍎", universal:"🌍", spotify:"🎵", youtube:"▶️", office:"📎", deezer:"🎧", canva:"🎨", gemini:"✨", chatgpt:"🤖", duolingo:"🦉", stellatv1:"⭐", stellatv2:"⭐", stellatv3:"⭐", oleadatv1:"🌊", oleadatv3:"🌊", latintv1:"📡", latintv2:"📡", latintv3:"📡", latintv4:"📡", liontv1:"🦁", liontv2:"🦁", liontv3:"🦁", liontv5:"🦁", evoutouch4:"📺", iptv1:"📡", iptv3:"📡", iptv4:"📡" };
+  const map = { netflix:"📺", vipnetflix:"🔥", disneyp:"🏰", disneys:"🎬", hbomax:"🎞️", primevideo:"🎥", paramount:"💿", crunchyroll:"🍥", vix:"📱", appletv:"🍎", universal:"🌍", spotify:"🎵", youtube:"▶️", office:"📎", deezer:"🎧", canva:"🎨", gemini:"✨", chatgpt:"🤖", duolingo:"🦉", stellatv1:"⭐", stellatv2:"⭐", stellatv3:"⭐", oleadatv1:"🌊", oleadatv3:"🌊", latintv1:"📡", latintv2:"📡", latintv3:"📡", latintv4:"📡", liontv1:"🦁", liontv2:"🦁", liontv3:"🦁", liontv5:"🦁", evoutouch1:"📺", evoutouch2:"📺", evoutouch3:"📺", evoutouch4:"📺", iptv1:"📡", iptv3:"📡", iptv4:"📡" };
   return map[k] || "📦";
 }
 
@@ -388,7 +388,7 @@ function docIdInventarioLocal(ident = "", plataforma = "") {
 
 function getTotalPorPlataformaLocal(plat = "") {
   const p = normalizarPlataforma(plat);
-  const map = { netflix:5, vipnetflix:1, disneyp:6, disneys:3, hbomax:5, primevideo:5, paramount:5, crunchyroll:5, vix:4, appletv:4, universal:4, spotify:1, youtube:1, deezer:1, stellatv1:1, stellatv2:2, stellatv3:3, oleadatv1:1, oleadatv3:3, latintv1:1, latintv2:2, latintv3:3, latintv4:4, liontv1:1, liontv2:2, liontv3:3, liontv5:5, evoutouch4:4, iptv1:1, iptv3:3, iptv4:4, canva:1, gemini:1, chatgpt:1, duolingo:1, office:1, office2021:1 };
+  const map = { netflix:5, vipnetflix:1, disneyp:6, disneys:3, hbomax:5, primevideo:5, paramount:5, crunchyroll:5, vix:4, appletv:4, universal:4, spotify:1, youtube:1, deezer:1, stellatv1:1, stellatv2:2, stellatv3:3, oleadatv1:1, oleadatv3:3, latintv1:1, latintv2:2, latintv3:3, latintv4:4, liontv1:1, liontv2:2, liontv3:3, liontv5:5, evoutouch1:1, evoutouch2:2, evoutouch3:3, evoutouch4:1, iptv1:1, iptv3:3, iptv4:4, canva:1, gemini:1, chatgpt:1, duolingo:1, office:1, office2021:1 };
   return map[p] || 1;
 }
 

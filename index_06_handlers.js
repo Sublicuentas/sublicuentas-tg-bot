@@ -259,7 +259,7 @@ function esPlataformaUsuarioLocal(plataforma = "") {
     "oleadatv1", "oleadatv3",
     "latintv1", "latintv2", "latintv3", "latintv4",
     "liontv1", "liontv2", "liontv3", "liontv5",
-    "evoutouch4",
+    "evoutouch1", "evoutouch2", "evoutouch3",
     "iptv1", "iptv3", "iptv4",
   ].includes(p);
 }
@@ -411,7 +411,7 @@ function cmAutoFamily(platform = "") {
   if (/^oleadatv[13]$/.test(p) || p === "oleada") return "oleada";
   if (/^latintv[1234]$/.test(p) || p === "latintv") return "latintv";
   if (/^liontv[1235]$/.test(p) || p === "liontv") return "liontv";
-  if (p === "evoutouch4" || p === "evoutouch") return "evoutouch";
+  if (/^evoutouch[1-4]?$/.test(p) || /^nanotech[1-3]?$/.test(p)) return "evoutouch";
   if (/^iptv[134]$/.test(p) || p === "iptv") return "iptv";
   return p;
 }
@@ -1076,7 +1076,7 @@ function humanPlatLabelSyncLocal(key = "") {
     liontv2: "LionTV (2 dispositivos)",
     liontv3: "LionTV (3 dispositivos)",
     liontv5: "LionTV (5 dispositivos)",
-    evoutouch4: "EvouTouch (4 dispositivos)",
+    evoutouch1: "Nanotech (1 dispositivo)", evoutouch2: "Nanotech (2 dispositivos)", evoutouch3: "Nanotech (3 dispositivos)", evoutouch4: "Nanotech (1 dispositivo)",
     iptv1: "IPTV anterior (1)",
     iptv3: "IPTV anterior (3)",
     iptv4: "IPTV anterior (4)",
@@ -1120,7 +1120,7 @@ function getTotalPorPlataformaLocal(plat = "") {
     liontv2: 2,
     liontv3: 3,
     liontv5: 5,
-    evoutouch4: 4,
+    evoutouch1: 1, evoutouch2: 2, evoutouch3: 3, evoutouch4: 1,
     iptv1: 1,
     iptv3: 3,
     iptv4: 4,
@@ -5433,7 +5433,7 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
           oleada: "🌊 OLEADA TV",
           lion: "🦁 LION TV",
           latin: "📡 LATIN TV",
-          evoutouch: "📺 EVOUTOUCH",
+          evoutouch: "📺 NANOTECH",
         };
         const brandDuraciones = {
           stella: "1, 3 y 7 meses (6 + 1 gratis)",

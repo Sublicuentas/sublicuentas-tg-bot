@@ -1,5 +1,6 @@
 const { startBotPollingSafe, db, admin, cacheInvalidatePrefix } = require("./index_01_core");
 const { consolidarClientesDuplicadosPorTelefono } = require("./index_19_consolidar_clientes_telefono");
+const { migrarNanotechClientes } = require("./index_21_migracion_nanotech");
 
 require("./index_02_utils_roles");
 require("./index_03_clientes_crm");
@@ -51,6 +52,13 @@ keepAliveRecurrente.unref?.();
     // Una migración fallida no debe dejar el bot fuera de línea. Como cada
     // ficha se respalda y cada alias se reanuda, el próximo reinicio reintenta.
     console.error("⚠️ No se pudo completar la consolidación de teléfonos:", error?.stack || error?.message || error);
+  }
+  try {
+    const nanotech = await migrarNanotechClientes({ db, admin });
+    cacheInvalidatePrefix?.("clientes:");
+    console.log("✅ Migración Nanotech:", JSON.stringify(nanotech));
+  } catch (error) {
+    console.error("⚠️ No se pudo completar la migración Nanotech:", error?.stack || error?.message || error);
   }
   await startBotPollingSafe();
 })();
