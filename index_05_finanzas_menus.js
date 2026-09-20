@@ -17,6 +17,7 @@ const {
 const {
   escMD, upsertPanel, parseFechaFinanceInput, getMonthLabelFromKey,
   getMonthKeyFromDMY, isFechaDMY, hoyDMY, moneyLps, logErr, normalizarPlataforma,
+  isAdmin,
 } = require("./index_02_utils_roles");
 
 const { humanPlataforma, obtenerRenovacionesPorFecha } = require("./index_03_clientes_crm");

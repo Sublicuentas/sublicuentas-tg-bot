@@ -62,9 +62,9 @@ app.use(cors());
 app.use(express.json({ limit: "15mb" }));
 
 // keepalive / health (para que Render lo mantenga vivo)
-const PANEL_API_VERSION = "socios-20260914-6";
+const PANEL_API_VERSION = "socios-20260920-1";
 app.get("/", (_req, res) => res.type("text/plain").send(`Sublicuentas Panel API OK ${PANEL_API_VERSION}`));
-app.get("/rev/ping", (_req, res) => res.json({ v: PANEL_API_VERSION, gemini: !!process.env.GEMINI_API_KEY, anthropic: !!process.env.ANTHROPIC_API_KEY, storageBuckets: STORAGE_BUCKET_CANDIDATES }));
+app.get("/rev/ping", (_req, res) => res.json({ v: PANEL_API_VERSION, ticketsBridge: true, gemini: !!process.env.GEMINI_API_KEY, anthropic: !!process.env.ANTHROPIC_API_KEY, storageBuckets: STORAGE_BUCKET_CANDIDATES }));
 app.get("/health", (_req, res) => res.json({ ok: true, version: PANEL_API_VERSION, ts: Date.now() }));
 
 // ── perfil/permisos vivos del socio ──
@@ -1398,20 +1398,24 @@ app.post("/rev/admin/tickets-telegram", revAdminAuth, async (req, res) => {
     const text = String(body.text || "").trim();
     if (!text) return res.status(400).json({ ok:false, error:"sin_texto" });
 
-    const results = [];
-    for (const role of destinos) {
+    // Lotes de 5 en paralelo (mismo criterio que las promociones): con muchos
+    // socios el envío secuencial pasaba de los 10 s y Vercel cortaba la petición.
+    const enviarRol = async (role) => {
       const resolved = await revResolveTicketTelegram(role);
       if (!resolved.chatId) {
-        results.push({ ok:false, skipped:true, reason:resolved.reason || "chat_id_missing", error:resolved.error || "", roles:[role] });
-        continue;
+        return { ok:false, skipped:true, reason:resolved.reason || "chat_id_missing", error:resolved.error || "", roles:[role], source:resolved.source };
       }
       try {
         const sent = await revSendTicketTelegramOne(resolved.chatId, body);
-        results.push({ ...sent, chatId:String(resolved.chatId), roles:[role], source:resolved.source });
+        return { ...sent, chatId:String(resolved.chatId), roles:[role], source:resolved.source };
       } catch (e) {
         const detail = revTelegramFriendlyError(e);
-        results.push({ ok:false, reason:detail.code, error:detail.error, roles:[role], source:resolved.source });
+        return { ok:false, reason:detail.code, error:detail.error, roles:[role], source:resolved.source };
       }
+    };
+    const results = [];
+    for (let i = 0; i < destinos.length; i += 5) {
+      results.push(...(await Promise.all(destinos.slice(i, i + 5).map(enviarRol))));
     }
     const deliveredRoles = destinos.filter(role => results.some(r => r.ok && (r.roles || []).includes(role)));
     const failedRoles = destinos.filter(role => !deliveredRoles.includes(role));

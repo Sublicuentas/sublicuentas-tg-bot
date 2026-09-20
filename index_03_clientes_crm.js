@@ -2507,8 +2507,8 @@ bot.onText(/^\/clientes_excel$/, async (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
 
-  // Solo admin
-  if (!isAdmin(userId)) {
+  // Solo admin (isAdmin es async: sin await, la Promesa es truthy y cualquiera pasaba el filtro)
+  if (!(await utils.isAdmin(userId))) {
     return bot.sendMessage(chatId, "❌ Solo admin puede descargar listado de clientes");
   }
 

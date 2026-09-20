@@ -7350,7 +7350,7 @@ bot.on("message", async (msg) => {
           if (inv) {
             const platFinal = normalizarPlataforma(patch.plataforma || platBase);
             const msg = platFinal !== platBase
-              ? `✅ ${label} actualizado. También corregí la plataforma a *${humanPlatLabelLocal(platFinal)}* y traje los datos del inventario.`
+              ? `✅ ${label} actualizado. También corregí la plataforma a *${humanPlatLabelSyncLocal(platFinal)}* y traje los datos del inventario.`
               : `✅ ${label} actualizado y datos sincronizados desde inventario.`;
             await bot.sendMessage(chatId, msg, { parse_mode: "Markdown" });
           } else {
