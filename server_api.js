@@ -59,13 +59,37 @@ const STORAGE_BUCKET = STORAGE_BUCKET_CANDIDATES[0] || "";
 const JWT_SECRET = getJwtSecret();
 
 const app = express();
-app.use(cors());
+app.disable("x-powered-by");
+
+// Seguridad web: en producción puede limitarse el CORS con
+// PANEL_ALLOWED_ORIGINS=https://socios.sublicuentas.com,https://otro-dominio.com
+// Si la variable no existe conservamos compatibilidad con el despliegue actual.
+const PANEL_ALLOWED_ORIGINS = String(process.env.PANEL_ALLOWED_ORIGINS || "")
+  .split(",").map((x) => x.trim()).filter(Boolean);
+app.use(cors({
+  origin(origin, callback) {
+    if (!origin || !PANEL_ALLOWED_ORIGINS.length || PANEL_ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
+    return callback(null, false);
+  },
+  credentials: false,
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+  maxAge: 86400,
+}));
+app.use((req, res, next) => {
+  res.set("X-Content-Type-Options", "nosniff");
+  res.set("X-Frame-Options", "DENY");
+  res.set("Referrer-Policy", "no-referrer");
+  res.set("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+  if (req.path.startsWith("/rev/")) res.set("Cache-Control", "no-store, max-age=0");
+  next();
+});
 app.use(express.json({ limit: "15mb" }));
 
 // keepalive / health (para que Render lo mantenga vivo)
-const PANEL_API_VERSION = "socios-20260925-tg-outbox-1";
+const PANEL_API_VERSION = "socios-20260925-professional-web-1";
 app.get("/", (_req, res) => res.type("text/plain").send(`Sublicuentas Panel API OK ${PANEL_API_VERSION}`));
-app.get("/rev/ping", (_req, res) => res.json({ v: PANEL_API_VERSION, ticketsBridge: true, telegramOutbox: true, gemini: !!process.env.GEMINI_API_KEY, anthropic: !!process.env.ANTHROPIC_API_KEY, storageBuckets: STORAGE_BUCKET_CANDIDATES }));
+app.get("/rev/ping", (_req, res) => res.json({ v: PANEL_API_VERSION, ticketsBridge: true, telegramOutbox: true, gemini: !!process.env.GEMINI_API_KEY, anthropic: !!process.env.ANTHROPIC_API_KEY, storageConfigured: STORAGE_BUCKET_CANDIDATES.length > 0 }));
 app.get("/health", (_req, res) => res.json({ ok: true, version: PANEL_API_VERSION, ts: Date.now() }));
 
 // ── perfil/permisos vivos del socio ──
@@ -408,6 +432,38 @@ function revFiltrarClientePorAliases(cliente = {}, aliases = []) {
   }
   return { ...cliente, servicios: [] };
 }
+
+// El Panel de Socios no necesita recibir credenciales internas del cliente.
+// Se construye un DTO mínimo para reducir exposición de correo, clave, PIN,
+// URL IPTV, tokens u otros campos que puedan existir en Firestore.
+function revClientePublicoPanel(id, cliente = {}) {
+  const nombre = String(cliente.nombrePerfil || cliente.nombre || cliente.nombre_norm || "Cliente").trim().slice(0, 180);
+  const telefono = String(cliente.telefono || cliente.telefono_norm || "").trim().slice(0, 40);
+  const servicios = (Array.isArray(cliente.servicios) ? cliente.servicios : []).map((s = {}, index) => {
+    const servicio = String(s.plataforma || s.servicio || s.nombre || "Servicio").trim().slice(0, 160);
+    const fecha = s.fechaRenovacion ?? s.vencimiento ?? s.vence ?? s.fechaFin ?? null;
+    const precioRaw = s.precio;
+    const precioNum = precioRaw == null || String(precioRaw).trim() === "" ? NaN : Number(precioRaw);
+    const original = Number(s.servicioIndexOriginal ?? s._servicioIndexOriginal ?? index);
+    return {
+      servicio,
+      fechaRenovacion: fecha,
+      precio: Number.isFinite(precioNum) ? precioNum : null,
+      compraId: String(s.compraId || "").slice(0, 180),
+      servicioIndexOriginal: Number.isInteger(original) ? original : index,
+      _servicioIndexOriginal: Number.isInteger(original) ? original : index,
+    };
+  });
+  return {
+    id: String(id || cliente.id || "").slice(0, 180),
+    nombre,
+    nombrePerfil: nombre,
+    nombre_norm: String(cliente.nombre_norm || "").trim().slice(0, 180),
+    telefono,
+    telefono_norm: String(cliente.telefono_norm || telefono).trim().slice(0, 40),
+    servicios,
+  };
+}
 async function revRepairClientVendorSummary(doc, data) {
   try {
     const servicios = heredarVendedorServicios(Array.isArray(data.servicios) ? data.servicios : [], data);
@@ -456,7 +512,7 @@ app.get("/rev/clientes", revAuth, async (req, res) => {
     if (reparaciones.length) Promise.allSettled(reparaciones).catch(() => {});
 
     const lista = Array.from(docs.values())
-      .map((d) => ({ id: d.id, ...revFiltrarClientePorAliases(d.data() || {}, aliases) }))
+      .map((d) => revClientePublicoPanel(d.id, revFiltrarClientePorAliases(d.data() || {}, aliases)))
       .filter((cliente) => cliente.servicios.length > 0);
     res.set("Cache-Control", "no-store");
     res.json(lista);
@@ -606,7 +662,8 @@ app.get("/rev/avisos", revAuth, async (req, res) => {
   try {
     // ✅ Sin where+orderBy combinado (evita necesitar índice compuesto en Firestore)
     const snap = await db.collection("avisos").orderBy("createdAt", "desc").limit(20).get();
-    const socioNorm = normVendedor(req.rev?.nombre_norm || req.rev?.nombre || "");
+    const live = await revLiveProfile(req.rev);
+    const socioAliases = new Set(revSocioAliases(live, req.rev).map(revNormKey));
     const lista = snap.docs
       .map((d) => {
         const a = d.data();
@@ -614,7 +671,7 @@ app.get("/rev/avisos", revAuth, async (req, res) => {
                    a.createdAt?.seconds ? a.createdAt.seconds * 1000 : Date.now();
         return { id: d.id, texto: a.texto || "", autor: a.autor || "Admin", ts, activo: a.activo !== false, tipo:a.tipo||"aviso", imagenUrl:a.imagenUrl||"", promocionId:a.promocionId||"", destinatarios:Array.isArray(a.destinatarios)?a.destinatarios:[] };
       })
-      .filter((a) => a.activo && (!a.destinatarios.length || a.destinatarios.map(normVendedor).includes(socioNorm)))
+      .filter((a) => a.activo && (!a.destinatarios.length || a.destinatarios.map(revNormKey).some((x) => socioAliases.has(x))))
       .slice(0, 10);
     res.json(lista);
   } catch (e) { console.error("rev/avisos", e); res.status(500).json({ error: "server" }); }
@@ -718,9 +775,9 @@ function cleanTg(v, max = 300) {
 function destinoInfo(destinoRaw) {
   const destino = revNormKey(String(destinoRaw || "sublicuentas")).replace(/^geissel$/, "geisell");
   const destinos = {
-    relojes: { key: "relojes", label: "⌚ Relojes", fallback: "411539492", env: "RELOJES_CHAT_ID" },
-    sublicuentas: { key: "sublicuentas", label: "🟣 Sublicuentas", fallback: "5728675990", env: "SUBLICUENTAS_CHAT_ID" },
-    geisell: { key: "geisell", label: "👤 Geisell", fallback: "", env: "GEISELL_CHAT_ID" },
+    relojes: { key: "relojes", label: "⌚ Relojes", env: "RELOJES_CHAT_ID" },
+    sublicuentas: { key: "sublicuentas", label: "🟣 Sublicuentas", env: "SUBLICUENTAS_CHAT_ID" },
+    geisell: { key: "geisell", label: "👤 Geisell", env: "GEISELL_CHAT_ID" },
   };
   const info = destinos[destino];
   if (!info) {
@@ -732,13 +789,29 @@ function destinoInfo(destinoRaw) {
 }
 async function getDestinoChatIds(destinoRaw) {
   const info = destinoInfo(destinoRaw);
-  const envIds = String(process.env[info.env] || "").split(",").map((s) => s.trim()).filter(Boolean);
+  const envIds = String(process.env[info.env] || "").split(",").map((s) => s.trim()).filter((s) => /^\d+$/.test(s));
   if (envIds.length) return [envIds[0]]; // destinatario específico: nunca abanicar un comprobante a varios chats
   if (info.key === "sublicuentas") {
-    const superIds = String(process.env.SUPER_ADMIN || "").split(",").map((s) => s.trim()).filter(Boolean);
+    const superIds = String(process.env.SUPER_ADMIN || "").split(",").map((s) => s.trim()).filter((s) => /^\d+$/.test(s));
     if (superIds.length) return [superIds[0]];
   }
-  if (info.fallback) return [info.fallback];
+  // Respaldo sin IDs incrustados en el código: busca la configuración viva.
+  try {
+    const revSnap = await db.collection("revendedores").where("nombre_norm", "==", info.key).limit(1).get();
+    if (!revSnap.empty) {
+      const tg = String(revSnap.docs[0].data()?.telegramId || "").trim();
+      if (/^\d+$/.test(tg)) return [tg];
+    }
+    const admins = await db.collection("admins").get();
+    for (const doc of admins.docs) {
+      const a = doc.data() || {};
+      const key = revNormKey(a.nombre_norm || a.nombre || a.usuario || "");
+      const tg = String(a.telegramId || (/^\d+$/.test(doc.id) ? doc.id : "")).trim();
+      if ((info.key === "sublicuentas" || key === info.key) && a.activo !== false && /^\d+$/.test(tg)) return [tg];
+    }
+  } catch (e) {
+    console.error("getDestinoChatIds", info.key, e?.message || e);
+  }
   const err = new Error(`destino_sin_chat_id:${info.key}`);
   err.status = 503; err.publicError = "destino_sin_configurar";
   throw err;
@@ -1135,8 +1208,8 @@ app.post("/rev/sugerencia", revAuth, async (req, res) => {
     const nombre = req.rev.nombre || req.rev.nombre_norm || "Revendedor";
 
     const destino = (req.body.destino || "sublicuentas").toString().trim();
-    const CHATS = { sublicuentas: "5728675990", relojes: "411539492" };
-    const quien = destino === "relojes" ? "⌚ Relojes" : "🟣 Sublicuentas";
+    const infoDestino = destinoInfo(destino);
+    const quien = infoDestino.label;
 
     await db.collection("sugerencias").add({
       texto, nombre, nombre_norm: req.rev.nombre_norm || "",
@@ -1144,8 +1217,8 @@ app.post("/rev/sugerencia", revAuth, async (req, res) => {
     });
 
     const aviso = `💬 *Nueva sugerencia* (${quien})\n👤 ${nombre}\n\n${texto}`;
-    const id = CHATS[destino] || CHATS.sublicuentas;
-    await sendTelegramMessage(id, aviso);
+    const ids = await getDestinoChatIds(destino);
+    await sendTelegramMessage(ids[0], aviso);
 
     res.json({ ok: true });
   } catch (e) { console.error("rev/sugerencia", e); res.status(500).json({ error: "server" }); }
