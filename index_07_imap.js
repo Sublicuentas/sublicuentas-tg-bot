@@ -16,52 +16,202 @@ const { simpleParser } = require("mailparser");
 const { bot, EMAIL_ACCOUNTS } = require("./index_01_core");
 const { isAdmin, logErr, escMD } = require("./index_02_utils_roles");
 
-// Compatibilidad con ambos esquemas de variables usados históricamente en Render.
-// No obligamos a migrar secretos existentes: /code acepta tanto IMAP_*_1
-// como EMAIL_ADMIN_*/EMAIL_IMAP_* y variantes antiguas de PASSWORD.
-const IMAP_HOST = String(
-  process.env.IMAP_HOST_1 ||
-  process.env.EMAIL_IMAP_HOST ||
-  "premium48.web-hosting.com"
-).trim();
-const IMAP_PORT = Number(
-  process.env.IMAP_PORT_1 ||
-  process.env.EMAIL_IMAP_PORT ||
-  993
-);
-const IMAP_USER = String(
-  process.env.IMAP_USER_1 ||
-  process.env.EMAIL_ADMIN_USER ||
-  process.env.EMAIL_IMAP_USER ||
-  "admin@sublicuentas.com"
-).trim();
-const IMAP_PASS = String(
-  process.env.IMAP_PASS_1 ||
-  process.env.EMAIL_ADMIN_PASS ||
-  process.env.EMAIL_ADMIN_PASSWORD ||
-  process.env.EMAIL_IMAP_PASS ||
-  process.env.EMAIL_IMAP_PASSWORD ||
-  ""
-);
-const IMAP_TLS = !["0", "false", "no", "off"].includes(
-  String(process.env.IMAP_SECURE_1 ?? process.env.EMAIL_IMAP_SECURE ?? "true").trim().toLowerCase()
-);
-const IMAP_SOURCE = String(process.env.IMAP_SOURCE_1 || "hosting-principal").trim() || "hosting-principal";
+// Resolución robusta de credenciales IMAP en Render.
+// Históricamente este bot ha usado varios nombres de variables. En vez de
+// depender de uno solo, normalizamos las claves y aceptamos las familias
+// EMAIL_ADMIN_*, EMAIL_IMAP_* e IMAP_*_N (PASS/PASSWORD/PWD).
+function normalizarClaveEnv(k = "") {
+  return String(k || "")
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function mapaEnvNormalizado() {
+  const out = new Map();
+  for (const [rawKey, rawValue] of Object.entries(process.env || {})) {
+    const key = normalizarClaveEnv(rawKey);
+    if (!key) continue;
+    const value = String(rawValue ?? "");
+    const anterior = out.get(key);
+    // Si Render llegara a exponer dos claves equivalentes, preferimos la que
+    // tenga contenido. Nunca registramos aquí el valor de un secreto.
+    if (!anterior || (!String(anterior.value || "").length && value.length)) {
+      out.set(key, { rawKey, value });
+    }
+  }
+  return out;
+}
+
+function buscarEnv(aliases = [], matcher = null, { requireEmail = false } = {}) {
+  const env = mapaEnvNormalizado();
+  for (const alias of aliases) {
+    const hit = env.get(normalizarClaveEnv(alias));
+    if (!hit) continue;
+    const value = String(hit.value ?? "");
+    if (!value.length) continue;
+    if (requireEmail && !value.includes("@")) continue;
+    return { value, key: hit.rawKey };
+  }
+  if (typeof matcher === "function") {
+    for (const [normKey, hit] of env.entries()) {
+      const value = String(hit.value ?? "");
+      if (!value.length || !matcher(normKey, value)) continue;
+      if (requireEmail && !value.includes("@")) continue;
+      return { value, key: hit.rawKey };
+    }
+  }
+  return { value: "", key: "" };
+}
+
+function valorBool(v, fallback = true) {
+  if (v === undefined || v === null || String(v).trim() === "") return fallback;
+  const s = String(v).trim().toLowerCase();
+  if (["0", "false", "no", "off", "disabled"].includes(s)) return false;
+  if (["1", "true", "yes", "si", "sí", "on", "ssl", "tls", "secure"].includes(s)) return true;
+  return fallback;
+}
+
+function resolverImapBase() {
+  const hostHit = buscarEnv(
+    ["EMAIL_IMAP_HOST", "IMAP_HOST", "IMAP_HOST_1"],
+    (k) => /^(?:EMAIL_)?IMAP_HOST(?:_\d+)?$/.test(k)
+  );
+  const portHit = buscarEnv(
+    ["EMAIL_IMAP_PORT", "IMAP_PORT", "IMAP_PORT_1"],
+    (k) => /^(?:EMAIL_)?IMAP_PORT(?:_\d+)?$/.test(k)
+  );
+  const userHit = buscarEnv(
+    [
+      "EMAIL_ADMIN_USER", "EMAIL_ADMIN_USERNAME", "EMAIL_ADMIN_EMAIL",
+      "EMAIL_IMAP_USER", "EMAIL_IMAP_USERNAME", "IMAP_USER", "IMAP_USER_1",
+      "IMAP_USERNAME_1", "IMAP_EMAIL_1"
+    ],
+    (k, value) => (
+      /^(?:EMAIL_ADMIN|EMAIL_IMAP|IMAP)_(?:USER|USERNAME|EMAIL)(?:_\d+)?$/.test(k) && value.includes("@")
+    ),
+    { requireEmail: true }
+  );
+  const passHit = buscarEnv(
+    [
+      "EMAIL_ADMIN_PASS", "EMAIL_ADMIN_PASSWORD", "EMAIL_ADMIN_PWD",
+      "EMAIL_IMAP_PASS", "EMAIL_IMAP_PASSWORD", "EMAIL_IMAP_PWD",
+      "IMAP_PASS", "IMAP_PASSWORD", "IMAP_PWD",
+      "IMAP_PASS_1", "IMAP_PASSWORD_1", "IMAP_PWD_1"
+    ],
+    (k) => /^(?:EMAIL_ADMIN|EMAIL_IMAP|IMAP)_(?:PASS|PASSWORD|PWD)(?:_\d+)?$/.test(k)
+  );
+  const secureHit = buscarEnv(
+    ["EMAIL_IMAP_SECURE", "IMAP_SECURE", "IMAP_SECURE_1", "IMAP_TLS", "IMAP_TLS_1"],
+    (k) => /^(?:EMAIL_)?IMAP_(?:SECURE|TLS)(?:_\d+)?$/.test(k)
+  );
+  const sourceHit = buscarEnv(
+    ["IMAP_SOURCE_1", "IMAP_SOURCE", "EMAIL_IMAP_SOURCE"],
+    (k) => /^(?:EMAIL_)?IMAP_(?:SOURCE|NAME|LABEL)(?:_\d+)?$/.test(k)
+  );
+
+  const portParsed = Number(portHit.value || 993);
+  return {
+    name: String(sourceHit.value || "hosting-principal").trim() || "hosting-principal",
+    host: String(hostHit.value || "premium48.web-hosting.com").trim(),
+    port: Number.isFinite(portParsed) && portParsed > 0 ? portParsed : 993,
+    tls: valorBool(secureHit.value, true),
+    user: String(userHit.value || "admin@sublicuentas.com").trim(),
+    password: String(passHit.value || ""),
+    _keys: {
+      host: hostHit.key || "(fallback premium48.web-hosting.com)",
+      port: portHit.key || "(fallback 993)",
+      user: userHit.key || "(fallback admin@sublicuentas.com)",
+      password: passHit.key || "(no detectada)",
+      secure: secureHit.key || "(fallback true)",
+      source: sourceHit.key || "(fallback hosting-principal)",
+    },
+  };
+}
+
+function resolverCuentasImapNumeradas() {
+  const env = mapaEnvNormalizado();
+  const indices = new Set();
+  for (const key of env.keys()) {
+    const m = key.match(/^IMAP_(?:USER|USERNAME|EMAIL|PASS|PASSWORD|PWD|HOST|PORT|SECURE|TLS|SOURCE|NAME|LABEL)_(\d+)$/);
+    if (m) indices.add(Number(m[1]));
+  }
+  const base = resolverImapBase();
+  const out = [];
+
+  const get = (...keys) => {
+    for (const k of keys) {
+      const hit = env.get(normalizarClaveEnv(k));
+      if (hit && String(hit.value ?? "").length) return { value: String(hit.value), key: hit.rawKey };
+    }
+    return { value: "", key: "" };
+  };
+
+  for (const n of [...indices].sort((a, b) => a - b)) {
+    const user = get(`IMAP_USER_${n}`, `IMAP_USERNAME_${n}`, `IMAP_EMAIL_${n}`);
+    const pass = get(`IMAP_PASS_${n}`, `IMAP_PASSWORD_${n}`, `IMAP_PWD_${n}`);
+    if (!user.value || !pass.value) continue;
+    const host = get(`IMAP_HOST_${n}`);
+    const port = get(`IMAP_PORT_${n}`);
+    const secure = get(`IMAP_SECURE_${n}`, `IMAP_TLS_${n}`);
+    const source = get(`IMAP_SOURCE_${n}`, `IMAP_NAME_${n}`, `IMAP_LABEL_${n}`);
+    const portNum = Number(port.value || base.port || 993);
+    out.push({
+      name: String(source.value || `imap-${n}`).trim() || `imap-${n}`,
+      host: String(host.value || base.host || "premium48.web-hosting.com").trim(),
+      port: Number.isFinite(portNum) && portNum > 0 ? portNum : 993,
+      tls: valorBool(secure.value, base.tls),
+      user: String(user.value).trim(),
+      password: String(pass.value),
+      _keys: { user: user.key, password: pass.key, host: host.key || base._keys.host },
+    });
+  }
+  return out;
+}
+
 const disneyUltimoEntregado = global.__SUBLICUENTAS_DISNEY_OTP__ || new Map();
 global.__SUBLICUENTAS_DISNEY_OTP__ = disneyUltimoEntregado;
 const esperar = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 function cuentasImapCodigos() {
-  const legacy = { name: IMAP_SOURCE, host: IMAP_HOST, port: IMAP_PORT, tls: IMAP_TLS, user: IMAP_USER, password: IMAP_PASS };
-  const rows = [legacy, ...(Array.isArray(EMAIL_ACCOUNTS) ? EMAIL_ACCOUNTS : [])];
+  const base = resolverImapBase();
+  const legacy = {
+    name: base.name, host: base.host, port: base.port, tls: base.tls,
+    user: base.user, password: base.password, _keys: base._keys,
+  };
+  const rows = [legacy, ...resolverCuentasImapNumeradas(), ...(Array.isArray(EMAIL_ACCOUNTS) ? EMAIL_ACCOUNTS : [])];
   const seen = new Set();
   return rows.filter(row => {
-    const host = String(row?.host || "").trim(), user = String(row?.user || "").trim();
+    const host = String(row?.host || "").trim();
+    const user = String(row?.user || "").trim();
     const password = String(row?.password || row?.pass || "");
     const key = `${host.toLowerCase()}|${user.toLowerCase()}`;
     if (!host || !user || !password || seen.has(key)) return false;
-    seen.add(key); return true;
+    seen.add(key);
+    return true;
   });
+}
+
+function estadoImapSeguro() {
+  const base = resolverImapBase();
+  const cuentas = cuentasImapCodigos();
+  const variables = Object.keys(process.env || {})
+    .filter(k => {
+      const n = normalizarClaveEnv(k);
+      return n.startsWith("IMAP_") || n.startsWith("EMAIL_IMAP_") || n.startsWith("EMAIL_ADMIN_");
+    })
+    .sort();
+  return {
+    cuentasValidas: cuentas.length,
+    host: Boolean(base.host),
+    user: Boolean(base.user),
+    password: Boolean(base.password),
+    port: base.port,
+    tls: base.tls,
+    selectedKeys: base._keys,
+    variables,
+  };
 }
 
 // ===============================
@@ -413,10 +563,11 @@ async function scrapearCodigoWeb(url) {
 // ===============================
 async function buscarEmailsCuenta(correo, limite=15, cuenta={}) {
   const correoBuscar = String(correo||"").trim().toLowerCase();
+  const base = resolverImapBase();
 
   const client = new ImapFlow({
-    host:String(cuenta.host||IMAP_HOST), port:Number(cuenta.port||IMAP_PORT), secure:cuenta.tls!==false,
-    auth:{user:String(cuenta.user||IMAP_USER), pass:String(cuenta.password||cuenta.pass||IMAP_PASS)},
+    host:String(cuenta.host||base.host), port:Number(cuenta.port||base.port), secure:cuenta.tls!==false,
+    auth:{user:String(cuenta.user||base.user), pass:String(cuenta.password||cuenta.pass||base.password)},
     logger:{
       debug: (obj) => console.log("[IMAP DBG]", obj?.msg || JSON.stringify(obj).slice(0,120)),
       info:  (obj) => console.log("[IMAP INF]", obj?.msg || ""),
@@ -529,15 +680,19 @@ async function buscarEmailsCuenta(correo, limite=15, cuenta={}) {
 async function buscarEmails(correo, limite=15) {
   const cuentas = cuentasImapCodigos();
   if (!cuentas.length) {
-    console.error("[IMAP /code] Sin cuenta válida. Estado:", {
-      host: Boolean(IMAP_HOST),
-      user: Boolean(IMAP_USER),
-      password: Boolean(IMAP_PASS),
-      port: IMAP_PORT,
-      tls: IMAP_TLS,
+    const estado = estadoImapSeguro();
+    console.error("[IMAP /code] Sin cuenta válida. Estado seguro:", {
+      cuentasValidas: estado.cuentasValidas,
+      host: estado.host,
+      user: estado.user,
+      password: estado.password,
+      port: estado.port,
+      tls: estado.tls,
+      selectedKeys: estado.selectedKeys,
+      variables: estado.variables,
       jsonAccounts: Array.isArray(EMAIL_ACCOUNTS) ? EMAIL_ACCOUNTS.length : 0,
     });
-    throw new Error("No hay una cuenta IMAP válida para consultar códigos.");
+    throw new Error("IMAP no recibió una credencial válida del entorno. Use /imapstatus para ver qué variables está leyendo el bot.");
   }
   const results = await Promise.allSettled(cuentas.map(cuenta => buscarEmailsCuenta(correo, limite, cuenta)));
   const emails = results.flatMap(result => result.status === "fulfilled" ? result.value : []);
@@ -841,6 +996,28 @@ async function cmdInbox(chatId, correo){
   }catch(e){ logErr("cmdInbox",e); return bot.sendMessage(chatId,"❌ Error."); }
 }
 
+/** /imapstatus — diagnóstico seguro de configuración IMAP (sin secretos) */
+async function cmdImapStatus(chatId){
+  try {
+    const estado = estadoImapSeguro();
+    const sel = estado.selectedKeys || {};
+    const variables = estado.variables.length ? estado.variables.join(", ") : "ninguna";
+    const txt =
+      `📡 *ESTADO IMAP*\n\n` +
+      `✅ Cuentas válidas: *${estado.cuentasValidas}*\n` +
+      `🌐 Host: ${estado.host ? "✅" : "❌"}  \`${escMD(sel.host || "-")}\`\n` +
+      `👤 Usuario: ${estado.user ? "✅" : "❌"}  \`${escMD(sel.user || "-")}\`\n` +
+      `🔐 Contraseña: ${estado.password ? "✅" : "❌"}  \`${escMD(sel.password || "-")}\`\n` +
+      `🔢 Puerto: \`${estado.port}\`\n` +
+      `🔒 TLS: \`${estado.tls ? "sí" : "no"}\`\n\n` +
+      `*Variables IMAP visibles para este proceso:*\n${escMD(variables)}`;
+    return bot.sendMessage(chatId, txt, { parse_mode: "Markdown" });
+  } catch (e) {
+    logErr("cmdImapStatus", e);
+    return bot.sendMessage(chatId, "❌ No pude leer el estado IMAP.");
+  }
+}
+
 // ===============================
 // REGISTRO DE COMANDOS (1 sola vez)
 // ===============================
@@ -852,7 +1029,7 @@ try {
       const reg = item.regexp ? item.regexp.toString() : "";
       return !(
         reg.includes("\/code") || reg.includes("\/link") ||
-        reg.includes("\/hogar") || reg.includes("\/prime") || reg.includes("\/inbox")
+        reg.includes("\/hogar") || reg.includes("\/prime") || reg.includes("\/inbox") || reg.includes("\/imapstatus")
       );
     });
     console.log("✅ IMAP: handlers viejos eliminados, registrando nuevos...");
@@ -866,6 +1043,7 @@ const _imapHogarHandler = async(msg,m)=>{ if(await isAdmin(msg.from.id)) return 
 const _imapPrimeHandler = async(msg,m)=>{ if(await isAdmin(msg.from.id)) return cmdPrime(msg.chat.id, normalizarCorreo(m[1])); };
 const _imapInboxHandler = async(msg,m)=>{ if(await isAdmin(msg.from.id)) return cmdInbox(msg.chat.id, normalizarCorreo(m[1])); };
 const _imapDebugHandler = async(msg,m)=>{ if(await isAdmin(msg.from.id)) return cmdDebug(msg.chat.id, normalizarCorreo(m[1])); };
+const _imapStatusHandler = async(msg)=>{ if(await isAdmin(msg.from.id)) return cmdImapStatus(msg.chat.id); };
 
 bot.onText(/^\/code\s+(\S+)/i,  _imapCodeHandler);
 bot.onText(/^\/link\s+(\S+)/i,  _imapLinkHandler);
@@ -873,7 +1051,8 @@ bot.onText(/^\/hogar\s+(\S+)/i, _imapHogarHandler);
 bot.onText(/^\/prime\s+(\S+)/i, _imapPrimeHandler);
 bot.onText(/^\/inbox\s+(\S+)/i, _imapInboxHandler);
 bot.onText(/^\/debug\s+(\S+)/i, _imapDebugHandler);
+bot.onText(/^\/imapstatus(?:\s|$)/i, _imapStatusHandler);
 
-console.log("✅ Módulo IMAP v19 cargado — /code /link /hogar /prime /inbox");
+console.log("✅ Módulo IMAP v20 cargado — /code /link /hogar /prime /inbox /imapstatus");
 
-module.exports = { cmdCode, cmdLink, cmdHogar, cmdPrime, cmdInbox, extraerCodigoInteligente, htmlATextoVisible };
+module.exports = { cmdCode, cmdLink, cmdHogar, cmdPrime, cmdInbox, cmdImapStatus, buscarEmails, estadoImapSeguro, extraerCodigoInteligente, htmlATextoVisible };
