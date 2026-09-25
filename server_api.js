@@ -960,7 +960,8 @@ app.post("/rev/compra", revAuth, async (req, res) => {
         catalogId: cleanTg(productoCatalogo.id || "", 90),
         servicio,
         servicioBase: cleanTg(productoCatalogo.n || p.servicioBase, 100),
-        entregaTipo: cleanTg(p.entregaTipo || "", 60),
+        entregaTipo: cleanTg(productoCatalogo.entregaTipo || p.entregaTipo || "", 60),
+        entregaCanal: cleanTg(productoCatalogo.entregaCanal || p.entregaCanal || "manual", 60),
         catalogCategory: cleanTg(productoCatalogo.categoria || p.catalogCategory || "", 120),
         catalogSub: cleanTg(productoCatalogo.s || p.catalogSub || "", 160),
         catalogDetalle: cleanTg(productoCatalogo.d || p.catalogDetalle || "", 500),
@@ -1005,6 +1006,7 @@ app.post("/rev/compra", revAuth, async (req, res) => {
       descuentoCombo,
       totalCombo,
       entregaTipo: productos[0].entregaTipo || "",
+      entregaCanal: productos[0].entregaCanal || "manual",
       catalogCategory: productos[0].catalogCategory || "",
       catalogSub: productos[0].catalogSub || "",
       catalogDetalle: productos[0].catalogDetalle || "",
@@ -1055,6 +1057,10 @@ app.post("/rev/compra", revAuth, async (req, res) => {
       if (p.acceso) datos.push(`Acceso: ${p.acceso}`);
       if (p.serial) datos.push(`Serial: ${p.serial}`);
       if (p.key) datos.push(`Key: ${p.key}`);
+      if (p.entregaCanal && p.entregaCanal !== "manual") {
+        const canalLabel = { bot_tg:"Bot TG / código", inventario:"Inventario Sublichat", invitacion:"Invitación al correo", iptv:"TV Digital / IPTV" }[p.entregaCanal] || p.entregaCanal;
+        datos.push(`Flujo: ${canalLabel}`);
+      }
       if (!datos.length && p.entregaTipo) datos.push(`Entrega: ${p.entregaTipo}`);
       return [
         `${i + 1}) ${p.servicio} — ${precio}`,

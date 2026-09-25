@@ -416,6 +416,8 @@ module.exports = function mountAdminPanel(app) {
       nombre, variante: String(b.variante || "").trim(),
       precio, // null = "Por comisión" (mismo significado que it.p===null en el catálogo original)
       detalle: String(b.detalle || "").trim().slice(0, 600),
+      entregaTipo: ["","perfil","correo","acceso","serial","serial_key","detalle"].includes(String(b.entregaTipo || "").toLowerCase()) ? String(b.entregaTipo || "").toLowerCase() : "",
+      entregaCanal: ["manual","bot_tg","inventario","invitacion","iptv"].includes(String(b.entregaCanal || "manual").toLowerCase()) ? String(b.entregaCanal || "manual").toLowerCase() : "manual",
       activo: b.activo !== false,
       stockModo: ["auto","manual"].includes(String(b.stockModo || "auto").toLowerCase()) ? String(b.stockModo || "auto").toLowerCase() : "auto",
       stockEstado: ["disponible","bajo","agotado","consultar",""] .includes(String(b.stockEstado || "").toLowerCase()) ? String(b.stockEstado || "").toLowerCase() : "",
@@ -445,6 +447,8 @@ module.exports = function mountAdminPanel(app) {
     if (b.nombre !== undefined) patch.nombre = String(b.nombre).trim();
     if (b.variante !== undefined) patch.variante = String(b.variante).trim();
     if (b.detalle !== undefined) patch.detalle = String(b.detalle).trim().slice(0, 600);
+    if (b.entregaTipo !== undefined) { const et=String(b.entregaTipo||"").toLowerCase(); if(!["","perfil","correo","acceso","serial","serial_key","detalle"].includes(et)) return fail(res,400,"entrega_tipo_invalido"); patch.entregaTipo=et; }
+    if (b.entregaCanal !== undefined) { const ec=String(b.entregaCanal||"manual").toLowerCase(); if(!["manual","bot_tg","inventario","invitacion","iptv"].includes(ec)) return fail(res,400,"entrega_canal_invalido"); patch.entregaCanal=ec; }
     if (b.activo !== undefined) patch.activo = !!b.activo;
     if (b.stockModo !== undefined) { const m=String(b.stockModo||"auto").toLowerCase(); if(!["auto","manual"].includes(m)) return fail(res,400,"stock_modo_invalido"); patch.stockModo=m; }
     if (b.stockEstado !== undefined) { const st=String(b.stockEstado||"").toLowerCase(); if(!["disponible","bajo","agotado","consultar",""] .includes(st)) return fail(res,400,"stock_estado_invalido"); patch.stockEstado=st; }
