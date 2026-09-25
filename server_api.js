@@ -1,4 +1,5 @@
 
+const crypto = require("crypto");
 /* ════════════════════════════════════════════════════════════════
    server_api.js  ·  API del PANEL DE REVENDEDORES (independiente)
    ────────────────────────────────────────────────────────────────
@@ -44,6 +45,7 @@ const {
   camposResumenVendedores,
   servicioPerteneceAVendedor,
   filtrarClienteParaVendedor,
+  clientePublicoPanel,
 } = require("./index_17_vendedores_servicio");
 const admin = require("firebase-admin");
 const STORAGE_BUCKET_CANDIDATES = Array.from(new Set([
@@ -59,37 +61,13 @@ const STORAGE_BUCKET = STORAGE_BUCKET_CANDIDATES[0] || "";
 const JWT_SECRET = getJwtSecret();
 
 const app = express();
-app.disable("x-powered-by");
-
-// Seguridad web: en producción puede limitarse el CORS con
-// PANEL_ALLOWED_ORIGINS=https://socios.sublicuentas.com,https://otro-dominio.com
-// Si la variable no existe conservamos compatibilidad con el despliegue actual.
-const PANEL_ALLOWED_ORIGINS = String(process.env.PANEL_ALLOWED_ORIGINS || "")
-  .split(",").map((x) => x.trim()).filter(Boolean);
-app.use(cors({
-  origin(origin, callback) {
-    if (!origin || !PANEL_ALLOWED_ORIGINS.length || PANEL_ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
-    return callback(null, false);
-  },
-  credentials: false,
-  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization"],
-  maxAge: 86400,
-}));
-app.use((req, res, next) => {
-  res.set("X-Content-Type-Options", "nosniff");
-  res.set("X-Frame-Options", "DENY");
-  res.set("Referrer-Policy", "no-referrer");
-  res.set("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
-  if (req.path.startsWith("/rev/")) res.set("Cache-Control", "no-store, max-age=0");
-  next();
-});
+app.use(cors());
 app.use(express.json({ limit: "15mb" }));
 
 // keepalive / health (para que Render lo mantenga vivo)
-const PANEL_API_VERSION = "socios-20260925-professional-web-1";
+const PANEL_API_VERSION = "socios-20260925-tg-outbox-1";
 app.get("/", (_req, res) => res.type("text/plain").send(`Sublicuentas Panel API OK ${PANEL_API_VERSION}`));
-app.get("/rev/ping", (_req, res) => res.json({ v: PANEL_API_VERSION, ticketsBridge: true, telegramOutbox: true, gemini: !!process.env.GEMINI_API_KEY, anthropic: !!process.env.ANTHROPIC_API_KEY, storageConfigured: STORAGE_BUCKET_CANDIDATES.length > 0 }));
+app.get("/rev/ping", (_req, res) => res.json({ v: PANEL_API_VERSION, ticketsBridge: true, telegramOutbox: true, gemini: !!process.env.GEMINI_API_KEY, anthropic: !!process.env.ANTHROPIC_API_KEY, storageBuckets: STORAGE_BUCKET_CANDIDATES }));
 app.get("/health", (_req, res) => res.json({ ok: true, version: PANEL_API_VERSION, ts: Date.now() }));
 
 // ── perfil/permisos vivos del socio ──
@@ -432,36 +410,18 @@ function revFiltrarClientePorAliases(cliente = {}, aliases = []) {
   }
   return { ...cliente, servicios: [] };
 }
-
-// El Panel de Socios no necesita recibir credenciales internas del cliente.
-// Se construye un DTO mínimo para reducir exposición de correo, clave, PIN,
-// URL IPTV, tokens u otros campos que puedan existir en Firestore.
-function revClientePublicoPanel(id, cliente = {}) {
-  const nombre = String(cliente.nombrePerfil || cliente.nombre || cliente.nombre_norm || "Cliente").trim().slice(0, 180);
-  const telefono = String(cliente.telefono || cliente.telefono_norm || "").trim().slice(0, 40);
-  const servicios = (Array.isArray(cliente.servicios) ? cliente.servicios : []).map((s = {}, index) => {
-    const servicio = String(s.plataforma || s.servicio || s.nombre || "Servicio").trim().slice(0, 160);
-    const fecha = s.fechaRenovacion ?? s.vencimiento ?? s.vence ?? s.fechaFin ?? null;
-    const precioRaw = s.precio;
-    const precioNum = precioRaw == null || String(precioRaw).trim() === "" ? NaN : Number(precioRaw);
-    const original = Number(s.servicioIndexOriginal ?? s._servicioIndexOriginal ?? index);
-    return {
-      servicio,
-      fechaRenovacion: fecha,
-      precio: Number.isFinite(precioNum) ? precioNum : null,
-      compraId: String(s.compraId || "").slice(0, 180),
-      servicioIndexOriginal: Number.isInteger(original) ? original : index,
-      _servicioIndexOriginal: Number.isInteger(original) ? original : index,
-    };
-  });
+function revClientePublicoPorAliases(cliente = {}, aliases = []) {
+  for (const alias of aliases) {
+    const visible = clientePublicoPanel(cliente, alias);
+    if (Array.isArray(visible.servicios) && visible.servicios.length) return visible;
+  }
   return {
-    id: String(id || cliente.id || "").slice(0, 180),
-    nombre,
-    nombrePerfil: nombre,
-    nombre_norm: String(cliente.nombre_norm || "").trim().slice(0, 180),
-    telefono,
-    telefono_norm: String(cliente.telefono_norm || telefono).trim().slice(0, 40),
-    servicios,
+    nombre: String(cliente?.nombre || "").slice(0, 140),
+    nombrePerfil: String(cliente?.nombrePerfil || "").slice(0, 140),
+    nombre_norm: String(cliente?.nombre_norm || "").slice(0, 140),
+    telefono: String(cliente?.telefono || cliente?.telefono_norm || "").slice(0, 40),
+    telefono_norm: String(cliente?.telefono_norm || cliente?.telefono || "").slice(0, 40),
+    servicios: [],
   };
 }
 async function revRepairClientVendorSummary(doc, data) {
@@ -512,7 +472,7 @@ app.get("/rev/clientes", revAuth, async (req, res) => {
     if (reparaciones.length) Promise.allSettled(reparaciones).catch(() => {});
 
     const lista = Array.from(docs.values())
-      .map((d) => revClientePublicoPanel(d.id, revFiltrarClientePorAliases(d.data() || {}, aliases)))
+      .map((d) => ({ id: d.id, ...revClientePublicoPorAliases(d.data() || {}, aliases) }))
       .filter((cliente) => cliente.servicios.length > 0);
     res.set("Cache-Control", "no-store");
     res.json(lista);
@@ -539,7 +499,11 @@ app.get("/rev/precios", revAuth, async (req, res) => {
     res.set("Expires", "0");
     const live = await revLiveProfile(req.rev);
     const catalogo = await obtenerCatalogoSocio(db, live);
+    if (String(catalogo.origen || "").startsWith("respaldo")) {
+      return res.status(503).json({ error: "catalogo_no_configurado", detail: "La tarifa debe cargarse desde la configuración real antes de vender." });
+    }
     res.set("X-Catalogo-Tarifa", catalogo.tarifaId);
+    res.set("X-Catalogo-Origen", catalogo.origen || "firestore");
     res.json(catalogo.grupos);
   } catch (e) { console.error("rev/precios", e); res.status(500).json({ error: "server" }); }
 });
@@ -555,6 +519,9 @@ app.get("/rev/inventario", revAuth, async (req, res) => {
       obtenerCatalogoSocio(db, live),
       db.collection("inventario").get(),
     ]);
+    if (String(catalogo.origen || "").startsWith("respaldo")) {
+      return res.status(503).json({ error: "catalogo_no_configurado", detail: "Inventario bloqueado hasta cargar la tarifa real." });
+    }
     const agregados = new Map();
     invSnap.docs.forEach((doc) => {
       const d = doc.data() || {};
@@ -661,20 +628,39 @@ app.get("/rev/compras/mias", revAuth, async (req, res) => {
 app.get("/rev/avisos", revAuth, async (req, res) => {
   try {
     // ✅ Sin where+orderBy combinado (evita necesitar índice compuesto en Firestore)
-    const snap = await db.collection("avisos").orderBy("createdAt", "desc").limit(20).get();
-    const live = await revLiveProfile(req.rev);
-    const socioAliases = new Set(revSocioAliases(live, req.rev).map(revNormKey));
+    const [snap, live] = await Promise.all([
+      db.collection("avisos").orderBy("createdAt", "desc").limit(20).get(),
+      revLiveProfile(req.rev),
+    ]);
+    const socioNorm = normVendedor(live?.nombre_norm || req.rev?.nombre_norm || req.rev?.nombre || "");
+    const leidos = new Set(Array.isArray(live?.avisosLeidos) ? live.avisosLeidos.map(String) : []);
     const lista = snap.docs
       .map((d) => {
         const a = d.data();
         const ts = a.createdAt?._seconds ? a.createdAt._seconds * 1000 :
                    a.createdAt?.seconds ? a.createdAt.seconds * 1000 : Date.now();
-        return { id: d.id, texto: a.texto || "", autor: a.autor || "Admin", ts, activo: a.activo !== false, tipo:a.tipo||"aviso", imagenUrl:a.imagenUrl||"", promocionId:a.promocionId||"", destinatarios:Array.isArray(a.destinatarios)?a.destinatarios:[] };
+        return { id: d.id, texto: a.texto || "", autor: a.autor || "Admin", ts, activo: a.activo !== false, tipo:a.tipo||"aviso", imagenUrl:a.imagenUrl||"", promocionId:a.promocionId||"", destinatarios:Array.isArray(a.destinatarios)?a.destinatarios:[], leido:leidos.has(String(d.id)) };
       })
-      .filter((a) => a.activo && (!a.destinatarios.length || a.destinatarios.map(revNormKey).some((x) => socioAliases.has(x))))
+      .filter((a) => a.activo && (!a.destinatarios.length || a.destinatarios.map(normVendedor).includes(socioNorm)))
       .slice(0, 10);
+    res.set("Cache-Control", "no-store");
     res.json(lista);
   } catch (e) { console.error("rev/avisos", e); res.status(500).json({ error: "server" }); }
+});
+
+app.post("/rev/avisos/leido", revAuth, async (req, res) => {
+  try {
+    const id = String(req.body?.id || "").trim();
+    if (!id || id.length > 180) return res.status(400).json({ error: "aviso_invalido" });
+    const live = await revLiveProfile(req.rev, 0);
+    if (!live?.id) return res.status(404).json({ error: "socio_no_encontrado" });
+    const actuales = Array.isArray(live.avisosLeidos) ? live.avisosLeidos.map(String) : [];
+    const avisosLeidos = [...new Set([...actuales, id])].slice(-200);
+    await db.collection("revendedores").doc(String(live.id)).set({ avisosLeidos }, { merge: true });
+    _revLiveCache.delete(String(live.id));
+    res.set("Cache-Control", "no-store");
+    res.json({ ok: true, id });
+  } catch (e) { console.error("rev/avisos/leido", e); res.status(500).json({ error: "server" }); }
 });
 
 // ── SUGERENCIAS — buzón del revendedor, llega directo al admin por Telegram ──
@@ -775,9 +761,9 @@ function cleanTg(v, max = 300) {
 function destinoInfo(destinoRaw) {
   const destino = revNormKey(String(destinoRaw || "sublicuentas")).replace(/^geissel$/, "geisell");
   const destinos = {
-    relojes: { key: "relojes", label: "⌚ Relojes", env: "RELOJES_CHAT_ID" },
-    sublicuentas: { key: "sublicuentas", label: "🟣 Sublicuentas", env: "SUBLICUENTAS_CHAT_ID" },
-    geisell: { key: "geisell", label: "👤 Geisell", env: "GEISELL_CHAT_ID" },
+    relojes: { key: "relojes", label: "⌚ Relojes", fallback: "411539492", env: "RELOJES_CHAT_ID" },
+    sublicuentas: { key: "sublicuentas", label: "🟣 Sublicuentas", fallback: "5728675990", env: "SUBLICUENTAS_CHAT_ID" },
+    geisell: { key: "geisell", label: "👤 Geisell", fallback: "", env: "GEISELL_CHAT_ID" },
   };
   const info = destinos[destino];
   if (!info) {
@@ -789,29 +775,13 @@ function destinoInfo(destinoRaw) {
 }
 async function getDestinoChatIds(destinoRaw) {
   const info = destinoInfo(destinoRaw);
-  const envIds = String(process.env[info.env] || "").split(",").map((s) => s.trim()).filter((s) => /^\d+$/.test(s));
+  const envIds = String(process.env[info.env] || "").split(",").map((s) => s.trim()).filter(Boolean);
   if (envIds.length) return [envIds[0]]; // destinatario específico: nunca abanicar un comprobante a varios chats
   if (info.key === "sublicuentas") {
-    const superIds = String(process.env.SUPER_ADMIN || "").split(",").map((s) => s.trim()).filter((s) => /^\d+$/.test(s));
+    const superIds = String(process.env.SUPER_ADMIN || "").split(",").map((s) => s.trim()).filter(Boolean);
     if (superIds.length) return [superIds[0]];
   }
-  // Respaldo sin IDs incrustados en el código: busca la configuración viva.
-  try {
-    const revSnap = await db.collection("revendedores").where("nombre_norm", "==", info.key).limit(1).get();
-    if (!revSnap.empty) {
-      const tg = String(revSnap.docs[0].data()?.telegramId || "").trim();
-      if (/^\d+$/.test(tg)) return [tg];
-    }
-    const admins = await db.collection("admins").get();
-    for (const doc of admins.docs) {
-      const a = doc.data() || {};
-      const key = revNormKey(a.nombre_norm || a.nombre || a.usuario || "");
-      const tg = String(a.telegramId || (/^\d+$/.test(doc.id) ? doc.id : "")).trim();
-      if ((info.key === "sublicuentas" || key === info.key) && a.activo !== false && /^\d+$/.test(tg)) return [tg];
-    }
-  } catch (e) {
-    console.error("getDestinoChatIds", info.key, e?.message || e);
-  }
+  if (info.fallback) return [info.fallback];
   const err = new Error(`destino_sin_chat_id:${info.key}`);
   err.status = 503; err.publicError = "destino_sin_configurar";
   throw err;
@@ -1007,10 +977,23 @@ app.post("/rev/compra", revAuth, async (req, res) => {
     if (!revCap(live, "canBuy", !esRevSoloCatalogo(req.rev))) return res.status(403).json({ error: "sin_permiso_comprar" });
     const b = req.body || {};
     const socio = live.nombre || live.nombre_norm || req.rev.nombre || req.rev.nombre_norm || "Revendedor";
+    const requestId = cleanTg(b.requestId, 120);
+    const requestDocId = requestId ? `web_${crypto.createHash("sha256").update(`${live.id || live.nombre_norm || "socio"}|${requestId}`).digest("hex").slice(0, 40)}` : "";
+    const requestRef = requestDocId ? db.collection("compras").doc(requestDocId) : null;
+    if (requestRef) {
+      const existente = await requestRef.get();
+      if (existente.exists) {
+        const d = existente.data() || {};
+        return res.json({ ok:true, id:existente.id, duplicate:true, estado:d.estado||"pendiente", destino:d.destino||"", destinoLabel:d.destinoLabel||"", totalCombo:Number(d.totalCombo||0), descuentoCombo:Number(d.descuentoCombo||0) });
+      }
+    }
     const destino = destinoInfo(b.destino);
     // El navegador nunca decide el precio final. Se vuelve a consultar la
     // tarifa del socio autenticado para impedir valores viejos o manipulados.
     const catalogoSocio = await obtenerCatalogoSocio(db, live);
+    if (String(catalogoSocio.origen || "").startsWith("respaldo")) {
+      return res.status(503).json({ error: "catalogo_no_configurado", detail: "La compra se bloqueó porque la tarifa real no está configurada." });
+    }
 
     const productosRaw = Array.isArray(b.productos) && b.productos.length
       ? b.productos.slice(0, 20)
@@ -1103,6 +1086,7 @@ app.post("/rev/compra", revAuth, async (req, res) => {
 
     const doc = {
       tipo: "compra",
+      requestId,
       servicio,
       productos,
       comboCantidad: productos.length,
@@ -1147,7 +1131,22 @@ app.post("/rev/compra", revAuth, async (req, res) => {
       createdAt: new Date(),
       estadoUpdatedAt: new Date(),
     };
-    const ref = await db.collection("compras").add(doc);
+    let ref;
+    if (requestRef) {
+      ref = requestRef;
+      try {
+        await ref.create(doc);
+      } catch (createErr) {
+        if (createErr?.code === 6 || createErr?.code === "already-exists" || /already exists/i.test(String(createErr?.message || ""))) {
+          const existente = await ref.get();
+          const d = existente.data() || {};
+          return res.json({ ok:true, id:ref.id, duplicate:true, estado:d.estado||"pendiente", destino:d.destino||"", destinoLabel:d.destinoLabel||"", totalCombo:Number(d.totalCombo||0), descuentoCombo:Number(d.descuentoCombo||0) });
+        }
+        throw createErr;
+      }
+    } else {
+      ref = await db.collection("compras").add(doc);
+    }
 
     const productoLineas = productos.flatMap((p, i) => {
       const precio = p.precioCatalogo === null ? "Por comisión" : `Lps. ${p.precioCatalogo}`;
@@ -1199,6 +1198,36 @@ app.post("/rev/compra", revAuth, async (req, res) => {
   }
 });
 
+app.get("/rev/sugerencias/mias", revAuth, async (req, res) => {
+  try {
+    const live = await revLiveProfile(req.rev);
+    const aliases = revSocioAliases(live, req.rev);
+    const snaps = await Promise.all(aliases.map(alias =>
+      db.collection("sugerencias").where("nombre_norm", "==", alias).get()
+    ));
+    const docs = new Map();
+    snaps.forEach(snap => snap.docs.forEach(doc => docs.set(doc.id, doc)));
+    const items = Array.from(docs.values()).map(doc => {
+      const d = doc.data() || {};
+      return {
+        id: doc.id,
+        texto: String(d.texto || "").slice(0, 4000),
+        destino: String(d.destino || ""),
+        destinoLabel: String(d.destinoLabel || d.destino || "Equipo"),
+        estado: String(d.estado || (d.respuesta ? "respondida" : "enviada")),
+        respuesta: String(d.respuesta || d.respuestaTexto || "").slice(0, 4000),
+        createdAt: d.createdAt || null,
+        respondedAt: d.respondedAt || d.respuestaAt || null,
+      };
+    }).sort((a,b) => {
+      const ms = (v) => v?.toMillis ? v.toMillis() : (v?._seconds || v?.seconds) ? Number(v._seconds || v.seconds) * 1000 : new Date(v || 0).getTime() || 0;
+      return ms(b.createdAt) - ms(a.createdAt);
+    }).slice(0, 60);
+    res.set("Cache-Control", "no-store");
+    res.json(items);
+  } catch (e) { console.error("rev/sugerencias/mias", e); res.status(500).json({ error: "server" }); }
+});
+
 app.post("/rev/sugerencia", revAuth, async (req, res) => {
   try {
     const live = await revLiveProfile(req.rev);
@@ -1208,17 +1237,17 @@ app.post("/rev/sugerencia", revAuth, async (req, res) => {
     const nombre = req.rev.nombre || req.rev.nombre_norm || "Revendedor";
 
     const destino = (req.body.destino || "sublicuentas").toString().trim();
-    const infoDestino = destinoInfo(destino);
-    const quien = infoDestino.label;
+    const destinoCfg = destinoInfo(destino);
+    const quien = destinoCfg.label;
 
     await db.collection("sugerencias").add({
       texto, nombre, nombre_norm: req.rev.nombre_norm || "",
-      destino, createdAt: new Date(),
+      destino: destinoCfg.key, destinoLabel: destinoCfg.label, estado: "enviada", createdAt: new Date(),
     });
 
     const aviso = `💬 *Nueva sugerencia* (${quien})\n👤 ${nombre}\n\n${texto}`;
-    const ids = await getDestinoChatIds(destino);
-    await sendTelegramMessage(ids[0], aviso);
+    const ids = await getDestinoChatIds(destinoCfg.key);
+    await Promise.all(ids.map((id) => sendTelegramMessage(id, aviso)));
 
     res.json({ ok: true });
   } catch (e) { console.error("rev/sugerencia", e); res.status(500).json({ error: "server" }); }

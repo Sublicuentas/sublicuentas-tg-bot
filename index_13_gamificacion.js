@@ -98,7 +98,7 @@ module.exports = function mountGamificacion(app) {
         const ventas = ventasPorSocio[k] || 0;
         const ren = renovaciones.filter(x => String(x.socio_norm || "").toLowerCase() === k);
         const cursos = Array.isArray(r.cursosCompletados) ? r.cursosCompletados.length : 0;
-        return { id: doc.id, nombre: r.nombre || k, nombreMostrar:r.nombreMostrar || r.nombre || k, nombre_norm:k, avatar:r.avatarData || "", ventas, clientes:clientesIdsPorSocio[k]?.size || 0, renovaciones:ren.length, cursos, racha:rachaDias(ren), nivel:nivel(ventas), score:ventas*100 + ren.length*25 + cursos*50 };
+        return { id: doc.id, nombre: r.nombre || k, nombreMostrar:r.nombreMostrar || r.nombre || k, nombre_norm:k, avatar:r.avatarData || "", ventas, clientes:clientesIdsPorSocio[k]?.size || 0, renovaciones:ren.length, cursos, cursosCompletados:Array.isArray(r.cursosCompletados)?r.cursosCompletados.map(String).slice(0,100):[], racha:rachaDias(ren), nivel:nivel(ventas), score:ventas*100 + ren.length*25 + cursos*50 };
       }).sort((a,b) => b.ventas-a.ventas || b.score-a.score || a.nombre.localeCompare(b.nombre));
       ranking.forEach((x,i) => x.posicion=i+1);
       const me = ranking.find(x => x.nombre_norm === String(req.rev.nombre_norm || "").toLowerCase()) || null;

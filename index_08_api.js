@@ -42,6 +42,7 @@ const {
   normVendedor,
   vendedorEfectivoServicio,
   filtrarClienteParaVendedor,
+  clientePublicoPanel,
 } = require("./index_17_vendedores_servicio");
 
 const {
@@ -110,25 +111,7 @@ const wrap = (fn) => (req, res) => Promise.resolve(fn(req, res)).catch((e) => {
 // APP
 // ===============================
 const app = express();
-app.disable("x-powered-by");
-const API_ALLOWED_ORIGINS = String(process.env.PANEL_ALLOWED_ORIGINS || process.env.API_ALLOWED_ORIGINS || "")
-  .split(",").map((x) => x.trim()).filter(Boolean);
-app.use(cors({
-  origin(origin, callback) {
-    if (!origin || !API_ALLOWED_ORIGINS.length || API_ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
-    return callback(null, false);
-  },
-  credentials: false,
-  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization"],
-  maxAge: 86400,
-}));
-app.use((req, res, next) => {
-  res.set("X-Content-Type-Options", "nosniff");
-  res.set("Referrer-Policy", "no-referrer");
-  if (req.path.startsWith("/rev/")) res.set("Cache-Control", "no-store, max-age=0");
-  next();
-});
+app.use(cors());
 app.use(express.json({ limit: "1mb" }));
 
 // Healthcheck (público, lo usa Render para keepalive)
@@ -375,27 +358,6 @@ const REV_JWT_SECRET = getJwtSecret();
 app.post("/rev/login", revLoginIpLimiter, createRevLoginHandler({ db, bot, SUPER_ADMIN }));
 
 // CLIENTES del revendedor autenticado
-// DTO mínimo: la web de socios no necesita claves, PIN, correos de cuentas,
-// URLs IPTV ni ningún otro secreto guardado en servicios[].
-function revClientePublicoPanel(id, cliente = {}) {
-  const nombre = String(cliente.nombrePerfil || cliente.nombre || cliente.nombre_norm || "Cliente").trim().slice(0, 180);
-  const telefono = String(cliente.telefono || cliente.telefono_norm || "").trim().slice(0, 40);
-  const servicios = (Array.isArray(cliente.servicios) ? cliente.servicios : []).map((s = {}, index) => {
-    const servicio = String(s.plataforma || s.servicio || s.nombre || "Servicio").trim().slice(0, 160);
-    const fecha = s.fechaRenovacion ?? s.vencimiento ?? s.vence ?? s.fechaFin ?? null;
-    const precioRaw = s.precio;
-    const precioNum = precioRaw == null || String(precioRaw).trim() === "" ? NaN : Number(precioRaw);
-    const original = Number(s.servicioIndexOriginal ?? s._servicioIndexOriginal ?? index);
-    return {
-      servicio, fechaRenovacion: fecha,
-      precio: Number.isFinite(precioNum) ? precioNum : null,
-      compraId: String(s.compraId || "").slice(0, 180),
-      servicioIndexOriginal: Number.isInteger(original) ? original : index,
-      _servicioIndexOriginal: Number.isInteger(original) ? original : index,
-    };
-  });
-  return { id: String(id || cliente.id || "").slice(0, 180), nombre, nombrePerfil: nombre, nombre_norm: String(cliente.nombre_norm || "").trim().slice(0, 180), telefono, telefono_norm: String(cliente.telefono_norm || telefono).trim().slice(0, 40), servicios };
-}
 app.get("/rev/clientes", revAuth, async (req, res) => {
   try {
     const vendedorNormRaw = normVendedor(req.rev.nombre_norm || req.rev.nombre || "");
@@ -427,7 +389,7 @@ app.get("/rev/clientes", revAuth, async (req, res) => {
       });
     }
     const lista = Array.from(docs.values())
-      .map((d) => revClientePublicoPanel(d.id, filtrarClienteParaVendedor(d.data() || {}, vendedorNorm)))
+      .map((d) => ({ id: d.id, ...clientePublicoPanel(d.data() || {}, vendedorNorm) }))
       .filter((cliente) => cliente.servicios.length > 0);
     res.json(lista);
   } catch (e) { console.error("rev/clientes", e); res.status(500).json({ error: "server" }); }
@@ -441,7 +403,11 @@ app.get("/rev/precios", revAuth, async (req, res) => {
     res.set("Pragma", "no-cache");
     res.set("Expires", "0");
     const catalogo = await obtenerCatalogoSocio(db, req.rev);
+    if (String(catalogo.origen || "").startsWith("respaldo")) {
+      return res.status(503).json({ error: "catalogo_no_configurado", detail: "La tarifa debe cargarse desde la configuración real antes de vender." });
+    }
     res.set("X-Catalogo-Tarifa", catalogo.tarifaId);
+    res.set("X-Catalogo-Origen", catalogo.origen || "firestore");
     res.json(catalogo.grupos);
   } catch (e) { console.error("rev/precios", e); res.status(500).json({ error: "server" }); }
 });

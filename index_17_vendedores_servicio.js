@@ -168,6 +168,43 @@ function filtrarClienteParaVendedor(cliente = {}, vendedor = "") {
   };
 }
 
+function valorSeguroTexto(value, max = 160) {
+  return clean(value).slice(0, max);
+}
+
+function servicioPublicoPanel(servicio = {}, indexOriginal = 0) {
+  const original = Number.isInteger(servicio?.servicioIndexOriginal)
+    ? servicio.servicioIndexOriginal
+    : Number.isInteger(servicio?._servicioIndexOriginal)
+      ? servicio._servicioIndexOriginal
+      : indexOriginal;
+  // Datos mínimos para Clientes/Renovación. Deliberadamente NO enviamos
+  // correo de cuenta, clave, PIN, URL IPTV, credenciales ni notas internas.
+  return {
+    plataforma: valorSeguroTexto(servicio?.plataforma || servicio?.servicio || servicio?.nombre || "Servicio", 120),
+    servicio: valorSeguroTexto(servicio?.servicio || servicio?.plataforma || servicio?.nombre || "Servicio", 120),
+    nombre: valorSeguroTexto(servicio?.nombre || servicio?.servicio || servicio?.plataforma || "Servicio", 120),
+    fechaRenovacion: servicio?.fechaRenovacion || servicio?.vencimiento || servicio?.vence || servicio?.fechaFin || null,
+    precio: servicio?.precio == null || servicio?.precio === "" ? null : servicio.precio,
+    compraId: valorSeguroTexto(servicio?.compraId || "", 180),
+    servicioIndexOriginal: original,
+    _servicioIndexOriginal: original,
+  };
+}
+
+function clientePublicoPanel(cliente = {}, vendedor = "") {
+  const visible = filtrarClienteParaVendedor(cliente, vendedor);
+  return {
+    nombre: valorSeguroTexto(visible?.nombre || "", 140),
+    nombrePerfil: valorSeguroTexto(visible?.nombrePerfil || "", 140),
+    nombre_norm: valorSeguroTexto(visible?.nombre_norm || "", 140),
+    telefono: valorSeguroTexto(visible?.telefono || visible?.telefono_norm || "", 40),
+    telefono_norm: valorSeguroTexto(visible?.telefono_norm || visible?.telefono || "", 40),
+    servicios: (Array.isArray(visible?.servicios) ? visible.servicios : []).map(servicioPublicoPanel),
+  };
+}
+
+
 module.exports = {
   normVendedor,
   canonicalVendedor,
@@ -178,4 +215,6 @@ module.exports = {
   servicioPerteneceAVendedor,
   clientePerteneceAVendedor,
   filtrarClienteParaVendedor,
+  servicioPublicoPanel,
+  clientePublicoPanel,
 };

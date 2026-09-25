@@ -128,11 +128,11 @@ function agruparCatalogo(rows = []) {
       s: p.variante || "",
       p: p.precio == null ? null : Number(p.precio),
       d: p.detalle || "",
-      entregaTipo: String(p.entregaTipo || p.entrega_tipo || ""),
-      entregaCanal: String(p.entregaCanal || p.entrega_canal || "manual"),
       stockModo: String(p.stockModo || p.stock_modo || "auto"),
       stockEstado: String(p.stockEstado || p.stock_estado || ""),
       stockCantidad: p.stockCantidad == null || p.stockCantidad === "" ? null : Number(p.stockCantidad),
+      entregaTipo: String(p.entregaTipo || p.entrega_tipo || "").trim(),
+      entregaCanal: String(p.entregaCanal || p.entrega_canal || "manual").trim(),
     });
   }
   return grupos;
