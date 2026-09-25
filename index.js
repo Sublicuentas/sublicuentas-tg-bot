@@ -1,6 +1,7 @@
 const { startBotPollingSafe, db, admin, cacheInvalidatePrefix } = require("./index_01_core");
 const { consolidarClientesDuplicadosPorTelefono } = require("./index_19_consolidar_clientes_telefono");
 const { migrarNanotechClientes } = require("./index_21_migracion_nanotech");
+const { startTelegramOutboxWorker } = require("./index_22_telegram_outbox");
 
 require("./index_02_utils_roles");
 require("./index_03_clientes_crm");
@@ -44,6 +45,7 @@ keepAliveInicial.unref?.();
 keepAliveRecurrente.unref?.();
 
 (async () => {
+  startTelegramOutboxWorker();
   try {
     const resultado = await consolidarClientesDuplicadosPorTelefono({ db, admin });
     cacheInvalidatePrefix?.("clientes:");

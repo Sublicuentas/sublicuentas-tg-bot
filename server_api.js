@@ -30,6 +30,7 @@ const {
 
 // Reusa Firebase ya inicializado en el core (no arranca el bot)
 const { db, PORT, bot, SUPER_ADMIN, PLATAFORMAS } = require("./index_01_core");
+const { enqueueTelegramJob, isUnauthorizedTelegramError } = require("./index_22_telegram_outbox");
 const { registrarEventoSorteosSeguro } = require("./index_14_sorteos");
 const {
   obtenerCatalogoSocio,
@@ -62,9 +63,9 @@ app.use(cors());
 app.use(express.json({ limit: "15mb" }));
 
 // keepalive / health (para que Render lo mantenga vivo)
-const PANEL_API_VERSION = "socios-20260920-1";
+const PANEL_API_VERSION = "socios-20260925-tg-outbox-1";
 app.get("/", (_req, res) => res.type("text/plain").send(`Sublicuentas Panel API OK ${PANEL_API_VERSION}`));
-app.get("/rev/ping", (_req, res) => res.json({ v: PANEL_API_VERSION, ticketsBridge: true, gemini: !!process.env.GEMINI_API_KEY, anthropic: !!process.env.ANTHROPIC_API_KEY, storageBuckets: STORAGE_BUCKET_CANDIDATES }));
+app.get("/rev/ping", (_req, res) => res.json({ v: PANEL_API_VERSION, ticketsBridge: true, telegramOutbox: true, gemini: !!process.env.GEMINI_API_KEY, anthropic: !!process.env.ANTHROPIC_API_KEY, storageBuckets: STORAGE_BUCKET_CANDIDATES }));
 app.get("/health", (_req, res) => res.json({ ok: true, version: PANEL_API_VERSION, ts: Date.now() }));
 
 // ── perfil/permisos vivos del socio ──
@@ -633,28 +634,52 @@ async function getAdminChatIds() {
   return String(process.env.SUPER_ADMIN || "").split(",").map((s) => s.trim()).filter(Boolean);
 }
 async function sendTelegramMessage(chatId, text) {
-  const token = process.env.BOT_TOKEN;
-  if (!token) return;
+  const token = String(process.env.BOT_TOKEN || "").trim();
+  if (!token) {
+    await enqueueTelegramJob({type:"message",chatId,text,parseMode:"Markdown",source:"panel-api"});
+    return true;
+  }
   try {
-    await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+    const r = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ chat_id: chatId, text, parse_mode: "Markdown" }),
     });
-  } catch (e) { console.error("sendTelegramMessage", e.message); }
+    if (r.ok) return true;
+    const raw=await r.text().catch(()=>"");
+    if (r.status===401 || /unauthorized/i.test(raw)) {
+      await enqueueTelegramJob({type:"message",chatId,text,parseMode:"Markdown",source:"panel-api-token-fallback"});
+      return true;
+    }
+    console.error("sendTelegramMessage", r.status, raw);
+    return false;
+  } catch (e) {
+    console.error("sendTelegramMessage", e.message);
+    try { await enqueueTelegramJob({type:"message",chatId,text,parseMode:"Markdown",source:"panel-api-network-fallback"}); return true; } catch (_) { return false; }
+  }
 }
 
 async function sendTelegramPhoto(chatId, photoUrl, caption) {
-  const token = process.env.BOT_TOKEN;
-  if (!token || !photoUrl) return false;
+  const token = String(process.env.BOT_TOKEN || "").trim();
+  if (!photoUrl) return false;
+  if (!token) {
+    await enqueueTelegramJob({type:"photo",chatId,photoUrl,text:caption,parseMode:"Markdown",source:"panel-api"});
+    return true;
+  }
   try {
     const r = await fetch(`https://api.telegram.org/bot${token}/sendPhoto`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ chat_id: chatId, photo: photoUrl, caption, parse_mode: "Markdown" }),
     });
-    if (!r.ok) console.error("sendTelegramPhoto", await r.text().catch(() => r.statusText));
-    return r.ok;
+    if (r.ok) return true;
+    const raw=await r.text().catch(()=>r.statusText||"");
+    if (r.status===401 || /unauthorized/i.test(raw)) {
+      await enqueueTelegramJob({type:"photo",chatId,photoUrl,text:caption,parseMode:"Markdown",source:"panel-api-token-fallback"});
+      return true;
+    }
+    console.error("sendTelegramPhoto",r.status,raw);
+    return false;
   } catch (e) { console.error("sendTelegramPhoto", e.message); return false; }
 }
 
@@ -669,8 +694,14 @@ async function sendTelegramPhotoBuffer(chatId, imageObj, caption) {
     fd.append("parse_mode", "Markdown");
     fd.append("photo", new Blob([imageObj.buffer], { type: imageObj.contentType || "image/jpeg" }), imageObj.filename || "comprobante.jpg");
     const r = await fetch(`https://api.telegram.org/bot${token}/sendPhoto`, { method: "POST", body: fd });
-    if (!r.ok) console.error("sendTelegramPhotoBuffer", await r.text().catch(() => r.statusText));
-    return r.ok;
+    if (r.ok) return true;
+    const raw=await r.text().catch(()=>r.statusText||"");
+    if (r.status===401 || /unauthorized/i.test(raw)) {
+      await enqueueTelegramJob({type:"message",chatId,text:caption,parseMode:"Markdown",source:"panel-api-buffer-token-fallback"});
+      return true;
+    }
+    console.error("sendTelegramPhotoBuffer",r.status,raw);
+    return false;
   } catch (e) { console.error("sendTelegramPhotoBuffer", e.message); return false; }
 }
 
@@ -1376,7 +1407,8 @@ function revTelegramFriendlyError(err) {
   const description = String(err?.response?.body?.description || err?.message || err || "Error desconocido de Telegram").trim();
   const lower = description.toLowerCase();
   let code = "telegram_error";
-  if (lower.includes("bot was blocked") || lower.includes("blocked by the user")) code = "bot_bloqueado";
+  if (lower.includes("unauthorized")) code = "bot_token_invalido";
+  else if (lower.includes("bot was blocked") || lower.includes("blocked by the user")) code = "bot_bloqueado";
   else if (lower.includes("chat not found")) code = "chat_no_encontrado";
   else if (lower.includes("user is deactivated")) code = "usuario_desactivado";
   else if (lower.includes("forbidden")) code = "telegram_prohibido";
@@ -1388,13 +1420,23 @@ async function revSendTicketTelegramOne(chatId, payload = {}) {
   const imageUrl = String(payload.imageUrl || "").trim();
   const replyMarkup = payload.replyMarkup && typeof payload.replyMarkup === "object" ? payload.replyMarkup : undefined;
   const opts = { parse_mode:"HTML", ...(replyMarkup ? { reply_markup:replyMarkup } : {}) };
-  if (imageUrl) {
-    const msg = await bot.sendPhoto(chatId, imageUrl, { ...opts, caption:text.slice(0,1000) });
+  try {
+    if (imageUrl) {
+      const msg = await bot.sendPhoto(chatId, imageUrl, { ...opts, caption:text.slice(0,1000) });
+      return { ok:true, messageId:Number(msg?.message_id || 0) };
+    }
+    const msg = await bot.sendMessage(chatId, text, { ...opts, disable_web_page_preview:true });
     return { ok:true, messageId:Number(msg?.message_id || 0) };
+  } catch (e) {
+    if (!isUnauthorizedTelegramError(e)) throw e;
+    const job = await enqueueTelegramJob({
+      type:imageUrl?"photo":"message", chatId, photoUrl:imageUrl, text, parseMode:"HTML",
+      replyMarkup, source:"sublichat-ticket-aviso", reference:String(payload.reference||""),
+    });
+    return { ok:true, queued:true, jobId:job.id, via:"bot_principal" };
   }
-  const msg = await bot.sendMessage(chatId, text, { ...opts, disable_web_page_preview:true });
-  return { ok:true, messageId:Number(msg?.message_id || 0) };
 }
+
 app.post("/rev/admin/tickets-telegram", revAdminAuth, async (req, res) => {
   try {
     const body = req.body || {};

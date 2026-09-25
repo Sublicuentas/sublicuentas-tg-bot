@@ -39,6 +39,7 @@ const {
   previsualizarVendedoresPorServicio,
   aplicarVendedoresPorServicio,
 } = require("./index_18_migracion_vendedores_servicio");
+const { enqueueTelegramJob, waitTelegramJob, isUnauthorizedTelegramError } = require("./index_22_telegram_outbox");
 
 const PRECIOS_COLLECTION = "precios";
 const PRECIOS_ESPECIALES_COLLECTION = "precios_especiales";
@@ -209,7 +210,8 @@ function telegramErrorInfo(e) {
   const motivo = clean(body?.description || e?.message || "Error desconocido de Telegram", 400);
   let diagnostico = "Telegram rechazó el envío.";
   const m = motivo.toLowerCase();
-  if (m.includes("chat not found")) diagnostico = "ID incorrecto o esa persona todavía no inició conversación con ESTE bot. Pídale enviar /id al bot y compare el número.";
+  if (codigo === 401 || m.includes("unauthorized")) diagnostico = "El ID no es el problema: el BOT_TOKEN de este servicio no está autorizado por Telegram. Se intentará usar el bot principal automáticamente.";
+  else if (m.includes("chat not found")) diagnostico = "ID incorrecto o esa persona todavía no inició conversación con ESTE bot. Pídale enviar /id al bot y compare el número.";
   else if (m.includes("bot was blocked") || m.includes("blocked by the user")) diagnostico = "La persona bloqueó el bot. Debe desbloquearlo y enviar /start.";
   else if (m.includes("user is deactivated")) diagnostico = "La cuenta de Telegram está desactivada.";
   else if (m.includes("forbidden")) diagnostico = "Telegram no permite que el bot escriba a ese usuario. Revise bloqueo/inicio del bot.";
@@ -295,7 +297,7 @@ module.exports = function mountAdminPanel(app) {
     const premiumEnabled=hasPremiumIcons(promoIcons)||Boolean(premiumIcons.platformTag(p.plataforma));
     const captionPremium=captionPromo(p,promoIcons);
     const captionRegular=premiumEnabled?captionPromo(p,{},false):captionPremium;
-    let enviados=0,fallidos=0,fallbackTexto=0,fallbackEmoji=0;const sinTelegram=[],erroresTelegram=[];
+    let enviados=0,fallidos=0,fallbackTexto=0,fallbackEmoji=0,encolados=0;const sinTelegram=[],erroresTelegram=[];
 
     // Telegram se procesa en lotes pequeños. Los custom emoji Premium se
     // intentan primero; si Telegram los rechaza, el envío se recupera con
@@ -305,22 +307,51 @@ module.exports = function mountAdminPanel(app) {
       const nombre=r.nombre||r.nombre_norm||r.id;
       if(!chatId){sinTelegram.push(nombre);erroresTelegram.push({nombre,telegramId:"",codigo:0,motivo:"Sin Telegram ID",diagnostico:"Agregue el ID de Telegram en la ficha del vendedor."});return {ok:false};}
 
+      const queuePrimaryBot=async()=>{
+        const job=await enqueueTelegramJob({
+          type:p.imagenUrl?"photo":"message",
+          chatId,
+          photoUrl:p.imagenUrl||"",
+          text:captionRegular,
+          parseMode:"HTML",
+          source:"panel-socios-promocion",
+          reference:p.id,
+        });
+        return {ok:true,queued:true,jobId:job.id};
+      };
+      const recoverUnauthorized=async(error)=>{
+        if(!isUnauthorizedTelegramError(error)) return null;
+        console.warn("Telegram directo sin autorización en Panel API; usando bot principal por outbox",r.id,chatId);
+        return queuePrimaryBot();
+      };
       const sendTextSmart=async()=>{
         let premiumError=null;
         if(premiumEnabled){
           try{await bot.sendMessage(chatId,captionPremium,{parse_mode:"HTML"});return {ok:true,premium:true};}
-          catch(e){premiumError=e;}
+          catch(e){
+            const recovered=await recoverUnauthorized(e);
+            if(recovered)return recovered;
+            premiumError=e;
+          }
         }
         try{await bot.sendMessage(chatId,captionRegular,{parse_mode:"HTML"});return {ok:true,emojiFallback:Boolean(premiumEnabled)};}
-        catch(e){throw e||premiumError;}
+        catch(e){
+          const recovered=await recoverUnauthorized(e);
+          if(recovered)return recovered;
+          throw e||premiumError;
+        }
       };
 
       if(p.imagenUrl){
         if(premiumEnabled){
           try{await bot.sendPhoto(chatId,p.imagenUrl,{caption:captionPremium,parse_mode:"HTML"});return {ok:true,premium:true};}
           catch(_premiumPhotoError){
+            const recoveredPremium=await recoverUnauthorized(_premiumPhotoError);
+            if(recoveredPremium)return recoveredPremium;
             try{await bot.sendPhoto(chatId,p.imagenUrl,{caption:captionRegular,parse_mode:"HTML"});return {ok:true,emojiFallback:true};}
             catch(_regularPhotoError){
+              const recoveredRegular=await recoverUnauthorized(_regularPhotoError);
+              if(recoveredRegular)return recoveredRegular;
               try{const result=await sendTextSmart();return {...result,fallback:true};}
               catch(textError){
                 const info=telegramErrorInfo(textError);
@@ -333,6 +364,8 @@ module.exports = function mountAdminPanel(app) {
         }
         try{await bot.sendPhoto(chatId,p.imagenUrl,{caption:captionRegular,parse_mode:"HTML"});return {ok:true};}
         catch(_photoError){
+          const recoveredPhoto=await recoverUnauthorized(_photoError);
+          if(recoveredPhoto)return recoveredPhoto;
           try{const result=await sendTextSmart();return {...result,fallback:true};}
           catch(textError){
             const info=telegramErrorInfo(textError);
@@ -354,15 +387,15 @@ module.exports = function mountAdminPanel(app) {
 
     for(let i=0;i<targets.length;i+=5){
       const resultados=await Promise.all(targets.slice(i,i+5).map(enviarUno));
-      for(const r of resultados){if(r.ok){enviados+=1;if(r.fallback)fallbackTexto+=1;if(r.emojiFallback)fallbackEmoji+=1}else fallidos+=1;}
+      for(const r of resultados){if(r.ok){enviados+=1;if(r.queued)encolados+=1;if(r.fallback)fallbackTexto+=1;if(r.emojiFallback)fallbackEmoji+=1}else fallidos+=1;}
     }
 
-    await ref.set({estado:"publicada",enviados,fallidos,sinTelegram,fallbackTexto,fallbackEmoji,premiumEmojis:premiumEnabled,erroresTelegram,sentAt:admin.firestore.FieldValue.serverTimestamp(),updatedAt:admin.firestore.FieldValue.serverTimestamp()},{merge:true});
+    await ref.set({estado:"publicada",enviados,fallidos,encolados,sinTelegram,fallbackTexto,fallbackEmoji,premiumEmojis:premiumEnabled,erroresTelegram,sentAt:admin.firestore.FieldValue.serverTimestamp(),updatedAt:admin.firestore.FieldValue.serverTimestamp()},{merge:true});
     let avisoGuardado=true;
     try{
       await db.collection("avisos").add({texto:`${p.titulo}\n${p.plataforma} · L ${Number(p.precioPromo)||0}\n${p.texto||""}`.trim(),autor:"Sublicuentas",tipo:"promocion_socios",promocionId:ref.id,imagenUrl:p.imagenUrl||"",destinatarios:p.destinatarios||[],activo:true,createdAt:admin.firestore.FieldValue.serverTimestamp()});
     }catch(e){avisoGuardado=false;console.error("promo aviso fail",ref.id,e.message)}
-    ok(res,{id:ref.id,enviados,fallidos,sinTelegram,fallbackTexto,fallbackEmoji,premiumEmojis:premiumEnabled,erroresTelegram,avisoGuardado});
+    ok(res,{id:ref.id,enviados,fallidos,encolados,sinTelegram,fallbackTexto,fallbackEmoji,premiumEmojis:premiumEnabled,erroresTelegram,avisoGuardado});
   }));
   /* ═══════════════ PRECIOS ═══════════════
      ⚠️ CORRECCIÓN (ago-2026): la primera versión de esto asumía que los
@@ -695,6 +728,27 @@ module.exports = function mountAdminPanel(app) {
       await bot.sendMessage(chatId, `✅ Prueba Sublicuentas\nHola ${nombre}. Su Telegram está correctamente vinculado para recibir avisos y promociones.`);
       return ok(res,{nombre,telegramId:chatId,telegramNombre:[chat?.first_name,chat?.last_name].filter(Boolean).join(" "),username:chat?.username||"",diagnostico:"Conexión correcta. Este usuario puede recibir mensajes del bot."});
     } catch (e) {
+      if (isUnauthorizedTelegramError(e)) {
+        const job = await enqueueTelegramJob({
+          type:"message", chatId,
+          text:`✅ Prueba Sublicuentas\nHola ${nombre}. Su Telegram está correctamente vinculado para recibir avisos y promociones.`,
+          source:"sublichat-probar-tg", reference:ref.id,
+        });
+        const result = await waitTelegramJob(job.id, 7000);
+        if (result.status === "sent") {
+          return ok(res,{nombre,telegramId:chatId,via:"bot_principal",diagnostico:"Conexión correcta. El Panel API tenía un BOT_TOKEN distinto, así que la prueba fue enviada automáticamente por el bot principal."});
+        }
+        if (result.status === "failed") {
+          const motivo=clean(result.error||"Telegram rechazó el envío.",400);
+          const diagnostico=result.errorKind==="bot_token_invalido"
+            ? "El BOT_TOKEN del bot principal también es inválido. Actualice BOT_TOKEN en el servicio principal de Telegram."
+            : result.errorKind==="chat_no_encontrado"
+              ? "El ID no corresponde a un chat disponible para este bot, o el usuario aún no inició /start."
+              : "El bot principal recibió la solicitud, pero Telegram rechazó el mensaje.";
+          return res.status(422).json({ok:false,error:motivo,nombre,telegramId:chatId,codigo:Number(result.errorCode||0),diagnostico});
+        }
+        return ok(res,{nombre,telegramId:chatId,queued:true,via:"bot_principal",diagnostico:"El BOT_TOKEN del Panel API no está autorizado. La prueba quedó enviada al bot principal y se procesará en segundos."});
+      }
       const info = telegramErrorInfo(e);
       return res.status(422).json({ ok:false,error:info.motivo,nombre,telegramId:chatId,...info });
     }
