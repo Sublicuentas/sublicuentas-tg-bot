@@ -16,16 +16,43 @@ const { simpleParser } = require("mailparser");
 const { bot, EMAIL_ACCOUNTS } = require("./index_01_core");
 const { isAdmin, logErr, escMD } = require("./index_02_utils_roles");
 
-const IMAP_HOST = process.env.IMAP_HOST_1 || process.env.EMAIL_IMAP_HOST || "premium48.web-hosting.com";
-const IMAP_PORT = Number(process.env.EMAIL_IMAP_PORT || 993);
-const IMAP_USER = process.env.EMAIL_ADMIN_USER || "admin@sublicuentas.com";
-const IMAP_PASS = process.env.EMAIL_ADMIN_PASS || "";
+// Compatibilidad con ambos esquemas de variables usados históricamente en Render.
+// No obligamos a migrar secretos existentes: /code acepta tanto IMAP_*_1
+// como EMAIL_ADMIN_*/EMAIL_IMAP_* y variantes antiguas de PASSWORD.
+const IMAP_HOST = String(
+  process.env.IMAP_HOST_1 ||
+  process.env.EMAIL_IMAP_HOST ||
+  "premium48.web-hosting.com"
+).trim();
+const IMAP_PORT = Number(
+  process.env.IMAP_PORT_1 ||
+  process.env.EMAIL_IMAP_PORT ||
+  993
+);
+const IMAP_USER = String(
+  process.env.IMAP_USER_1 ||
+  process.env.EMAIL_ADMIN_USER ||
+  process.env.EMAIL_IMAP_USER ||
+  "admin@sublicuentas.com"
+).trim();
+const IMAP_PASS = String(
+  process.env.IMAP_PASS_1 ||
+  process.env.EMAIL_ADMIN_PASS ||
+  process.env.EMAIL_ADMIN_PASSWORD ||
+  process.env.EMAIL_IMAP_PASS ||
+  process.env.EMAIL_IMAP_PASSWORD ||
+  ""
+);
+const IMAP_TLS = !["0", "false", "no", "off"].includes(
+  String(process.env.IMAP_SECURE_1 ?? process.env.EMAIL_IMAP_SECURE ?? "true").trim().toLowerCase()
+);
+const IMAP_SOURCE = String(process.env.IMAP_SOURCE_1 || "hosting-principal").trim() || "hosting-principal";
 const disneyUltimoEntregado = global.__SUBLICUENTAS_DISNEY_OTP__ || new Map();
 global.__SUBLICUENTAS_DISNEY_OTP__ = disneyUltimoEntregado;
 const esperar = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 function cuentasImapCodigos() {
-  const legacy = { name: "hosting-principal", host: IMAP_HOST, port: IMAP_PORT, tls: true, user: IMAP_USER, password: IMAP_PASS };
+  const legacy = { name: IMAP_SOURCE, host: IMAP_HOST, port: IMAP_PORT, tls: IMAP_TLS, user: IMAP_USER, password: IMAP_PASS };
   const rows = [legacy, ...(Array.isArray(EMAIL_ACCOUNTS) ? EMAIL_ACCOUNTS : [])];
   const seen = new Set();
   return rows.filter(row => {
@@ -501,7 +528,17 @@ async function buscarEmailsCuenta(correo, limite=15, cuenta={}) {
 
 async function buscarEmails(correo, limite=15) {
   const cuentas = cuentasImapCodigos();
-  if (!cuentas.length) throw new Error("No hay una cuenta IMAP válida para consultar códigos.");
+  if (!cuentas.length) {
+    console.error("[IMAP /code] Sin cuenta válida. Estado:", {
+      host: Boolean(IMAP_HOST),
+      user: Boolean(IMAP_USER),
+      password: Boolean(IMAP_PASS),
+      port: IMAP_PORT,
+      tls: IMAP_TLS,
+      jsonAccounts: Array.isArray(EMAIL_ACCOUNTS) ? EMAIL_ACCOUNTS.length : 0,
+    });
+    throw new Error("No hay una cuenta IMAP válida para consultar códigos.");
+  }
   const results = await Promise.allSettled(cuentas.map(cuenta => buscarEmailsCuenta(correo, limite, cuenta)));
   const emails = results.flatMap(result => result.status === "fulfilled" ? result.value : []);
   if (!emails.length && results.every(result => result.status === "rejected")) {
