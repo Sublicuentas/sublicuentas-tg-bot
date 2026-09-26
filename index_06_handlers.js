@@ -5158,8 +5158,9 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
         if (!clientesCorregidos.length) txt += "_No hay clientes asignados._\n\n";
         else {
           clientesCorregidos.forEach((c, i) => {
+            // En el inventario de Telegram se muestra únicamente el perfil real.
+            // "Pagado por" es una nota exclusiva de Control Maestro.
             txt += `${i + 1}. ${escMD(c.nombre || "Sin nombre")} — PIN ${escMD(c.pin || "----")}\n`;
-            if (c.pagadoPor && normTxt(c.pagadoPor) !== normTxt(c.nombre)) txt += `   💳 Pagado por: ${escMD(c.pagadoPor)}\n`;
           });
           txt += "\n";
         }

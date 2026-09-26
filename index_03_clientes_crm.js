@@ -1276,10 +1276,12 @@ function renderFichaClienteMarkdown(c = {}) {
   } else {
     servicios.forEach((s, i) => {
       const est = getEstadoServicio(s.fechaRenovacion || "");
+      const benef = etiquetaBeneficiarioServicioLocal(s);
       const perfilReal = nombrePerfilRealServicioLocal(s, nombre);
-      const pagadorDistinto = perfilReal && normTxt(perfilReal) !== normTxt(nombre);
-      txt += `\n\n${i + 1}) ${iconPlataforma(s.plataforma || "")} *${escMD(humanPlataforma(s.plataforma || ""))}* — 👤 ${escMD(perfilReal)}\n`;
-      if (pagadorDistinto) txt += `💳 *Pagado por:* ${escMD(nombre)}\n`;
+      const uso = benef.esTercero
+        ? `🔑 ${escMD(benef.texto)}`
+        : `👤 ${escMD(perfilReal || nombre)}`;
+      txt += `\n\n${i + 1}) ${iconPlataforma(s.plataforma || "")} *${escMD(humanPlataforma(s.plataforma || ""))}* — ${uso}\n`;
       txt += `🧾 *Vendedor responsable:* ${escMD(vendedorEfectivoServicio(s, c).vendedor || "-")}\n`;
       txt += renderCredencialesServicioLocal(s, true, "");
       txt += `💵 *Precio:* ${escMD(`${Number(s.precio || 0).toFixed(2)} Lps`)}\n`;
@@ -1411,12 +1413,13 @@ async function menuServicio(chatId, clientId, selector) {
   const compraSel = compraSelectorLocal(s, idx);
   const est = getEstadoServicio(s.fechaRenovacion || "");
   const perfilReal = nombrePerfilRealServicioLocal(s, c.nombrePerfil || "");
-  const pagadorDistinto = perfilReal && normTxt(perfilReal) !== normTxt(c.nombrePerfil || "");
+  const benef = etiquetaBeneficiarioServicioLocal(s);
   let txt =
     `🧩 *SERVICIO #${idx + 1}*\n\n` +
     `${iconPlataforma(s.plataforma || "")} *Plataforma:* ${escMD(humanPlataforma(s.plataforma || ""))}\n` +
-    `👤 *Perfil:* ${escMD(perfilReal)}\n`;
-  if (pagadorDistinto) txt += `💳 *Pagado por:* ${escMD(c.nombrePerfil || "Cliente")}\n`;
+    (benef.esTercero
+      ? `🔑 *Tercero:* ${escMD(s.beneficiarioNombre || s.beneficiario || perfilReal || "Tercero")}\n`
+      : `👤 *Perfil:* ${escMD(perfilReal)}\n`);
 
   txt += renderCredencialesServicioLocal(s, true, "");
   txt += `🧾 *Vendedor responsable:* ${escMD(vendedorEfectivoServicio(s, c).vendedor || "-")}\n`;
