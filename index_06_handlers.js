@@ -1947,9 +1947,35 @@ function cleanupStaleInteractiveStateLocal(chatId) {
   } catch (_) {}
 }
 
+// Estados que son SOLO de navegación/confirmación por botones.
+// Es importante que esta sea una lista de exclusión: cualquier pending nuevo
+// o desconocido se trata por defecto como flujo que espera texto. Así una
+// fecha, precio, correo, clave, PIN, vendedor, nombre, etc. jamás cae por
+// accidente en el buscador general y termina mostrando “Sin resultados”.
+const PENDING_BUTTON_ONLY_MODES_LOCAL = new Set([
+  "bajaMasiva",
+  "cliProfDelete",
+  "cliRenNoRenovo",
+  "cliServDelete",
+  "cliServSelectPlat",
+  "finEgresoBancoPick",
+  "finEgresoMotivoPick",
+  "finIngresoBancoPick",
+  "invSubmenuCtx",
+  "mailDelClientePickCtx",
+  "mailEditPinPickCtx",
+]);
+
 function pendingReallyExpectsTextLocal(state) {
   if (!state) return false;
-  return PENDING_TEXT_INPUT_MODES_LOCAL.has(String(state.mode || ""));
+  const mode = String(state.mode || "").trim();
+  if (!mode) return true;
+  if (PENDING_BUTTON_ONLY_MODES_LOCAL.has(mode)) return false;
+  if (PENDING_TEXT_INPUT_MODES_LOCAL.has(mode)) return true;
+
+  // Fallback seguro: si mañana se agrega un nuevo modo y se olvida añadirlo
+  // a la lista de texto, NO permitir que el buscador se robe la respuesta.
+  return true;
 }
 
 // ==========================================================
@@ -6586,6 +6612,11 @@ bot.on("message", async (msg) => {
       const pSearch = pending.get(keySearch);
       const pendingBloqueaBusqueda = pendingReallyExpectsTextLocal(pSearch);
       const wizardActivo = wizard.has(keySearch);
+
+      // HOTFIX 2026-09-25: los datos de una operación activa tienen prioridad
+      // absoluta sobre la búsqueda libre. Esto corrige el caso visible de
+      // Agregar servicio -> Fecha renovación (ej. 25/10/2026) que terminaba
+      // como búsqueda y respondía “Sin resultados”.
       const pareceBusqueda =
         isEmailLike(tSearch) ||
         onlyDigits(tSearch).length >= 7 ||
