@@ -248,7 +248,12 @@ function perfilesServicioLocal(servicio = {}, titular = "") {
         pin: servicio.pinPerfil || servicio.pin_perfil || servicio.perfilPin || servicio.pin || ""
       }];
   return lista.map((p, index) => {
-    const nombre = String(p?.nombre || p?.nombrePerfil || p?.cliente || p?.perfil || titular || `Perfil ${index + 1}`).trim();
+    const nombreGuardado = String(p?.nombre || p?.nombrePerfil || p?.cliente || p?.perfil || titular || `Perfil ${index + 1}`).trim();
+    const esTercero = String(servicio?.beneficiarioTipo || "").trim().toLowerCase() === "tercero";
+    const beneficiario = esTercero ? String(servicio?.beneficiarioNombre || servicio?.beneficiario || "").trim() : "";
+    const nombre = beneficiario && (lista.length === 1 || !nombreGuardado || normTxt(nombreGuardado) === normTxt(titular))
+      ? beneficiario
+      : nombreGuardado;
     return {
       perfilId: String(p?.perfilId || p?.id || ""),
       nombre,
@@ -367,6 +372,12 @@ function etiquetaBeneficiarioServicioLocal(servicio = {}) {
   const nombre = String(servicio.beneficiarioNombre || servicio.beneficiario || "").trim();
   const texto = nombre ? `Tercero: ${nombre}` : "Tercero";
   return { esTercero: true, texto, corto: `🔑 ${texto}` };
+}
+
+function nombrePerfilRealServicioLocal(servicio = {}, titular = "") {
+  const perfiles = perfilesServicioLocal(servicio, titular);
+  const principal = perfiles[0] || {};
+  return String(principal.nombre || principal.perfil || servicio.beneficiarioNombre || servicio.perfil || titular || "Sin nombre").trim();
 }
 
 function validateIdentByPlatformLocal(plataforma = "", ident = "") {
@@ -622,7 +633,7 @@ async function getInventarioDoc(plataforma = "", acceso = "") {
   return null;
 }
 
-async function syncServicioEnInventario({ clienteNombre = "", plataforma = "", correo = "", clave = "", pin = "", clienteId = "", compraId = "", perfilId = "" }) {
+async function syncServicioEnInventario({ clienteNombre = "", pagadoPor = "", plataforma = "", correo = "", clave = "", pin = "", clienteId = "", compraId = "", perfilId = "" }) {
   const plat = normalizarPlataforma(plataforma);
   const acceso = normalizeIdentByPlatformLocal(plat, correo);
   const found = await getInventarioDoc(plat, acceso);
@@ -640,30 +651,42 @@ async function syncServicioEnInventario({ clienteNombre = "", plataforma = "", c
     let idxExiste = perfilKey
       ? clientes.findIndex((x) => String(x?.perfilId || "").trim() === perfilKey)
       : -1;
-    if (idxExiste === -1 && !perfilKey && compraKey) {
-      idxExiste = clientes.findIndex((x) =>
-        String(x?.compraId || "").trim() === compraKey
-        && (!clienteKey || String(x?.clienteId || "").trim() === clienteKey)
-      );
-    }
-    // Compatibilidad con inventario antiguo: solo adoptamos una fila sin IDs.
-    // Así dos compras reales del mismo cliente y con el mismo PIN no colapsan.
+    // Primero el nombre real + PIN. Un mismo compraId puede contener varios
+    // perfiles y no debe provocar que un perfil pise a otro.
     if (idxExiste === -1) {
       idxExiste = clientes.findIndex((x) =>
-        !String(x?.perfilId || "").trim()
-        && !String(x?.compraId || "").trim()
-        && normTxt(x?.nombre || "") === normTxt(clienteNombre)
-        && String(x?.pin || "") === pinNorm
+        normTxt(x?.nombre || "") === normTxt(clienteNombre)
+        && (!pinNorm || String(x?.pin || "") === pinNorm)
       );
+    }
+    // Compatibilidad con inventario antiguo: si el nombre guardado era el
+    // pagador, lo adoptamos únicamente cuando el PIN también coincide.
+    if (idxExiste === -1 && pagadoPor) {
+      idxExiste = clientes.findIndex((x) =>
+        normTxt(x?.nombre || "") === normTxt(pagadoPor)
+        && (!pinNorm || String(x?.pin || "") === pinNorm)
+      );
+    }
+    // Último fallback por compraId solo si existe una única coincidencia.
+    if (idxExiste === -1 && !perfilKey && compraKey) {
+      const porCompra = clientes.map((x, i) => ({ x, i })).filter(({ x }) =>
+        String(x?.compraId || "").trim() === compraKey
+        && (!clienteKey || !String(x?.clienteId || "").trim() || String(x?.clienteId || "").trim() === clienteKey)
+        && (!pinNorm || String(x?.pin || "") === pinNorm)
+      );
+      if (porCompra.length === 1) idxExiste = porCompra[0].i;
     }
     if (idxExiste !== -1) {
       const patch = {};
       const identificado = {
         ...clientes[idxExiste],
+        nombre: String(clienteNombre || clientes[idxExiste]?.nombre || "").trim(),
         ...(clienteKey ? { clienteId: clienteKey } : {}),
         ...(compraKey ? { compraId: compraKey } : {}),
         ...(perfilKey ? { perfilId: perfilKey } : {}),
       };
+      if (pagadoPor && normTxt(pagadoPor) !== normTxt(identificado.nombre)) identificado.pagadoPor = String(pagadoPor).trim();
+      else delete identificado.pagadoPor;
       if (pinNorm) identificado.pin = pinNorm;
       if (JSON.stringify(identificado) !== JSON.stringify(clientes[idxExiste])) {
         clientes[idxExiste] = identificado;
@@ -682,6 +705,7 @@ async function syncServicioEnInventario({ clienteNombre = "", plataforma = "", c
     if (clientes.length >= capacidad) return { ok: false, reason: "full" };
     clientes.push({
       nombre: String(clienteNombre || "").trim(), pin: pinNorm, slot: clientes.length + 1,
+      ...(pagadoPor && normTxt(pagadoPor) !== normTxt(clienteNombre) ? { pagadoPor: String(pagadoPor).trim() } : {}),
       ...(clienteKey ? { clienteId: clienteKey } : {}),
       ...(compraKey ? { compraId: compraKey } : {}),
       ...(perfilKey ? { perfilId: perfilKey } : {}),
@@ -713,19 +737,22 @@ async function removeServicioDeInventario({ clienteNombre = "", plataforma = "",
     let idx = String(perfilId || "").trim()
       ? clientes.findIndex((x) => String(x?.perfilId || "").trim() === String(perfilId).trim())
       : -1;
-    if (idx === -1 && !String(perfilId || "").trim() && String(compraId || "").trim()) {
-      idx = clientes.findIndex((x) =>
-        String(x?.compraId || "").trim() === String(compraId).trim()
-        && (!String(clienteId || "").trim() || String(x?.clienteId || "").trim() === String(clienteId).trim())
-      );
-    }
-    // Si ya encontramos por perfilId/compraId, NO debemos reemplazar esa
-    // coincidencia por nombre+PIN. El código anterior podía terminar quitando
-    // otra fila cuando había PIN repetido o datos legacy parecidos.
+    // Nombre + PIN antes que compraId para no eliminar el perfil equivocado
+    // dentro de una compra multiperfil.
     if (idx === -1 && pinFiltro) {
       idx = clientes.findIndex((x) => normTxt(x?.nombre || "") === normTxt(clienteNombre) && String(x?.pin || "") === pinFiltro);
     }
     if (idx === -1) idx = clientes.findIndex((x) => normTxt(x?.nombre || "") === normTxt(clienteNombre));
+    if (idx === -1 && !String(perfilId || "").trim() && String(compraId || "").trim()) {
+      const compraKey = String(compraId).trim();
+      const clienteKey = String(clienteId || "").trim();
+      const porCompra = clientes.map((x, i) => ({ x, i })).filter(({ x }) =>
+        String(x?.compraId || "").trim() === compraKey
+        && (!clienteKey || !String(x?.clienteId || "").trim() || String(x?.clienteId || "").trim() === clienteKey)
+        && (!pinFiltro || String(x?.pin || "") === pinFiltro)
+      );
+      if (porCompra.length === 1) idx = porCompra[0].i;
+    }
     if (idx === -1) return { ok: true, removed: false };
     clientes.splice(idx, 1);
     clientes = clientes.map((x, i) => ({ ...x, slot: i + 1 }));
@@ -826,7 +853,7 @@ async function sincronizarCompraInventarioLocal(anterior, nuevo, titular = "") {
       }
     }
     for (const p of despues) {
-      const result = await syncServicioEnInventario({ clienteNombre: p.nombre || titular, plataforma: platNuevo, correo: p.correo, clave: p.clave, pin: p.pin, compraId: nuevo?.compraId || "", perfilId: p.perfilId || "" });
+      const result = await syncServicioEnInventario({ clienteNombre: p.nombre || titular, pagadoPor: titular, plataforma: platNuevo, correo: p.correo, clave: p.clave, pin: p.pin, compraId: nuevo?.compraId || "", perfilId: p.perfilId || "" });
       if (result?.reason === "full") throw new Error(`La cuenta de ${p.nombre || "ese perfil"} ya está llena.`);
       if (result?.added) agregados.push(p);
     }
@@ -836,7 +863,7 @@ async function sincronizarCompraInventarioLocal(anterior, nuevo, titular = "") {
       try { await removeServicioDeInventario({ clienteNombre: p.nombre || titular, plataforma: platNuevo, correo: p.correo, pin: p.pin, compraId: nuevo?.compraId || "", perfilId: p.perfilId || "" }); } catch (_) {}
     }
     for (const p of removidos) {
-      try { await syncServicioEnInventario({ clienteNombre: p.nombre || titular, plataforma: platAntes, correo: p.correo, clave: p.clave, pin: p.pin, compraId: anterior?.compraId || "", perfilId: p.perfilId || "" }); } catch (_) {}
+      try { await syncServicioEnInventario({ clienteNombre: p.nombre || titular, pagadoPor: titular, plataforma: platAntes, correo: p.correo, clave: p.clave, pin: p.pin, compraId: anterior?.compraId || "", perfilId: p.perfilId || "" }); } catch (_) {}
     }
     throw error;
   }
@@ -1249,8 +1276,10 @@ function renderFichaClienteMarkdown(c = {}) {
   } else {
     servicios.forEach((s, i) => {
       const est = getEstadoServicio(s.fechaRenovacion || "");
-      const benef = etiquetaBeneficiarioServicioLocal(s);
-      txt += `\n\n${i + 1}) ${iconPlataforma(s.plataforma || "")} *${escMD(humanPlataforma(s.plataforma || ""))}* — ${benef.esTercero ? "🔑" : "👤"} ${escMD(benef.texto)}\n`;
+      const perfilReal = nombrePerfilRealServicioLocal(s, nombre);
+      const pagadorDistinto = perfilReal && normTxt(perfilReal) !== normTxt(nombre);
+      txt += `\n\n${i + 1}) ${iconPlataforma(s.plataforma || "")} *${escMD(humanPlataforma(s.plataforma || ""))}* — 👤 ${escMD(perfilReal)}\n`;
+      if (pagadorDistinto) txt += `💳 *Pagado por:* ${escMD(nombre)}\n`;
       txt += `🧾 *Vendedor responsable:* ${escMD(vendedorEfectivoServicio(s, c).vendedor || "-")}\n`;
       txt += renderCredencialesServicioLocal(s, true, "");
       txt += `💵 *Precio:* ${escMD(`${Number(s.precio || 0).toFixed(2)} Lps`)}\n`;
@@ -1381,11 +1410,13 @@ async function menuServicio(chatId, clientId, selector) {
   const s = servicios[idx] || {};
   const compraSel = compraSelectorLocal(s, idx);
   const est = getEstadoServicio(s.fechaRenovacion || "");
-  const benef = etiquetaBeneficiarioServicioLocal(s);
+  const perfilReal = nombrePerfilRealServicioLocal(s, c.nombrePerfil || "");
+  const pagadorDistinto = perfilReal && normTxt(perfilReal) !== normTxt(c.nombrePerfil || "");
   let txt =
     `🧩 *SERVICIO #${idx + 1}*\n\n` +
     `${iconPlataforma(s.plataforma || "")} *Plataforma:* ${escMD(humanPlataforma(s.plataforma || ""))}\n` +
-    `${benef.esTercero ? "🔑" : "👤"} *Uso:* ${escMD(benef.texto)}\n`;
+    `👤 *Perfil:* ${escMD(perfilReal)}\n`;
+  if (pagadorDistinto) txt += `💳 *Pagado por:* ${escMD(c.nombrePerfil || "Cliente")}\n`;
 
   txt += renderCredencialesServicioLocal(s, true, "");
   txt += `🧾 *Vendedor responsable:* ${escMD(vendedorEfectivoServicio(s, c).vendedor || "-")}\n`;
@@ -2556,5 +2587,5 @@ module.exports = {
   obtenerRenovacionesPorFecha, renovacionesTexto, enviarTXT, enviarTXTATodosHoy,
   perfilesServicioLocal, cantidadPerfilesServicioLocal,
   compraSelectorLocal, perfilSelectorLocal, resolverIndiceCompraSelectorLocal, resolverIndicePerfilSelectorLocal,
-  etiquetaBeneficiarioServicioLocal,
+  etiquetaBeneficiarioServicioLocal, nombrePerfilRealServicioLocal,
 };

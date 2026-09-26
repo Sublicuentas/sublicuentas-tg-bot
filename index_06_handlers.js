@@ -118,6 +118,7 @@ const {
   clienteDuplicado,
   perfilesServicioLocal,
   cantidadPerfilesServicioLocal,
+  nombrePerfilRealServicioLocal,
   compraSelectorLocal, perfilSelectorLocal, resolverIndiceCompraSelectorLocal, resolverIndicePerfilSelectorLocal,
 } = require("./index_03_clientes_crm");
 
@@ -326,6 +327,69 @@ function normalizeIdentByPlatformLocal(plataforma = "", ident = "") {
     return v;
   }
   return v.toLowerCase();
+}
+
+
+
+async function resolverVistaClienteInventarioCRM(clienteInv = {}, plataforma = "", acceso = "") {
+  const fallback = {
+    nombre: String(clienteInv?.nombre || "Sin nombre").trim() || "Sin nombre",
+    pagadoPor: String(clienteInv?.pagadoPor || "").trim(),
+    clienteId: String(clienteInv?.clienteId || "").trim(),
+    compraId: String(clienteInv?.compraId || "").trim(),
+    perfilId: String(clienteInv?.perfilId || "").trim(),
+  };
+  try {
+    const plat = normalizarPlataforma(plataforma);
+    const accesoNorm = normalizeIdentByPlatformLocal(plat, acceso);
+    const pinNorm = String(clienteInv?.pin || "").trim();
+    let clientesCRM = [];
+
+    if (fallback.clienteId) {
+      const directo = await getCliente(fallback.clienteId);
+      if (directo) clientesCRM = [{ id: fallback.clienteId, ...directo }];
+    }
+    if (!clientesCRM.length) clientesCRM = await getClientesBusquedaSnapshot();
+
+    const matches = [];
+    for (const cli of clientesCRM) {
+      const titular = String(cli?.nombrePerfil || cli?.nombre || "").trim();
+      const servicios = Array.isArray(cli?.servicios) ? cli.servicios : [];
+      for (const s of servicios) {
+        if (normalizarPlataforma(s?.plataforma || "") !== plat) continue;
+        if (fallback.compraId && String(s?.compraId || "").trim() !== fallback.compraId) continue;
+        const perfiles = perfilesServicioLocal(s, titular);
+        for (const perfil of perfiles) {
+          const perfilId = String(perfil?.perfilId || "").trim();
+          if (fallback.perfilId && perfilId && perfilId !== fallback.perfilId) continue;
+          const perfilAcceso = normalizeIdentByPlatformLocal(plat, perfil?.correo || s?.correo || "");
+          if (accesoNorm && perfilAcceso !== accesoNorm) continue;
+          const perfilPin = String(perfil?.pin || "").trim();
+          if (pinNorm && perfilPin && perfilPin !== pinNorm) continue;
+          matches.push({
+            nombre: String(perfil?.nombre || perfil?.perfil || nombrePerfilRealServicioLocal(s, titular) || titular || "Sin nombre").trim(),
+            pagadoPor: titular,
+            clienteId: String(cli?.id || fallback.clienteId || "").trim(),
+            compraId: String(s?.compraId || fallback.compraId || "").trim(),
+            perfilId: perfilId || fallback.perfilId,
+          });
+        }
+      }
+    }
+
+    if (!matches.length) return fallback;
+    let elegido = matches[0];
+    if (matches.length > 1) {
+      const exactoId = matches.find((x) => fallback.perfilId && x.perfilId === fallback.perfilId)
+        || matches.find((x) => fallback.compraId && x.compraId === fallback.compraId)
+        || matches.find((x) => fallback.clienteId && x.clienteId === fallback.clienteId && normTxt(x.pagadoPor) === normTxt(fallback.nombre));
+      if (exactoId) elegido = exactoId;
+      else return fallback;
+    }
+    return elegido;
+  } catch (_) {
+    return fallback;
+  }
 }
 
 
@@ -5037,14 +5101,42 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
         if (!found) return bot.sendMessage(chatId, "❌ La cuenta no existe.");
         const correoData = found.data || {};
         const clientes = Array.isArray(correoData.clientes) ? correoData.clientes : [];
+        const vistas = await Promise.all(clientes.map((c) => resolverVistaClienteInventarioCRM(c, plataforma, acceso)));
+        let reparado = false;
+        const clientesCorregidos = clientes.map((c, i) => {
+          const vista = vistas[i] || {};
+          const siguiente = {
+            ...(c || {}),
+            nombre: String(vista.nombre || c?.nombre || "Sin nombre").trim(),
+            ...(vista.clienteId ? { clienteId: vista.clienteId } : {}),
+            ...(vista.compraId ? { compraId: vista.compraId } : {}),
+            ...(vista.perfilId ? { perfilId: vista.perfilId } : {}),
+          };
+          if (vista.pagadoPor && normTxt(vista.pagadoPor) !== normTxt(siguiente.nombre)) siguiente.pagadoPor = String(vista.pagadoPor).trim();
+          else delete siguiente.pagadoPor;
+          if (JSON.stringify(siguiente) !== JSON.stringify(c || {})) reparado = true;
+          return siguiente;
+        });
+        if (reparado) {
+          try {
+            await found.ref.set({ clientes: clientesCorregidos, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+            cacheInvalidatePrefix?.("clientes:");
+          } catch (_) {}
+        }
         const capacidad = getCapacidadCorreo(correoData, plataforma);
-        const ocupados = clientes.length;
+        const ocupados = clientesCorregidos.length;
         const disponibles = Math.max(0, capacidad - ocupados);
         const estado = disponibles === 0 ? "LLENA" : "CON ESPACIO";
         let txt = "👥 *Clientes en esta cuenta*\n\n";
         txt += `${identIcon(plataforma)} *${escMD(getIdentLabelLocal(plataforma))}:* ${escMD(acceso)}\n📌 *${escMD(String(plataforma).toUpperCase())}*\n\n`;
-        if (!clientes.length) txt += "_No hay clientes asignados._\n\n";
-        else { clientes.forEach((c, i) => { txt += `${i + 1}. ${escMD(c.nombre || "Sin nombre")} — PIN ${escMD(c.pin || "----")}\n`; }); txt += "\n"; }
+        if (!clientesCorregidos.length) txt += "_No hay clientes asignados._\n\n";
+        else {
+          clientesCorregidos.forEach((c, i) => {
+            txt += `${i + 1}. ${escMD(c.nombre || "Sin nombre")} — PIN ${escMD(c.pin || "----")}\n`;
+            if (c.pagadoPor && normTxt(c.pagadoPor) !== normTxt(c.nombre)) txt += `   💳 Pagado por: ${escMD(c.pagadoPor)}\n`;
+          });
+          txt += "\n";
+        }
         txt += `👤 *Ocupados:* ${ocupados}/${capacidad}\n✅ *Disponibles:* ${disponibles}\n📊 *Estado:* ${escMD(estado)}`;
         return upsertPanel(chatId, txt, [
           [{ text: "⬅️ Volver a la cuenta", callback_data: `mail_panel|${normalizarPlataforma(plataforma)}|${encodeURIComponent(acceso)}` }],
