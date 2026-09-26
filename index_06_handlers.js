@@ -4516,7 +4516,55 @@ async function ticketTryConsumeTelegramReply(msg,adminOk,vend){
   const ticketId=String(nativeTicketId||(pendingReply&&pendingReply.ticketId)||'');if(!ticketId)return false;
   const raw=String(msg.text||'').trim().toLowerCase();if(['/cancelar','cancelar','cancel'].includes(raw)){ticketReplyState.delete(key);await bot.sendMessage(chatId,'✅ Respuesta cancelada.');return true;}
   if(raw.startsWith('/')&&!nativeTicketId)return false;
-  try{const {old}=await ticketAppendTelegramReply({ticketId,msg,rev:vend,adminOk});ticketReplyState.delete(key);await bot.sendMessage(chatId,`✅ Su respuesta quedó agregada ${String(old.tipo||'').toLowerCase()==='aviso'?'al aviso':`al ticket #${old.numero||'—'}`}. Sublicuentas la verá en la misma conversación.`);return true;}catch(e){ticketReplyState.delete(key);await bot.sendMessage(chatId,'⚠️ '+String(e?.message||'No pude guardar la respuesta.'));return true;}
+  try{const {old}=await ticketAppendTelegramReply({ticketId,msg,rev:vend,adminOk});ticketReplyState.delete(key);await registrarActividadTelegramLocal(msg?.from?.id,chatId,'responder_ticket',{ticketId, titulo:old.titulo||'',destino:old.creadoPor||old.remitente||'',campo:'respuesta'},`Respondió ${String(old.tipo||'').toLowerCase()==='aviso'?'el aviso':`el ticket #${old.numero||'—'}`}${old.titulo?` “${old.titulo}”`:''} desde Telegram.`,'Tickets');await bot.sendMessage(chatId,`✅ Su respuesta quedó agregada ${String(old.tipo||'').toLowerCase()==='aviso'?'al aviso':`al ticket #${old.numero||'—'}`}. Sublicuentas la verá en la misma conversación.`);return true;}catch(e){ticketReplyState.delete(key);await bot.sendMessage(chatId,'⚠️ '+String(e?.message||'No pude guardar la respuesta.'));return true;}
+}
+
+
+// ===============================
+// ACTIVIDAD DETALLADA · Sublichat + Telegram comparten actividad_usuarios
+// ===============================
+function actividadCleanLocal(v,n=220){return String(v??'').trim().replace(/\s+/g,' ').slice(0,n);}
+function actividadUsuarioKeyLocal(v){const x=normTxt(v||'usuario');return x==='geissel'?'geisell':x||'usuario';}
+function actividadActorLabelLocal(v){const k=actividadUsuarioKeyLocal(v);if(['naara','sublicuentas'].includes(k))return 'Sublicuentas';if(['libni','relojes','daniela'].includes(k))return 'Relojes';if(k==='geisell')return 'Geisell';if(k==='magdiel')return 'Magdiel';return actividadCleanLocal(v||'Usuario',80);}
+async function actividadActorTelegramLocal(userId,chatId){
+  const uid=String(userId||chatId||'').trim();
+  try{
+    const revSnap=await db.collection('revendedores').get();let found=null;
+    revSnap.forEach(d=>{if(found)return;const x=d.data()||{};const ids=[x.telegramId,x.userId].map(v=>String(v||'').trim());if(ids.includes(uid))found={id:d.id,...x};});
+    if(found){const raw=found.nombre||found.nombre_norm||found.usuario||found.id||'Usuario';return {usuario:actividadUsuarioKeyLocal(raw),actorLabel:actividadActorLabelLocal(raw),rol:'telegram'};}
+  }catch(_){}
+  try{
+    const direct=await db.collection('admins').doc(uid).get();
+    if(direct.exists){const x=direct.data()||{},raw=x.nombre||x.usuario||x.nombre_norm||x.username||'Sublicuentas';return {usuario:actividadUsuarioKeyLocal(raw),actorLabel:actividadActorLabelLocal(raw),rol:'admin'};}
+    const snap=await db.collection('admins').get();let found=null;
+    snap.forEach(d=>{if(found)return;const x=d.data()||{};const ids=[d.id,x.telegramId,x.userId,x.uid].map(v=>String(v||'').trim());if(ids.includes(uid))found={id:d.id,...x};});
+    if(found){const raw=found.nombre||found.usuario||found.nombre_norm||found.username||'Sublicuentas';return {usuario:actividadUsuarioKeyLocal(raw),actorLabel:actividadActorLabelLocal(raw),rol:'admin'};}
+  }catch(_){}
+  try{if(await isSuperAdmin(uid))return {usuario:'sublicuentas',actorLabel:'Sublicuentas',rol:'admin'};}catch(_){}
+  return {usuario:`telegram_${uid||'usuario'}`,actorLabel:'Usuario Telegram',rol:'telegram'};
+}
+async function registrarActividadTelegramLocal(userId,chatId,accion,detalle={},detalleTexto='',modulo='Bot Telegram'){
+  try{
+    const actor=await actividadActorTelegramLocal(userId,chatId),now=new Date().toISOString();
+    const safe={origen:'Telegram Bot'};
+    for(const k of ['clienteId','cliente','clienteAnterior','telefono','servicioIndex','servicioId','inventarioId','ticketId','id','plataforma','cuenta','perfil','pagador','vendedor','seccion','tipo','motivo','campo','cambio','destino','titulo','resultado']){
+      if(detalle[k]!=null&&typeof detalle[k]!=='object'&&String(detalle[k]).trim()!=='')safe[k]=actividadCleanLocal(detalle[k]);
+    }
+    await db.collection('actividad_usuarios').add({
+      usuario:actor.usuario,actorLabel:actor.actorLabel,rol:actor.rol,uid:String(userId||''),modulo,accion:actividadCleanLocal(accion,120),metodo:'BOT',ruta:'telegram',origen:'Telegram Bot',detalle:safe,
+      detalleTexto:actividadCleanLocal(detalleTexto||Object.entries(safe).filter(([k])=>k!=='origen').slice(0,5).map(([k,v])=>`${k}: ${v}`).join(' · '),520),
+      createdAt:admin.firestore.FieldValue.serverTimestamp(),createdAtIso:now
+    });
+  }catch(e){logErr('actividad.telegram',e?.message||e);}
+}
+async function actividadClienteServicioLocal(clientId,idx=null,compraId=''){
+  try{
+    const c=await getCliente(String(clientId||''));if(!c)return {clienteId:String(clientId||'')};
+    const servicios=Array.isArray(c.servicios)?c.servicios:[];let i=Number.isInteger(Number(idx))?Number(idx):-1;
+    const compra=String(compraId||'').trim();if(compra){const by=servicios.findIndex(s=>String(s?.compraId||'')===compra);if(by>=0)i=by;}
+    const s=i>=0&&i<servicios.length?servicios[i]||{}:{};
+    return {clienteId:String(c.id||clientId||''),cliente:c.nombrePerfil||c.nombre||'Cliente',telefono:c.telefono||'',servicioIndex:i>=0?i:'',plataforma:s.plataforma?humanPlataforma(s.plataforma):'',cuenta:s.correo||s.usuario||s.cuenta||'',vendedor:s.vendedor||c.vendedor||'',perfil:nombrePerfilRealServicioLocal(s,c.nombrePerfil||'')||''};
+  }catch(_){return {clienteId:String(clientId||'')};}
 }
 
 // ===============================
@@ -4555,7 +4603,17 @@ bot.on("callback_query", async (q) => {
       const clientId = parts[3];
       const idx = Number(parts[4]);
       try {
+        const beforeAudit = await actividadClienteServicioLocal(clientId, idx);
         const r = await sincronizarUnServicioDesdeInventarioLocal(clientId, idx);
+        await registrarActividadTelegramLocal(userId, chatId, 'sincronizar_servicio_inventario', {
+          clienteId: clientId,
+          cliente: beforeAudit.cliente,
+          telefono: beforeAudit.telefono,
+          plataforma: humanPlataforma(r.plataformaNueva || beforeAudit.plataforma),
+          cuenta: r.correo || beforeAudit.cuenta,
+          campo: 'datos desde Bodega',
+          cambio: `${r.claveActualizada ? 'clave actualizada' : 'clave sin cambio'} · ${r.pinConservado ? 'PIN conservado' : 'sin PIN'}`
+        }, `Sincronizó ${humanPlataforma(r.plataformaNueva || beforeAudit.plataforma)} de ${beforeAudit.cliente || 'un cliente'} desde Bodega · cuenta ${r.correo || beforeAudit.cuenta || '-'} · ${r.claveActualizada ? 'clave actualizada' : 'clave sin cambio'} · ${r.pinConservado ? 'PIN conservado' : 'sin PIN'}.`, 'Clientes');
         let txt = `✅ *Servicio sincronizado*
 
 `;
@@ -4988,6 +5046,7 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
         try {
           const eliminado = await eliminarMovimientoFinanzas(id, userId, await safeIsSuperAdminLocal(userId));
           const tipoEliminado = String(eliminado.tipo || "").toLowerCase() === "egreso" ? "egreso" : "ingreso";
+          await registrarActividadTelegramLocal(userId,chatId,'eliminar_movimiento',{id,tipo:tipoEliminado,motivo:eliminado.motivo||eliminado.detalle||'',cambio:`${moneyLps(eliminado.monto||0)} · ${eliminado.fecha||''}`},`Eliminó un ${tipoEliminado} de ${moneyLps(eliminado.monto||0)}${eliminado.motivo?` · ${eliminado.motivo}`:''} · fecha ${eliminado.fecha||'-'}.`,'Finanzas');
           return upsertPanel(chatId,
             `✅ *Movimiento eliminado correctamente*\n\n🗂️ Tipo: ${escMD(eliminado.tipo || "-")}\n💰 Monto: ${moneyLps(eliminado.monto || 0)}\n📅 Fecha: ${escMD(eliminado.fecha || "-")}`,
             [
@@ -5095,6 +5154,7 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
         if (!doc.exists) return bot.sendMessage(chatId, "⚠️ No existe esa cuenta en inventario.");
         await ref.delete();
         pending.delete(String(chatId));
+        await registrarActividadTelegramLocal(userId,chatId,'eliminar_cuenta_inventario',{inventarioId:ref.id,plataforma:humanPlataforma(plat),cuenta:acceso,campo:'cuenta de Bodega'},`Eliminó la cuenta ${acceso} de ${humanPlataforma(plat)} en Bodega.`,'Bodega');
       forceNextPanelAtBottom(chatId);
         return enviarInventarioPlataforma(chatId, plat, 0);
       }
@@ -5671,6 +5731,7 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
         await batch.commit();
         const { cacheInvalidatePrefix: cIPDel } = require("./index_01_core");
         cIPDel(`clientes:doc:${clientId}`);
+        await registrarActividadTelegramLocal(userId,chatId,'eliminar_cliente',{clienteId,cliente:nombre,telefono:c2?.telefono||'',campo:'cliente completo'},`Eliminó al cliente ${nombre} y su historial desde Telegram.`);
         forceNextPanelAtBottom(chatId);
         return bot.sendMessage(chatId, `✅ Cliente *${escMD(nombre)}* eliminado.`, { parse_mode: "Markdown" });
       }
@@ -5753,8 +5814,12 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
         const idx = Number(ctx?.idx);
         const perfilIndex = Number(ctx?.perfilIndex);
         try {
+          const antes=await actividadClienteServicioLocal(clientId,idx,ctx?.compraId||"");
+          const cAntes=await getCliente(clientId);const perfilesAntes=perfilesServicioLocal((cAntes?.servicios||[])[idx]||{},cAntes?.nombrePerfil||'');
+          const perfilNombre=perfilesAntes[perfilIndex]?.nombre||perfilesAntes[perfilIndex]?.perfil||antes.perfil||'Perfil';
           await eliminarPerfilTx(clientId, idx, perfilIndex, ctx?.compraId || "", ctx?.perfilId || "");
           pending.delete(String(chatId));
+          await registrarActividadTelegramLocal(userId,chatId,'eliminar_perfil',{...antes,perfil:perfilNombre,campo:'perfil'},`Quitó el perfil ${perfilNombre}${antes.cliente?` de ${antes.cliente}`:''}${antes.plataforma?` · ${antes.plataforma}`:''}${antes.cuenta?` · cuenta ${antes.cuenta}`:''}.`);
           await bot.sendMessage(chatId, "✅ Perfil retirado. La compra conserva un solo precio y una sola renovación.");
           return menuListaPerfilesServicio(chatId, clientId, ctx?.compraSel || idx);
         } catch (e) { return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo quitar el perfil."}`); }
@@ -5903,7 +5968,10 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
             }
           }
 
+          const antes=await actividadClienteServicioLocal(clientId,idx,actual.compraId||"");
           await patchServicio(clientId, idx, patch, actual.compraId || "");
+          const despues=await actividadClienteServicioLocal(clientId,idx,actual.compraId||"");
+          await registrarActividadTelegramLocal(userId,chatId,'editar_servicio',{...despues,campo:'plataforma',cambio:`${antes.plataforma||'Servicio'} → ${despues.plataforma||humanPlataforma(plat)}`},`Cambió la plataforma de ${despues.cliente||antes.cliente||'un cliente'}: ${antes.plataforma||'anterior'} → ${despues.plataforma||humanPlataforma(plat)}${despues.cuenta?` · cuenta ${despues.cuenta}`:''}.`);
           if (ctxValido) pending.delete(String(chatId));
           return menuServicio(chatId, clientId, compraSel);
         } catch (e) {
@@ -5946,8 +6014,10 @@ Revise que el correo exista en inventario con esa plataforma o coloque la clave 
         const clientId = parts[4];
         const ctx = pending.get(String(chatId));
         const idx = Number(ctx?.idx);
+        const auditAntes=await actividadClienteServicioLocal(clientId,idx,ctx?.compraId||"");
         try { await eliminarServicioTx(clientId, idx, ctx?.compraId || ""); pending.delete(String(chatId)); }
         catch (e) { return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo eliminar la compra."}`); }
+        await registrarActividadTelegramLocal(userId,chatId,'eliminar_servicio',{...auditAntes,campo:'servicio completo'},`Eliminó ${auditAntes.plataforma||'un servicio'}${auditAntes.cliente?` de ${auditAntes.cliente}`:''}${auditAntes.cuenta?` · cuenta ${auditAntes.cuenta}`:''}.`);
         const actualizado = await getCliente(clientId);
         const restantes = Array.isArray(actualizado?.servicios) ? actualizado.servicios : [];
         if (restantes.length) return menuListaServicios(chatId, clientId);
@@ -5990,6 +6060,8 @@ Revise que el correo exista en inventario con esa plataforma o coloque la clave 
         if (idx < 0) return bot.sendMessage(chatId, "⚠️ Esa compra cambió o ya no existe. Abra nuevamente la ficha.");
         const compraId = String(servicios[idx]?.compraId || "");
         const renovado = await renovarServicioTx(clientId, idx, { dias: 30, compraId });
+        const aud=await actividadClienteServicioLocal(clientId,idx,compraId);
+        await registrarActividadTelegramLocal(userId,chatId,'renovar_servicio',{...aud,campo:'renovación',cambio:`nueva fecha ${renovado.fechaNueva}`},`Renovó ${aud.plataforma||'servicio'}${aud.cliente?` de ${aud.cliente}`:''} +30 días · nueva fecha ${renovado.fechaNueva}.`);
         await bot.sendMessage(chatId, `✅ Renovado +30 días\nNueva fecha: *${escMD(renovado.fechaNueva)}*`, { parse_mode: "Markdown" });
         return enviarFichaCliente(chatId, clientId);
       }
@@ -6006,6 +6078,8 @@ Revise que el correo exista en inventario con esa plataforma o coloque la clave 
         if (idx < 0) return bot.sendMessage(chatId, "⚠️ Esa compra cambió o ya no existe. Abra nuevamente la ficha.");
         const compraId = String(servicios[idx]?.compraId || "");
         const renovado = await renovarServicioTx(clientId, idx, { dias: 31, compraId });
+        const aud=await actividadClienteServicioLocal(clientId,idx,compraId);
+        await registrarActividadTelegramLocal(userId,chatId,'renovar_servicio',{...aud,campo:'renovación',cambio:`nueva fecha ${renovado.fechaNueva}`},`Renovó ${aud.plataforma||'servicio'}${aud.cliente?` de ${aud.cliente}`:''} +31 días · nueva fecha ${renovado.fechaNueva}.`);
         await bot.sendMessage(chatId, `✅ Renovado +31 días\nNueva fecha: *${escMD(renovado.fechaNueva)}*`, { parse_mode: "Markdown" });
         return enviarFichaCliente(chatId, clientId);
       }
@@ -6045,7 +6119,9 @@ Revise que el correo exista en inventario con esa plataforma o coloque la clave 
           const idx = resolverIndiceCompraSelectorLocal(servicios, compraSel);
           if (idx < 0) return bot.sendMessage(chatId, "⚠️ Esa compra cambió o ya no existe. Abra nuevamente la ficha.");
           const compraId = String(servicios[idx]?.compraId || "");
+          const auditAntes=await actividadClienteServicioLocal(clientId,idx,compraId);
           const result = await eliminarServicioTx(clientId, idx, compraId);
+          await registrarActividadTelegramLocal(userId,chatId,'cambiar_servicio',{...auditAntes,campo:'servicio',cambio:'servicio anterior eliminado para reemplazo'},`Inició cambio de servicio de ${auditAntes.cliente||result.nombreCliente||'cliente'}: eliminó ${auditAntes.plataforma||humanPlatAlertLocal(result.eliminado?.plataforma||'servicio')}${auditAntes.cuenta?` · cuenta ${auditAntes.cuenta}`:''}.`);
           await bot.sendMessage(chatId,
             `🔄 *Servicio eliminado*\n\n` +
             `📦 ${escMD(humanPlatAlertLocal(result.eliminado?.plataforma || "-"))} — ${escMD(result.eliminado?.correo || "-")}\n` +
@@ -6105,8 +6181,10 @@ Revise que el correo exista en inventario con esa plataforma o coloque la clave 
         try {
           const ctx = pending.get(String(chatId));
           const idx = Number(ctx?.idx);
+          const auditAntes=await actividadClienteServicioLocal(clientId,idx,ctx?.compraId||"");
           const result = await eliminarServicioTx(clientId, idx, ctx?.compraId || "");
           pending.delete(String(chatId));
+          await registrarActividadTelegramLocal(userId,chatId,'no_renovo_eliminar',{...auditAntes,campo:'servicio',motivo:'No renovó'},`Marcó NO RENOVÓ y eliminó ${auditAntes.plataforma||'el servicio'}${auditAntes.cliente?` de ${auditAntes.cliente}`:''}${auditAntes.cuenta?` · cuenta ${auditAntes.cuenta}`:''}.`);
           await bot.sendMessage(chatId,
             `✅ *Servicio eliminado correctamente*\n\n` +
             `📦 ${escMD(humanPlatAlertLocal(result.eliminado?.plataforma || "-"))} — ${escMD(result.eliminado?.correo || "-")}\n` +
@@ -6145,7 +6223,9 @@ Revise que el correo exista en inventario con esa plataforma o coloque la clave 
 
       if (data.startsWith("cli:ren:all:ok:")) {
         const clientId = data.slice("cli:ren:all:ok:".length);
+        const cAudit=await getCliente(clientId);
         await renovarTodosServiciosTx(clientId, { dias: 30 });
+        await registrarActividadTelegramLocal(userId,chatId,'renovar_todos',{clienteId,cliente:cAudit?.nombrePerfil||cAudit?.nombre||'Cliente',telefono:cAudit?.telefono||'',campo:'todos los servicios',cambio:'+30 días'},`Renovó todos los servicios de ${cAudit?.nombrePerfil||cAudit?.nombre||'Cliente'} +30 días.`);
         await bot.sendMessage(chatId, `✅ Todos los servicios renovados +30 días.`);
         return enviarFichaCliente(chatId, clientId);
       }
@@ -6161,7 +6241,9 @@ Revise que el correo exista en inventario con esa plataforma o coloque la clave 
 
       if (data.startsWith("cli:ren:all31:ok:")) {
         const clientId = data.slice("cli:ren:all31:ok:".length);
+        const cAudit=await getCliente(clientId);
         await renovarTodosServiciosTx(clientId, { dias: 31 });
+        await registrarActividadTelegramLocal(userId,chatId,'renovar_todos',{clienteId,cliente:cAudit?.nombrePerfil||cAudit?.nombre||'Cliente',telefono:cAudit?.telefono||'',campo:'todos los servicios',cambio:'+31 días'},`Renovó todos los servicios de ${cAudit?.nombrePerfil||cAudit?.nombre||'Cliente'} +31 días.`);
         await bot.sendMessage(chatId, `✅ Todos los servicios renovados +31 días.`);
         return enviarFichaCliente(chatId, clientId);
       }
@@ -6254,10 +6336,13 @@ Revise que el correo exista en inventario con esa plataforma o coloque la clave 
 
         const referenciasBase = Array.isArray(ctx.referencias) ? ctx.referencias : [];
         const referencias = seleccionados.map((idx) => referenciasBase[idx] || { idx, compraId: "" });
+        const cAudit=await getCliente(clientId);
         const baja = await eliminarServiciosTx(clientId, referencias);
         const eliminados = baja.eliminados || [];
         const servicios = baja.servicios || [];
         pending.delete(String(chatId));
+        const resumenEliminados=eliminados.map(x=>humanPlatAlertLocal(x.plataforma||'')).filter(Boolean).join(', ');
+        await registrarActividadTelegramLocal(userId,chatId,'baja_masiva',{clienteId,cliente:cAudit?.nombrePerfil||cAudit?.nombre||'Cliente',telefono:cAudit?.telefono||'',campo:'servicios',cambio:`eliminó ${eliminados.length}: ${resumenEliminados}`},`Hizo baja masiva a ${cAudit?.nombrePerfil||cAudit?.nombre||'Cliente'} · eliminó ${eliminados.length} servicio(s)${resumenEliminados?`: ${resumenEliminados}`:''}.`);
       forceNextPanelAtBottom(chatId);
 
         let msg = `✅ *Baja masiva completada*\n\n`;
@@ -6693,6 +6778,7 @@ bot.on("message", async (msg) => {
         pending.delete(String(chatId));
       forceNextPanelAtBottom(chatId);
         const ok = await registrarIngresoTx({ monto: p.monto, banco: p.banco, plataforma: p.plataforma, detalle: p.detalle || "", fecha, userId, userName: msg.from?.first_name || "" });
+        await registrarActividadTelegramLocal(userId,chatId,'registrar_ingreso',{id:ok.id,plataforma:ok.plataforma||p.plataforma||'',cambio:`${moneyLps(ok.monto)} · ${ok.banco||''} · ${ok.fecha||fecha}`,motivo:ok.detalle||''},`Registró ingreso de ${moneyLps(ok.monto)} · ${ok.banco||p.banco||'-'} · ${ok.plataforma||p.plataforma||'-'} · fecha ${ok.fecha||fecha}.`,'Finanzas');
         return bot.sendMessage(chatId, `✅ *Ingreso registrado*\n\n💰 Monto: ${moneyLps(ok.monto)}\n🏦 Banco: ${escMD(ok.banco)}\n📦 Plataforma(s): ${escMD(ok.plataforma || "-")}\n📝 Detalle: ${escMD(ok.detalle || "-")}\n📅 Fecha: ${escMD(ok.fecha)}\n🆔 ID: \`${ok.id}\``, {
           parse_mode: "Markdown",
           reply_markup: { inline_keyboard: [[{ text: "➕ Registrar otro ingreso", callback_data: "fin:otro:ingreso" }], [{ text: "⬅️ Volver a Finanzas", callback_data: "menu:pagos" }], [{ text: "🏠 Inicio", callback_data: "go:inicio" }]] },
@@ -6720,6 +6806,7 @@ bot.on("message", async (msg) => {
         pending.delete(String(chatId));
       forceNextPanelAtBottom(chatId);
         const ok = await registrarEgresoTx({ monto: p.monto, banco: p.banco, motivo: p.motivo, detalle: p.detalle || "", fecha, userId, userName: msg.from?.first_name || "" });
+        await registrarActividadTelegramLocal(userId,chatId,'registrar_egreso',{id:ok.id,motivo:ok.motivo||p.motivo||'',cambio:`${moneyLps(ok.monto)} · ${ok.banco||''} · ${ok.fecha||fecha}`},`Registró egreso de ${moneyLps(ok.monto)} · ${ok.banco||p.banco||'-'} · ${ok.motivo||p.motivo||'-'} · fecha ${ok.fecha||fecha}.`,'Finanzas');
         return bot.sendMessage(chatId, `✅ *Egreso registrado*\n\n💸 Monto: ${moneyLps(ok.monto)}\n🏦 Banco: ${escMD(ok.banco || "-")}\n🧾 Motivo: ${escMD(ok.motivo)}\n📝 Detalle: ${escMD(ok.detalle || "-")}\n📅 Fecha: ${escMD(ok.fecha)}\n🆔 ID: \`${ok.id}\``, {
           parse_mode: "Markdown",
           reply_markup: { inline_keyboard: [[{ text: "➕ Registrar otro egreso", callback_data: "fin:otro:egreso" }], [{ text: "⬅️ Volver a Finanzas", callback_data: "menu:pagos" }], [{ text: "🏠 Inicio", callback_data: "go:inicio" }]] },
@@ -6891,7 +6978,10 @@ bot.on("message", async (msg) => {
         if (!Number.isFinite(monto) || monto <= 0) return bot.sendMessage(chatId, "⚠️ Monto inválido.");
         pending.delete(String(chatId));
       forceNextPanelAtBottom(chatId);
-        await db.collection(FINANZAS_COLLECTION).doc(String(p.id)).set({ monto: Number(monto), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        const finRef = db.collection(FINANZAS_COLLECTION).doc(String(p.id));
+        const finPrev = (await finRef.get()).data() || {};
+        await finRef.set({ monto: Number(monto), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        await registrarActividadTelegramLocal(userId,chatId,'editar_movimiento_finanzas',{id:String(p.id),campo:'monto',cambio:`L ${Number(finPrev.monto||0).toFixed(2)} → L ${Number(monto).toFixed(2)}`,cliente:finPrev.cliente||finPrev.nombreCliente||'',plataforma:finPrev.plataforma||'',motivo:finPrev.motivo||''},`Actualizó el monto de un movimiento: L ${Number(finPrev.monto||0).toFixed(2)} → L ${Number(monto).toFixed(2)}${finPrev.cliente||finPrev.nombreCliente?` · ${finPrev.cliente||finPrev.nombreCliente}`:''}.`,'Finanzas');
         return bot.sendMessage(chatId, "✅ Monto actualizado correctamente.");
       }
 
@@ -6899,7 +6989,10 @@ bot.on("message", async (msg) => {
         if (!t) return bot.sendMessage(chatId, "⚠️ Escriba el banco.");
         pending.delete(String(chatId));
       forceNextPanelAtBottom(chatId);
-        await db.collection(FINANZAS_COLLECTION).doc(String(p.id)).set({ banco: t, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        const finRef = db.collection(FINANZAS_COLLECTION).doc(String(p.id));
+        const finPrev = (await finRef.get()).data() || {};
+        await finRef.set({ banco: t, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        await registrarActividadTelegramLocal(userId,chatId,'editar_movimiento_finanzas',{id:String(p.id),campo:'banco',cambio:`${finPrev.banco||'-'} → ${t}`,cliente:finPrev.cliente||finPrev.nombreCliente||'',plataforma:finPrev.plataforma||'',motivo:finPrev.motivo||''},`Actualizó el banco de un movimiento: ${finPrev.banco||'-'} → ${t}${finPrev.cliente||finPrev.nombreCliente?` · ${finPrev.cliente||finPrev.nombreCliente}`:''}.`,'Finanzas');
         return bot.sendMessage(chatId, "✅ Banco actualizado correctamente.");
       }
 
@@ -6907,7 +7000,10 @@ bot.on("message", async (msg) => {
         if (!t) return bot.sendMessage(chatId, "⚠️ Escriba el motivo.");
         pending.delete(String(chatId));
       forceNextPanelAtBottom(chatId);
-        await db.collection(FINANZAS_COLLECTION).doc(String(p.id)).set({ motivo: t, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        const finRef = db.collection(FINANZAS_COLLECTION).doc(String(p.id));
+        const finPrev = (await finRef.get()).data() || {};
+        await finRef.set({ motivo: t, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        await registrarActividadTelegramLocal(userId,chatId,'editar_movimiento_finanzas',{id:String(p.id),campo:'motivo',cambio:`${finPrev.motivo||'-'} → ${t}`,cliente:finPrev.cliente||finPrev.nombreCliente||'',plataforma:finPrev.plataforma||''},`Actualizó el motivo de un movimiento: ${finPrev.motivo||'-'} → ${t}.`,'Finanzas');
         return bot.sendMessage(chatId, "✅ Motivo actualizado correctamente.");
       }
 
@@ -6915,7 +7011,10 @@ bot.on("message", async (msg) => {
         if (!t) return bot.sendMessage(chatId, "⚠️ Escriba la plataforma.");
         pending.delete(String(chatId));
       forceNextPanelAtBottom(chatId);
-        await db.collection(FINANZAS_COLLECTION).doc(String(p.id)).set({ plataforma: t, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        const finRef = db.collection(FINANZAS_COLLECTION).doc(String(p.id));
+        const finPrev = (await finRef.get()).data() || {};
+        await finRef.set({ plataforma: t, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        await registrarActividadTelegramLocal(userId,chatId,'editar_movimiento_finanzas',{id:String(p.id),campo:'plataforma',cambio:`${finPrev.plataforma||'-'} → ${t}`,cliente:finPrev.cliente||finPrev.nombreCliente||''},`Actualizó la plataforma de un movimiento: ${finPrev.plataforma||'-'} → ${t}${finPrev.cliente||finPrev.nombreCliente?` · ${finPrev.cliente||finPrev.nombreCliente}`:''}.`,'Finanzas');
         return bot.sendMessage(chatId, "✅ Plataforma actualizada correctamente.");
       }
 
@@ -6923,7 +7022,10 @@ bot.on("message", async (msg) => {
         if (!t) return bot.sendMessage(chatId, "⚠️ Escriba el detalle.");
         pending.delete(String(chatId));
       forceNextPanelAtBottom(chatId);
-        await db.collection(FINANZAS_COLLECTION).doc(String(p.id)).set({ detalle: t, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        const finRef = db.collection(FINANZAS_COLLECTION).doc(String(p.id));
+        const finPrev = (await finRef.get()).data() || {};
+        await finRef.set({ detalle: t, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        await registrarActividadTelegramLocal(userId,chatId,'editar_movimiento_finanzas',{id:String(p.id),campo:'detalle',cambio:`${String(finPrev.detalle||'-').slice(0,100)} → ${String(t).slice(0,100)}`,cliente:finPrev.cliente||finPrev.nombreCliente||'',plataforma:finPrev.plataforma||''},`Actualizó el detalle de un movimiento${finPrev.cliente||finPrev.nombreCliente?` de ${finPrev.cliente||finPrev.nombreCliente}`:''}.`,'Finanzas');
         return bot.sendMessage(chatId, "✅ Detalle actualizado correctamente.");
       }
 
@@ -6931,7 +7033,10 @@ bot.on("message", async (msg) => {
         if (!isFechaDMY(t)) return bot.sendMessage(chatId, "⚠️ Fecha inválida. Use dd/mm/yyyy");
         pending.delete(String(chatId));
       forceNextPanelAtBottom(chatId);
-        await db.collection(FINANZAS_COLLECTION).doc(String(p.id)).set({ fecha: t, fechaTS: parseDMYtoTS(t), mesKey: getMonthKeyFromDMY(t), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        const finRef = db.collection(FINANZAS_COLLECTION).doc(String(p.id));
+        const finPrev = (await finRef.get()).data() || {};
+        await finRef.set({ fecha: t, fechaTS: parseDMYtoTS(t), mesKey: getMonthKeyFromDMY(t), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        await registrarActividadTelegramLocal(userId,chatId,'editar_movimiento_finanzas',{id:String(p.id),campo:'fecha',cambio:`${finPrev.fecha||'-'} → ${t}`,cliente:finPrev.cliente||finPrev.nombreCliente||'',plataforma:finPrev.plataforma||''},`Actualizó la fecha de un movimiento: ${finPrev.fecha||'-'} → ${t}${finPrev.cliente||finPrev.nombreCliente?` · ${finPrev.cliente||finPrev.nombreCliente}`:''}.`,'Finanzas');
         return bot.sendMessage(chatId, "✅ Fecha actualizada correctamente.");
       }
 
@@ -6958,6 +7063,7 @@ bot.on("message", async (msg) => {
         if (idxExiste !== -1) {
           clientes[idxExiste] = { ...clientes[idxExiste], pin: t };
           await ref.set({ clientes, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+          await registrarActividadTelegramLocal(userId,chatId,'editar_pin_perfil_bodega',{inventarioId:ref.id,cliente:p.nombre,perfil:p.nombre,plataforma:humanPlataforma(p.plataforma),cuenta:p.correo,campo:'PIN',cambio:'PIN actualizado'},`Actualizó el PIN de ${p.nombre} en Bodega · ${humanPlataforma(p.plataforma)} · cuenta ${p.correo}.`,'Bodega');
           await bot.sendMessage(chatId, `⚠️ *${escMD(p.nombre)}* ya estaba en esta cuenta — actualicé su PIN a *${escMD(t)}* en vez de duplicarlo.`, { parse_mode: "Markdown" });
           return mostrarPanelCorreo(chatId, p.plataforma, p.correo);
         }
@@ -6968,6 +7074,7 @@ bot.on("message", async (msg) => {
         const ocupados = clientes.length;
         const disponibles = Math.max(0, capacidad - ocupados);
         await ref.set({ clientes, ocupados, disponibles, disp: disponibles, estado: disponibles === 0 ? "llena" : "activa", capacidad, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        await registrarActividadTelegramLocal(userId,chatId,'agregar_perfil_bodega',{inventarioId:ref.id,cliente:p.nombre,perfil:p.nombre,plataforma:humanPlataforma(p.plataforma),cuenta:p.correo,campo:'perfil'},`Agregó a ${p.nombre} a Bodega · ${humanPlataforma(p.plataforma)} · cuenta ${p.correo}.`,'Bodega');
         await bot.sendMessage(chatId, `✅ *Cliente agregado correctamente*\n\n👤 *Nombre:* ${escMD(p.nombre)}\n🔐 *PIN:* ${escMD(t)}\n\n👤 *Ocupados:* ${ocupados}/${capacidad}\n✅ *Disponibles:* ${disponibles}\n📊 *Estado:* ${escMD(disponibles === 0 ? "LLENA" : "CON ESPACIO")}`, { parse_mode: "Markdown" });
         return mostrarPanelCorreo(chatId, p.plataforma, p.correo);
       }
@@ -6981,8 +7088,10 @@ bot.on("message", async (msg) => {
         const ref = found.ref;
         const clientes = Array.isArray(found.data?.clientes) ? found.data.clientes.slice() : [];
         if (p.clienteIndex < 0 || p.clienteIndex >= clientes.length) return bot.sendMessage(chatId, "❌ Cliente inválido.");
+        const perfilEditado = clientes[p.clienteIndex]?.nombre || `perfil ${p.clienteIndex + 1}`;
         clientes[p.clienteIndex] = { ...clientes[p.clienteIndex], pin: t };
         await ref.set({ clientes, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        await registrarActividadTelegramLocal(userId,chatId,'editar_pin_perfil_bodega',{inventarioId:ref.id,cliente:perfilEditado,perfil:perfilEditado,plataforma:humanPlataforma(p.plataforma),cuenta:p.correo,campo:'PIN',cambio:'PIN actualizado'},`Actualizó el PIN de ${perfilEditado} en Bodega · ${humanPlataforma(p.plataforma)} · cuenta ${p.correo}.`,'Bodega');
         await bot.sendMessage(chatId, "✅ PIN actualizado correctamente.");
         return mostrarPanelCorreo(chatId, p.plataforma, p.correo);
       }
@@ -6994,6 +7103,7 @@ bot.on("message", async (msg) => {
         const found = await buscarCorreoInventarioPorPlatCorreo(p.plataforma, p.correo);
         if (!found) return bot.sendMessage(chatId, "❌ La cuenta no existe.");
         await found.ref.set({ clave: t, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        await registrarActividadTelegramLocal(userId,chatId,'editar_clave_cuenta_bodega',{inventarioId:found.ref.id,plataforma:humanPlataforma(p.plataforma),cuenta:p.correo,campo:'clave',cambio:'clave actualizada'},`Actualizó la clave de una cuenta de Bodega · ${humanPlataforma(p.plataforma)} · cuenta ${p.correo}.`,'Bodega');
         await bot.sendMessage(chatId, "✅ Clave de la cuenta actualizada.");
         return mostrarPanelCorreo(chatId, p.plataforma, p.correo);
       }
@@ -7026,6 +7136,7 @@ bot.on("message", async (msg) => {
         if (nuevaRef.id !== found.ref.id) {
           await found.ref.delete();
         }
+        await registrarActividadTelegramLocal(userId,chatId,'editar_cuenta_bodega',{inventarioId:nuevaRef.id,plataforma:humanPlataforma(p.plataforma),cuenta:nuevoCorreo,campo:identLabel,cambio:`${p.correo} → ${nuevoCorreo}`},`Actualizó ${identLabel.toLowerCase()} de una cuenta de Bodega · ${humanPlataforma(p.plataforma)} · ${p.correo} → ${nuevoCorreo}.`,'Bodega');
 
         await bot.sendMessage(chatId, `✅ ${identLabel} de la cuenta actualizado.`);
         return mostrarPanelCorreo(chatId, p.plataforma, nuevoCorreo);
@@ -7084,6 +7195,7 @@ bot.on("message", async (msg) => {
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         }, { merge: true });
         invalidarCacheRevendedores();
+        await registrarActividadTelegramLocal(userId,chatId,'agregar_vendedor',{vendedor:nombre,campo:'usuario Telegram',cambio:'vendedor agregado'},`Agregó al vendedor ${nombre} al bot de Telegram.`,'Equipo');
         await bot.sendMessage(chatId, `✅ Revendedor *${escMD(nombre)}* agregado.\n🆔 ${escMD(telegramId)}`, { parse_mode: "Markdown" });
         return menuGestionRevendedores(chatId);
       }
@@ -7115,6 +7227,7 @@ bot.on("message", async (msg) => {
         const correoNorm = normalizeIdentByPlatformLocal(p.plat, p.correo);
         const ref = db.collection("inventario").doc(docIdInventarioLocal(correoNorm, p.plat));
         await ref.set({ plataforma: p.plat, correo: correoNorm, ident: correoNorm, clave: p.clave, capacidad: qty, ocupados: 0, disponibles: qty, disp: qty, estado: "activa", clientes: [], createdAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+        await registrarActividadTelegramLocal(userId,chatId,'crear_cuenta_inventario',{inventarioId:ref.id,plataforma:humanPlataforma(p.plat),cuenta:correoNorm,campo:'cuenta de Bodega',cambio:`capacidad ${qty}`},`Creó la cuenta ${correoNorm} de ${humanPlataforma(p.plat)} en Bodega · capacidad ${qty}.`,'Bodega');
         await bot.sendMessage(chatId, `✅ Cuenta *${escMD(correoNorm)}* creada con ${qty} perfiles.`, { parse_mode: "Markdown" });
         pending.set(String(chatId), { mode: "invSubmenuCtx", plat: p.plat, correo: correoNorm });
         return enviarSubmenuInventario(chatId, p.plat, correoNorm);
@@ -7137,6 +7250,7 @@ bot.on("message", async (msg) => {
         const nuevaCapacidad = Math.max(capacidad, ocupados + qty);
         const disponibles = Math.max(0, nuevaCapacidad - ocupados);
         await ref.set({ capacidad: nuevaCapacidad, ocupados, disponibles, disp: disponibles, estado: disponibles === 0 ? "llena" : "activa", updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        await registrarActividadTelegramLocal(userId,chatId,'editar_cuenta_inventario',{inventarioId:ref.id,plataforma:humanPlataforma(plat),cuenta:acceso,campo:'capacidad',cambio:`${capacidad} → ${nuevaCapacidad}`},`Aumentó la capacidad de ${acceso} · ${humanPlataforma(plat)}: ${capacidad} → ${nuevaCapacidad}.`,'Bodega');
         pending.set(String(chatId), { mode: "invSubmenuCtx", plat, correo: acceso });
         return enviarSubmenuInventario(chatId, plat, acceso);
       }
@@ -7159,6 +7273,7 @@ bot.on("message", async (msg) => {
         const disponibles = Math.max(0, nuevaCapacidad - ocupados);
         const antes = { ...d, disp: Math.max(0, capacidadActual - ocupados), capacidad: capacidadActual };
         await ref.set({ capacidad: nuevaCapacidad, ocupados, disponibles, disp: disponibles, estado: disponibles === 0 ? "llena" : "activa", updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        await registrarActividadTelegramLocal(userId,chatId,'editar_cuenta_inventario',{inventarioId:ref.id,plataforma:humanPlataforma(plat),cuenta:acceso,campo:'capacidad',cambio:`${capacidadActual} → ${nuevaCapacidad}`},`Redujo la capacidad de ${acceso} · ${humanPlataforma(plat)}: ${capacidadActual} → ${nuevaCapacidad}.`,'Bodega');
         await aplicarAutoLleno(chatId, ref, antes, { ...d, disp: disponibles, plataforma: plat, correo: acceso, capacidad: nuevaCapacidad });
         pending.set(String(chatId), { mode: "invSubmenuCtx", plat, correo: acceso });
         return enviarSubmenuInventario(chatId, plat, acceso);
@@ -7175,6 +7290,7 @@ bot.on("message", async (msg) => {
         if (!doc.exists) return bot.sendMessage(chatId, "⚠️ Esa cuenta no existe en inventario.");
         await ref.set({ clave: t, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
         const sync = await sincronizarCuentaEnComprasTx({ plataforma: plat, correo: acceso, nuevaClave: t, asignaciones: Array.isArray((doc.data() || {}).clientes) ? (doc.data() || {}).clientes : [] });
+        await registrarActividadTelegramLocal(userId,chatId,'editar_cuenta_inventario',{inventarioId:ref.id,plataforma:humanPlataforma(plat),cuenta:acceso,campo:'clave',cambio:`clave actualizada · ${sync.perfilesActualizados||0} perfil(es) sincronizados`},`Actualizó la clave de ${acceso} · ${humanPlataforma(plat)}${sync.perfilesActualizados?` · sincronizó ${sync.perfilesActualizados} perfil(es)`:''}.`,'Bodega');
         if (sync.perfilesActualizados) await bot.sendMessage(chatId, `✅ Clave actualizada también en ${sync.perfilesActualizados} perfil(es) del CRM.`);
         pending.set(String(chatId), { mode: "invSubmenuCtx", plat, correo: acceso });
         return enviarSubmenuInventario(chatId, plat, acceso);
@@ -7205,7 +7321,9 @@ bot.on("message", async (msg) => {
 
         pending.delete(String(chatId));
         forceNextPanelAtBottom(chatId);
+        const cAudit=await getCliente(p.clientId);
         await renovarTodosServiciosTx(p.clientId, { fechaExacta: fechaFinal });
+        await registrarActividadTelegramLocal(userId,chatId,'renovar_todos',{clienteId:p.clientId,cliente:cAudit?.nombrePerfil||cAudit?.nombre||'Cliente',telefono:cAudit?.telefono||'',campo:'todos los servicios',cambio:`fecha → ${fechaFinal}`},`Renovó todos los servicios de ${cAudit?.nombrePerfil||cAudit?.nombre||'Cliente'} a la fecha ${fechaFinal}.`);
         await bot.sendMessage(chatId, `✅ Todos los servicios renovados a la fecha: *${fechaFinal}*`, { parse_mode: "Markdown" });
         return enviarFichaCliente(chatId, p.clientId);
       }
@@ -7238,6 +7356,8 @@ bot.on("message", async (msg) => {
         pending.delete(String(chatId));
       forceNextPanelAtBottom(chatId);
         await renovarServicioTx(p.clientId, p.idx, { fechaExacta: fechaFinal, compraId: p.compraId || "" });
+        const aud=await actividadClienteServicioLocal(p.clientId,p.idx,p.compraId||"");
+        await registrarActividadTelegramLocal(userId,chatId,'renovar_servicio',{...aud,campo:'renovación',cambio:`fecha → ${fechaFinal}`},`Renovó ${aud.plataforma||'servicio'}${aud.cliente?` de ${aud.cliente}`:''} a la fecha ${fechaFinal}.`);
         await bot.sendMessage(chatId, `✅ Fecha actualizada: *${fechaFinal}*`, { parse_mode: "Markdown" });
         return menuServicio(chatId, p.clientId, p.idx);
       }
@@ -7252,6 +7372,7 @@ bot.on("message", async (msg) => {
         const ref = db.collection("clientes").doc(String(actual.id));
         await ref.set({ nombrePerfil: t, nombre_norm: String(t || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().replace(/\s+/g, " "), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
         { const { cacheInvalidatePrefix: cIPn } = require("./index_01_core"); cIPn(`clientes:doc:${actual.id}`); }
+        await registrarActividadTelegramLocal(userId,chatId,'editar_cliente',{clienteId:actual.id,cliente:t,clienteAnterior:actual.nombrePerfil||actual.nombre||'',telefono:actual.telefono||'',campo:'nombre',cambio:`${actual.nombrePerfil||actual.nombre||'Cliente'} → ${t}`},`Cambió el nombre del cliente ${actual.nombrePerfil||actual.nombre||'Cliente'} → ${t}.`);
         return menuEditarCliente(chatId, actual.id);
       }
 
@@ -7266,6 +7387,7 @@ bot.on("message", async (msg) => {
         const telefonoCanonico = normalizarTelefonoCliente(t);
         await ref.set({ telefono: telefonoCanonico, telefono_norm: telefonoCanonico, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
         { const { cacheInvalidatePrefix: cIPt } = require("./index_01_core"); cIPt(`clientes:doc:${actual.id}`); }
+        await registrarActividadTelegramLocal(userId,chatId,'editar_cliente',{clienteId:actual.id,cliente:actual.nombrePerfil||actual.nombre||'Cliente',telefono:telefonoCanonico,campo:'teléfono',cambio:`${actual.telefono||'-'} → ${telefonoCanonico}`},`Actualizó el teléfono de ${actual.nombrePerfil||actual.nombre||'Cliente'}: ${actual.telefono||'-'} → ${telefonoCanonico}.`);
         return menuEditarCliente(chatId, actual.id);
       }
 
@@ -7292,6 +7414,7 @@ bot.on("message", async (msg) => {
           pending.delete(String(chatId));forceNextPanelAtBottom(chatId);
           try { await addPerfilTx(p.clientId, p.idx, { nombre: t, perfil: t, correo: "", clave: "", pin: "" }, p.compraId || ""); }
           catch (e) { return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo añadir el perfil."}`); }
+          {const aud=await actividadClienteServicioLocal(p.clientId,p.idx,p.compraId||"");await registrarActividadTelegramLocal(userId,chatId,'agregar_perfil',{...aud,perfil:t,campo:'perfil'},`Agregó el perfil ${t}${aud.cliente?` a ${aud.cliente}`:''}${aud.plataforma?` · ${aud.plataforma}`:''}.`);}
           return menuListaPerfilesServicio(chatId, p.clientId, p.idx);
         }
         pending.set(String(chatId), { ...p, mode: "cliProfAddMail", plat, nombre: t });
@@ -7312,6 +7435,7 @@ bot.on("message", async (msg) => {
         pending.delete(String(chatId));forceNextPanelAtBottom(chatId);
         try { await addPerfilTx(p.clientId, p.idx, { nombre: p.nombre, perfil: p.nombre, correo: mail, clave: "", pin: "" }, p.compraId || ""); }
         catch (e) { return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo añadir el perfil."}`); }
+        {const aud=await actividadClienteServicioLocal(p.clientId,p.idx,p.compraId||"");await registrarActividadTelegramLocal(userId,chatId,'agregar_perfil',{...aud,perfil:p.nombre,cuenta:mail,campo:'perfil'},`Agregó el perfil ${p.nombre}${aud.cliente?` a ${aud.cliente}`:''}${aud.plataforma?` · ${aud.plataforma}`:''} · cuenta ${mail}.`);}
         await bot.sendMessage(chatId, "✅ Perfil añadido a la misma compra. No se creó otro precio ni otra renovación.");
         return menuListaPerfilesServicio(chatId, p.clientId, p.idx);
       }
@@ -7324,6 +7448,7 @@ bot.on("message", async (msg) => {
         pending.delete(String(chatId));forceNextPanelAtBottom(chatId);
         try { await addPerfilTx(p.clientId, p.idx, { nombre: p.nombre, perfil: p.nombre, correo: p.mail, clave: t, pin: "" }, p.compraId || ""); }
         catch (e) { return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo añadir el perfil."}`); }
+        {const aud=await actividadClienteServicioLocal(p.clientId,p.idx,p.compraId||"");await registrarActividadTelegramLocal(userId,chatId,'agregar_perfil',{...aud,perfil:p.nombre,cuenta:p.mail||aud.cuenta,campo:'perfil + clave'},`Agregó el perfil ${p.nombre}${aud.cliente?` a ${aud.cliente}`:''}${aud.plataforma?` · ${aud.plataforma}`:''}${(p.mail||aud.cuenta)?` · cuenta ${p.mail||aud.cuenta}`:''}.`);}
         await bot.sendMessage(chatId, "✅ Perfil añadido a la misma compra. No se creó otro precio ni otra renovación.");
         return menuListaPerfilesServicio(chatId, p.clientId, p.idx);
       }
@@ -7332,6 +7457,7 @@ bot.on("message", async (msg) => {
         pending.delete(String(chatId));forceNextPanelAtBottom(chatId);
         try { await addPerfilTx(p.clientId, p.idx, { nombre: p.nombre, perfil: p.nombre, correo: p.mail, clave: p.clave || "", pin: t }, p.compraId || ""); }
         catch (e) { return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo añadir el perfil."}`); }
+        {const aud=await actividadClienteServicioLocal(p.clientId,p.idx,p.compraId||"");await registrarActividadTelegramLocal(userId,chatId,'agregar_perfil',{...aud,perfil:p.nombre,cuenta:p.mail||aud.cuenta,campo:'perfil + PIN'},`Agregó el perfil ${p.nombre}${aud.cliente?` a ${aud.cliente}`:''}${aud.plataforma?` · ${aud.plataforma}`:''}${(p.mail||aud.cuenta)?` · cuenta ${p.mail||aud.cuenta}`:''} · PIN guardado.`);}
         await bot.sendMessage(chatId, "✅ Perfil añadido a la misma compra con su PIN individual. El precio y la fecha siguen únicos.");
         return menuListaPerfilesServicio(chatId, p.clientId, p.idx);
       }
@@ -7349,8 +7475,13 @@ bot.on("message", async (msg) => {
         } else if (p.field === "key") patch.clave = t;
         else if (p.field === "pin") patch.pin = t;
         pending.delete(String(chatId));forceNextPanelAtBottom(chatId);
+        const audAntes=await actividadClienteServicioLocal(p.clientId,p.idx,p.compraId||"");
+        const perfilesAntes=perfilesServicioLocal(s,c?.nombrePerfil||'');const perfilAntes=perfilesAntes[p.perfilIndex]?.nombre||perfilesAntes[p.perfilIndex]?.perfil||audAntes.perfil||'Perfil';
         try { await patchPerfilTx(p.clientId, p.idx, p.perfilIndex, patch, p.compraId || "", p.perfilId || ""); }
         catch (e) { return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo editar el perfil."}`); }
+        const campoPerfil=p.field==='name'?'nombre del perfil':p.field==='mail'?'correo/cuenta':p.field==='key'?'clave':'PIN';
+        const cambioPerfil=p.field==='name'?`${perfilAntes} → ${t}`:p.field==='mail'?`cuenta → ${patch.correo}`:p.field==='key'?'clave actualizada':'PIN actualizado';
+        await registrarActividadTelegramLocal(userId,chatId,'editar_perfil',{...audAntes,perfil:p.field==='name'?t:perfilAntes,cuenta:p.field==='mail'?patch.correo:audAntes.cuenta,campo:campoPerfil,cambio:cambioPerfil},`Actualizó ${campoPerfil} de ${perfilAntes}${audAntes.cliente?` · cliente ${audAntes.cliente}`:''}${audAntes.plataforma?` · ${audAntes.plataforma}`:''}${p.field==='mail'?` · nueva cuenta ${patch.correo}`:''}.`);
         await bot.sendMessage(chatId, "✅ Perfil actualizado dentro de la misma compra.");
         return menuPerfilServicio(chatId, p.clientId, p.idx, p.perfilIndex);
       }
@@ -7420,6 +7551,7 @@ bot.on("message", async (msg) => {
         } catch (e) {
           return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo agregar el servicio."}`);
         }
+        {const cAudit=await getCliente(p.clientId);await registrarActividadTelegramLocal(userId,chatId,'agregar_servicio',{clienteId:p.clientId,cliente:cAudit?.nombrePerfil||cAudit?.nombre||'Cliente',telefono:cAudit?.telefono||'',plataforma:humanPlataforma(p.plat),cuenta:p.mail||'',vendedor,campo:'servicio',cambio:`precio L ${p.precio} · renovación ${p.fechaRenovacion}`},`Agregó ${humanPlataforma(p.plat)} a ${cAudit?.nombrePerfil||cAudit?.nombre||'Cliente'}${p.mail?` · cuenta ${p.mail}`:''} · L ${p.precio} · renueva ${p.fechaRenovacion}.`);}
         return enviarFichaCliente(chatId, p.clientId);
       }
 
@@ -7469,7 +7601,10 @@ bot.on("message", async (msg) => {
             }
           }
 
+          const auditAntes=await actividadClienteServicioLocal(p.clientId,p.idx,p.compraId||"");
           await patchServicio(p.clientId, p.idx, patch, p.compraId || "");
+          const auditDespues=await actividadClienteServicioLocal(p.clientId,p.idx,p.compraId||"");
+          await registrarActividadTelegramLocal(userId,chatId,'editar_servicio',{...auditDespues,campo:'correo/cuenta',cambio:`${auditAntes.cuenta||'-'} → ${auditDespues.cuenta||patch.correo||correoIngresado}`},`Actualizó el correo/cuenta de ${auditDespues.cliente||auditAntes.cliente||'cliente'}${auditDespues.plataforma?` · ${auditDespues.plataforma}`:''}: ${auditAntes.cuenta||'-'} → ${auditDespues.cuenta||patch.correo||correoIngresado}.`);
 
           if (inv) {
             const platFinal = normalizarPlataforma(patch.plataforma || platBase);
@@ -7491,6 +7626,7 @@ bot.on("message", async (msg) => {
         pending.delete(String(chatId));
       forceNextPanelAtBottom(chatId);
         try { await patchServicio(p.clientId, p.idx, { clave: t }, p.compraId || ""); } catch (e) { return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo actualizar el servicio."}`); }
+        {const aud=await actividadClienteServicioLocal(p.clientId,p.idx,p.compraId||"");await registrarActividadTelegramLocal(userId,chatId,'editar_servicio',{...aud,campo:'clave',cambio:'clave actualizada'},`Actualizó la clave de ${aud.cliente||'cliente'}${aud.plataforma?` · ${aud.plataforma}`:''}${aud.cuenta?` · cuenta ${aud.cuenta}`:''}.`);}
         return menuServicio(chatId, p.clientId, p.idx);
       }
 
@@ -7498,6 +7634,7 @@ bot.on("message", async (msg) => {
         pending.delete(String(chatId));
       forceNextPanelAtBottom(chatId);
         try { await patchServicio(p.clientId, p.idx, { pin: t }, p.compraId || ""); } catch (e) { return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo actualizar el servicio."}`); }
+        {const aud=await actividadClienteServicioLocal(p.clientId,p.idx,p.compraId||"");await registrarActividadTelegramLocal(userId,chatId,'editar_servicio',{...aud,campo:'PIN',cambio:'PIN actualizado'},`Actualizó el PIN de ${aud.cliente||'cliente'}${aud.plataforma?` · ${aud.plataforma}`:''}${aud.cuenta?` · cuenta ${aud.cuenta}`:''}.`);}
         return menuServicio(chatId, p.clientId, p.idx);
       }
 
@@ -7505,7 +7642,10 @@ bot.on("message", async (msg) => {
         pending.delete(String(chatId));
         forceNextPanelAtBottom(chatId);
         try {
+          const antes=await actividadClienteServicioLocal(p.clientId,p.idx,p.compraId||"");
           await patchServicio(p.clientId, p.idx, { plataforma: p.plat, correo: "", clave: "", pin: t }, p.compraId || "");
+          const despues=await actividadClienteServicioLocal(p.clientId,p.idx,p.compraId||"");
+          await registrarActividadTelegramLocal(userId,chatId,'editar_servicio',{...despues,campo:'plataforma + PIN',cambio:`${antes.plataforma||'Servicio'} → ${despues.plataforma||humanPlataforma(p.plat)}`},`Cambió la plataforma de ${despues.cliente||antes.cliente||'cliente'}: ${antes.plataforma||'anterior'} → ${despues.plataforma||humanPlataforma(p.plat)} · PIN actualizado.`);
         } catch (e) {
           return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo cambiar la plataforma."}`);
         }
@@ -7518,6 +7658,7 @@ bot.on("message", async (msg) => {
         pending.delete(String(chatId));
       forceNextPanelAtBottom(chatId);
         try { await patchServicio(p.clientId, p.idx, { precio: n }, p.compraId || ""); } catch (e) { return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo actualizar el servicio."}`); }
+        {const aud=await actividadClienteServicioLocal(p.clientId,p.idx,p.compraId||"");await registrarActividadTelegramLocal(userId,chatId,'editar_servicio',{...aud,campo:'precio',cambio:`precio → L ${n}`},`Actualizó el precio de ${aud.cliente||'cliente'}${aud.plataforma?` · ${aud.plataforma}`:''} → L ${n}.`);}
         return menuServicio(chatId, p.clientId, p.idx);
       }
 
@@ -7526,6 +7667,7 @@ bot.on("message", async (msg) => {
         pending.delete(String(chatId));
       forceNextPanelAtBottom(chatId);
         try { await patchServicio(p.clientId, p.idx, { fechaRenovacion: t }, p.compraId || ""); } catch (e) { return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo actualizar el servicio."}`); }
+        {const aud=await actividadClienteServicioLocal(p.clientId,p.idx,p.compraId||"");await registrarActividadTelegramLocal(userId,chatId,'editar_servicio',{...aud,campo:'renovación',cambio:`fecha → ${t}`},`Actualizó la renovación de ${aud.cliente||'cliente'}${aud.plataforma?` · ${aud.plataforma}`:''} → ${t}.`);}
         return menuServicio(chatId, p.clientId, p.idx);
       }
 
@@ -7546,6 +7688,8 @@ bot.on("message", async (msg) => {
         } catch (e) {
           return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo transferir la cuenta."}`);
         }
+        const aud=await actividadClienteServicioLocal(p.clientId,p.idx,p.compraId||"");
+        await registrarActividadTelegramLocal(userId,chatId,'transferir_servicio',{...aud,vendedor,campo:'vendedor',cambio:`vendedor → ${vendedor}`},`Cambió el vendedor responsable de ${aud.cliente||'cliente'}${aud.plataforma?` · ${aud.plataforma}`:''}${aud.cuenta?` · cuenta ${aud.cuenta}`:''} → ${vendedor}.`);
         await bot.sendMessage(chatId, `✅ Cuenta transferida a ${vendedor}. Las demás cuentas del cliente no cambiaron.`);
         return menuServicio(chatId, p.clientId, p.idx);
       }
