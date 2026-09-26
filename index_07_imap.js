@@ -345,11 +345,29 @@ function esSpotify(from="",subject=""){
   return f.includes("spotify") || s.includes("spotify");
 }
 
-function esReset(subject="", text="") {
-  const s = `${subject} ${text}`.toLowerCase();
-  return s.includes("restablec") || s.includes("reset") ||
-         s.includes("recupera tu contrase") || s.includes("reset your password") ||
-         s.includes("cambiar contrase") || s.includes("change your password");
+// Correos que SOLO avisan (nuevo inicio de sesión, cuenta modificada, bienvenida,
+// invitación a familia). Traen links de "si no fuiste tú, restablece tu clave"
+// en el cuerpo, pero NO son un restablecimiento ni traen el OTP.
+function esNotificacionCuenta(subject = "") {
+  const s = normalizarTextoBusqueda(subject);
+  return [
+    "nuevo inicio de sesion", "inicio de sesion nuevo", "new sign-in", "new sign in", "new login",
+    "se ha modificado", "ha sido modificad", "has been updated", "was changed", "se actualizo",
+    "te damos la bienvenida", "bienvenid", "welcome to",
+    "invited to join", "te invitaron", "invitacion", "mydisney family", "familia mydisney",
+    "tu contrasena ha cambiado", "tu contrasena se cambio", "password has been changed", "password was changed",
+  ].some(k => s.includes(k));
+}
+
+// El restablecimiento se decide por el ASUNTO. Antes se miraba también el cuerpo
+// completo y cualquier correo con un pie "restablece tu contraseña" (como
+// "Nuevo inicio de sesión" de Disney) se entregaba como link de reset.
+function esReset(subject = "", _text = "") {
+  if (esNotificacionCuenta(subject)) return false;
+  const s = normalizarTextoBusqueda(subject);
+  return s.includes("restablec") || s.includes("reset") || s.includes("recupera") ||
+         s.includes("olvidaste") || s.includes("cambiar tu contrasena") || s.includes("cambia tu contrasena") ||
+         s.includes("change your password") || s.includes("forgot your password");
 }
 
 function esVix(from="",subject=""){
@@ -726,6 +744,7 @@ async function cmdCode(chatId, correo){
 
       // Restablecer contraseña siempre es un link, nunca un código numérico.
       if (esReset(e.subject, e.text)) {
+        if (!emailCodigoVigente(e, 120)) continue;
         const linkReset = extraerLink(e.text, e.html);
         if (linkReset) {
           const plat = esNetflix(e.from,e.subject) ? "NETFLIX" : esDisney(e.from,e.subject) ? "DISNEY+" :
@@ -766,6 +785,9 @@ async function cmdCode(chatId, correo){
         // Disney indica que el OTP vence en 15 minutos. Damos 30 minutos de
         // margen por relojes del servidor, pero jamás devolvemos el de ayer.
         if(!emailCodigoVigente(e, 30)) continue;
+        // Avisos de cuenta no traen OTP: saltarlos para no leer un número
+        // cualquiera del cuerpo ni tapar el correo del código.
+        if(esNotificacionCuenta(e.subject)) continue;
         const codigo = extraerCodigoInteligente(e.text, e.subject, e.html, "disney");
         if(codigo) {
           const correoKey = normalizarCorreo(correo);

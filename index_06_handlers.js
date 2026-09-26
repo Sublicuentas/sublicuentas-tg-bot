@@ -1383,7 +1383,9 @@ async function getActiveAdminIdsLocal() {
     logErr("getActiveAdminIdsLocal", e?.stack || e?.message || e);
   }
 
-  return Array.from(ids).filter(Boolean);
+  // Solo IDs numéricos de Telegram. Un documento placeholder en "admins"
+  // (ej. id "user_id") hacía fallar el AutoTXT 7AM con "chat not found".
+  return Array.from(ids).filter((id) => /^-?\d{5,}$/.test(id));
 }
 
 async function getActiveRevendedoresLocal() {
