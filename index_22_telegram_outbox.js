@@ -39,6 +39,36 @@ function isUnauthorizedTelegramError(e) {
   return info.kind === 'bot_token_invalido';
 }
 
+// Firestore no admite arrays anidados. Telegram, en cambio, representa los
+// teclados inline como `inline_keyboard: [[{...}]]`. Guardar replyMarkup como
+// objeto provoca INVALID_ARGUMENT: "Property replyMarkup contains an invalid
+// nested entity". Lo serializamos a JSON para que la cola sea 100% compatible
+// con Firestore y lo reconstruimos justo antes de enviar a Telegram.
+function serializeReplyMarkup(value) {
+  if (!value || typeof value !== 'object') return '';
+  try {
+    const json = JSON.stringify(value);
+    // Un teclado de tickets es diminuto; este límite evita guardar payloads
+    // accidentales enormes sin afectar teclados normales.
+    return json.length <= 20000 ? json : '';
+  } catch (_) {
+    return '';
+  }
+}
+
+function deserializeReplyMarkup(value) {
+  // Compatibilidad defensiva con documentos antiguos que sí pudieran tener
+  // un objeto plano guardado. Los nuevos trabajos siempre usan JSON string.
+  if (value && typeof value === 'object') return value;
+  if (typeof value !== 'string' || !value.trim()) return null;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch (_) {
+    return null;
+  }
+}
+
 async function enqueueTelegramJob(input = {}) {
   const type = input.type === 'photo' ? 'photo' : 'message';
   const chatId = clean(input.chatId, 80).replace(/[^0-9-]/g, '');
@@ -56,7 +86,9 @@ async function enqueueTelegramJob(input = {}) {
     photoUrl,
     parseMode: ['HTML', 'Markdown', 'MarkdownV2'].includes(input.parseMode) ? input.parseMode : '',
     disableWebPreview: input.disableWebPreview !== false,
-    replyMarkup: input.replyMarkup && typeof input.replyMarkup === 'object' ? input.replyMarkup : null,
+    // IMPORTANTE: no guardar el objeto replyMarkup directamente; contiene
+    // arrays anidados (inline_keyboard) que Firestore rechaza.
+    replyMarkupJson: serializeReplyMarkup(input.replyMarkup),
     source: clean(input.source || 'panel-api', 120),
     reference: clean(input.reference || '', 180),
     status: 'pending',
@@ -105,7 +137,8 @@ async function claimJob(ref) {
 async function sendJob(job) {
   const opts = {};
   if (job.parseMode) opts.parse_mode = job.parseMode;
-  if (job.replyMarkup) opts.reply_markup = job.replyMarkup;
+  const replyMarkup = deserializeReplyMarkup(job.replyMarkupJson || job.replyMarkup);
+  if (replyMarkup) opts.reply_markup = replyMarkup;
   if (job.disableWebPreview !== false) opts.disable_web_page_preview = true;
   if (job.type === 'photo') {
     return bot.sendPhoto(job.chatId, job.photoUrl, { ...opts, caption: clean(job.text, 1000) });
