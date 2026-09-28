@@ -33,6 +33,7 @@ const {
 // hueco de "auto-claim" del panel de revendedores — ver index_09_api_auth.js)
 const { generarPinSetup } = require("./index_09_api_auth");
 const accessControl = require("./index_23_access_control");
+const integrity = require("./index_26_integrity_guard");
 const { callbackPermission, permissionGranted } = require("./lib_hardening");
 const { obtenerCatalogoSocio, tarifaIdParaSocio } = require("./index_15_catalogo_socios");
 const { canonicalVendedor, normVendedor, clientePerteneceAVendedor, vendedorEfectivoServicio } = require("./index_17_vendedores_servicio");
@@ -112,6 +113,9 @@ const {
   renovarServicioTx,
   renovarTodosServiciosTx,
   eliminarServiciosTx,
+  eliminarClienteConPapelera,
+  restaurarClienteDesdePapelera,
+  restaurarServiciosDesdePapelera,
   sincronizarCuentaEnComprasTx,
   menuListaRenovacion,
   menuRenovacionServicio,
@@ -4177,8 +4181,52 @@ bot.onText(/\/delvendedor\s+(.+)/i, async (msg, match) => {
     if (revNombreNorm === nombreNorm) found = { ref: d.ref, nombre: rev.nombre || d.id };
   });
   if (!found) return bot.sendMessage(chatId, "⚠️ No encontré ese revendedor.");
-  await found.ref.delete();
-  return bot.sendMessage(chatId, `🗑️ Revendedor eliminado:\n${found.nombre}`);
+  const operationId = integrity.makeWindowOperationKey("tg-delete-reseller", [found.ref.id, String(userId || "")], 120000);
+  const trashed = await integrity.trashDocument({
+    ref: found.ref,
+    kind: "revendedor",
+    actor: { userId: String(userId || ""), name: msg.from?.first_name || msg.from?.username || "", source: "Telegram" },
+    operationId,
+    metadata: { nombre: found.nombre || found.ref.id },
+  });
+  invalidarCacheRevendedores();
+  return bot.sendMessage(chatId, `🗑️ Revendedor movido a Papelera de Integridad:\n${found.nombre}\n\nRespaldo: ${trashed.trashId}`);
+});
+
+// ===============================
+// PAPELERA DE INTEGRIDAD — solo perfiles con permiso explícito
+// ===============================
+bot.onText(/^\/papelera(?:\s+([\w_-]+))?$/i, async (msg, match) => {
+  if (!hasRuntimeLock()) return;
+  const chatId = msg.chat.id;
+  const userId = msg.from.id;
+  if (!(await requirePermissionLocal(chatId, userId, "integridad.read"))) return;
+  const kind = String(match?.[1] || "").trim().toLowerCase();
+  const rows = await integrity.listTrash({ kind, status: "deleted", limit: 15 });
+  if (!rows.length) return bot.sendMessage(chatId, kind ? `🗑️ No hay elementos ${kind} pendientes de restaurar.` : "🗑️ La Papelera de Integridad está vacía.");
+  const lines = rows.map((x, i) => {
+    const label = x?.metadata?.cliente || x?.metadata?.nombre || x?.metadata?.cuenta || x?.source?.id || "registro";
+    return `${i + 1}. ${x.kind || "registro"} · ${label}\nID: ${x.id}`;
+  });
+  return bot.sendMessage(chatId, `🗑️ PAPELERA DE INTEGRIDAD\n\n${lines.join("\n\n")}\n\nPara recuperar: /restaurar ID`);
+});
+
+bot.onText(/^\/restaurar\s+([A-Za-z0-9_-]+)$/i, async (msg, match) => {
+  if (!hasRuntimeLock()) return;
+  const chatId = msg.chat.id;
+  const userId = msg.from.id;
+  if (!(await requirePermissionLocal(chatId, userId, "integridad.restore"))) return;
+  const papeleraId = String(match?.[1] || "").trim();
+  const entry = await integrity.getTrashEntry(papeleraId);
+  if (!entry) return bot.sendMessage(chatId, "⚠️ Ese respaldo no existe en la Papelera de Integridad.");
+  const actor = { userId: String(userId || ""), name: msg.from?.first_name || msg.from?.username || "", source: "Telegram" };
+  let result;
+  if (entry.kind === "cliente") result = await restaurarClienteDesdePapelera(papeleraId, actor);
+  else if (entry.kind === "servicio_cliente" || entry.kind === "servicios_cliente") result = await restaurarServiciosDesdePapelera(papeleraId, actor);
+  else result = await integrity.restoreDocumentTrash(papeleraId, actor);
+  if (entry.kind === "revendedor") invalidarCacheRevendedores();
+  await registrarActividadTelegramLocal(userId, chatId, "restaurar_papelera", { papeleraId, tipo: entry.kind, origen: entry.source?.path || "" }, `Restauró ${entry.kind || "registro"} desde Papelera de Integridad · ${papeleraId}.`, "Integridad");
+  return bot.sendMessage(chatId, `${result?.duplicate ? "ℹ️" : "✅"} ${result?.duplicate ? "Este respaldo ya estaba restaurado." : "Restauración completada."}\nTipo: ${entry.kind || "registro"}\nRespaldo: ${papeleraId}`);
 });
 
 // ===============================
@@ -5092,9 +5140,14 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
         const ref = db.collection("inventario").doc(docIdInventarioLocal(acceso, plat));
         const doc = await ref.get();
         if (!doc.exists) return bot.sendMessage(chatId, "⚠️ No existe esa cuenta en inventario.");
-        await ref.delete();
+        const trash = await integrity.trashDocument({
+          ref, kind: "inventario_cuenta",
+          actor: { userId: String(userId || ""), name: q.from?.first_name || q.from?.username || "", source: "Telegram" },
+          operationId: integrity.makeWindowOperationKey("tg-delete-inventory", [ref.id, String(userId || "")], 120000),
+          metadata: { plataforma: humanPlataforma(plat), cuenta: acceso },
+        });
         pending.delete(String(chatId));
-        await registrarActividadTelegramLocal(userId,chatId,'eliminar_cuenta_inventario',{inventarioId:ref.id,plataforma:humanPlataforma(plat),cuenta:acceso,campo:'cuenta de Bodega'},`Eliminó la cuenta ${acceso} de ${humanPlataforma(plat)} en Bodega.`,'Bodega');
+        await registrarActividadTelegramLocal(userId,chatId,'eliminar_cuenta_inventario',{inventarioId:ref.id,plataforma:humanPlataforma(plat),cuenta:acceso,campo:'cuenta de Bodega',papeleraId:trash.trashId},`Movió la cuenta ${acceso} de ${humanPlataforma(plat)} a Papelera de Integridad · respaldo ${trash.trashId}.`,'Bodega');
       forceNextPanelAtBottom(chatId);
         return enviarInventarioPlataforma(chatId, plat, 0);
       }
@@ -5492,7 +5545,13 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
         if (!found) return mostrarListaCorreosPlataforma(chatId, plataforma);
         const clientes = Array.isArray(found.data?.clientes) ? found.data.clientes : [];
         if (clientes.length > 0) await bot.sendMessage(chatId, "⚠️ Esta cuenta tenía clientes asignados. Se eliminará igualmente del inventario.");
-        await found.ref.delete();
+        const trash = await integrity.trashDocument({
+          ref: found.ref, kind: "inventario_cuenta",
+          actor: { userId: String(userId || ""), name: q.from?.first_name || q.from?.username || "", source: "Telegram" },
+          operationId: integrity.makeWindowOperationKey("tg-delete-inventory-mail", [found.ref.id, String(userId || "")], 120000),
+          metadata: { plataforma: humanPlataforma(plataforma), cuenta: acceso, clientesAsignados: clientes.length },
+        });
+        await registrarActividadTelegramLocal(userId,chatId,'eliminar_cuenta_inventario',{inventarioId:found.ref.id,plataforma:humanPlataforma(plataforma),cuenta:acceso,campo:'cuenta de Bodega',papeleraId:trash.trashId},`Movió la cuenta ${acceso} de ${humanPlataforma(plataforma)} a Papelera de Integridad · respaldo ${trash.trashId}.`,'Bodega');
         return enviarInventarioPlataforma(chatId, plataforma, 0);
       }
 
@@ -5647,9 +5706,9 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
         const c2 = await getCliente(clientId);
         const nombre = c2?.nombrePerfil || "este cliente";
         return upsertPanel(chatId,
-          `🗑️ *BORRAR CLIENTE*\n\n👤 *${escMD(nombre)}*\n\n⚠️ Se eliminará el cliente y todo su historial. No se puede deshacer.\n\n¿Confirma borrar a *${escMD(nombre)}*?`,
+          `🗑️ *BORRAR CLIENTE*\n\n👤 *${escMD(nombre)}*\n\n⚠️ El cliente se quitará de la operación activa, pero quedará respaldado en la Papelera de Integridad para recuperación. El historial se conserva.\n\n¿Confirma borrar a *${escMD(nombre)}*?`,
           [
-            [{ text: "✅ Sí, borrar definitivamente", callback_data: `cli:del:ok:${clientId}` }],
+            [{ text: "✅ Sí, mover a papelera", callback_data: `cli:del:ok:${clientId}` }],
             [{ text: "❌ Cancelar", callback_data: `cli:view:${clientId}` }],
           ]
         );
@@ -5659,21 +5718,13 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
         const clientId = data.split(":")[3];
         const c2 = await getCliente(clientId);
         const nombre = c2?.nombrePerfil || "Cliente";
-        const compras = Array.isArray(c2?.servicios) ? c2.servicios : [];
-        for (let i = compras.length - 1; i >= 0; i--) {
-          try { await eliminarServicioTx(clientId, i, compras[i]?.compraId || ""); }
-          catch (e) { return bot.sendMessage(chatId, `⚠️ No se borró el cliente porque no pude liberar todos sus perfiles: ${e.message || "revise Bodega"}`); }
-        }
-        const batch = db.batch();
-        batch.delete(db.collection("clientes").doc(clientId));
-        const histSnap = await db.collection("historial_clientes").where("clientId", "==", clientId).get();
-        histSnap.forEach(d => batch.delete(d.ref));
-        await batch.commit();
-        const { cacheInvalidatePrefix: cIPDel } = require("./index_01_core");
-        cIPDel(`clientes:doc:${clientId}`);
-        await registrarActividadTelegramLocal(userId,chatId,'eliminar_cliente',{clienteId,cliente:nombre,telefono:c2?.telefono||'',campo:'cliente completo'},`Eliminó al cliente ${nombre} y su historial desde Telegram.`);
+        const resultado = await eliminarClienteConPapelera(clientId, {
+          actor: { userId:String(userId||""), name:q.from?.first_name || q.from?.username || "", source:"Telegram" },
+        });
+        await registrarActividadTelegramLocal(userId,chatId,'eliminar_cliente',{clienteId,cliente:nombre,telefono:c2?.telefono||'',campo:'cliente completo',papeleraId:resultado.papeleraId},`Movió al cliente ${nombre} a la Papelera de Integridad desde Telegram · respaldo ${resultado.papeleraId}.`);
         forceNextPanelAtBottom(chatId);
-        return bot.sendMessage(chatId, `✅ Cliente *${escMD(nombre)}* eliminado.`, { parse_mode: "Markdown" });
+        return bot.sendMessage(chatId, `✅ Cliente *${escMD(nombre)}* movido a papelera.
+🔐 Respaldo: ${escMD(resultado.papeleraId)}`, { parse_mode: "Markdown" });
       }
 
       if (data.startsWith("cli:serv:list:")) return menuListaServicios(chatId, data.split(":")[3]);
@@ -5955,7 +6006,7 @@ Revise que el correo exista en inventario con esa plataforma o coloque la clave 
         const ctx = pending.get(String(chatId));
         const idx = Number(ctx?.idx);
         const auditAntes=await actividadClienteServicioLocal(clientId,idx,ctx?.compraId||"");
-        try { await eliminarServicioTx(clientId, idx, ctx?.compraId || ""); pending.delete(String(chatId)); }
+        try { await eliminarServicioTx(clientId, idx, ctx?.compraId || "", { actor:{userId:String(userId||""),name:q.from?.first_name||q.from?.username||"",source:"Telegram"} }); pending.delete(String(chatId)); }
         catch (e) { return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo eliminar la compra."}`); }
         await registrarActividadTelegramLocal(userId,chatId,'eliminar_servicio',{...auditAntes,campo:'servicio completo'},`Eliminó ${auditAntes.plataforma||'un servicio'}${auditAntes.cliente?` de ${auditAntes.cliente}`:''}${auditAntes.cuenta?` · cuenta ${auditAntes.cuenta}`:''}.`);
         const actualizado = await getCliente(clientId);
@@ -6060,7 +6111,7 @@ Revise que el correo exista en inventario con esa plataforma o coloque la clave 
           if (idx < 0) return bot.sendMessage(chatId, "⚠️ Esa compra cambió o ya no existe. Abra nuevamente la ficha.");
           const compraId = String(servicios[idx]?.compraId || "");
           const auditAntes=await actividadClienteServicioLocal(clientId,idx,compraId);
-          const result = await eliminarServicioTx(clientId, idx, compraId);
+          const result = await eliminarServicioTx(clientId, idx, compraId, { actor:{userId:String(userId||""),name:q.from?.first_name||q.from?.username||"",source:"Telegram"} });
           await registrarActividadTelegramLocal(userId,chatId,'cambiar_servicio',{...auditAntes,campo:'servicio',cambio:'servicio anterior eliminado para reemplazo'},`Inició cambio de servicio de ${auditAntes.cliente||result.nombreCliente||'cliente'}: eliminó ${auditAntes.plataforma||humanPlatAlertLocal(result.eliminado?.plataforma||'servicio')}${auditAntes.cuenta?` · cuenta ${auditAntes.cuenta}`:''}.`);
           await bot.sendMessage(chatId,
             `🔄 *Servicio eliminado*\n\n` +
@@ -6122,7 +6173,7 @@ Revise que el correo exista en inventario con esa plataforma o coloque la clave 
           const ctx = pending.get(String(chatId));
           const idx = Number(ctx?.idx);
           const auditAntes=await actividadClienteServicioLocal(clientId,idx,ctx?.compraId||"");
-          const result = await eliminarServicioTx(clientId, idx, ctx?.compraId || "");
+          const result = await eliminarServicioTx(clientId, idx, ctx?.compraId || "", { actor:{userId:String(userId||""),name:q.from?.first_name||q.from?.username||"",source:"Telegram"} });
           pending.delete(String(chatId));
           await registrarActividadTelegramLocal(userId,chatId,'no_renovo_eliminar',{...auditAntes,campo:'servicio',motivo:'No renovó'},`Marcó NO RENOVÓ y eliminó ${auditAntes.plataforma||'el servicio'}${auditAntes.cliente?` de ${auditAntes.cliente}`:''}${auditAntes.cuenta?` · cuenta ${auditAntes.cuenta}`:''}.`);
           await bot.sendMessage(chatId,
@@ -6277,7 +6328,7 @@ Revise que el correo exista en inventario con esa plataforma o coloque la clave 
         const referenciasBase = Array.isArray(ctx.referencias) ? ctx.referencias : [];
         const referencias = seleccionados.map((idx) => referenciasBase[idx] || { idx, compraId: "" });
         const cAudit=await getCliente(clientId);
-        const baja = await eliminarServiciosTx(clientId, referencias);
+        const baja = await eliminarServiciosTx(clientId, referencias, { actor:{userId:String(userId||""),name:q.from?.first_name||q.from?.username||"",source:"Telegram"} });
         const eliminados = baja.eliminados || [];
         const servicios = baja.servicios || [];
         pending.delete(String(chatId));
@@ -6416,12 +6467,18 @@ Revise que el correo exista en inventario con esa plataforma o coloque la clave 
 
     if (data.startsWith("rev:del:ok:")) {
       const docId = data.split(":")[3];
-      const snap2 = await db.collection("revendedores").doc(docId).get();
-      const nombre = snap2.exists ? (snap2.data()?.nombre || docId) : docId;
-      await db.collection("revendedores").doc(docId).delete();
+      const ref = db.collection("revendedores").doc(docId);
+      const operationId = integrity.makeWindowOperationKey("tg-delete-reseller-callback", [docId, String(userId || "")], 120000);
+      const trash = await integrity.trashDocument({
+        ref, kind: "revendedor",
+        actor: { userId: String(userId || ""), name: q.from?.first_name || q.from?.username || "", source: "Telegram" },
+        operationId,
+        metadata: { revendedorId: docId },
+      });
+      const nombre = trash?.snapshot?.nombre || docId;
       invalidarCacheRevendedores();
       forceNextPanelAtBottom(chatId);
-      await bot.sendMessage(chatId, `✅ Revendedor *${escMD(nombre)}* eliminado.`, { parse_mode: "Markdown" });
+      await bot.sendMessage(chatId, `✅ Revendedor *${escMD(nombre)}* movido a Papelera de Integridad.\nRespaldo: \`${escMD(trash.trashId)}\``, { parse_mode: "Markdown" });
       return menuGestionRevendedores(chatId);
     }
 
@@ -6723,7 +6780,7 @@ bot.on("message", async (msg) => {
         if (!vf.ok) return bot.sendMessage(chatId, vf.msg, { parse_mode: "Markdown" });
         pending.delete(String(chatId));
       forceNextPanelAtBottom(chatId);
-        const ok = await registrarIngresoTx({ monto: p.monto, banco: p.banco, plataforma: p.plataforma, detalle: p.detalle || "", fecha, userId, userName: msg.from?.first_name || "" });
+        const ok = await registrarIngresoTx({ monto: p.monto, banco: p.banco, plataforma: p.plataforma, detalle: p.detalle || "", fecha, userId, userName: msg.from?.first_name || "", operationId:`tg-fin-ingreso:${chatId}:${msg.message_id}` });
         await registrarActividadTelegramLocal(userId,chatId,'registrar_ingreso',{id:ok.id,plataforma:ok.plataforma||p.plataforma||'',cambio:`${moneyLps(ok.monto)} · ${ok.banco||''} · ${ok.fecha||fecha}`,motivo:ok.detalle||''},`Registró ingreso de ${moneyLps(ok.monto)} · ${ok.banco||p.banco||'-'} · ${ok.plataforma||p.plataforma||'-'} · fecha ${ok.fecha||fecha}.`,'Finanzas');
         return bot.sendMessage(chatId, `✅ *Ingreso registrado*\n\n💰 Monto: ${moneyLps(ok.monto)}\n🏦 Banco: ${escMD(ok.banco)}\n📦 Plataforma(s): ${escMD(ok.plataforma || "-")}\n📝 Detalle: ${escMD(ok.detalle || "-")}\n📅 Fecha: ${escMD(ok.fecha)}\n🆔 ID: \`${ok.id}\``, {
           parse_mode: "Markdown",
@@ -6751,7 +6808,7 @@ bot.on("message", async (msg) => {
         if (!vf2.ok) return bot.sendMessage(chatId, vf2.msg, { parse_mode: "Markdown" });
         pending.delete(String(chatId));
       forceNextPanelAtBottom(chatId);
-        const ok = await registrarEgresoTx({ monto: p.monto, banco: p.banco, motivo: p.motivo, detalle: p.detalle || "", fecha, userId, userName: msg.from?.first_name || "" });
+        const ok = await registrarEgresoTx({ monto: p.monto, banco: p.banco, motivo: p.motivo, detalle: p.detalle || "", fecha, userId, userName: msg.from?.first_name || "", operationId:`tg-fin-egreso:${chatId}:${msg.message_id}` });
         await registrarActividadTelegramLocal(userId,chatId,'registrar_egreso',{id:ok.id,motivo:ok.motivo||p.motivo||'',cambio:`${moneyLps(ok.monto)} · ${ok.banco||''} · ${ok.fecha||fecha}`},`Registró egreso de ${moneyLps(ok.monto)} · ${ok.banco||p.banco||'-'} · ${ok.motivo||p.motivo||'-'} · fecha ${ok.fecha||fecha}.`,'Finanzas');
         return bot.sendMessage(chatId, `✅ *Egreso registrado*\n\n💸 Monto: ${moneyLps(ok.monto)}\n🏦 Banco: ${escMD(ok.banco || "-")}\n🧾 Motivo: ${escMD(ok.motivo)}\n📝 Detalle: ${escMD(ok.detalle || "-")}\n📅 Fecha: ${escMD(ok.fecha)}\n🆔 ID: \`${ok.id}\``, {
           parse_mode: "Markdown",
@@ -7265,11 +7322,18 @@ bot.on("message", async (msg) => {
           );
         }
 
-        pending.delete(String(chatId));
         forceNextPanelAtBottom(chatId);
         const cAudit=await getCliente(p.clientId);
-        await renovarTodosServiciosTx(p.clientId, { fechaExacta: fechaFinal });
-        await registrarActividadTelegramLocal(userId,chatId,'renovar_todos',{clienteId:p.clientId,cliente:cAudit?.nombrePerfil||cAudit?.nombre||'Cliente',telefono:cAudit?.telefono||'',campo:'todos los servicios',cambio:`fecha → ${fechaFinal}`},`Renovó todos los servicios de ${cAudit?.nombrePerfil||cAudit?.nombre||'Cliente'} a la fecha ${fechaFinal}.`);
+        try {
+          await renovarTodosServiciosTx(p.clientId, { fechaExacta: fechaFinal });
+        } catch (e) {
+          logErr("renovar TODOS fecha manual", e?.stack || e?.message || e);
+          return bot.sendMessage(chatId, `⚠️ No se pudo renovar: ${String(e?.message || "error desconocido").slice(0, 220)}\n\nPuede corregir la fecha y enviarla de nuevo.`);
+        }
+        pending.delete(String(chatId));
+        try {
+          await registrarActividadTelegramLocal(userId,chatId,'renovar_todos',{clienteId:p.clientId,cliente:cAudit?.nombrePerfil||cAudit?.nombre||'Cliente',telefono:cAudit?.telefono||'',campo:'todos los servicios',cambio:`fecha → ${fechaFinal}`},`Renovó todos los servicios de ${cAudit?.nombrePerfil||cAudit?.nombre||'Cliente'} a la fecha ${fechaFinal}.`);
+        } catch (e) { logErr("auditoria renovar TODOS", e?.message || e); }
         await bot.sendMessage(chatId, `✅ Todos los servicios renovados a la fecha: *${fechaFinal}*`, { parse_mode: "Markdown" });
         return enviarFichaCliente(chatId, p.clientId);
       }
@@ -7299,11 +7363,18 @@ bot.on("message", async (msg) => {
           );
         }
 
-        pending.delete(String(chatId));
       forceNextPanelAtBottom(chatId);
-        await renovarServicioTx(p.clientId, p.idx, { fechaExacta: fechaFinal, compraId: p.compraId || "" });
+        try {
+          await renovarServicioTx(p.clientId, p.idx, { fechaExacta: fechaFinal, compraId: p.compraId || "" });
+        } catch (e) {
+          logErr("renovar servicio fecha manual", e?.stack || e?.message || e);
+          return bot.sendMessage(chatId, `⚠️ No se pudo renovar: ${String(e?.message || "error desconocido").slice(0, 220)}\n\nPuede corregir la fecha y enviarla de nuevo.`);
+        }
+        pending.delete(String(chatId));
         const aud=await actividadClienteServicioLocal(p.clientId,p.idx,p.compraId||"");
-        await registrarActividadTelegramLocal(userId,chatId,'renovar_servicio',{...aud,campo:'renovación',cambio:`fecha → ${fechaFinal}`},`Renovó ${aud.plataforma||'servicio'}${aud.cliente?` de ${aud.cliente}`:''} a la fecha ${fechaFinal}.`);
+        try {
+          await registrarActividadTelegramLocal(userId,chatId,'renovar_servicio',{...aud,campo:'renovación',cambio:`fecha → ${fechaFinal}`},`Renovó ${aud.plataforma||'servicio'}${aud.cliente?` de ${aud.cliente}`:''} a la fecha ${fechaFinal}.`);
+        } catch (e) { logErr("auditoria renovar servicio", e?.message || e); }
         await bot.sendMessage(chatId, `✅ Fecha actualizada: *${fechaFinal}*`, { parse_mode: "Markdown" });
         return menuServicio(chatId, p.clientId, p.idx);
       }

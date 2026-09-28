@@ -2012,157 +2012,228 @@ async function eliminarServicioTx(clientId, idx, compraId = "", options = {}) {
 }
 
 async function renovarServicioTx(clientId, idx, { dias = 0, fechaExacta = "", compraId = "", operationId = "" } = {}) {
+  // HOTFIX 2026-09-28:
+  // La renovación debe ser una operación CRM simple y no depender de la capa
+  // de idempotencia/papelera. Esa capa continúa activa para eliminaciones y
+  // otras operaciones destructivas, pero no puede bloquear una renovación.
   const id = String(clientId || "").trim();
-  const opId = String(operationId || integrity.makeWindowOperationKey(
-    "renew-service", [id, String(compraId || idx || ""), Number(dias || 0), String(fechaExacta || "")], 120000
-  )).slice(0, 180);
   const renovadoAt = new Date();
   const resultado = await mutarServiciosClienteTx(id, ({ cliente, servicios }) => {
     const actualIdx = resolverIndiceCompraLocal(servicios, idx, compraId);
     if (actualIdx === -1) throw new Error("Servicio inválido.");
+
     const anterior = servicios[actualIdx] || {};
-    if (opId && String(anterior.ultimaRenovacionOperacionId || "") === opId) {
-      return {
-        servicios,
-        anterior,
-        siguiente: anterior,
-        actualIdx,
-        fechaAnterior: String(anterior.ultimaRenovacionFechaAnterior || anterior.fechaRenovacion || ""),
-        fechaNueva: String(anterior.fechaRenovacion || ""),
-        nombreTitular: cliente.nombrePerfil || "",
-        duplicate: true,
-        skipWrite: true,
-      };
-    }
     const fechaAnterior = String(anterior.fechaRenovacion || "");
     const fechaNueva = fechaExacta
       ? String(fechaExacta || "").trim()
       : addDaysDMY(isFechaDMY(fechaAnterior) ? fechaAnterior : hoyDMY(), Number(dias || 0));
+
     if (!isFechaDMY(fechaNueva)) throw new Error("Fecha inválida.");
+
+    // Importante: una fecha personalizada NO debe validarse contra los planes
+    // comerciales IPTV. Si la duración no coincide con un plan comercial,
+    // conservamos el plan existente y únicamente cambiamos la fecha.
     const mesesContratados = mesesContratadosRenovacionLocal(
-      anterior.plataforma || "", anterior.mesesContratados || 1,
-      isFechaDMY(fechaAnterior) ? fechaAnterior : hoyDMY(), fechaNueva
+      anterior.plataforma || "",
+      anterior.mesesContratados || 1,
+      isFechaDMY(fechaAnterior) ? fechaAnterior : hoyDMY(),
+      fechaNueva
     );
+
     const siguiente = {
       ...anterior,
       fechaRenovacion: fechaNueva,
       mesesContratados,
       ultimaRenovacionAt: renovadoAt,
-      ultimaRenovacionOperacionId: opId,
       ultimaRenovacionFechaAnterior: fechaAnterior,
     };
+    // Limpiamos cualquier marcador de una versión anterior del hardening para
+    // que nunca impida volver a renovar la misma compra.
+    delete siguiente.ultimaRenovacionOperacionId;
+
     servicios[actualIdx] = siguiente;
-    return { servicios, anterior, siguiente, actualIdx, fechaAnterior, fechaNueva, nombreTitular: cliente.nombrePerfil || "", duplicate: false };
+    return {
+      servicios,
+      anterior,
+      siguiente,
+      actualIdx,
+      fechaAnterior,
+      fechaNueva,
+      nombreTitular: cliente.nombrePerfil || "",
+    };
   });
+
   cacheInvalidatePrefix(`clientes:doc:${id}`);
   cacheInvalidatePrefix("renovaciones:");
 
-  if (resultado.duplicate) {
-    return { ok: true, duplicate: true, servicio: resultado.siguiente, servicioIndex: resultado.actualIdx, fechaAnterior: resultado.fechaAnterior, fechaNueva: resultado.fechaNueva, sorteo: { ok: true, creados: 0, omitido: "operacion_repetida" }, operationId: opId };
+  // Sorteos e historial son secundarios: si fallan, la renovación CRM ya
+  // guardada no debe convertirse en un error para el usuario.
+  const compraEvento = String(resultado.siguiente.compraId || `servicio-${resultado.actualIdx}`);
+  let sorteo = { ok: true, creados: 0, omitido: "fecha_sin_cambio" };
+  if (resultado.fechaNueva !== resultado.fechaAnterior) {
+    try {
+      sorteo = await registrarEventoSorteosSeguro({
+        tipo: "renovacion",
+        clientId: id,
+        compraId: compraEvento,
+        fechaEvento: resultado.fechaNueva,
+        eventoId: `renov:${compraEvento}:${resultado.fechaNueva}`,
+        meses: Math.max(1, Math.round(Number(dias || 30) / 30)),
+        clienteNombre: resultado.cliente?.nombrePerfil || resultado.cliente?.nombre || resultado.nombreTitular || "Cliente",
+        telefono: resultado.cliente?.telefono || "",
+        vendedor: resultado.siguiente?.vendedor || resultado.cliente?.vendedor || "",
+        origen: "Telegram",
+      });
+    } catch (e) {
+      logErr("renovarServicioTx.sorteo", e);
+      sorteo = { ok: false, creados: 0, error: String(e?.message || e || "") };
+    }
   }
 
-  const compraEvento = String(resultado.siguiente.compraId || `servicio-${resultado.actualIdx}`);
-  const sorteo = resultado.fechaNueva !== resultado.fechaAnterior
-    ? await registrarEventoSorteosSeguro({
-      tipo: "renovacion", clientId: id, compraId: compraEvento, fechaEvento: resultado.fechaNueva,
-      eventoId: `renov:${compraEvento}:${resultado.fechaNueva}`,
+  try {
+    await registrarEventoHistorial(id, {
+      tipo: "servicio_renovado",
+      compraId: compraEvento,
+      descripcion: `Se renovó ${humanPlataforma(resultado.siguiente.plataforma || "")}: ${resultado.fechaAnterior || "-"} → ${resultado.fechaNueva}`,
+      plataforma: resultado.siguiente.plataforma || "",
+      correo: resultado.siguiente.correo || "",
+      fechaAnterior: resultado.fechaAnterior,
+      fechaRenovacion: resultado.fechaNueva,
       meses: Math.max(1, Math.round(Number(dias || 30) / 30)),
-      clienteNombre: resultado.cliente?.nombrePerfil || resultado.cliente?.nombre || resultado.nombreTitular || "Cliente",
-      telefono: resultado.cliente?.telefono || "", vendedor: resultado.siguiente?.vendedor || resultado.cliente?.vendedor || "", origen: "Telegram"
-    })
-    : { ok: true, creados: 0, omitido: "fecha_sin_cambio" };
+      vendedor: resultado.siguiente?.vendedor || resultado.cliente?.vendedor || "",
+      servicioIndex: resultado.actualIdx,
+      sorteoOk: sorteo?.ok !== false,
+      boletosCreados: Math.max(0, Number(sorteo?.creados) || 0),
+      origen: "Telegram",
+    });
+  } catch (e) {
+    logErr("renovarServicioTx.historial", e);
+  }
 
-  await registrarEventoHistorial(id, {
-    tipo: "servicio_renovado",
-    compraId: compraEvento,
-    descripcion: `Se renovó ${humanPlataforma(resultado.siguiente.plataforma || "")}: ${resultado.fechaAnterior || "-"} → ${resultado.fechaNueva}`,
-    plataforma: resultado.siguiente.plataforma || "",
-    correo: resultado.siguiente.correo || "",
-    fechaAnterior: resultado.fechaAnterior,
-    fechaRenovacion: resultado.fechaNueva,
-    meses: Math.max(1, Math.round(Number(dias || 30) / 30)),
-    vendedor: resultado.siguiente?.vendedor || resultado.cliente?.vendedor || "",
+  return {
+    ok: true,
+    servicio: resultado.siguiente,
     servicioIndex: resultado.actualIdx,
-    sorteoOk: sorteo?.ok !== false,
-    boletosCreados: Math.max(0, Number(sorteo?.creados) || 0),
-    origen: "Telegram",
-    operationId: opId,
-  });
-  return { ok: true, duplicate: false, servicio: resultado.siguiente, servicioIndex: resultado.actualIdx, fechaAnterior: resultado.fechaAnterior, fechaNueva: resultado.fechaNueva, sorteo, operationId: opId };
+    fechaAnterior: resultado.fechaAnterior,
+    fechaNueva: resultado.fechaNueva,
+    sorteo,
+  };
 }
 
 async function renovarTodosServiciosTx(clientId, { dias = 0, fechaExacta = "", operationId = "" } = {}) {
+  // HOTFIX 2026-09-28: misma regla que renovación individual. Renovar TODOS
+  // nunca debe bloquearse por plan IPTV ni por una clave de idempotencia.
   const id = String(clientId || "").trim();
-  const opId = String(operationId || integrity.makeWindowOperationKey(
-    "renew-all", [id, Number(dias || 0), String(fechaExacta || "")], 120000
-  )).slice(0, 180);
   const renovadoAt = new Date();
+
   const resultado = await mutarServiciosClienteTx(id, ({ cliente, servicios }) => {
     if (!servicios.length) throw new Error("Este cliente no tiene servicios.");
-    if (opId && servicios.every(s => String(s?.ultimaRenovacionOperacionId || "") === opId)) {
-      return { servicios, total: servicios.length, cambios: [], fechaExacta: String(fechaExacta || ""), nombreTitular: cliente.nombrePerfil || "", duplicate: true, skipWrite: true };
-    }
+
     const cambios = [];
     const siguientes = servicios.map((s, index) => {
       const fechaAnterior = String(s?.fechaRenovacion || "");
       const base = isFechaDMY(fechaAnterior) ? fechaAnterior : hoyDMY();
-      const fechaNueva = fechaExacta ? String(fechaExacta || "").trim() : addDaysDMY(base, Number(dias || 0));
+      const fechaNueva = fechaExacta
+        ? String(fechaExacta || "").trim()
+        : addDaysDMY(base, Number(dias || 0));
+
       if (!isFechaDMY(fechaNueva)) throw new Error("Fecha inválida.");
+
       cambios.push({
         compraId: s?.compraId || `servicio-${index}`,
         fechaAnterior,
         fechaNueva,
         vendedor: vendedorEfectivoServicio(s, cliente).vendedor,
       });
+
       const mesesContratados = mesesContratadosRenovacionLocal(
-        s?.plataforma || "", s?.mesesContratados || 1,
-        isFechaDMY(fechaAnterior) ? fechaAnterior : hoyDMY(), fechaNueva
+        s?.plataforma || "",
+        s?.mesesContratados || 1,
+        base,
+        fechaNueva
       );
-      return {
-        ...(s || {}), fechaRenovacion: fechaNueva, mesesContratados, ultimaRenovacionAt: renovadoAt,
-        ultimaRenovacionOperacionId: opId, ultimaRenovacionFechaAnterior: fechaAnterior,
+
+      const siguiente = {
+        ...(s || {}),
+        fechaRenovacion: fechaNueva,
+        mesesContratados,
+        ultimaRenovacionAt: renovadoAt,
+        ultimaRenovacionFechaAnterior: fechaAnterior,
       };
+      delete siguiente.ultimaRenovacionOperacionId;
+      return siguiente;
     });
-    return { servicios: siguientes, total: siguientes.length, cambios, fechaExacta: String(fechaExacta || ""), nombreTitular: cliente.nombrePerfil || "", duplicate: false };
+
+    return {
+      servicios: siguientes,
+      total: siguientes.length,
+      cambios,
+      fechaExacta: String(fechaExacta || ""),
+      nombreTitular: cliente.nombrePerfil || "",
+    };
   });
+
   cacheInvalidatePrefix(`clientes:doc:${id}`);
   cacheInvalidatePrefix("renovaciones:");
 
-  if (resultado.duplicate) return { ok: true, duplicate: true, total: resultado.total, servicios: resultado.servicios, sorteos: [], operationId: opId };
-
+  // La actualización CRM ya quedó guardada. Sorteos/auditoría nunca deben
+  // hacer que Telegram responda "Error interno" después de una renovación válida.
   const sorteos = [];
   const sorteoPorCompra = new Map();
   for (const cambio of resultado.cambios || []) {
     if (cambio.fechaNueva === cambio.fechaAnterior) continue;
-    const sorteo = await registrarEventoSorteosSeguro({
-      tipo: "renovacion", clientId: id, compraId: cambio.compraId, fechaEvento: cambio.fechaNueva,
-      eventoId: `renov:${cambio.compraId}:${cambio.fechaNueva}`,
-      meses: Math.max(1, Math.round(Number(dias || 30) / 30)),
-      clienteNombre: resultado.cliente?.nombrePerfil || resultado.cliente?.nombre || resultado.nombreTitular || "Cliente",
-      telefono: resultado.cliente?.telefono || "", vendedor: cambio.vendedor || resultado.cliente?.vendedor || "", origen: "Telegram"
-    });
+    let sorteo;
+    try {
+      sorteo = await registrarEventoSorteosSeguro({
+        tipo: "renovacion",
+        clientId: id,
+        compraId: cambio.compraId,
+        fechaEvento: cambio.fechaNueva,
+        eventoId: `renov:${cambio.compraId}:${cambio.fechaNueva}`,
+        meses: Math.max(1, Math.round(Number(dias || 30) / 30)),
+        clienteNombre: resultado.cliente?.nombrePerfil || resultado.cliente?.nombre || resultado.nombreTitular || "Cliente",
+        telefono: resultado.cliente?.telefono || "",
+        vendedor: cambio.vendedor || resultado.cliente?.vendedor || "",
+        origen: "Telegram",
+      });
+    } catch (e) {
+      logErr("renovarTodosServiciosTx.sorteo", e);
+      sorteo = { ok: false, creados: 0, error: String(e?.message || e || "") };
+    }
     sorteos.push(sorteo);
     sorteoPorCompra.set(String(cambio.compraId || ""), sorteo);
   }
 
-  await registrarEventoHistorial(id, {
-    tipo: "servicios_renovados",
-    cambios: (resultado.cambios || []).map((item,index) => {
-      const sorteo = sorteoPorCompra.get(String(item.compraId || ""));
-      return {
-        compraId: item.compraId, servicioIndex: index, fechaAnterior: item.fechaAnterior,
-        fechaRenovacion: item.fechaNueva, vendedor: item.vendedor,
-        meses: Math.max(1, Math.round(Number(dias || 30) / 30)),
-        sorteoOk: sorteo?.ok !== false,
-        boletosCreados: Math.max(0, Number(sorteo?.creados) || 0)
-      };
-    }),
-    vendedor: resultado.cliente?.vendedor || "",
-    origen: "Telegram",
-    operationId: opId,
-    descripcion: `Se renovaron ${resultado.total} servicio(s)${resultado.fechaExacta ? ` a ${resultado.fechaExacta}` : ` por ${Number(dias || 0)} días`}`
-  });
-  return { ok: true, duplicate: false, total: resultado.total, servicios: resultado.servicios, sorteos, operationId: opId };
+  try {
+    await registrarEventoHistorial(id, {
+      tipo: "servicios_renovados",
+      cambios: (resultado.cambios || []).map((item, index) => {
+        const sorteo = sorteoPorCompra.get(String(item.compraId || ""));
+        return {
+          compraId: item.compraId,
+          servicioIndex: index,
+          fechaAnterior: item.fechaAnterior,
+          fechaRenovacion: item.fechaNueva,
+          vendedor: item.vendedor,
+          meses: Math.max(1, Math.round(Number(dias || 30) / 30)),
+          sorteoOk: sorteo?.ok !== false,
+          boletosCreados: Math.max(0, Number(sorteo?.creados) || 0),
+        };
+      }),
+      vendedor: resultado.cliente?.vendedor || "",
+      origen: "Telegram",
+      descripcion: `Se renovaron ${resultado.total} servicio(s)${resultado.fechaExacta ? ` a ${resultado.fechaExacta}` : ` por ${Number(dias || 0)} días`}`,
+    });
+  } catch (e) {
+    logErr("renovarTodosServiciosTx.historial", e);
+  }
+
+  return {
+    ok: true,
+    total: resultado.total,
+    servicios: resultado.servicios,
+    sorteos,
+  };
 }
 
 async function eliminarServiciosTx(clientId, referencias = [], options = {}) {
