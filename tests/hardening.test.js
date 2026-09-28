@@ -5,6 +5,9 @@ const path = require('node:path');
 const {
   isPrivateTelegramContext,
   permissionsForRole,
+  permissionsForProfile,
+  resolveAccessProfile,
+  callbackPermission,
   permissionGranted,
   getLocalParts,
   dailyScheduleDue,
@@ -26,7 +29,7 @@ test('ACL: vendedor no hereda permisos administrativos', () => {
   const admin = permissionsForRole('admin');
   assert.equal(permissionGranted(vendor, 'bot.use'), true);
   assert.equal(permissionGranted(vendor, 'finanzas.write'), false);
-  assert.equal(permissionGranted(admin, 'finanzas.write'), true);
+  assert.equal(permissionGranted(admin, 'finanzas.write'), false);
   assert.equal(permissionGranted(permissionsForRole('superadmin'), 'cualquier.permiso'), true);
 });
 
@@ -90,4 +93,151 @@ test('timezone Tegucigalpa genera partes coherentes', () => {
   assert.equal(p.dmy, '28/09/2026');
   assert.equal(p.hour, 0);
   assert.equal(p.minute, 15);
+});
+
+
+test('ACL nominal: Sublicuentas total; Relojes/Geisell/Magdiel quedan segmentados', () => {
+  const sublicuentas = permissionsForProfile('sublicuentas');
+  const relojes = permissionsForProfile('relojes');
+  const geisell = permissionsForProfile('geisell');
+  const magdiel = permissionsForProfile('magdiel');
+
+  assert.equal(permissionGranted(sublicuentas, 'equipo.manage'), true);
+  assert.equal(permissionGranted(relojes, 'codigos.read'), true);
+  assert.equal(permissionGranted(relojes, 'finanzas.read'), false);
+  assert.equal(permissionGranted(relojes, 'avisos.read'), false);
+  assert.equal(permissionGranted(geisell, 'clientes.write'), true);
+  assert.equal(permissionGranted(geisell, 'inventario.read'), false);
+  assert.equal(permissionGranted(magdiel, 'actividad.read'), true);
+  assert.equal(permissionGranted(magdiel, 'clientes.write'), false);
+});
+
+test('ACL nominal resuelve aliases conocidos sin depender del documento exacto', () => {
+  assert.equal(resolveAccessProfile({ nombre:'Sublicuentas' }, 'admin'), 'sublicuentas');
+  assert.equal(resolveAccessProfile({ nombre:'Libni' }, 'admin'), 'relojes');
+  assert.equal(resolveAccessProfile({ nombre:'Geissel' }, 'admin'), 'geisell');
+  assert.equal(resolveAccessProfile({ nombre:'Magdiel' }, 'admin'), 'magdiel');
+  assert.equal(resolveAccessProfile({ nombre:'Yami' }, 'vendedor'), 'vendedor');
+});
+
+test('callbacks sensibles requieren el permiso granular correcto', () => {
+  assert.equal(callbackPermission('menu:pagos'), 'finanzas.read');
+  assert.equal(callbackPermission('fin:edit:monto:abc'), 'finanzas.write');
+  assert.equal(callbackPermission('mail_menu_codigos|netflix|correo'), 'codigos.read');
+  assert.equal(callbackPermission('inv:menu:borrarok:netflix:x'), 'inventario.write');
+  assert.equal(callbackPermission('cli:view:abc'), 'clientes.read');
+  assert.equal(callbackPermission('cli:del:ok:abc'), 'clientes.write');
+  assert.equal(callbackPermission('menu:revendedores'), 'equipo.manage');
+});
+
+test('privacidad de tickets: respuestas ya no se abanican a todos los admins', () => {
+  const handlers = read('index_06_handlers.js');
+  assert.equal(handlers.includes("ticket:notify-admin"), false);
+  assert.equal(handlers.includes("ticket:notify-owner"), true);
+  assert.equal(handlers.includes("getSublicuentasRecipientChatIds"), true);
+});
+
+test('AutoTXT general queda reservado a Sublicuentas', () => {
+  const handlers = read('index_06_handlers.js');
+  assert.equal(handlers.includes('const adminIds = new Set(await accessControl.getSublicuentasRecipientChatIds());'), true);
+});
+
+test('backup dominical no acepta una lista genérica de admins', () => {
+  const acl = read('index_23_access_control.js');
+  const backupBlock = acl.slice(acl.indexOf('async function getBackupRecipientChatIds()'), acl.indexOf('function invalidateAcl'));
+  assert.equal(backupBlock.includes('BACKUP_RECIPIENT_IDS'), false);
+  assert.equal(backupBlock.includes("getTelegramIdsForAlias('relojes')"), true);
+  assert.equal(backupBlock.includes('getSublicuentasRecipientChatIds'), true);
+});
+
+test('códigos IMAP usan permiso codigos.read y diagnóstico queda administrativo', () => {
+  const imap = read('index_07_imap.js');
+  assert.equal(imap.includes('imapAllowed(msg,"codigos.read")'), true);
+  assert.equal(imap.includes('imapAllowed(msg,"system.admin")'), true);
+});
+
+test('ACL fase 2: perfiles nominales aplican mínimo privilegio', () => {
+  const relojes = permissionsForProfile('relojes');
+  const geisell = permissionsForProfile('geisell');
+  const magdiel = permissionsForProfile('magdiel');
+
+  assert.equal(permissionGranted(relojes, 'sincronizacion.claves'), true);
+  assert.equal(permissionGranted(relojes, 'backup.receive'), true);
+  assert.equal(permissionGranted(relojes, 'finanzas.read'), false);
+  assert.equal(permissionGranted(relojes, 'avisos.read'), false);
+
+  assert.equal(permissionGranted(geisell, 'clientes.read'), true);
+  assert.equal(permissionGranted(geisell, 'control_maestro.write'), true);
+  assert.equal(permissionGranted(geisell, 'codigos.read'), false);
+  assert.equal(permissionGranted(geisell, 'sincronizacion.claves'), false);
+  assert.equal(permissionGranted(geisell, 'finanzas.read'), false);
+
+  assert.equal(permissionGranted(magdiel, 'auditoria.read'), true);
+  assert.equal(permissionGranted(magdiel, 'actividad.read'), true);
+  assert.equal(permissionGranted(magdiel, 'clientes.read'), false);
+  assert.equal(permissionGranted(magdiel, 'inventario.read'), false);
+  assert.equal(permissionGranted(magdiel, 'finanzas.read'), false);
+});
+
+test('callbacks fase 2: no deja huecos en rutas sensibles principales', () => {
+  assert.equal(callbackPermission('sync:claves:run'), 'sincronizacion.claves');
+  assert.equal(callbackPermission('sync:clave:serv:abc:0'), 'sincronizacion.claves');
+  assert.equal(callbackPermission('platgrp:set:root'), 'clientes.write');
+  assert.equal(callbackPermission('txt:todos:hoy'), 'renovaciones.read');
+  assert.equal(callbackPermission('txt:hoy'), 'renovaciones.read');
+  assert.equal(callbackPermission('menu:renovaciones'), 'renovaciones.read');
+  assert.equal(callbackPermission('ren:accion:abc'), 'renovaciones.write');
+  assert.equal(callbackPermission('rec:start:28/09/2026'), 'self-service');
+});
+
+test('todos los callbacks exactos del router tienen clasificación ACL o son navegación inocua', () => {
+  const handlers = read('index_06_handlers.js');
+  const begin = handlers.indexOf('bot.on("callback_query"');
+  const end = handlers.indexOf('// ===============================\n// MESSAGE ROUTER', begin);
+  const chunk = handlers.slice(begin, end > begin ? end : undefined);
+  const exact = [...chunk.matchAll(/data\s*===\s*["']([^"']+)["']/g)].map((m) => m[1]);
+  const exempt = new Set(['noop', 'go:inicio']);
+  for (const data of exact) {
+    if (exempt.has(data)) continue;
+    assert.ok(callbackPermission(data), `Callback sin ACL: ${data}`);
+  }
+});
+
+test('configuración de iconos Premium queda exclusiva a permiso promociones.config', () => {
+  const premium = read('index_20_premium_icons.js');
+  const roles = read('index_02_utils_roles.js');
+  const handlers = read('index_06_handlers.js');
+  assert.equal(premium.includes('typeof canConfigure === "function" ? canConfigure : isAdmin'), true);
+  assert.equal(roles.includes('accessControl.hasPermission(userId, "promociones.config")'), true);
+  assert.equal(handlers.includes('safeHasPermissionLocal(msg.from?.id, "promociones.config")'), true);
+  assert.equal(permissionGranted(permissionsForProfile('relojes'), 'promociones.config'), false);
+  assert.equal(permissionGranted(permissionsForProfile('sublicuentas'), 'promociones.config'), true);
+});
+
+test('exportaciones directas respetan ACL granular', () => {
+  const crm = read('index_03_clientes_crm.js');
+  const fin = read('index_05_finanzas_menus.js');
+  assert.equal(crm.includes('accessControl.hasPermission(userId, "clientes.read")'), true);
+  assert.equal(fin.includes('accessControl.hasPermission(userId, "finanzas.read")'), true);
+});
+
+test('vinculación de vendedores ya no puede ser reclamada por cualquier usuario', () => {
+  const handlers = read('index_06_handlers.js');
+  const pos = handlers.indexOf('vincular_vendedor\\s+(\\d+)\\s+(.+)');
+  assert.ok(pos >= 0);
+  const block = handlers.slice(Math.max(0, pos - 120), pos + 1200);
+  assert.equal(block.includes('equipo.manage'), true);
+  assert.equal(block.includes('TELEGRAM_ID NOMBRE'), true);
+  const fnPos = handlers.indexOf('async function linkRevendedorByNombre');
+  const fnEnd = handlers.indexOf('\nfunction textoBtnEliminarMovimiento', fnPos);
+  const fnBlock = handlers.slice(fnPos, fnEnd);
+  assert.equal(fnBlock.includes('db.collection("revendedores").get()'), false);
+  assert.equal(fnBlock.includes('where("nombre_norm", "==", nombreNorm)'), true);
+});
+
+test('respuestas de avisos intentan resolver al autor específico antes de fallback Sublicuentas', () => {
+  const handlers = read('index_06_handlers.js');
+  assert.equal(handlers.includes('const ownerCandidates=[old.creadoPor,old.remitente,old.autor,old.creadoPorRol]'), true);
+  assert.equal(handlers.includes("['admin','administrador','usuario','socio'].includes(ownerAlias)"), true);
+  assert.equal(handlers.includes('Solo el responsable de esa conversación recibirá la respuesta.'), true);
 });
