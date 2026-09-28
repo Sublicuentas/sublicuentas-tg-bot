@@ -759,7 +759,26 @@ async function enviarRecordatorios11AM() {
 
 // ===============================
 // ✅ BACKUP DOMINICAL — DOMINGO 9PM
+// Privado: únicamente Sublicuentas y Relojes pueden recibir el archivo.
 // ===============================
+function backupAdminKeyLocal(v = "") {
+  return String(v || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, " ").trim();
+}
+function backupAdminPermitidoLocal(doc, data = {}) {
+  const tg = String(data.telegramId || data.telegramID || data.userId || doc.id || "").trim();
+  if (!tg) return "";
+  const configured = new Set([
+    String(process.env.SUBLICUENTAS_CHAT_ID || "5728675990").trim(),
+    String(process.env.RELOJES_CHAT_ID || "411539492").trim(),
+  ].filter(Boolean));
+  if (configured.has(tg)) return tg;
+
+  const aliases = [doc.id, data.nombre, data.nombre_norm, data.usuario, data.username, data.rol, data.role]
+    .map(backupAdminKeyLocal).filter(Boolean);
+  const esSublicuentas = aliases.some((x) => ["sublicuentas", "naara"].includes(x));
+  const esRelojes = aliases.some((x) => ["relojes", "libni", "daniela"].includes(x));
+  return (esSublicuentas || esRelojes) ? tg : "";
+}
 async function ejecutarBackupDominical() {
   try {
     const hoy = hoyDMY();
@@ -812,13 +831,16 @@ async function ejecutarBackupDominical() {
       `👥 *Clientes*: ${clientes.length} registrados\n\n` +
       `_El archivo Excel contiene todas las finanzas del mes y la lista completa de clientes._`;
     const snapAdmins = await db.collection("admins").get();
-    let enviados = 0;
+    const destinatariosBackup = new Set();
     for (const d of snapAdmins.docs) {
       const data = d.data() || {};
       if (data.activo === false) continue;
-      const tg = String(data.telegramId || data.userId || d.id || "").trim();
-      if (!tg) continue;
-      try { await bot.sendMessage(tg, resumenMsg, { parse_mode: "Markdown" }); await bot.sendDocument(tg, tempPath, { caption: ` Backup ${hoy}` }); enviados++; } catch (e) { logErr(`backup:admin:${tg}`, e); }
+      const tg = backupAdminPermitidoLocal(d, data);
+      if (tg) destinatariosBackup.add(tg);
+    }
+    let enviados = 0;
+    for (const tg of destinatariosBackup) {
+      try { await bot.sendMessage(tg, resumenMsg, { parse_mode: "Markdown" }); await bot.sendDocument(tg, tempPath, { caption: ` Backup ${hoy}` }); enviados++; } catch (e) { logErr(`backup:privado:${tg}`, e); }
     }
     try { fs.unlinkSync(tempPath); } catch (_) {}
     console.log(`✅ Backup dominical enviado a ${enviados} admin(s) — ${hoy}`);

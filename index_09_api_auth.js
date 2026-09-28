@@ -124,6 +124,10 @@ function revAdminAuth(req, res, next) {
   try {
     const p = jwt.verify(token, getJwtSecret());
     if (!p.admin) return res.status(403).json({ error: "no_admin" });
+    // Los tokens admin antiguos no tenían ámbito. Por privacidad se consideran
+    // Sublicuentas; nunca un admin genérico obtiene pagos enviados a Relojes.
+    if (!p.adminDestino) p.adminDestino = "sublicuentas";
+    if (!p.adminRole) p.adminRole = p.adminDestino;
     req.admin = p;
     next();
   } catch (e) {
@@ -214,6 +218,8 @@ function createRevLoginHandler({ db, bot, SUPER_ADMIN }) {
       const JWT_SECRET = getJwtSecret();
       const ADMIN_USER = (process.env.ADMIN_USER || "").trim().toLowerCase();
       const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "";
+      const RELOJES_ADMIN_USER = (process.env.RELOJES_ADMIN_USER || "").trim().toLowerCase();
+      const RELOJES_ADMIN_PASSWORD = process.env.RELOJES_ADMIN_PASSWORD || "";
 
       const usuarioIngresado = (req.body?.usuario || "").trim().toLowerCase();
       // El nombre correcto es Geisell. El alias mal escrito sigue entrando
@@ -228,14 +234,22 @@ function createRevLoginHandler({ db, bot, SUPER_ADMIN }) {
       const throttlePromise = checkLoginThrottle(db, usuario);
 
       // ── Admin ──
-      if (ADMIN_USER && ADMIN_PASSWORD && usuarioIngresado === ADMIN_USER && safeEqualStr(password, ADMIN_PASSWORD)) {
+      // Cada receptor de pagos usa un token con ámbito propio. El admin
+      // principal siempre corresponde a Sublicuentas. Relojes puede tener
+      // credenciales independientes mediante RELOJES_ADMIN_USER/PASSWORD.
+      const adminAccounts = [
+        ADMIN_USER && ADMIN_PASSWORD ? { usuario: ADMIN_USER, password: ADMIN_PASSWORD, destino: "sublicuentas", nombre: "Sublicuentas" } : null,
+        RELOJES_ADMIN_USER && RELOJES_ADMIN_PASSWORD ? { usuario: RELOJES_ADMIN_USER, password: RELOJES_ADMIN_PASSWORD, destino: "relojes", nombre: "Relojes" } : null,
+      ].filter(Boolean);
+      const adminMatch = adminAccounts.find((a) => usuarioIngresado === a.usuario && safeEqualStr(password, a.password));
+      if (adminMatch) {
         const throttle = await throttlePromise;
         if (throttle.blocked) {
           return res.status(429).json({ error: "demasiados_intentos", retryAfterSeconds: throttle.retryAfterSeconds });
         }
         clearLoginThrottle(db, usuario).catch(() => {});
-        const token = jwt.sign({ admin: true, nombre: "Admin" }, JWT_SECRET, { expiresIn: "6h" });
-        return res.json({ token, admin: true, nombre: "Admin" });
+        const token = jwt.sign({ admin: true, nombre: adminMatch.nombre, adminDestino: adminMatch.destino, adminRole: adminMatch.destino }, JWT_SECRET, { expiresIn: "6h" });
+        return res.json({ token, admin: true, nombre: adminMatch.nombre, adminDestino: adminMatch.destino });
       }
 
       // ── Revendedor ──

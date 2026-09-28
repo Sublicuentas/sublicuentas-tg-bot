@@ -1388,6 +1388,64 @@ async function getActiveAdminIdsLocal() {
   return Array.from(ids).filter((id) => /^-?\d{5,}$/.test(id));
 }
 
+function ticketAdminRoleFromDataLocal(data = {}, docId = "") {
+  const aliases = [docId, data.nombre, data.nombre_norm, data.usuario, data.username, data.rol, data.role]
+    .map((v) => ticketDestNorm(v)).filter(Boolean);
+  if (aliases.some((x) => ["relojes", "libni", "daniela"].includes(x))) return "relojes";
+  if (aliases.some((x) => ["sublicuentas", "naara", "superadmin"].includes(x))) return "sublicuentas";
+  return "";
+}
+async function ticketAdminRoleByTelegramIdLocal(userId) {
+  const uid = normalizeTelegramIdLocal(userId);
+  if (!uid) return "";
+  if (uid === String(process.env.RELOJES_CHAT_ID || "411539492").trim()) return "relojes";
+  if (uid === String(process.env.SUBLICUENTAS_CHAT_ID || "5728675990").trim()) return "sublicuentas";
+  try {
+    const direct = await db.collection("admins").doc(uid).get();
+    if (direct.exists && (direct.data() || {}).activo !== false) {
+      const role = ticketAdminRoleFromDataLocal(direct.data() || {}, direct.id);
+      if (role) return role;
+      if ((direct.data() || {}).superAdmin === true || (direct.data() || {}).superadmin === true) return "sublicuentas";
+    }
+    const snap = await db.collection("admins").get();
+    for (const d of snap.docs) {
+      const data = d.data() || {};
+      if (data.activo === false) continue;
+      const tg = normalizeTelegramIdLocal(data.telegramId || data.telegramID || data.userId || d.id || "");
+      if (tg !== uid) continue;
+      return ticketAdminRoleFromDataLocal(data, d.id) || "";
+    }
+  } catch (e) {
+    logErr("ticketAdminRoleByTelegramIdLocal", e?.message || e);
+  }
+  if (getSuperAdminIdsLocal().includes(uid)) return "sublicuentas";
+  return "";
+}
+async function ticketAdminIdsByRoleLocal(role = "") {
+  const wanted = ticketDestNorm(role);
+  const ids = new Set();
+  if (wanted === "sublicuentas") {
+    const id = String(process.env.SUBLICUENTAS_CHAT_ID || "5728675990").trim();
+    if (id) ids.add(id);
+  }
+  if (wanted === "relojes") {
+    const id = String(process.env.RELOJES_CHAT_ID || "411539492").trim();
+    if (id) ids.add(id);
+  }
+  try {
+    const snap = await db.collection("admins").get();
+    snap.forEach((d) => {
+      const data = d.data() || {};
+      if (data.activo === false || ticketAdminRoleFromDataLocal(data, d.id) !== wanted) return;
+      const tg = normalizeTelegramIdLocal(data.telegramId || data.telegramID || data.userId || d.id || "");
+      if (tg) ids.add(tg);
+    });
+  } catch (e) {
+    logErr("ticketAdminIdsByRoleLocal", e?.message || e);
+  }
+  return Array.from(ids).filter((id) => /^-?\d{5,}$/.test(id));
+}
+
 async function getActiveRevendedoresLocal() {
   const out = [];
   try {
@@ -4492,17 +4550,26 @@ async function ticketTelegramPhotoUrl(msg,ticketId){
 async function ticketAppendTelegramReply({ticketId,msg,rev,adminOk}){
   const ref=db.collection('tickets_auditoria').doc(String(ticketId||''));
   const snap=await ref.get();if(!snap.exists)throw new Error('Ese ticket ya no existe.');
-  const old=snap.data()||{};if(!ticketCanTelegramAccess(old,rev,adminOk))throw new Error('Este ticket no corresponde a su usuario.');
+  const old=snap.data()||{};
+  const esAviso=String(old.tipo||'').toLowerCase()==='aviso';
+  const adminRole=adminOk?await ticketAdminRoleByTelegramIdLocal(msg?.from?.id||msg?.chat?.id):'';
+  const actorRol=rev?ticketDestNorm(rev.nombre_norm||rev.id||rev.nombre):(adminRole||(esAviso?'':'sublicuentas'));
+  const destinos=(Array.isArray(old.destinos)?old.destinos:[]).map(ticketDestNorm).filter(Boolean);
+  const creatorRol=ticketDestNorm(old.creadoPorRol||'sublicuentas')||'sublicuentas';
+  const adminPuede=adminOk && (!esAviso || (!!actorRol && (actorRol==='sublicuentas'||destinos.includes(actorRol)||creatorRol===actorRol)));
+  if(!(adminOk?adminPuede:ticketCanTelegramAccess(old,rev,false)))throw new Error('Este ticket no corresponde a su usuario.');
   const texto=String(msg?.text||msg?.caption||'').trim().slice(0,3000);
   const imagenUrl=await ticketTelegramPhotoUrl(msg,ticketId);
   if(!texto&&!imagenUrl)throw new Error('Envíe texto o una foto como respuesta.');
-  const actor=rev?.nombre||rev?.nombre_norm||(adminOk?'Admin Telegram':'Socio');
-  const actorRol=rev?ticketDestNorm(rev.nombre_norm||rev.id||rev.nombre):'sublicuentas';
-  const entry={texto:texto||(imagenUrl?'Evidencia adjunta':''),por:String(actor).slice(0,100),porRol:actorRol,imagenUrl,origen:'telegram',telegramUserId:String(msg?.from?.id||''),at:new Date().toISOString()};
+  const actor=rev?.nombre||rev?.nombre_norm||(actorRol==='relojes'?'Relojes':'Sublicuentas');
+  const paraRoles=esAviso&&actorRol!==creatorRol?[creatorRol]:[];
+  const entry={texto:texto||(imagenUrl?'Evidencia adjunta':''),por:String(actor).slice(0,100),porRol:actorRol,para:paraRoles,paraLabel:paraRoles.map((r)=>r==='sublicuentas'?'Sublicuentas':r==='relojes'?'Relojes':r).join(', '),imagenUrl,origen:'telegram',telegramUserId:String(msg?.from?.id||''),at:new Date().toISOString()};
   await db.runTransaction(async tx=>{const fresh=await tx.get(ref);if(!fresh.exists)throw new Error('Ese ticket ya no existe.');const data=fresh.data()||{},respuestas=Array.isArray(data.respuestas)?data.respuestas.slice():[];respuestas.push(entry);tx.set(ref,{respuestas,ultimaRespuesta:entry.texto,ultimaRespuestaPor:entry.por,estado:String(data.estado||'abierto')==='resuelto'?'resuelto':'respondido',updatedAt:new Date().toISOString()},{merge:true});});
-  const label=String(old.tipo||'').toLowerCase()==='aviso'?`aviso "${old.titulo||'Sin título'}"`:`ticket #${old.numero||String(ticketId).slice(-4)}`;
+  const label=esAviso?`aviso "${old.titulo||'Sin título'}"`:`ticket #${old.numero||String(ticketId).slice(-4)}`;
   const aviso=`💬 *Respuesta desde Telegram*\n👤 ${escMD(entry.por)}\n🎫 ${escMD(label)}\n\n${escMD(entry.texto||'Evidencia adjunta')}`;
-  const admins=await getActiveAdminIdsLocal();
+  // En avisos la respuesta es privada: vuelve únicamente al creador del aviso
+  // (normalmente Sublicuentas). Nunca se difunde al resto de administradores.
+  const admins=esAviso?await ticketAdminIdsByRoleLocal(creatorRol):await getActiveAdminIdsLocal();
   for(const id of admins){if(String(id)===String(msg?.chat?.id))continue;try{if(imagenUrl)await bot.sendPhoto(id,imagenUrl,{caption:aviso,parse_mode:'Markdown'});else await bot.sendMessage(id,aviso,{parse_mode:'Markdown'});}catch(e){logErr('ticket:notify-admin',e?.message||e);}}
   return {old,entry};
 }

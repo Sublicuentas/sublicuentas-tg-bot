@@ -65,7 +65,7 @@ app.use(cors());
 app.use(express.json({ limit: "15mb" }));
 
 // keepalive / health (para que Render lo mantenga vivo)
-const PANEL_API_VERSION = "socios-20260925-tg-outbox-2";
+const PANEL_API_VERSION = "socios-20260928-privacy-complete-accounts";
 app.get("/", (_req, res) => res.type("text/plain").send(`Sublicuentas Panel API OK ${PANEL_API_VERSION}`));
 app.get("/rev/ping", (_req, res) => res.json({ v: PANEL_API_VERSION, ticketsBridge: true, telegramOutbox: true, gemini: !!process.env.GEMINI_API_KEY, anthropic: !!process.env.ANTHROPIC_API_KEY, storageBuckets: STORAGE_BUCKET_CANDIDATES }));
 app.get("/health", (_req, res) => res.json({ ok: true, version: PANEL_API_VERSION, ts: Date.now() }));
@@ -773,6 +773,30 @@ function destinoInfo(destinoRaw) {
   }
   return info;
 }
+function adminDestinoScope(req) {
+  const raw = revNormKey(req?.admin?.adminDestino || req?.admin?.adminRole || "sublicuentas");
+  return raw === "relojes" ? "relojes" : "sublicuentas";
+}
+function registroDestinoKey(raw = "") {
+  try { return destinoInfo(raw || "sublicuentas").key; }
+  catch (_) { return "sublicuentas"; }
+}
+function adminPuedeVerRegistro(req, rawDestino = "") {
+  return registroDestinoKey(rawDestino) === adminDestinoScope(req);
+}
+function compraTextoNorm(v = "") {
+  return String(v || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, " ").trim();
+}
+function esCuentaCompletaCatalogo(producto = {}) {
+  const tipo = compraTextoNorm(producto.entregaTipo || producto.entrega_tipo || "").replace(/\s+/g, "_");
+  const categoria = compraTextoNorm(producto.categoria || producto.catalogCategory || "");
+  return tipo === "cuenta_completa" || /(^| )cuentas? completas?( |$)/.test(categoria);
+}
+function cantidadCuentaCompleta(raw, esCompleta) {
+  if (!esCompleta) return 1;
+  const n = Math.floor(Number(raw) || 1);
+  return Math.min(50, Math.max(1, n));
+}
 async function getDestinoChatIds(destinoRaw) {
   const info = destinoInfo(destinoRaw);
   const envIds = String(process.env[info.env] || "").split(",").map((s) => s.trim()).filter(Boolean);
@@ -1015,6 +1039,7 @@ app.post("/rev/compra", revAuth, async (req, res) => {
           nombreCliente: b.nombreCliente,
           dispositivo: b.dispositivo,
           marcaTv: b.marcaTv,
+          cantidad: b.cantidad,
         }];
 
     const productos = productosRaw.map((p) => {
@@ -1027,32 +1052,36 @@ app.post("/rev/compra", revAuth, async (req, res) => {
       }
       const servicio = cleanTg(productoCatalogo.nombreCompleto || p.servicio || p.nombre || "", 140);
       const precioCatalogo = productoCatalogo.p == null ? null : Number(productoCatalogo.p);
-      const perfilNombre = cleanTg(p.perfilNombre, 80);
-      const perfilApellido = cleanTg(p.perfilApellido, 80);
-      const correo = cleanTg(p.correo, 160);
-      const detalleServicio = cleanTg(p.detalleServicio, 240);
-      const acceso = cleanTg(p.acceso, 220);
-      const serial = cleanTg(p.serial, 220);
-      const key = cleanTg(p.key, 220);
-      // ✅ NUEVO: nombre del cliente (para compras tipo "correo" — Gemini,
-      // Canva, invitación al correo) y dispositivo (para Disney, HBO/Max,
-      // Vix, Paramount, Crunchyroll y Prime Video).
-      const nombreCliente = cleanTg(p.nombreCliente, 80);
+      const esCuentaCompleta = esCuentaCompletaCatalogo(productoCatalogo);
+      const cantidad = cantidadCuentaCompleta(p.cantidad, esCuentaCompleta);
+
+      // CUENTAS COMPLETAS: solo cantidad. El correo/credenciales los entrega
+      // el equipo; nunca se guardan datos de cliente, perfil o instalación.
+      const perfilNombre = esCuentaCompleta ? "" : cleanTg(p.perfilNombre, 80);
+      const perfilApellido = esCuentaCompleta ? "" : cleanTg(p.perfilApellido, 80);
+      const correo = esCuentaCompleta ? "" : cleanTg(p.correo, 160);
+      const detalleServicio = esCuentaCompleta ? "" : cleanTg(p.detalleServicio, 240);
+      const acceso = esCuentaCompleta ? "" : cleanTg(p.acceso, 220);
+      const serial = esCuentaCompleta ? "" : cleanTg(p.serial, 220);
+      const key = esCuentaCompleta ? "" : cleanTg(p.key, 220);
+      const nombreCliente = esCuentaCompleta ? "" : cleanTg(p.nombreCliente, 80);
       const DISP_LABEL = { tv: "📺 TV", celular: "📱 Celular", tablet: "📱 Tablet", computadora: "💻 Computadora" };
-      const dispositivo = DISP_LABEL[String(p.dispositivo || "").toLowerCase()] || cleanTg(p.dispositivo, 40);
+      const dispositivo = esCuentaCompleta ? "" : (DISP_LABEL[String(p.dispositivo || "").toLowerCase()] || cleanTg(p.dispositivo, 40));
       const MARCA_LABEL={samsung:"Samsung",lg:"LG",tcl:"TCL",roku:"Roku TV"};
-      const marcaTv=MARCA_LABEL[String(p.marcaTv||"").toLowerCase()]||cleanTg(p.marcaTv,80);
+      const marcaTv=esCuentaCompleta ? "" : (MARCA_LABEL[String(p.marcaTv||"").toLowerCase()]||cleanTg(p.marcaTv,80));
       return {
         id: cleanTg(productoCatalogo.id || p.catalogId || p.id, 90),
         catalogId: cleanTg(productoCatalogo.id || "", 90),
         servicio,
         servicioBase: cleanTg(productoCatalogo.n || p.servicioBase, 100),
-        entregaTipo: cleanTg(productoCatalogo.entregaTipo || p.entregaTipo || "", 60),
+        entregaTipo: esCuentaCompleta ? "cuenta_completa" : cleanTg(productoCatalogo.entregaTipo || p.entregaTipo || "", 60),
         entregaCanal: cleanTg(productoCatalogo.entregaCanal || p.entregaCanal || "manual", 60),
         catalogCategory: cleanTg(productoCatalogo.categoria || p.catalogCategory || "", 120),
         catalogSub: cleanTg(productoCatalogo.s || p.catalogSub || "", 160),
         catalogDetalle: cleanTg(productoCatalogo.d || p.catalogDetalle || "", 500),
         precioCatalogo,
+        cantidad,
+        esCuentaCompleta,
         perfilNombre,
         perfilApellido,
         perfil: `${perfilNombre} ${perfilApellido}`.trim(),
@@ -1070,15 +1099,17 @@ app.post("/rev/compra", revAuth, async (req, res) => {
     if (!productos.length) return res.status(400).json({ error: "falta_servicio" });
 
     const comentario = cleanTg(b.comentario, 700);
-    const clienteNombre = cleanTg(b.clienteNombre, 80);
-    const clienteApellido = cleanTg(b.clienteApellido, 80);
-    const subtotalCatalogo = productos.reduce((a, p) => a + (p.precioCatalogo !== null ? Number(p.precioCatalogo || 0) : 0), 0);
-    const conPrecio = productos.filter((p) => p.precioCatalogo !== null).length;
+    const primeraEsCompleta = productos[0]?.esCuentaCompleta === true;
+    const clienteNombre = primeraEsCompleta ? "" : cleanTg(b.clienteNombre, 80);
+    const clienteApellido = primeraEsCompleta ? "" : cleanTg(b.clienteApellido, 80);
+    const totalUnidades = productos.reduce((a, p) => a + Math.max(1, Number(p.cantidad) || 1), 0);
+    const subtotalCatalogo = productos.reduce((a, p) => a + (p.precioCatalogo !== null ? Number(p.precioCatalogo || 0) * Math.max(1, Number(p.cantidad) || 1) : 0), 0);
+    const conPrecio = productos.reduce((a, p) => a + (p.precioCatalogo !== null ? Math.max(1, Number(p.cantidad) || 1) : 0), 0);
     const descuentoCombo = Math.min(Math.max(conPrecio - 1, 0), 4) * 10; // 2=10, 3=20, 4=30, 5+=40
     const totalCombo = Math.max(0, subtotalCatalogo - descuentoCombo);
     const monto = revMoneyNumber(b.monto) || totalCombo || 0;
-    const servicio = productos.length > 1
-      ? `Combo ${productos.length} plataformas`
+    const servicio = totalUnidades > 1
+      ? (productos.length > 1 ? `Combo ${totalUnidades} unidades` : `${productos[0].servicio} × ${totalUnidades}`)
       : productos[0].servicio;
 
     const imagenObj = await uploadPanelImage(b.imagen, "compras");
@@ -1089,7 +1120,7 @@ app.post("/rev/compra", revAuth, async (req, res) => {
       requestId,
       servicio,
       productos,
-      comboCantidad: productos.length,
+      comboCantidad: totalUnidades,
       subtotalCatalogo,
       descuentoCombo,
       totalCombo,
@@ -1149,8 +1180,10 @@ app.post("/rev/compra", revAuth, async (req, res) => {
     }
 
     const productoLineas = productos.flatMap((p, i) => {
-      const precio = p.precioCatalogo === null ? "Por comisión" : `Lps. ${p.precioCatalogo}`;
+      const cantidad = Math.max(1, Number(p.cantidad) || 1);
+      const precio = p.precioCatalogo === null ? "Por comisión" : (cantidad > 1 ? `Lps. ${p.precioCatalogo} × ${cantidad} = Lps. ${Number(p.precioCatalogo || 0) * cantidad}` : `Lps. ${p.precioCatalogo}`);
       const datos = [];
+      if (p.esCuentaCompleta) datos.push(`Cantidad: ${cantidad} cuenta${cantidad === 1 ? "" : "s"} completa${cantidad === 1 ? "" : "s"}`);
       if (p.perfil) datos.push(`Perfil: ${p.perfil}`);
       if (p.dispositivo) datos.push(`Dispositivo: ${p.dispositivo}`);
       if (p.marcaTv) datos.push(`Marca / sistema TV: ${p.marcaTv}`);
@@ -1172,14 +1205,14 @@ app.post("/rev/compra", revAuth, async (req, res) => {
     });
 
     const capLineas = [
-      productos.length > 1 ? `🛒 *COMPRA COMBO*` : `🛒 *COMPRA NUEVA*`,
+      totalUnidades > 1 ? `🛒 *COMPRA COMBO*` : `🛒 *COMPRA NUEVA*`,
       `━━━━━━━━━━━━━━`,
       `📍 Avisar: ${destino.label}`,
       `👤 Socio: ${cleanTg(socio, 80)}`,
       `📦 Productos:`,
       ...productoLineas,
       ``,
-      productos.length > 1
+      totalUnidades > 1
         ? `💰 Subtotal: Lps. ${subtotalCatalogo}\n🏷️ Descuento combo: Lps. ${descuentoCombo}\n✅ Total sugerido: Lps. ${totalCombo}\n💵 Monto pagado: ${monto ? `Lps. ${monto}` : "—"}`
         : `💵 Monto pagado: ${monto ? `Lps. ${monto}` : "—"}${productos[0].precioCatalogo !== null ? ` | Catálogo: Lps. ${productos[0].precioCatalogo}` : ""}`,
       comentario ? `📝 Nota: ${cleanTg(comentario, 220)}` : "",
@@ -1191,7 +1224,7 @@ app.post("/rev/compra", revAuth, async (req, res) => {
     const ids = await getDestinoChatIds(destino.key);
     await Promise.all(ids.map((id) => sendTelegramImageSmart(id, imagenObj, cap)));
 
-    res.json({ ok: true, id: ref.id, imagenUrl, destino: destino.key, destinoLabel: destino.label, totalCombo, descuentoCombo, estado: "pendiente" });
+    res.json({ ok: true, id: ref.id, imagenUrl, destino: destino.key, destinoLabel: destino.label, comboCantidad: totalUnidades, totalCombo, descuentoCombo, estado: "pendiente" });
   } catch (e) {
     console.error("rev/compra", e);
     res.status(e.status || 500).json({ error: e.publicError || "server", detail: e.message });
@@ -1317,7 +1350,7 @@ app.get("/rev/admin/comprobantes", revAdminAuth, async (req, res) => {
   try {
     const limit = Math.min(Number(req.query.limit) || 120, 300);
     const snap = await db.collection("renovaciones").orderBy("createdAt", "desc").limit(limit).get();
-    const lista = snap.docs.map((d) => {
+    const lista = snap.docs.filter((d) => adminPuedeVerRegistro(req, (d.data() || {}).destino)).map((d) => {
       const r = d.data() || {};
       const ts = r.createdAt?._seconds ? r.createdAt._seconds * 1000 :
                  r.createdAt?.seconds ? r.createdAt.seconds * 1000 :
@@ -1332,6 +1365,8 @@ app.get("/rev/admin/comprobantes", revAdminAuth, async (req, res) => {
         monto: Number(r.monto) || 0,
         socio: r.socio || "",
         socio_norm: r.socio_norm || "",
+        destino: registroDestinoKey(r.destino),
+        destinoLabel: destinoInfo(registroDestinoKey(r.destino)).label,
         imagenUrl: r.imagenUrl || r.imagenData || "",
         renovado: !!r.renovado,
         fechaAnterior: r.fechaAnterior || "",
@@ -1349,7 +1384,7 @@ app.get("/rev/admin/compras", revAdminAuth, async (req, res) => {
   try {
     const limit = Math.min(Number(req.query.limit) || 120, 300);
     const snap = await db.collection("compras").orderBy("createdAt", "desc").limit(limit).get();
-    const lista = snap.docs.map((d) => {
+    const lista = snap.docs.filter((d) => adminPuedeVerRegistro(req, (d.data() || {}).destino)).map((d) => {
       const r = d.data() || {};
       const ts = r.createdAt?._seconds ? r.createdAt._seconds * 1000 :
                  r.createdAt?.seconds ? r.createdAt.seconds * 1000 :
@@ -1403,6 +1438,7 @@ app.patch("/rev/admin/compras/:id/estado", revAdminAuth, async (req, res) => {
     const snap = await ref.get();
     if (!snap.exists) return res.status(404).json({ error: "no_existe" });
     const compra = snap.data() || {};
+    if (!adminPuedeVerRegistro(req, compra.destino)) return res.status(403).json({ error: "fuera_de_ambito" });
     const at = new Date();
     const hist = { estado, detalle, at: at.toISOString(), por: cleanTg(req.admin?.nombre || "Admin", 80) };
     await ref.update({
