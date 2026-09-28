@@ -21,6 +21,7 @@ const path = require("path");
 const core = require("./index_01_core");
 const utils = require("./index_02_utils_roles");
 const accessControl = require("./index_23_access_control");
+const integrity = require("./index_26_integrity_guard");
 const { registrarEventoSorteosSeguro } = require("./index_14_sorteos");
 const {
   normVendedor,
@@ -131,6 +132,24 @@ function validarMesesTvDigitalLocal(plataforma = "", meses = 1) {
     throw new Error(`${nombre}: plan de ${n} meses no válido. Use ${permitidos.join(", ")} meses.`);
   }
   return n;
+}
+
+// Renovar/cambiar la fecha NO debe bloquearse por la tabla comercial de planes IPTV.
+// La tabla de planes se valida al vender/asignar el servicio. En una renovación manual
+// el administrador puede fijar cualquier fecha (por ejemplo, una fecha exacta o +3m).
+// Si la diferencia de fechas coincide con un plan IPTV válido, actualizamos el dato
+// mesesContratados; si no coincide, conservamos el plan que ya tenía el servicio.
+function mesesContratadosRenovacionLocal(plataforma = "", mesesActuales = 1, fechaAnterior = "", fechaNueva = "") {
+  const calculados = mesesEntreDMYLocal(fechaAnterior, fechaNueva);
+  const permitidos = mesesValidosTvDigitalLocal(plataforma);
+  if (!permitidos.length) return calculados;
+  if (permitidos.includes(calculados)) return calculados;
+
+  const actualNormalizado = normalizarMesesLegacyTvDigitalLocal(plataforma, mesesActuales || 1);
+  if (permitidos.includes(actualNormalizado)) return actualNormalizado;
+
+  // Registro antiguo/incompleto: no impedir la renovación por un dato auxiliar.
+  return permitidos[0] || 1;
 }
 
 // Solo para registros antiguos que guardaron meses pagados en vez de la
@@ -1603,15 +1622,18 @@ async function mutarServiciosClienteTx(clientId, mutador) {
       }
       return s;
     });
-    const resultado = await mutador({ cliente: { ...cliente, servicios }, servicios, ref });
+    const resultado = await mutador({ cliente: { ...cliente, servicios }, servicios, ref, tx });
     const siguientesRaw = Array.isArray(resultado?.servicios) ? resultado.servicios : servicios;
     const siguientes = heredarVendedorServicios(siguientesRaw, cliente);
     const resumenVendedores = camposResumenVendedores(siguientes, cliente);
-    tx.set(ref, {
-      servicios: siguientes,
-      ...resumenVendedores,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp()
-    }, { merge: true });
+    if (!resultado?.skipWrite) {
+      tx.set(ref, {
+        servicios: siguientes,
+        ...resumenVendedores,
+        dataVersion: admin.firestore.FieldValue.increment(1),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      }, { merge: true });
+    }
     return {
       ...(resultado || {}),
       cliente: { ...cliente, ...resumenVendedores, servicios: siguientes },
@@ -1920,57 +1942,125 @@ async function sincronizarCuentaEnComprasTx({ plataforma = "", correo = "", nuev
 // ===============================
 // ✅ ELIMINAR SERVICIO (con limpieza de inventario + historial)
 // ===============================
-async function eliminarServicioTx(clientId, idx, compraId = "") {
+async function eliminarServicioTx(clientId, idx, compraId = "", options = {}) {
   const id = String(clientId || "").trim();
-  const resultado = await mutarServiciosClienteTx(id, ({ cliente, servicios }) => {
+  const actor = options.actor || {};
+  const operationId = String(options.operationId || integrity.makeWindowOperationKey(
+    "delete-service", [id, String(compraId || idx || ""), actor?.userId || actor?.id || ""], 120000
+  ));
+  const resultado = await mutarServiciosClienteTx(id, async ({ cliente, servicios, ref, tx }) => {
+    const trashRef = integrity.makeTrashRef(operationId);
+    const oldTrash = await tx.get(trashRef);
+    if (oldTrash.exists) {
+      const t = oldTrash.data() || {};
+      const snap = t.snapshot || {};
+      return {
+        servicios,
+        eliminado: snap.servicio || null,
+        actualIdx: Number(snap.index ?? idx),
+        nombreTitular: cliente.nombrePerfil || "",
+        papeleraId: trashRef.id,
+        duplicate: true,
+        skipWrite: true,
+      };
+    }
     const actualIdx = resolverIndiceCompraLocal(servicios, idx, compraId);
     if (actualIdx === -1) throw new Error("Servicio inválido.");
     const eliminado = servicios[actualIdx];
+    const trash = await integrity.embeddedTrashInTransaction(tx, {
+      kind: "servicio_cliente",
+      sourceCollection: CLIENTES_COLLECTION,
+      sourceId: id,
+      sourcePath: ref.path,
+      snapshot: { servicio: eliminado, index: actualIdx },
+      actor,
+      operationId,
+      metadata: {
+        cliente: cliente.nombrePerfil || cliente.nombre || "Cliente",
+        telefono: cliente.telefono || "",
+        compraId: eliminado?.compraId || compraId || "",
+        plataforma: eliminado?.plataforma || "",
+      },
+    });
+    if (trash.duplicate) {
+      return { servicios, eliminado, actualIdx, nombreTitular: cliente.nombrePerfil || "", papeleraId: trash.trashId, duplicate: true, skipWrite: true };
+    }
     servicios.splice(actualIdx, 1);
-    return { servicios, eliminado, actualIdx, nombreTitular: cliente.nombrePerfil || "" };
+    return { servicios, eliminado, actualIdx, nombreTitular: cliente.nombrePerfil || "", papeleraId: trash.trashId, duplicate: false };
   });
   const eliminado = resultado.eliminado;
+  if (resultado.duplicate) {
+    return { ok: true, duplicate: true, eliminado, servicioIndex: resultado.actualIdx, nombreCliente: resultado.nombreTitular || "", sync: { ok: true, omitido: true }, papeleraId: resultado.papeleraId };
+  }
   const sync = await sincronizarCompraInventarioSeguroLocal(eliminado, null, resultado.nombreTitular || "");
   cacheInvalidatePrefix(`clientes:doc:${id}`);
   cacheInvalidatePrefix("renovaciones:");
 
-  // ✅ Registrar en historial
   await registrarEventoHistorial(id, {
     tipo: "servicio_eliminado",
-    descripcion: `Se eliminó ${humanPlataforma(eliminado.plataforma || "")} con ${cantidadPerfilesServicioLocal(eliminado, resultado.nombreTitular || "")} perfil(es)`,
+    descripcion: `Se eliminó ${humanPlataforma(eliminado.plataforma || "")} con ${cantidadPerfilesServicioLocal(eliminado, resultado.nombreTitular || "")} perfil(es). Papelera: ${resultado.papeleraId}`,
     plataforma: eliminado.plataforma || "",
     correo: eliminado.correo || "",
     clave: getClaveServicioLocal(eliminado, eliminado.plataforma || ""),
     pin: getPinServicioLocal(eliminado, eliminado.plataforma || ""),
     precio: eliminado.precio || 0,
     fechaRenovacion: eliminado.fechaRenovacion || "",
+    papeleraId: resultado.papeleraId,
   });
 
-  return { ok: true, eliminado, servicioIndex: resultado.actualIdx, nombreCliente: resultado.nombreTitular || "", sync };
+  return { ok: true, eliminado, servicioIndex: resultado.actualIdx, nombreCliente: resultado.nombreTitular || "", sync, papeleraId: resultado.papeleraId };
 }
 
-async function renovarServicioTx(clientId, idx, { dias = 0, fechaExacta = "", compraId = "" } = {}) {
+async function renovarServicioTx(clientId, idx, { dias = 0, fechaExacta = "", compraId = "", operationId = "" } = {}) {
   const id = String(clientId || "").trim();
+  const opId = String(operationId || integrity.makeWindowOperationKey(
+    "renew-service", [id, String(compraId || idx || ""), Number(dias || 0), String(fechaExacta || "")], 120000
+  )).slice(0, 180);
   const renovadoAt = new Date();
   const resultado = await mutarServiciosClienteTx(id, ({ cliente, servicios }) => {
     const actualIdx = resolverIndiceCompraLocal(servicios, idx, compraId);
     if (actualIdx === -1) throw new Error("Servicio inválido.");
     const anterior = servicios[actualIdx] || {};
+    if (opId && String(anterior.ultimaRenovacionOperacionId || "") === opId) {
+      return {
+        servicios,
+        anterior,
+        siguiente: anterior,
+        actualIdx,
+        fechaAnterior: String(anterior.ultimaRenovacionFechaAnterior || anterior.fechaRenovacion || ""),
+        fechaNueva: String(anterior.fechaRenovacion || ""),
+        nombreTitular: cliente.nombrePerfil || "",
+        duplicate: true,
+        skipWrite: true,
+      };
+    }
     const fechaAnterior = String(anterior.fechaRenovacion || "");
     const fechaNueva = fechaExacta
       ? String(fechaExacta || "").trim()
       : addDaysDMY(isFechaDMY(fechaAnterior) ? fechaAnterior : hoyDMY(), Number(dias || 0));
     if (!isFechaDMY(fechaNueva)) throw new Error("Fecha inválida.");
-    const mesesCalculados = mesesEntreDMYLocal(isFechaDMY(fechaAnterior) ? fechaAnterior : hoyDMY(), fechaNueva);
-    const mesesContratados = validarMesesTvDigitalLocal(anterior.plataforma || "", mesesCalculados);
-    const siguiente = { ...anterior, fechaRenovacion: fechaNueva, mesesContratados, ultimaRenovacionAt: renovadoAt };
+    const mesesContratados = mesesContratadosRenovacionLocal(
+      anterior.plataforma || "", anterior.mesesContratados || 1,
+      isFechaDMY(fechaAnterior) ? fechaAnterior : hoyDMY(), fechaNueva
+    );
+    const siguiente = {
+      ...anterior,
+      fechaRenovacion: fechaNueva,
+      mesesContratados,
+      ultimaRenovacionAt: renovadoAt,
+      ultimaRenovacionOperacionId: opId,
+      ultimaRenovacionFechaAnterior: fechaAnterior,
+    };
     servicios[actualIdx] = siguiente;
-    return { servicios, anterior, siguiente, actualIdx, fechaAnterior, fechaNueva, nombreTitular: cliente.nombrePerfil || "" };
+    return { servicios, anterior, siguiente, actualIdx, fechaAnterior, fechaNueva, nombreTitular: cliente.nombrePerfil || "", duplicate: false };
   });
   cacheInvalidatePrefix(`clientes:doc:${id}`);
   cacheInvalidatePrefix("renovaciones:");
 
-  // Solo un cambio real de fecha genera boletos; editar sin moverla no cuenta.
+  if (resultado.duplicate) {
+    return { ok: true, duplicate: true, servicio: resultado.siguiente, servicioIndex: resultado.actualIdx, fechaAnterior: resultado.fechaAnterior, fechaNueva: resultado.fechaNueva, sorteo: { ok: true, creados: 0, omitido: "operacion_repetida" }, operationId: opId };
+  }
+
   const compraEvento = String(resultado.siguiente.compraId || `servicio-${resultado.actualIdx}`);
   const sorteo = resultado.fechaNueva !== resultado.fechaAnterior
     ? await registrarEventoSorteosSeguro({
@@ -1995,16 +2085,23 @@ async function renovarServicioTx(clientId, idx, { dias = 0, fechaExacta = "", co
     servicioIndex: resultado.actualIdx,
     sorteoOk: sorteo?.ok !== false,
     boletosCreados: Math.max(0, Number(sorteo?.creados) || 0),
-    origen: "Telegram"
+    origen: "Telegram",
+    operationId: opId,
   });
-  return { ok: true, servicio: resultado.siguiente, servicioIndex: resultado.actualIdx, fechaAnterior: resultado.fechaAnterior, fechaNueva: resultado.fechaNueva, sorteo };
+  return { ok: true, duplicate: false, servicio: resultado.siguiente, servicioIndex: resultado.actualIdx, fechaAnterior: resultado.fechaAnterior, fechaNueva: resultado.fechaNueva, sorteo, operationId: opId };
 }
 
-async function renovarTodosServiciosTx(clientId, { dias = 0, fechaExacta = "" } = {}) {
+async function renovarTodosServiciosTx(clientId, { dias = 0, fechaExacta = "", operationId = "" } = {}) {
   const id = String(clientId || "").trim();
+  const opId = String(operationId || integrity.makeWindowOperationKey(
+    "renew-all", [id, Number(dias || 0), String(fechaExacta || "")], 120000
+  )).slice(0, 180);
   const renovadoAt = new Date();
   const resultado = await mutarServiciosClienteTx(id, ({ cliente, servicios }) => {
     if (!servicios.length) throw new Error("Este cliente no tiene servicios.");
+    if (opId && servicios.every(s => String(s?.ultimaRenovacionOperacionId || "") === opId)) {
+      return { servicios, total: servicios.length, cambios: [], fechaExacta: String(fechaExacta || ""), nombreTitular: cliente.nombrePerfil || "", duplicate: true, skipWrite: true };
+    }
     const cambios = [];
     const siguientes = servicios.map((s, index) => {
       const fechaAnterior = String(s?.fechaRenovacion || "");
@@ -2017,17 +2114,22 @@ async function renovarTodosServiciosTx(clientId, { dias = 0, fechaExacta = "" } 
         fechaNueva,
         vendedor: vendedorEfectivoServicio(s, cliente).vendedor,
       });
-      const mesesCalculados = mesesEntreDMYLocal(isFechaDMY(fechaAnterior) ? fechaAnterior : hoyDMY(), fechaNueva);
-      const mesesContratados = validarMesesTvDigitalLocal(s?.plataforma || "", mesesCalculados);
-      return { ...(s || {}), fechaRenovacion: fechaNueva, mesesContratados, ultimaRenovacionAt: renovadoAt };
+      const mesesContratados = mesesContratadosRenovacionLocal(
+        s?.plataforma || "", s?.mesesContratados || 1,
+        isFechaDMY(fechaAnterior) ? fechaAnterior : hoyDMY(), fechaNueva
+      );
+      return {
+        ...(s || {}), fechaRenovacion: fechaNueva, mesesContratados, ultimaRenovacionAt: renovadoAt,
+        ultimaRenovacionOperacionId: opId, ultimaRenovacionFechaAnterior: fechaAnterior,
+      };
     });
-    return { servicios: siguientes, total: siguientes.length, cambios, fechaExacta: String(fechaExacta || ""), nombreTitular: cliente.nombrePerfil || "" };
+    return { servicios: siguientes, total: siguientes.length, cambios, fechaExacta: String(fechaExacta || ""), nombreTitular: cliente.nombrePerfil || "", duplicate: false };
   });
   cacheInvalidatePrefix(`clientes:doc:${id}`);
   cacheInvalidatePrefix("renovaciones:");
 
-  // Sorteos: dos boletos estrictos por cada servicio realmente renovado
-  // (fecha distinta a la anterior) dentro de esta renovación masiva.
+  if (resultado.duplicate) return { ok: true, duplicate: true, total: resultado.total, servicios: resultado.servicios, sorteos: [], operationId: opId };
+
   const sorteos = [];
   const sorteoPorCompra = new Map();
   for (const cambio of resultado.cambios || []) {
@@ -2048,51 +2150,165 @@ async function renovarTodosServiciosTx(clientId, { dias = 0, fechaExacta = "" } 
     cambios: (resultado.cambios || []).map((item,index) => {
       const sorteo = sorteoPorCompra.get(String(item.compraId || ""));
       return {
-      compraId: item.compraId, servicioIndex: index, fechaAnterior: item.fechaAnterior,
-      fechaRenovacion: item.fechaNueva, vendedor: item.vendedor,
-      meses: Math.max(1, Math.round(Number(dias || 30) / 30)),
-      sorteoOk: sorteo?.ok !== false,
-      boletosCreados: Math.max(0, Number(sorteo?.creados) || 0)
-    };
+        compraId: item.compraId, servicioIndex: index, fechaAnterior: item.fechaAnterior,
+        fechaRenovacion: item.fechaNueva, vendedor: item.vendedor,
+        meses: Math.max(1, Math.round(Number(dias || 30) / 30)),
+        sorteoOk: sorteo?.ok !== false,
+        boletosCreados: Math.max(0, Number(sorteo?.creados) || 0)
+      };
     }),
     vendedor: resultado.cliente?.vendedor || "",
     origen: "Telegram",
+    operationId: opId,
     descripcion: `Se renovaron ${resultado.total} servicio(s)${resultado.fechaExacta ? ` a ${resultado.fechaExacta}` : ` por ${Number(dias || 0)} días`}`
   });
-  return { ok: true, total: resultado.total, servicios: resultado.servicios, sorteos };
+  return { ok: true, duplicate: false, total: resultado.total, servicios: resultado.servicios, sorteos, operationId: opId };
 }
 
-async function eliminarServiciosTx(clientId, referencias = []) {
+async function eliminarServiciosTx(clientId, referencias = [], options = {}) {
   const id = String(clientId || "").trim();
   const refs = (Array.isArray(referencias) ? referencias : []).map((r) =>
     typeof r === "number" ? { idx: r, compraId: "" } : { idx: Number(r?.idx), compraId: String(r?.compraId || "") }
   );
   if (!refs.length) throw new Error("No seleccionó servicios para eliminar.");
-  const resultado = await mutarServiciosClienteTx(id, ({ cliente, servicios }) => {
+  const actor = options.actor || {};
+  const operationId = String(options.operationId || integrity.makeWindowOperationKey(
+    "delete-services", [id, refs.map(r => r.compraId || r.idx).sort(), actor?.userId || actor?.id || ""], 120000
+  ));
+  const resultado = await mutarServiciosClienteTx(id, async ({ cliente, servicios, ref, tx }) => {
+    const trashRef = integrity.makeTrashRef(operationId);
+    const oldTrash = await tx.get(trashRef);
+    if (oldTrash.exists) {
+      const t = oldTrash.data() || {};
+      const entries = Array.isArray(t.snapshot?.servicios) ? t.snapshot.servicios : [];
+      return { servicios, eliminados: entries.map(x => x.servicio).filter(Boolean), nombreTitular: cliente.nombrePerfil || "", papeleraId: trashRef.id, duplicate: true, skipWrite: true };
+    }
     const indices = new Set();
     refs.forEach((r) => {
       const pos = resolverIndiceCompraLocal(servicios, r.idx, r.compraId);
       if (pos !== -1) indices.add(pos);
     });
     if (!indices.size) throw new Error("Los servicios seleccionados ya no existen.");
+    const entries = [...indices].sort((a,b)=>a-b).map(pos => ({ index: pos, servicio: servicios[pos] }));
+    const trash = await integrity.embeddedTrashInTransaction(tx, {
+      kind: "servicios_cliente",
+      sourceCollection: CLIENTES_COLLECTION,
+      sourceId: id,
+      sourcePath: ref.path,
+      snapshot: { servicios: entries },
+      actor,
+      operationId,
+      metadata: { cliente: cliente.nombrePerfil || cliente.nombre || "Cliente", telefono: cliente.telefono || "", cantidad: entries.length },
+    });
     const eliminados = [];
     [...indices].sort((a, b) => b - a).forEach((pos) => {
       eliminados.unshift(servicios[pos]);
       servicios.splice(pos, 1);
     });
-    return { servicios, eliminados, nombreTitular: cliente.nombrePerfil || "" };
+    return { servicios, eliminados, nombreTitular: cliente.nombrePerfil || "", papeleraId: trash.trashId, duplicate: false };
   });
+  if (resultado.duplicate) return { ok: true, duplicate: true, eliminados: resultado.eliminados, servicios: resultado.servicios, sync: [], papeleraId: resultado.papeleraId };
   const sync = [];
-  for (const servicio of resultado.eliminados) {
-    sync.push(await sincronizarCompraInventarioSeguroLocal(servicio, null, resultado.nombreTitular || ""));
-  }
+  for (const servicio of resultado.eliminados) sync.push(await sincronizarCompraInventarioSeguroLocal(servicio, null, resultado.nombreTitular || ""));
   cacheInvalidatePrefix(`clientes:doc:${id}`);
   cacheInvalidatePrefix("renovaciones:");
   await registrarEventoHistorial(id, {
     tipo: "servicios_eliminados",
+    papeleraId: resultado.papeleraId,
     descripcion: `Se eliminaron ${resultado.eliminados.length} servicio(s): ${resultado.eliminados.map((s) => humanPlataforma(s?.plataforma || "")).join(", ")}`
   });
-  return { ok: true, eliminados: resultado.eliminados, servicios: resultado.servicios, sync };
+  return { ok: true, eliminados: resultado.eliminados, servicios: resultado.servicios, sync, papeleraId: resultado.papeleraId };
+}
+
+async function eliminarClienteConPapelera(clientId, options = {}) {
+  const id = String(clientId || "").trim();
+  if (!id) throw new Error("Cliente inválido.");
+  const actor = options.actor || {};
+  const operationId = String(options.operationId || integrity.makeWindowOperationKey("delete-client", [id, actor?.userId || actor?.id || ""], 120000));
+  const ref = db.collection(CLIENTES_COLLECTION).doc(id);
+  const snap = await ref.get();
+  if (!snap.exists) {
+    // Doble clic/reintento: si la operación ya creó su respaldo, devolver el
+    // mismo resultado en vez de convertir el reintento en un error 404.
+    const previous = await integrity.makeTrashRef(operationId).get();
+    if (previous.exists) {
+      const t = previous.data() || {};
+      const clientePrevio = { id, ...(t.snapshot || {}) };
+      return { ok: true, duplicate: true, cliente: clientePrevio, papeleraId: previous.id, sync: [] };
+    }
+    throw new Error("Cliente no encontrado.");
+  }
+  const cliente = { id: snap.id, ...(snap.data() || {}) };
+  const servicios = heredarVendedorServicios(Array.isArray(cliente.servicios) ? cliente.servicios : [], cliente);
+  // Primero aseguramos el snapshot + borrado atómico. Solo el primer intento
+  // libera inventario; un doble clic que recibe duplicate no repite efectos.
+  const trashed = await integrity.trashDocument({
+    ref, kind: "cliente", actor, operationId,
+    metadata: { cliente: cliente.nombrePerfil || cliente.nombre || "Cliente", telefono: cliente.telefono || "", servicios: servicios.length },
+  });
+  if (trashed.duplicate) {
+    return { ok: true, duplicate: true, cliente: { id, ...(trashed.snapshot || cliente) }, papeleraId: trashed.trashId, sync: [] };
+  }
+  const sync = [];
+  for (const servicio of servicios) sync.push(await sincronizarCompraInventarioSeguroLocal(servicio, null, cliente.nombrePerfil || cliente.nombre || ""));
+  cacheInvalidatePrefix(`clientes:doc:${id}`);
+  cacheInvalidatePrefix("renovaciones:");
+  return { ok: true, duplicate: false, cliente, papeleraId: trashed.trashId, sync };
+}
+
+async function restaurarClienteDesdePapelera(papeleraId, actor = {}) {
+  const entry = await integrity.getTrashEntry(papeleraId);
+  if (!entry || entry.kind !== "cliente") throw Object.assign(new Error("papelera_cliente_invalida"), { status: 404, publicError: "papelera_cliente_invalida" });
+  const restored = await integrity.restoreDocumentTrash(papeleraId, actor);
+  const cliente = restored.snapshot || entry.snapshot || {};
+  const id = String(restored.source?.id || entry.source?.id || "");
+  const servicios = heredarVendedorServicios(Array.isArray(cliente.servicios) ? cliente.servicios : [], cliente);
+  const sync = [];
+  for (const servicio of servicios) sync.push(await sincronizarCompraInventarioSeguroLocal(null, servicio, cliente.nombrePerfil || cliente.nombre || ""));
+  cacheInvalidatePrefix(`clientes:doc:${id}`);
+  cacheInvalidatePrefix("renovaciones:");
+  if (!restored.duplicate) await registrarEventoHistorial(id, { tipo: "cliente_restaurado", papeleraId, descripcion: "Cliente restaurado desde Papelera de Integridad" });
+  return { ...restored, clienteId: id, sync };
+}
+
+async function restaurarServiciosDesdePapelera(papeleraId, actor = {}) {
+  const trashRef = db.collection(integrity.TRASH_COLLECTION).doc(String(papeleraId || "").trim());
+  let restoredEntries = [];
+  const result = await db.runTransaction(async tx => {
+    const trashSnap = await tx.get(trashRef);
+    if (!trashSnap.exists) throw Object.assign(new Error("papelera_no_existe"), { status: 404, publicError: "papelera_no_existe" });
+    const t = trashSnap.data() || {};
+    if (!["servicio_cliente", "servicios_cliente"].includes(t.kind)) throw Object.assign(new Error("papelera_servicio_invalida"), { status: 409, publicError: "papelera_servicio_invalida" });
+    if (t.status === "restored") return { duplicate: true, clienteId: t.source?.id || "", entries: [] };
+    const clientId = String(t.source?.id || "");
+    const clientRef = db.collection(CLIENTES_COLLECTION).doc(clientId);
+    const clientSnap = await tx.get(clientRef);
+    if (!clientSnap.exists) throw Object.assign(new Error("cliente_no_existe"), { status: 404, publicError: "cliente_no_existe" });
+    const cliente = clientSnap.data() || {};
+    const servicios = heredarVendedorServicios(Array.isArray(cliente.servicios) ? cliente.servicios : [], cliente);
+    const entries = t.kind === "servicio_cliente"
+      ? [{ index: Number(t.snapshot?.index ?? servicios.length), servicio: t.snapshot?.servicio }]
+      : (Array.isArray(t.snapshot?.servicios) ? t.snapshot.servicios : []);
+    const valid = entries.filter(x => x?.servicio);
+    for (const item of valid.sort((a,b)=>Number(a.index||0)-Number(b.index||0))) {
+      const compraId = String(item.servicio?.compraId || "");
+      if (compraId && servicios.some(s => String(s?.compraId || "") === compraId)) continue;
+      const pos = Math.max(0, Math.min(Number(item.index ?? servicios.length), servicios.length));
+      servicios.splice(pos, 0, item.servicio);
+      restoredEntries.push(item);
+    }
+    const resumen = camposResumenVendedores(servicios, cliente);
+    tx.set(clientRef, { servicios, ...resumen, dataVersion: admin.firestore.FieldValue.increment(1), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+    await integrity.markEmbeddedTrashRestoredInTransaction(tx, trashRef, actor, { restoredItems: restoredEntries.length });
+    return { duplicate: false, clienteId: clientId, entries: restoredEntries, cliente: { ...cliente, servicios } };
+  });
+  if (result.duplicate) return { ok: true, duplicate: true, clienteId: result.clienteId, restaurados: 0, sync: [] };
+  const sync = [];
+  for (const item of restoredEntries) sync.push(await sincronizarCompraInventarioSeguroLocal(null, item.servicio, result.cliente?.nombrePerfil || result.cliente?.nombre || ""));
+  cacheInvalidatePrefix(`clientes:doc:${result.clienteId}`);
+  cacheInvalidatePrefix("renovaciones:");
+  await registrarEventoHistorial(result.clienteId, { tipo: "servicios_restaurados", papeleraId, descripcion: `Se restauraron ${restoredEntries.length} servicio(s) desde Papelera` });
+  return { ok: true, duplicate: false, clienteId: result.clienteId, restaurados: restoredEntries.length, sync };
 }
 
 // ===============================
@@ -2601,6 +2817,7 @@ module.exports = {
   menuListaPerfilesServicio, menuPerfilServicio,
   patchServicio, addServicioTx, addPerfilTx, patchPerfilTx, eliminarPerfilTx, eliminarServicioTx,
   renovarServicioTx, renovarTodosServiciosTx, eliminarServiciosTx,
+  eliminarClienteConPapelera, restaurarClienteDesdePapelera, restaurarServiciosDesdePapelera,
   removeServicioDeInventario, sincronizarCuentaEnComprasTx,
   menuListaRenovacion, menuRenovacionServicio, enviarPanelRenovacionesConAcciones,
   kbPlataformasWiz, kbTvDigitalMarcasWiz, kbTvDigitalPlanesWiz, wizardStart, wizardNext,
