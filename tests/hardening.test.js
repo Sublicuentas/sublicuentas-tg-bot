@@ -241,3 +241,64 @@ test('respuestas de avisos intentan resolver al autor específico antes de fallb
   assert.equal(handlers.includes("['admin','administrador','usuario','socio'].includes(ownerAlias)"), true);
   assert.equal(handlers.includes('Solo el responsable de esa conversación recibirá la respuesta.'), true);
 });
+
+test('fase 3: API Android ya no autentica con API_ADMIN_TOKEN compartido', () => {
+  const api = read('index_08_api.js');
+  assert.equal(api.includes('token !== API_TOKEN'), false);
+  assert.equal(api.includes('createAdminSessionAuth({ db })'), true);
+  assert.equal(api.includes('createAdminLoginHandler({ db })'), true);
+  assert.equal(api.includes('adminPermission("finanzas.read")'), true);
+  assert.equal(api.includes('adminPermission("codigos.read")'), true);
+});
+
+test('fase 3: JWT admin antiguo sin sesión individual queda obsoleto', () => {
+  const auth = read('index_09_api_auth.js');
+  const security = read('index_25_api_security.js');
+  assert.equal(auth.includes('createAdminSession({ db, account: adminAccount, req })'), true);
+  assert.equal(security.includes("const TOKEN_TYPE = 'admin-session-v3'"), true);
+  assert.equal(security.includes("p.typ!==TOKEN_TYPE"), true);
+  assert.equal(security.includes('ADMIN_SESSIONS_COLLECTION'), true);
+});
+
+test('fase 3: Panel Admin usa permisos por endpoint y no solo admin:true', () => {
+  const panel = read('index_12_admin_panel.js');
+  const rewards = read('index_13_gamificacion.js');
+  assert.equal(panel.includes('adminPermission("clientes.read")'), true);
+  assert.equal(panel.includes('adminPermission("clientes.write")'), true);
+  assert.equal(panel.includes('adminPermission("equipo.manage")'), true);
+  assert.equal(panel.includes('adminPermission("system.maintenance")'), true);
+  assert.equal(rewards.includes('adminPermission("recompensas.manage")'), true);
+});
+
+test('fase 3: pagos de Panel Socios quedan scoped al destinatario', () => {
+  const api = read('server_api.js');
+  assert.equal(api.includes('socios.pagos.own.read'), true);
+  assert.equal(api.includes('socios.compras.own.read'), true);
+  assert.equal(api.includes('revNormKey(x.destino) === profile'), true);
+  assert.equal(api.includes('error:"fuera_de_ambito"'), true);
+  const relojes = permissionsForProfile('relojes');
+  assert.equal(permissionGranted(relojes, 'socios.pagos.own.read'), true);
+  assert.equal(permissionGranted(relojes, 'socios.compras.own.write'), true);
+  assert.equal(permissionGranted(relojes, 'finanzas.read'), false);
+});
+
+test('fase 3: CORS abierto fue retirado de ambas APIs', () => {
+  const api = read('index_08_api.js');
+  const panel = read('server_api.js');
+  const security = read('index_25_api_security.js');
+  assert.equal(api.includes('app.use(cors());'), false);
+  assert.equal(panel.includes('app.use(cors());'), false);
+  assert.equal(api.includes('buildCorsOptions()'), true);
+  assert.equal(panel.includes('buildCorsOptions()'), true);
+  assert.equal(security.includes('CORS_ALLOWED_ORIGINS'), true);
+});
+
+test('fase 3: mutaciones administrativas quedan auditadas', () => {
+  const api = read('index_08_api.js');
+  const panel = read('server_api.js');
+  const security = read('index_25_api_security.js');
+  assert.equal(api.includes('createAdminAuditMiddleware'), true);
+  assert.equal(panel.includes('createAdminAuditMiddleware'), true);
+  assert.equal(security.includes("db.collection('actividad_usuarios').add"), true);
+  assert.equal(security.includes("['POST','PUT','PATCH','DELETE']"), true);
+});
