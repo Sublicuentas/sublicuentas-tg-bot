@@ -51,6 +51,7 @@ const PROFILE_PERMISSIONS = Object.freeze({
     'renovaciones.read', 'renovaciones.write',
     'codigos.read', 'reportes.read', 'sincronizacion.claves',
     'tickets.own.read', 'tickets.own.write', 'avisos.own.read',
+    'socios.pagos.own.read', 'socios.compras.own.read', 'socios.compras.own.write',
     'backup.receive',
   ],
   geisell: [

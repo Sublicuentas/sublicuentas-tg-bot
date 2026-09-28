@@ -17,6 +17,7 @@
    ════════════════════════════════════════════════════════════════ */
 
 const { revAuth, revAdminAuth, generarPinSetup } = require("./index_09_api_auth");
+const { adminPermission } = require("./index_25_api_security");
 const { db, admin, bot, CLIENTES_COLLECTION, REVENDEDORES_COLLECTION } = require("./index_01_core");
 const { getCliente, patchServicio, eliminarServicioTx, buscarClienteRobusto } = require("./index_03_clientes_crm");
 const { normalizarTelefonoCliente, premiumIcons } = require("./index_02_utils_roles");
@@ -237,13 +238,13 @@ module.exports = function mountAdminPanel(app) {
     ok(res,{promociones});
   }));
 
-  app.get("/rev/admin/promociones", revAdminAuth, wrap(async (_req,res) => {
+  app.get("/rev/admin/promociones", revAdminAuth, adminPermission("promociones.read"), wrap(async (_req,res) => {
     const snap=await db.collection(PROMOCIONES_SOCIOS_COLLECTION).limit(150).get();
     const promociones=snap.docs.map(promoPublica).sort((a,b)=>String(b.createdAt).localeCompare(String(a.createdAt)));
     ok(res,{promociones});
   }));
 
-  app.post("/rev/admin/promociones", revAdminAuth, wrap(async (req,res) => {
+  app.post("/rev/admin/promociones", revAdminAuth, adminPermission("promociones.write"), wrap(async (req,res) => {
     const titulo=clean(req.body?.titulo,120), plataforma=clean(req.body?.plataforma,100);
     if(!titulo||!plataforma)return fail(res,400,"Complete título y plataforma.");
     const ref=db.collection(PROMOCIONES_SOCIOS_COLLECTION).doc();
@@ -253,7 +254,7 @@ module.exports = function mountAdminPanel(app) {
     ok(res,{id:ref.id});
   }));
 
-  app.put("/rev/admin/promociones/:id", revAdminAuth, wrap(async (req,res) => {
+  app.put("/rev/admin/promociones/:id", revAdminAuth, adminPermission("promociones.write"), wrap(async (req,res) => {
     const ref=db.collection(PROMOCIONES_SOCIOS_COLLECTION).doc(clean(req.params.id,160));
     const snap=await ref.get();
     if(!snap.exists)return fail(res,404,"Promoción no encontrada.");
@@ -281,13 +282,13 @@ module.exports = function mountAdminPanel(app) {
     ok(res,{promocion:promoPublica(updated)});
   }));
 
-  app.delete("/rev/admin/promociones/:id", revAdminAuth, wrap(async (req,res) => {
+  app.delete("/rev/admin/promociones/:id", revAdminAuth, adminPermission("promociones.write"), wrap(async (req,res) => {
     const ref=db.collection(PROMOCIONES_SOCIOS_COLLECTION).doc(clean(req.params.id,160));const snap=await ref.get();
     if(!snap.exists)return fail(res,404,"Promoción no encontrada.");
     await ref.delete();ok(res,{id:ref.id});
   }));
 
-  app.post("/rev/admin/promociones/:id/enviar", revAdminAuth, wrap(async (req,res) => {
+  app.post("/rev/admin/promociones/:id/enviar", revAdminAuth, adminPermission("promociones.write"), wrap(async (req,res) => {
     const ref=db.collection(PROMOCIONES_SOCIOS_COLLECTION).doc(clean(req.params.id,160)),snap=await ref.get();
     if(!snap.exists)return fail(res,404,"Promoción no encontrada.");
     const p={id:snap.id,...(snap.data()||{})},selected=new Set(Array.isArray(p.destinatarios)?p.destinatarios.map(normNombre):[]);
@@ -417,7 +418,7 @@ module.exports = function mountAdminPanel(app) {
   */
 
   // Admin: lista plana de todos los ítems (para editar uno por uno).
-  app.get("/rev/admin/precios", revAdminAuth, wrap(async (req, res) => {
+  app.get("/rev/admin/precios", revAdminAuth, adminPermission("precios.read"), wrap(async (req, res) => {
     // ✅ Sin orderBy múltiple (evita necesitar índice compuesto en
     // Firestore): la colección es chica, se ordena en memoria.
     const tarifaId = tarifaPrecios(req);
@@ -434,7 +435,7 @@ module.exports = function mountAdminPanel(app) {
   }));
 
   // Admin: crear un ítem nuevo del catálogo.
-  app.post("/rev/admin/precios", revAdminAuth, wrap(async (req, res) => {
+  app.post("/rev/admin/precios", revAdminAuth, adminPermission("precios.write"), wrap(async (req, res) => {
     const b = req.body || {};
     const categoria = String(b.categoria || "").trim();
     const nombre = String(b.nombre || "").trim();
@@ -466,7 +467,7 @@ module.exports = function mountAdminPanel(app) {
   }));
 
   // Admin: editar un ítem existente (parcial).
-  app.put("/rev/admin/precios/:id", revAdminAuth, wrap(async (req, res) => {
+  app.put("/rev/admin/precios/:id", revAdminAuth, adminPermission("precios.write"), wrap(async (req, res) => {
     const tarifaId = tarifaPrecios(req);
     const ref = db.collection(coleccionPrecios(req)).doc(req.params.id);
     const snap = await ref.get();
@@ -499,7 +500,7 @@ module.exports = function mountAdminPanel(app) {
   }));
 
   // Admin: borrar un ítem del catálogo.
-  app.delete("/rev/admin/precios/:id", revAdminAuth, wrap(async (req, res) => {
+  app.delete("/rev/admin/precios/:id", revAdminAuth, adminPermission("precios.write"), wrap(async (req, res) => {
     const tarifaId = tarifaPrecios(req);
     const ref = db.collection(coleccionPrecios(req)).doc(req.params.id);
     const snap = await ref.get();
@@ -554,7 +555,7 @@ module.exports = function mountAdminPanel(app) {
   function slugPrecio(v) {
     return String(v || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
   }
-  app.post("/rev/admin/precios/importar-inicial", revAdminAuth, wrap(async (req, res) => {
+  app.post("/rev/admin/precios/importar-inicial", revAdminAuth, adminPermission("precios.write"), wrap(async (req, res) => {
     const col = db.collection(PRECIOS_COLLECTION);
     let creados = 0, actualizados = 0, categoriaOrden = 0;
     for (const grupo of PRECIOS_INICIALES) {
@@ -594,11 +595,11 @@ module.exports = function mountAdminPanel(app) {
   // Previsualización y aplicación única de la tarifa solicitada para
   // Sublicuentas, Sublicuentas 2, Relojes y Geisell. La aplicación también
   // corrige Geissel -> Geisell y actualiza los precios de sus clientes.
-  app.get("/rev/admin/actualizaciones/precios-agosto-2026", revAdminAuth, wrap(async (_req, res) => {
+  app.get("/rev/admin/actualizaciones/precios-agosto-2026", revAdminAuth, adminPermission("system.maintenance"), wrap(async (_req, res) => {
     ok(res, await previsualizarActualizacion({ db }));
   }));
 
-  app.post("/rev/admin/actualizaciones/precios-agosto-2026", revAdminAuth, wrap(async (req, res) => {
+  app.post("/rev/admin/actualizaciones/precios-agosto-2026", revAdminAuth, adminPermission("system.maintenance"), wrap(async (req, res) => {
     const resultado = await aplicarActualizacion({
       db,
       admin,
@@ -610,17 +611,17 @@ module.exports = function mountAdminPanel(app) {
 
   // Migra fichas antiguas al modelo de vendedor por cuenta. Cada servicio
   // sin vendedor hereda el vendedor legacy del cliente y se crea respaldo.
-  app.get("/rev/admin/actualizaciones/vendedores-por-servicio", revAdminAuth, wrap(async (_req, res) => {
+  app.get("/rev/admin/actualizaciones/vendedores-por-servicio", revAdminAuth, adminPermission("system.maintenance"), wrap(async (_req, res) => {
     ok(res, await previsualizarVendedoresPorServicio({ db }));
   }));
 
-  app.post("/rev/admin/actualizaciones/vendedores-por-servicio", revAdminAuth, wrap(async (req, res) => {
+  app.post("/rev/admin/actualizaciones/vendedores-por-servicio", revAdminAuth, adminPermission("system.maintenance"), wrap(async (req, res) => {
     ok(res, await aplicarVendedoresPorServicio({ db, admin, force: req.body?.force === true }));
   }));
 
   // Permite restaurar la lista especial si se vacía, sin tocar clientes ni
   // vendedores. La migración completa de arriba es la opción recomendada.
-  app.post("/rev/admin/precios/importar-especial", revAdminAuth, wrap(async (req, res) => {
+  app.post("/rev/admin/precios/importar-especial", revAdminAuth, adminPermission("precios.write"), wrap(async (req, res) => {
     const ops = CATALOGO_PROPIETARIOS.map((row) => ({
       id: `${TARIFA_PROPIETARIOS_ID}__${row.id}`,
       data: {
@@ -642,7 +643,7 @@ module.exports = function mountAdminPanel(app) {
      (/addvendedor, /resetpin, /delvendedor).
   */
 
-  app.post("/rev/admin/revendedores", revAdminAuth, wrap(async (req, res) => {
+  app.post("/rev/admin/revendedores", revAdminAuth, adminPermission("equipo.manage"), wrap(async (req, res) => {
     let nombre = String(req.body?.nombre || "").trim();
     if (normNombre(nombre) === "geissel") nombre = "Geisell";
     const telegramId = String(req.body?.telegramId || "").trim().replace(/[^0-9]/g, "");
@@ -671,7 +672,7 @@ module.exports = function mountAdminPanel(app) {
     ok(res, { docId, nombre, nombre_norm: docId, telegramId, telefono, pin });
   }));
 
-  app.patch("/rev/admin/revendedores/:id", revAdminAuth, wrap(async (req, res) => {
+  app.patch("/rev/admin/revendedores/:id", revAdminAuth, adminPermission("equipo.manage"), wrap(async (req, res) => {
     const ref = db.collection(REVENDEDORES_COLLECTION).doc(req.params.id);
     const snap = await ref.get();
     if (!snap.exists) return fail(res, 404, "no_existe");
@@ -715,7 +716,7 @@ module.exports = function mountAdminPanel(app) {
     ok(res, { id: ref.id, ...actualizado.data() });
   }));
 
-  app.post("/rev/admin/revendedores/:id/testtelegram", revAdminAuth, wrap(async (req, res) => {
+  app.post("/rev/admin/revendedores/:id/testtelegram", revAdminAuth, adminPermission("equipo.manage"), wrap(async (req, res) => {
     const ref = db.collection(REVENDEDORES_COLLECTION).doc(req.params.id);
     const snap = await ref.get();
     if (!snap.exists) return fail(res, 404, "no_existe");
@@ -754,7 +755,7 @@ module.exports = function mountAdminPanel(app) {
     }
   }));
 
-  app.post("/rev/admin/revendedores/:id/resetpin", revAdminAuth, wrap(async (req, res) => {
+  app.post("/rev/admin/revendedores/:id/resetpin", revAdminAuth, adminPermission("equipo.manage"), wrap(async (req, res) => {
     const ref = db.collection(REVENDEDORES_COLLECTION).doc(req.params.id);
     const snap = await ref.get();
     if (!snap.exists) return fail(res, 404, "no_existe");
@@ -770,7 +771,7 @@ module.exports = function mountAdminPanel(app) {
     ok(res, { id: ref.id, nombre: d.nombre || ref.id, pin });
   }));
 
-  app.delete("/rev/admin/revendedores/:id", revAdminAuth, wrap(async (req, res) => {
+  app.delete("/rev/admin/revendedores/:id", revAdminAuth, adminPermission("equipo.manage"), wrap(async (req, res) => {
     const ref = db.collection(REVENDEDORES_COLLECTION).doc(req.params.id);
     const snap = await ref.get();
     if (!snap.exists) return fail(res, 404, "no_existe");
@@ -790,7 +791,7 @@ module.exports = function mountAdminPanel(app) {
      precio/fecha y sincroniza inventario) y borrado.
   */
 
-  app.get("/rev/admin/clientes", revAdminAuth, wrap(async (req, res) => {
+  app.get("/rev/admin/clientes", revAdminAuth, adminPermission("clientes.read"), wrap(async (req, res) => {
     const q = String(req.query.q || "").trim();
     if (q) {
       let resultados = await buscarClienteRobusto(q);
@@ -836,13 +837,13 @@ module.exports = function mountAdminPanel(app) {
     ok(res, { clientes: lista });
   }));
 
-  app.get("/rev/admin/clientes/:id", revAdminAuth, wrap(async (req, res) => {
+  app.get("/rev/admin/clientes/:id", revAdminAuth, adminPermission("clientes.read"), wrap(async (req, res) => {
     const c = await getCliente(req.params.id);
     if (!c) return fail(res, 404, "no_existe");
     ok(res, { cliente: c });
   }));
 
-  app.patch("/rev/admin/clientes/:id", revAdminAuth, wrap(async (req, res) => {
+  app.patch("/rev/admin/clientes/:id", revAdminAuth, adminPermission("clientes.write"), wrap(async (req, res) => {
     const ref = db.collection(CLIENTES_COLLECTION).doc(req.params.id);
     const snap = await ref.get();
     if (!snap.exists) return fail(res, 404, "no_existe");
@@ -869,7 +870,7 @@ module.exports = function mountAdminPanel(app) {
     ok(res, { id: ref.id, ...actualizado.data() });
   }));
 
-  app.delete("/rev/admin/clientes/:id", revAdminAuth, wrap(async (req, res) => {
+  app.delete("/rev/admin/clientes/:id", revAdminAuth, adminPermission("clientes.write"), wrap(async (req, res) => {
     const ref = db.collection(CLIENTES_COLLECTION).doc(req.params.id);
     const snap = await ref.get();
     if (!snap.exists) return fail(res, 404, "no_existe");
@@ -878,7 +879,7 @@ module.exports = function mountAdminPanel(app) {
   }));
 
   // Editar un servicio puntual del cliente (precio, fecha, correo, clave, pin...)
-  app.patch("/rev/admin/clientes/:id/servicios/:idx", revAdminAuth, wrap(async (req, res) => {
+  app.patch("/rev/admin/clientes/:id/servicios/:idx", revAdminAuth, adminPermission("clientes.write"), wrap(async (req, res) => {
     const idx = Number(req.params.idx);
     if (!Number.isInteger(idx) || idx < 0) return fail(res, 400, "indice_invalido");
     const patch = { ...(req.body || {}) };
@@ -897,7 +898,7 @@ module.exports = function mountAdminPanel(app) {
     ok(res, resultado);
   }));
 
-  app.delete("/rev/admin/clientes/:id/servicios/:idx", revAdminAuth, wrap(async (req, res) => {
+  app.delete("/rev/admin/clientes/:id/servicios/:idx", revAdminAuth, adminPermission("clientes.write"), wrap(async (req, res) => {
     const idx = Number(req.params.idx);
     if (!Number.isInteger(idx) || idx < 0) return fail(res, 400, "indice_invalido");
     const resultado = await eliminarServicioTx(req.params.id, idx, String(req.query?.compraId || ""));

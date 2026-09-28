@@ -1,5 +1,6 @@
 /* Panel de Socios · perfil, ranking y gamificación compartida */
 const { revAuth, revAdminAuth, capacidadesRevendedor } = require("./index_09_api_auth");
+const { adminPermission } = require("./index_25_api_security");
 const { db, admin, bot, SUPER_ADMIN } = require("./index_01_core");
 const { normVendedor, vendedorEfectivoServicio } = require("./index_17_vendedores_servicio");
 const RECOMPENSAS = {
@@ -200,6 +201,6 @@ module.exports = function mountGamificacion(app) {
       res.json({ok:true,id:ref.id,...doc});
     }catch(e){console.error("rev/recompensa",e);res.status(500).json({error:"server"});}
   });
-  app.get("/rev/admin/recompensas",revAdminAuth,async(req,res)=>{try{const snap=await db.collection("recompensas_socios").get();const items=snap.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>dateMs(b.createdAt)-dateMs(a.createdAt));res.json({ok:true,recompensas:items})}catch(e){res.status(500).json({error:"server"})}});
-  app.patch("/rev/admin/recompensas/:id",revAdminAuth,async(req,res)=>{try{const estado=String(req.body?.estado||"");if(!["pendiente","entregada","rechazada"].includes(estado))return res.status(400).json({error:"estado_invalido"});const ref=db.collection("recompensas_socios").doc(req.params.id),snap=await ref.get();if(!snap.exists)return res.status(404).json({error:"no_existe"});await ref.update({estado,updatedAt:admin.firestore.FieldValue.serverTimestamp()});res.json({ok:true,id:ref.id,estado})}catch(e){res.status(500).json({error:"server"})}});
+  app.get("/rev/admin/recompensas",revAdminAuth,adminPermission("recompensas.manage"),async(req,res)=>{try{const snap=await db.collection("recompensas_socios").get();const items=snap.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>dateMs(b.createdAt)-dateMs(a.createdAt));res.json({ok:true,recompensas:items})}catch(e){res.status(500).json({error:"server"})}});
+  app.patch("/rev/admin/recompensas/:id",revAdminAuth,adminPermission("recompensas.manage"),async(req,res)=>{try{const estado=String(req.body?.estado||"");if(!["pendiente","entregada","rechazada"].includes(estado))return res.status(400).json({error:"estado_invalido"});const ref=db.collection("recompensas_socios").doc(req.params.id),snap=await ref.get();if(!snap.exists)return res.status(404).json({error:"no_existe"});await ref.update({estado,updatedAt:admin.firestore.FieldValue.serverTimestamp()});res.json({ok:true,id:ref.id,estado})}catch(e){res.status(500).json({error:"server"})}});
 };

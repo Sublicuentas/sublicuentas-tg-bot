@@ -11,6 +11,9 @@ const jwt = require("jsonwebtoken");
 const bcrypt = require("bcryptjs");
 const crypto = require("crypto");
 const admin = require("firebase-admin");
+const {
+  findAdminAccount, verifyAdminPassword, createAdminSession, createAdminSessionAuth,
+} = require("./index_25_api_security");
 
 /**
  * ✅ SEGURIDAD — Ya NO hay fallback público ("CAMBIAME_EN_RENDER").
@@ -117,22 +120,16 @@ function revAuth(req, res, next) {
 /**
  * Middleware: Valida JWT token SOLO para admin
  */
+let _revAdminSessionAuth = null;
 function revAdminAuth(req, res, next) {
-  const h = req.headers.authorization || "";
-  const token = h.startsWith("Bearer ") ? h.slice(7) : null;
-  if (!token) return res.status(401).json({ error: "sin_token" });
-  try {
-    const p = jwt.verify(token, getJwtSecret());
-    if (!p.admin) return res.status(403).json({ error: "no_admin" });
-    // Los tokens admin antiguos no tenían ámbito. Por privacidad se consideran
-    // Sublicuentas; nunca un admin genérico obtiene pagos enviados a Relojes.
-    if (!p.adminDestino) p.adminDestino = "sublicuentas";
-    if (!p.adminRole) p.adminRole = p.adminDestino;
-    req.admin = p;
-    next();
-  } catch (e) {
-    return res.status(401).json({ error: "token_invalido" });
+  // FASE 3: los JWT admin anteriores (admin:true sin sesión individual) ya
+  // no son suficientes. Cada administrador debe volver a iniciar sesión y
+  // recibe una sesión revocable con perfil + permisos.
+  if (!_revAdminSessionAuth) {
+    const { db } = require("./index_01_core");
+    _revAdminSessionAuth = createAdminSessionAuth({ db });
   }
+  return _revAdminSessionAuth(req, res, next);
 }
 
 /**
@@ -216,11 +213,6 @@ function createRevLoginHandler({ db, bot, SUPER_ADMIN }) {
   return async function revLoginHandler(req, res) {
     try {
       const JWT_SECRET = getJwtSecret();
-      const ADMIN_USER = (process.env.ADMIN_USER || "").trim().toLowerCase();
-      const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "";
-      const RELOJES_ADMIN_USER = (process.env.RELOJES_ADMIN_USER || "").trim().toLowerCase();
-      const RELOJES_ADMIN_PASSWORD = process.env.RELOJES_ADMIN_PASSWORD || "";
-
       const usuarioIngresado = (req.body?.usuario || "").trim().toLowerCase();
       // El nombre correcto es Geisell. El alias mal escrito sigue entrando
       // para no dejar fuera una cuenta o sesión creada anteriormente.
@@ -233,23 +225,20 @@ function createRevLoginHandler({ db, bot, SUPER_ADMIN }) {
       // la búsqueda de la cuenta. Antes eran dos esperas de Firestore seguidas.
       const throttlePromise = checkLoginThrottle(db, usuario);
 
-      // ── Admin ──
-      // Cada receptor de pagos usa un token con ámbito propio. El admin
-      // principal siempre corresponde a Sublicuentas. Relojes puede tener
-      // credenciales independientes mediante RELOJES_ADMIN_USER/PASSWORD.
-      const adminAccounts = [
-        ADMIN_USER && ADMIN_PASSWORD ? { usuario: ADMIN_USER, password: ADMIN_PASSWORD, destino: "sublicuentas", nombre: "Sublicuentas" } : null,
-        RELOJES_ADMIN_USER && RELOJES_ADMIN_PASSWORD ? { usuario: RELOJES_ADMIN_USER, password: RELOJES_ADMIN_PASSWORD, destino: "relojes", nombre: "Relojes" } : null,
-      ].filter(Boolean);
-      const adminMatch = adminAccounts.find((a) => usuarioIngresado === a.usuario && safeEqualStr(password, a.password));
-      if (adminMatch) {
+      // ── Admin FASE 3: credenciales individuales + sesión revocable ──
+      const adminAccount = findAdminAccount(usuarioIngresado);
+      if (adminAccount) {
         const throttle = await throttlePromise;
         if (throttle.blocked) {
           return res.status(429).json({ error: "demasiados_intentos", retryAfterSeconds: throttle.retryAfterSeconds });
         }
+        if (!(await verifyAdminPassword(adminAccount, password))) {
+          await registerLoginFailure(db, usuario);
+          return res.status(400).json({ error: "credenciales" });
+        }
         clearLoginThrottle(db, usuario).catch(() => {});
-        const token = jwt.sign({ admin: true, nombre: adminMatch.nombre, adminDestino: adminMatch.destino, adminRole: adminMatch.destino }, JWT_SECRET, { expiresIn: "6h" });
-        return res.json({ token, admin: true, nombre: adminMatch.nombre, adminDestino: adminMatch.destino });
+        const session = await createAdminSession({ db, account: adminAccount, req });
+        return res.json(session);
       }
 
       // ── Revendedor ──

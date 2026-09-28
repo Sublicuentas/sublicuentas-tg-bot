@@ -3,16 +3,20 @@
    Expone la MISMA lógica del bot por HTTP para que la app la consuma.
    Todo escribe/lee del mismo Firestore → bot, app y Render siempre sincronizados.
 
-   🔒 SOLO ADMIN: cada endpoint exige el header
-        Authorization: Bearer <API_ADMIN_TOKEN>
-      Sin ese token → 401. Además valida isAdmin si se manda adminId.
+   🔒 SOLO ADMIN: cada endpoint /api exige una sesión JWT individual.
+      La sesión se obtiene en POST /api/login con usuario/clave de administrador.
+      El antiguo API_ADMIN_TOKEN compartido ya no autoriza por defecto.
 
    ⚙️ REQUISITOS (1 sola vez):
    1) npm install express cors
    2) Variables de entorno en Render:
-        API_ADMIN_TOKEN = (un secreto largo y único)
-        GEMINI_API_KEY  = (tu key de Gemini, la misma de Sublichat) — para el cobro con IA
-        JWT_SECRET      = (llave para revendedores panel)
+        JWT_SECRET      = (llave fuerte para sesiones JWT)
+        ADMIN_USER / ADMIN_PASSWORD = Sublicuentas
+        RELOJES_ADMIN_USER / RELOJES_ADMIN_PASSWORD = opcional
+        GEISELL_ADMIN_USER / GEISELL_ADMIN_PASSWORD = opcional
+        MAGDIEL_ADMIN_USER / MAGDIEL_ADMIN_PASSWORD = opcional
+        CORS_ALLOWED_ORIGINS = orígenes web permitidos separados por coma
+        GEMINI_API_KEY  = (tu key de Gemini) — para el cobro con IA
    3) En tu archivo de arranque, requerir esta parte AL FINAL:
         require("./index_08_api");
    
@@ -33,6 +37,12 @@ const {
 } = require("./index_09_api_auth");
 
 const {
+  adminLoginIpLimiter, createAdminLoginHandler, createAdminSessionAuth,
+  createAdminLogoutHandler, createAdminMeHandler, adminPermission,
+  buildCorsOptions, apiSecurityHeaders, createAdminAuditMiddleware,
+} = require("./index_25_api_security");
+
+const {
   db, ExcelJS, PORT, bot, SUPER_ADMIN,
   FIN_BANCOS, FIN_MOTIVOS_EGRESO, PLATAFORMAS,
   cacheInvalidatePrefix, getCoreHealth,
@@ -46,7 +56,7 @@ const {
 } = require("./index_17_vendedores_servicio");
 
 const {
-  isAdmin, logErr, hoyDMY,
+  logErr, hoyDMY,
 } = require("./index_02_utils_roles");
 
 const {
@@ -68,8 +78,9 @@ const { apiCode, apiLink, apiHogar, apiInbox } = require("./index_07_imap");
 // ===============================
 // HELPERS
 // ===============================
-const API_TOKEN = String(process.env.API_ADMIN_TOKEN || "").trim();
-const APP_NAME = "App Admin";
+function apiActorName(req) {
+  return String(req?.admin?.nombre || req?.admin?.username || "App Admin").slice(0, 80);
+}
 
 // Gemini — mismo modelo y endpoint que tu chat.js de Sublichat
 const GEMINI_API_KEY = String(process.env.GEMINI_API_KEY || "").trim();
@@ -111,8 +122,11 @@ const wrap = (fn) => (req, res) => Promise.resolve(fn(req, res)).catch((e) => {
 // APP
 // ===============================
 const app = express();
-app.use(cors());
+const corsOptions = buildCorsOptions();
+app.use(cors(corsOptions));
+app.use(apiSecurityHeaders);
 app.use(express.json({ limit: "1mb" }));
+app.use("/rev/admin", createAdminAuditMiddleware({ db, source: "Bot API / Panel Admin" }));
 
 // Healthcheck (público, lo usa Render para keepalive)
 app.get("/health", (_req, res) => res.json(getCoreHealth ? getCoreHealth() : { ok: true }));
@@ -174,24 +188,17 @@ app.get("/wa-business", (req, res) => {
 </html>`);
 });
 
-// 🔒 Candado SOLO ADMIN — aplica a todo lo que empiece con /api
-app.use("/api", async (req, res, next) => {
-  try {
-    const auth = String(req.headers.authorization || "");
-    const token = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
-    if (!API_TOKEN || token !== API_TOKEN) return fail(res, 401, "No autorizado");
-    // Doble candado opcional: si la app manda adminId, se valida contra la colección de admins
-    const adminId = req.headers["x-admin-id"] || req.body?.adminId || req.query?.adminId;
-    if (adminId && !(await isAdmin(adminId))) return fail(res, 403, "No es admin");
-    next();
-  } catch (e) { fail(res, 401, "No autorizado"); }
-});
-
-// Login: la app valida el token de admin
-app.post("/api/login", wrap((req, res) => ok(res, { rol: "admin" })));
+// 🔐 FASE 3 — login individual + sesión revocable.
+// /api/login queda fuera del middleware autenticado; todo lo demás bajo /api
+// exige JWT v3 con perfil/permisos.
+app.post("/api/login", adminLoginIpLimiter, createAdminLoginHandler({ db }));
+const apiAdminAuth = createAdminSessionAuth({ db });
+app.use("/api", apiAdminAuth, createAdminAuditMiddleware({ db, source: "Sublicuentas API" }));
+app.get("/api/me", createAdminMeHandler());
+app.post("/api/logout", createAdminLogoutHandler({ db }));
 
 // Catálogos (bancos, motivos, plataformas) para los selectores de la app
-app.get("/api/catalogos", wrap((_req, res) => ok(res, {
+app.get("/api/catalogos", adminPermission("bot.use"), wrap((_req, res) => ok(res, {
   bancos: FIN_BANCOS,
   motivos: FIN_MOTIVOS_EGRESO,
   plataformas: Object.values(PLATAFORMAS)
@@ -200,53 +207,53 @@ app.get("/api/catalogos", wrap((_req, res) => ok(res, {
 })));
 
 // ---------- CÓDIGOS (IMAP) ----------
-app.get("/api/code", wrap(async (req, res) => {
+app.get("/api/code", adminPermission("codigos.read"), wrap(async (req, res) => {
   const correo = String(req.query.correo || "").trim().toLowerCase();
   if (!correo) return fail(res, 400, "Falta correo");
   ok(res, await apiCode(correo));
 }));
-app.get("/api/link", wrap(async (req, res) => ok(res, await apiLink(String(req.query.correo || "").trim().toLowerCase()))));
-app.get("/api/hogar", wrap(async (req, res) => ok(res, await apiHogar(String(req.query.correo || "").trim().toLowerCase()))));
-app.get("/api/inbox", wrap(async (req, res) => ok(res, await apiInbox(String(req.query.correo || "").trim().toLowerCase()))));
+app.get("/api/link", adminPermission("codigos.read"), wrap(async (req, res) => ok(res, await apiLink(String(req.query.correo || "").trim().toLowerCase()))));
+app.get("/api/hogar", adminPermission("codigos.read"), wrap(async (req, res) => ok(res, await apiHogar(String(req.query.correo || "").trim().toLowerCase()))));
+app.get("/api/inbox", adminPermission("codigos.read"), wrap(async (req, res) => ok(res, await apiInbox(String(req.query.correo || "").trim().toLowerCase()))));
 
 // ---------- CLIENTES / CRM ----------
-app.get("/api/clientes", wrap(async (req, res) => {
+app.get("/api/clientes", adminPermission("clientes.read"), wrap(async (req, res) => {
   const q = String(req.query.q || "").trim();
   ok(res, { resultados: await buscarClienteRobusto(q) });
 }));
-app.get("/api/clientes/:id", wrap(async (req, res) => {
+app.get("/api/clientes/:id", adminPermission("clientes.read"), wrap(async (req, res) => {
   const c = await getCliente(req.params.id);
   if (!c) return fail(res, 404, "Cliente no encontrado");
   ok(res, { cliente: c });
 }));
 // Renovar servicio (+30 / +31) — usa la misma lógica del bot
-app.post("/api/clientes/:id/renovar", wrap(async (req, res) => {
+app.post("/api/clientes/:id/renovar", adminPermission("renovaciones.write"), wrap(async (req, res) => {
   const idx = Number(req.body.idx);
   const dias = Number(req.body.dias) === 31 ? 31 : 30;
   const resultado = await renovarServicio(req.params.id, idx, dias);
   ok(res, { servicio: resultado.servicio, sorteo: resultado.sorteo, mensaje: `Renovado +${dias} días` });
 }));
 // Editar un servicio del cliente
-app.patch("/api/clientes/:id/servicio/:idx", wrap(async (req, res) => {
+app.patch("/api/clientes/:id/servicio/:idx", adminPermission("clientes.write"), wrap(async (req, res) => {
   const r = await patchServicio(req.params.id, Number(req.params.idx), req.body.patch || {});
   cacheInvalidatePrefix(`clientes:doc:${req.params.id}`);
   ok(res, { resultado: r });
 }));
 // Borrar un servicio del cliente
-app.delete("/api/clientes/:id/servicio/:idx", wrap(async (req, res) => {
+app.delete("/api/clientes/:id/servicio/:idx", adminPermission("clientes.write"), wrap(async (req, res) => {
   const r = await eliminarServicioTx(req.params.id, Number(req.params.idx));
   cacheInvalidatePrefix(`clientes:doc:${req.params.id}`);
   ok(res, { resultado: r });
 }));
 
 // ---------- RENOVACIONES POR FECHA ----------
-app.get("/api/renovaciones", wrap(async (req, res) => {
+app.get("/api/renovaciones", adminPermission("renovaciones.read"), wrap(async (req, res) => {
   const fecha = String(req.query.fecha || hoyDMY());
   ok(res, { fecha, rows: await obtenerRenovacionesPorFecha(fecha) });
 }));
 
 // ---------- MENSAJE DE COBRO CON IA (Gemini) ----------
-app.post("/api/cobro/ia", wrap(async (req, res) => {
+app.post("/api/cobro/ia", adminPermission("clientes.read"), wrap(async (req, res) => {
   const { nombre = "", plataforma = "", precio = "", fecha = "" } = req.body || {};
   if (!nombre || !plataforma) return fail(res, 400, "Faltan datos del cliente");
   const mensaje = await generarMensajeCobroIA({ nombre, plataforma, precio, fecha });
@@ -254,33 +261,33 @@ app.post("/api/cobro/ia", wrap(async (req, res) => {
 }));
 
 // ---------- INVENTARIO ----------
-app.get("/api/inventario", wrap(async (req, res) => {
+app.get("/api/inventario", adminPermission("inventario.read"), wrap(async (req, res) => {
   const correo = String(req.query.correo || "").trim();
   ok(res, { resultados: await buscarInventarioPorCorreo(correo) });
 }));
 
 // ---------- FINANZAS ----------
-app.post("/api/finanzas/ingreso", wrap(async (req, res) => {
+app.post("/api/finanzas/ingreso", adminPermission("finanzas.write"), wrap(async (req, res) => {
   const { monto, banco, plataforma, detalle, fecha } = req.body || {};
-  const mov = await registrarIngresoTx({ monto, banco, plataforma, detalle, fecha, userName: APP_NAME });
+  const mov = await registrarIngresoTx({ monto, banco, plataforma, detalle, fecha, userName: apiActorName(req) });
   ok(res, { movimiento: mov });
 }));
-app.post("/api/finanzas/egreso", wrap(async (req, res) => {
+app.post("/api/finanzas/egreso", adminPermission("finanzas.write"), wrap(async (req, res) => {
   const { monto, banco, motivo, detalle, fecha } = req.body || {};
-  const mov = await registrarEgresoTx({ monto, banco, motivo, detalle, fecha, userName: APP_NAME });
+  const mov = await registrarEgresoTx({ monto, banco, motivo, detalle, fecha, userName: apiActorName(req) });
   ok(res, { movimiento: mov });
 }));
-app.get("/api/finanzas/movimientos", wrap(async (req, res) => {
+app.get("/api/finanzas/movimientos", adminPermission("finanzas.read"), wrap(async (req, res) => {
   const fecha = String(req.query.fecha || hoyDMY());
   ok(res, { fecha, movimientos: await getMovimientosPorFecha(fecha) });
 }));
-app.delete("/api/finanzas/movimientos/:id", wrap(async (req, res) => {
+app.delete("/api/finanzas/movimientos/:id", adminPermission("finanzas.write"), wrap(async (req, res) => {
   const existe = await getMovimientoFinanzaById(req.params.id);
   if (!existe) return fail(res, 404, "Movimiento no encontrado");
   await eliminarMovimientoFinanzas(req.params.id);
   ok(res, { eliminado: req.params.id });
 }));
-app.get("/api/finanzas/cierre", wrap(async (req, res) => {
+app.get("/api/finanzas/cierre", adminPermission("finanzas.read"), wrap(async (req, res) => {
   const fecha = String(req.query.fecha || hoyDMY());
   const lista = await getMovimientosPorFecha(fecha);
   let ingresos = 0, egresos = 0;
@@ -291,7 +298,7 @@ app.get("/api/finanzas/cierre", wrap(async (req, res) => {
   ok(res, { fecha, ingresos, egresos, saldo: ingresos - egresos, movimientos: lista.length, texto: cierreCajaTexto(fecha, lista) });
 }));
 // Excel — genera el .xlsx y lo devuelve como descarga (mismo ExcelJS del bot)
-app.get("/api/finanzas/excel", wrap(async (req, res) => {
+app.get("/api/finanzas/excel", adminPermission("finanzas.read"), wrap(async (req, res) => {
   const desde = String(req.query.desde || hoyDMY());
   const hasta = String(req.query.hasta || desde);
   const rows = await getMovimientosPorRango(desde, hasta);
@@ -356,6 +363,8 @@ const REV_JWT_SECRET = getJwtSecret();
 
 // LOGIN (revendedor con clave, o admin con ADMIN_USER/ADMIN_PASSWORD) — handler compartido
 app.post("/rev/login", revLoginIpLimiter, createRevLoginHandler({ db, bot, SUPER_ADMIN }));
+app.get("/rev/admin/me", revAdminAuth, createAdminMeHandler());
+app.post("/rev/admin/logout", revAdminAuth, createAdminLogoutHandler({ db }));
 
 // CLIENTES del revendedor autenticado
 app.get("/rev/clientes", revAuth, async (req, res) => {
@@ -413,7 +422,7 @@ app.get("/rev/precios", revAuth, async (req, res) => {
 });
 
 // ADMIN: lista de revendedores con contadores
-app.get("/rev/admin/revendedores", revAdminAuth, async (req, res) => {
+app.get("/rev/admin/revendedores", revAdminAuth, adminPermission("equipo.manage"), async (req, res) => {
   try {
     const [revSnap, cliSnap] = await Promise.all([
       db.collection("revendedores").get(),
@@ -467,7 +476,7 @@ app.get("/rev/admin/revendedores", revAdminAuth, async (req, res) => {
 });
 
 // ADMIN: "ver como" un revendedor
-app.post("/rev/admin/impersonate", revAdminAuth, async (req, res) => {
+app.post("/rev/admin/impersonate", revAdminAuth, adminPermission("admin.impersonate"), async (req, res) => {
   try {
     const id = (req.body.id || "").trim();
     const nombre_norm = (req.body.nombre_norm || "").trim().toLowerCase();
@@ -512,7 +521,7 @@ require("./index_13_gamificacion")(app);
 if (!global.__SUBLICUENTAS_API_SERVER__) {
   global.__SUBLICUENTAS_API_SERVER__ = app.listen(PORT, () => {
     console.log("🌐 API REST Sublicuentas activa en puerto", PORT);
-    if (!API_TOKEN) console.warn("⚠️ Falta API_ADMIN_TOKEN — la API rechazará todo hasta configurarlo.");
+    console.log("🔐 API Admin Fase 3: sesiones individuales JWT + ACL activas.");
   });
 }
 
