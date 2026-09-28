@@ -12,7 +12,9 @@
     "migracion:precios:preview": "node migrar_precios_socios_202608.js --preview",
     "migracion:precios:apply": "node migrar_precios_socios_202608.js --apply",
     "migracion:vendedores:preview": "node migrar_vendedores_servicio_202608.js --preview",
-    "migracion:vendedores:apply": "node migrar_vendedores_servicio_202608.js --apply"
+    "migracion:vendedores:apply": "node migrar_vendedores_servicio_202608.js --apply",
+    "maintenance:migrations": "node run_maintenance_migrations.js",
+    "test": "node --test tests/*.test.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

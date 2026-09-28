@@ -17,11 +17,11 @@ const {
 const {
   escMD, upsertPanel, parseFechaFinanceInput, getMonthLabelFromKey,
   getMonthKeyFromDMY, isFechaDMY, hoyDMY, moneyLps, logErr, normalizarPlataforma,
-  isAdmin,
+  isAdmin, normTxt, getBackupRecipientChatIds,
 } = require("./index_02_utils_roles");
 
 const { humanPlataforma, obtenerRenovacionesPorFecha } = require("./index_03_clientes_crm");
-const { vendedorEfectivoServicio, resumenVendedoresCliente } = require("./index_17_vendedores_servicio");
+const { vendedorEfectivoServicio, resumenVendedoresCliente, normVendedor } = require("./index_17_vendedores_servicio");
 
 // ===============================
 // CONFIG
@@ -698,14 +698,17 @@ async function generarDashboard(chatId) {
 // Envía a admins y vendedores las renovaciones de mañana a las 11AM
 // Así tienen tiempo de avisar a sus clientes durante el día
 // ===============================
-async function enviarRecordatorios11AM() {
+async function enviarRecordatorios11AM(scheduledDateDMY = "") {
   try {
-    const hoy = hoyDMY();
+    const hoy = isFechaDMY(scheduledDateDMY) ? scheduledDateDMY : hoyDMY();
     const [dd, mm, yyyy] = hoy.split("/");
     const mananaDate = new Date(Number(yyyy), Number(mm) - 1, Number(dd) + 1);
     const manana = `${String(mananaDate.getDate()).padStart(2,"0")}/${String(mananaDate.getMonth()+1).padStart(2,"0")}/${mananaDate.getFullYear()}`;
 
-    // Admins activos
+    // Una sola lectura de renovaciones. Antes se repetía una lectura completa
+    // de clientes por cada vendedor.
+    const rowsMananaGlobal = await obtenerRenovacionesPorFecha(manana, null);
+
     const snapAdmins = await db.collection("admins").get();
     const adminIds = [];
     snapAdmins.forEach((d) => {
@@ -715,9 +718,7 @@ async function enviarRecordatorios11AM() {
       if (tg) adminIds.push(tg);
     });
 
-    // Renovaciones de mañana — todas (para admins)
-    const rowsMananaGlobal = await obtenerRenovacionesPorFecha(manana, null);
-
+    let enviadosAdmins = 0;
     for (const adminId of adminIds) {
       try {
         if (!rowsMananaGlobal.length) continue;
@@ -728,16 +729,18 @@ async function enviarRecordatorios11AM() {
         });
         if (rowsMananaGlobal.length > 20) msg += `\n_...y ${rowsMananaGlobal.length - 20} más._`;
         await bot.sendMessage(adminId, msg, { parse_mode: "Markdown" });
+        enviadosAdmins++;
       } catch (e) { logErr(`recordatorio11AM:admin:${adminId}`, e); }
     }
 
-    // Notificación filtrada por vendedor
     const snapRev = await db.collection("revendedores").get();
+    let enviadosVendedores = 0;
     for (const d of snapRev.docs) {
       const rev = d.data() || {};
       if (!rev.activo || !rev.telegramId || !rev.nombre) continue;
       try {
-        const rowsVend = await obtenerRenovacionesPorFecha(manana, rev.nombre);
+        const vendedorNorm = normVendedor(rev.nombre);
+        const rowsVend = rowsMananaGlobal.filter((x) => normVendedor(x.vendedor || "") === vendedorNorm);
         if (!rowsVend.length) continue;
         let msg = `🔔 *RECORDATORIO: Tus renovaciones de mañana (${escMD(manana)})*\n\n`;
         msg += `*Total:* ${rowsVend.length} perfil(es)\n\n`;
@@ -748,40 +751,24 @@ async function enviarRecordatorios11AM() {
           msg += `   💰 ${escMD(moneyLps(x.precio))}\n\n`;
         });
         await bot.sendMessage(rev.telegramId, msg, { parse_mode: "Markdown" });
+        enviadosVendedores++;
       } catch (e) { logErr(`recordatorio11AM:rev:${rev.nombre}`, e); }
     }
 
-    console.log(`✅ Recordatorios 11AM enviados para renovaciones del ${manana}`);
+    console.log(`✅ Recordatorios 11AM procesados para renovaciones del ${manana}`);
+    return { ok: true, fecha: manana, admins: enviadosAdmins, vendedores: enviadosVendedores };
   } catch (e) {
     logErr("enviarRecordatorios11AM", e);
+    return { ok: false, error: String(e?.message || e) };
   }
 }
 
 // ===============================
 // ✅ BACKUP DOMINICAL — DOMINGO 9PM
-// Privado: únicamente Sublicuentas y Relojes pueden recibir el archivo.
 // ===============================
-function backupAdminKeyLocal(v = "") {
-  return String(v || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, " ").trim();
-}
-function backupAdminPermitidoLocal(doc, data = {}) {
-  const tg = String(data.telegramId || data.telegramID || data.userId || doc.id || "").trim();
-  if (!tg) return "";
-  const configured = new Set([
-    String(process.env.SUBLICUENTAS_CHAT_ID || "5728675990").trim(),
-    String(process.env.RELOJES_CHAT_ID || "411539492").trim(),
-  ].filter(Boolean));
-  if (configured.has(tg)) return tg;
-
-  const aliases = [doc.id, data.nombre, data.nombre_norm, data.usuario, data.username, data.rol, data.role]
-    .map(backupAdminKeyLocal).filter(Boolean);
-  const esSublicuentas = aliases.some((x) => ["sublicuentas", "naara"].includes(x));
-  const esRelojes = aliases.some((x) => ["relojes", "libni", "daniela"].includes(x));
-  return (esSublicuentas || esRelojes) ? tg : "";
-}
-async function ejecutarBackupDominical() {
+async function ejecutarBackupDominical(scheduledDateDMY = "") {
   try {
-    const hoy = hoyDMY();
+    const hoy = isFechaDMY(scheduledDateDMY) ? scheduledDateDMY : hoyDMY();
     const [, mm, yyyy] = hoy.split("/");
     const mesKey = `${yyyy}-${String(mm).padStart(2, "0")}`;
     const label = monthLabelFromKeyLocal(mesKey);
@@ -830,75 +817,32 @@ async function ejecutarBackupDominical() {
       `Movimientos: ${rows.length}\n\n` +
       `👥 *Clientes*: ${clientes.length} registrados\n\n` +
       `_El archivo Excel contiene todas las finanzas del mes y la lista completa de clientes._`;
-    const snapAdmins = await db.collection("admins").get();
-    const destinatariosBackup = new Set();
-    for (const d of snapAdmins.docs) {
-      const data = d.data() || {};
-      if (data.activo === false) continue;
-      const tg = backupAdminPermitidoLocal(d, data);
-      if (tg) destinatariosBackup.add(tg);
-    }
+    // PRIVACIDAD: el backup financiero/completo solo puede salir hacia
+    // Sublicuentas y Relojes (resueltos por ACL), nunca hacia el resto de admins.
+    const destinatarios = await getBackupRecipientChatIds();
+    if (!destinatarios.length) throw new Error("backup_sin_destinatarios_autorizados");
     let enviados = 0;
-    for (const tg of destinatariosBackup) {
-      try { await bot.sendMessage(tg, resumenMsg, { parse_mode: "Markdown" }); await bot.sendDocument(tg, tempPath, { caption: ` Backup ${hoy}` }); enviados++; } catch (e) { logErr(`backup:privado:${tg}`, e); }
+    for (const tg of destinatarios) {
+      try {
+        await bot.sendMessage(tg, resumenMsg, { parse_mode: "Markdown" });
+        await bot.sendDocument(tg, tempPath, { caption: `Backup ${hoy}` });
+        enviados++;
+      } catch (e) { logErr(`backup:autorizado:${tg}`, e); }
     }
     try { fs.unlinkSync(tempPath); } catch (_) {}
-    console.log(`✅ Backup dominical enviado a ${enviados} admin(s) — ${hoy}`);
-  } catch (e) { logErr("ejecutarBackupDominical", e); }
+    console.log(`✅ Backup dominical enviado a ${enviados}/${destinatarios.length} destinatario(s) autorizados — ${hoy}`);
+    return { ok: enviados > 0, enviados, destinatarios: destinatarios.length, fecha: hoy };
+  } catch (e) {
+    logErr("ejecutarBackupDominical", e);
+    return { ok: false, error: String(e?.message || e) };
+  }
 }
 
 // ===============================
-// ✅ SCHEDULER
-// - 11AM todos los días → recordatorio de renovaciones del día siguiente
-// - Domingo 9PM → backup dominical con Excel
+// SCHEDULER
 // ===============================
-let _lastRecordatorio11AM = "";
-let _lastBackupDominical = "";
-
-function getTimePartsNowLocal() {
-  const now = new Date();
-  const fmt = new Intl.DateTimeFormat("es-HN", {
-    timeZone: String(process.env.TZ || "America/Tegucigalpa"),
-    hour: "2-digit", minute: "2-digit", hour12: false,
-    year: "numeric", month: "2-digit", day: "2-digit",
-    weekday: "short",
-  }).formatToParts(now);
-  const obj = {};
-  fmt.forEach((p) => { if (p.type !== "literal") obj[p.type] = p.value; });
-  return {
-    dmy: `${obj.day}/${obj.month}/${obj.year}`,
-    hh: Number(obj.hour),
-    mm: Number(obj.minute),
-    weekday: String(obj.weekday || "").toLowerCase(),
-  };
-}
-
-if (!global.__SUBLICUENTAS_SCHEDULER__) {
-  global.__SUBLICUENTAS_SCHEDULER__ = true;
-
-  setInterval(async () => {
-    try {
-      const { dmy, hh, mm, weekday } = getTimePartsNowLocal();
-
-      // ✅ 11AM todos los días — recordatorio de renovaciones del día siguiente
-      if (hh === 11 && mm === 0 && _lastRecordatorio11AM !== dmy) {
-        _lastRecordatorio11AM = dmy;
-        await enviarRecordatorios11AM();
-      }
-
-      // Domingo 9PM — backup dominical
-      const esDomingo = weekday.startsWith("dom") || weekday === "sun" || weekday === "su";
-      if (esDomingo && hh === 21 && mm === 0 && _lastBackupDominical !== dmy) {
-        _lastBackupDominical = dmy;
-        await ejecutarBackupDominical();
-      }
-    } catch (e) {
-      logErr("scheduler", e);
-    }
-  }, 30 * 1000);
-
-  console.log("⏰ Scheduler activo: recordatorio 11AM diario + backup dominical domingo 9PM");
-}
+// El scheduler por minuto exacto fue retirado. index_24_durable_scheduler.js
+// ejecuta estas tareas con estado persistente en Firestore.
 
 // ===============================
 // EXCEL RANGO

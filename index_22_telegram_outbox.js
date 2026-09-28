@@ -1,18 +1,24 @@
-/* SUBLICUENTAS — TELEGRAM OUTBOX
+/* SUBLICUENTAS — TELEGRAM OUTBOX v2
    ---------------------------------------------------------------
-   Cola compartida para que servicios secundarios (Panel API) puedan
-   pedir envíos al BOT PRINCIPAL sin depender de un BOT_TOKEN duplicado.
+   Cola compartida para que servicios secundarios pidan envíos al bot.
 
-   - Panel API: enqueueTelegramJob(...)
-   - Bot principal (index.js): startTelegramOutboxWorker()
-
-   Firestore: telegram_outbox
+   Mejoras v2:
+   - Listener Firestore en vez de consultar cada 1.5 segundos.
+   - Watchdog liviano cada 60 segundos.
+   - Lease para recuperar trabajos atascados en processing.
+   - Reintentos con backoff y soporte retry_after de Telegram 429.
+   - Máximo de intentos configurable.
 */
 const { db, admin, bot, sleep } = require('./index_01_core');
+const { retryDelayMs } = require('./lib_hardening');
 
 const COLLECTION = 'telegram_outbox';
 const WORKER_ID = `tg_${process.pid}_${Date.now().toString(36)}`;
-let timer = null;
+const MAX_ATTEMPTS = Math.max(1, Number(process.env.TELEGRAM_OUTBOX_MAX_ATTEMPTS || 5));
+const LEASE_MS = Math.max(30_000, Number(process.env.TELEGRAM_OUTBOX_LEASE_MS || 120_000));
+const WATCHDOG_MS = Math.max(30_000, Number(process.env.TELEGRAM_OUTBOX_WATCHDOG_MS || 120_000));
+let watchdogTimer = null;
+let unsubscribePending = null;
 let running = false;
 
 function clean(v, max = 4000) {
@@ -24,6 +30,7 @@ function telegramErrorInfo(e) {
   const code = Number(body?.error_code || e?.response?.statusCode || e?.statusCode || 0) || 0;
   const description = clean(body?.description || e?.message || e || 'Error desconocido de Telegram', 500);
   const lower = description.toLowerCase();
+  const retryAfterSec = Number(body?.parameters?.retry_after || e?.response?.body?.parameters?.retry_after || 0) || 0;
   let kind = 'telegram_error';
   if (code === 401 || lower.includes('unauthorized')) kind = 'bot_token_invalido';
   else if (lower.includes('chat not found')) kind = 'chat_no_encontrado';
@@ -31,42 +38,28 @@ function telegramErrorInfo(e) {
   else if (lower.includes('forbidden')) kind = 'telegram_prohibido';
   else if (lower.includes('user is deactivated')) kind = 'usuario_desactivado';
   else if (code === 429 || lower.includes('too many requests')) kind = 'rate_limit';
-  return { code, description, kind };
+  return { code, description, kind, retryAfterSec };
 }
 
 function isUnauthorizedTelegramError(e) {
-  const info = telegramErrorInfo(e);
-  return info.kind === 'bot_token_invalido';
+  return telegramErrorInfo(e).kind === 'bot_token_invalido';
 }
 
-// Firestore no admite arrays anidados. Telegram, en cambio, representa los
-// teclados inline como `inline_keyboard: [[{...}]]`. Guardar replyMarkup como
-// objeto provoca INVALID_ARGUMENT: "Property replyMarkup contains an invalid
-// nested entity". Lo serializamos a JSON para que la cola sea 100% compatible
-// con Firestore y lo reconstruimos justo antes de enviar a Telegram.
 function serializeReplyMarkup(value) {
   if (!value || typeof value !== 'object') return '';
   try {
     const json = JSON.stringify(value);
-    // Un teclado de tickets es diminuto; este límite evita guardar payloads
-    // accidentales enormes sin afectar teclados normales.
     return json.length <= 20000 ? json : '';
-  } catch (_) {
-    return '';
-  }
+  } catch (_) { return ''; }
 }
 
 function deserializeReplyMarkup(value) {
-  // Compatibilidad defensiva con documentos antiguos que sí pudieran tener
-  // un objeto plano guardado. Los nuevos trabajos siempre usan JSON string.
   if (value && typeof value === 'object') return value;
   if (typeof value !== 'string' || !value.trim()) return null;
   try {
     const parsed = JSON.parse(value);
     return parsed && typeof parsed === 'object' ? parsed : null;
-  } catch (_) {
-    return null;
-  }
+  } catch (_) { return null; }
 }
 
 async function enqueueTelegramJob(input = {}) {
@@ -79,15 +72,10 @@ async function enqueueTelegramJob(input = {}) {
   if (type === 'photo' && !photoUrl) throw new Error('telegram_photo_url_requerida');
 
   const ref = db.collection(COLLECTION).doc();
-  const payload = {
-    type,
-    chatId,
-    text,
-    photoUrl,
+  await ref.set({
+    type, chatId, text, photoUrl,
     parseMode: ['HTML', 'Markdown', 'MarkdownV2'].includes(input.parseMode) ? input.parseMode : '',
     disableWebPreview: input.disableWebPreview !== false,
-    // IMPORTANTE: no guardar el objeto replyMarkup directamente; contiene
-    // arrays anidados (inline_keyboard) que Firestore rechaza.
     replyMarkupJson: serializeReplyMarkup(input.replyMarkup),
     source: clean(input.source || 'panel-api', 120),
     reference: clean(input.reference || '', 180),
@@ -95,8 +83,7 @@ async function enqueueTelegramJob(input = {}) {
     attempts: 0,
     createdAt: admin.firestore.FieldValue.serverTimestamp(),
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-  };
-  await ref.set(payload);
+  });
   return { id: ref.id, status: 'pending' };
 }
 
@@ -108,7 +95,7 @@ async function waitTelegramJob(id, timeoutMs = 7000) {
     if (!snap.exists) return { status: 'missing' };
     const d = snap.data() || {};
     if (['sent', 'failed'].includes(d.status)) return { id: snap.id, ...d };
-    await sleep(250);
+    await sleep(350);
   }
   const snap = await ref.get();
   return snap.exists ? { id: snap.id, ...(snap.data() || {}), timeout: true } : { status: 'missing', timeout: true };
@@ -116,17 +103,19 @@ async function waitTelegramJob(id, timeoutMs = 7000) {
 
 async function claimJob(ref) {
   let claimed = null;
+  const now = Date.now();
   await db.runTransaction(async (tx) => {
     const snap = await tx.get(ref);
     if (!snap.exists) return;
     const d = snap.data() || {};
     if (d.status !== 'pending') return;
+    if (Number(d.nextAttemptAtMillis || 0) > now) return;
     const attempts = Number(d.attempts || 0) + 1;
     tx.update(ref, {
-      status: 'processing',
-      attempts,
+      status: 'processing', attempts,
       claimedBy: WORKER_ID,
       claimedAt: admin.firestore.FieldValue.serverTimestamp(),
+      leaseUntilMillis: now + LEASE_MS,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
     claimed = { id: snap.id, ...d, attempts };
@@ -140,9 +129,7 @@ async function sendJob(job) {
   const replyMarkup = deserializeReplyMarkup(job.replyMarkupJson || job.replyMarkup);
   if (replyMarkup) opts.reply_markup = replyMarkup;
   if (job.disableWebPreview !== false) opts.disable_web_page_preview = true;
-  if (job.type === 'photo') {
-    return bot.sendPhoto(job.chatId, job.photoUrl, { ...opts, caption: clean(job.text, 1000) });
-  }
+  if (job.type === 'photo') return bot.sendPhoto(job.chatId, job.photoUrl, { ...opts, caption: clean(job.text, 1000) });
   return bot.sendMessage(job.chatId, clean(job.text, 3900), opts);
 }
 
@@ -156,25 +143,32 @@ async function processOne(ref) {
       messageId: Number(msg?.message_id || 0),
       sentAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      leaseUntilMillis: 0,
+      claimedBy: admin.firestore.FieldValue.delete(),
       error: admin.firestore.FieldValue.delete(),
       errorKind: admin.firestore.FieldValue.delete(),
       errorCode: admin.firestore.FieldValue.delete(),
+      nextAttemptAtMillis: admin.firestore.FieldValue.delete(),
     }, { merge: true });
   } catch (e) {
     const info = telegramErrorInfo(e);
-    const retryable = (info.code >= 500 || info.kind === 'rate_limit') && Number(job.attempts || 0) < 3;
+    const retryable = (info.code >= 500 || info.kind === 'rate_limit' || info.code === 0) && Number(job.attempts || 0) < MAX_ATTEMPTS;
+    const delay = retryDelayMs(job.attempts, info.retryAfterSec);
     await ref.set({
-      status: retryable ? 'pending' : 'failed',
+      status: retryable ? 'retry_wait' : 'failed',
       error: info.description,
       errorKind: info.kind,
       errorCode: info.code,
+      nextAttemptAtMillis: retryable ? Date.now() + delay : admin.firestore.FieldValue.delete(),
       failedAt: retryable ? admin.firestore.FieldValue.delete() : admin.firestore.FieldValue.serverTimestamp(),
+      leaseUntilMillis: 0,
+      claimedBy: admin.firestore.FieldValue.delete(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     }, { merge: true });
   }
 }
 
-async function processTelegramOutbox() {
+async function processPendingBatch() {
   if (running) return;
   running = true;
   try {
@@ -182,18 +176,109 @@ async function processTelegramOutbox() {
     for (const doc of snap.docs) await processOne(doc.ref);
   } catch (e) {
     console.error('telegram_outbox_worker', e?.message || e);
-  } finally {
-    running = false;
+  } finally { running = false; }
+}
+
+async function releaseDueRetries() {
+  const now = Date.now();
+  try {
+    const snap = await db.collection(COLLECTION).where('status', '==', 'retry_wait').limit(50).get();
+    const due = snap.docs.filter((d) => Number((d.data() || {}).nextAttemptAtMillis || 0) <= now);
+    if (!due.length) return 0;
+    const batch = db.batch();
+    due.forEach((d) => batch.set(d.ref, {
+      status: 'pending',
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      nextAttemptAtMillis: admin.firestore.FieldValue.delete(),
+    }, { merge: true }));
+    await batch.commit();
+    return due.length;
+  } catch (e) {
+    console.error('telegram_outbox_retry_release', e?.message || e);
+    return 0;
   }
+}
+
+function timestampMillis(value) {
+  if (!value) return 0;
+  if (typeof value.toMillis === 'function') return Number(value.toMillis() || 0);
+  if (value._seconds != null) return Number(value._seconds) * 1000;
+  if (value.seconds != null) return Number(value.seconds) * 1000;
+  const n = Number(value || 0);
+  return Number.isFinite(n) ? n : 0;
+}
+
+async function recoverStuckJobs() {
+  const now = Date.now();
+  try {
+    const snap = await db.collection(COLLECTION).where('status', '==', 'processing').limit(50).get();
+    const stuck = snap.docs.filter((doc) => {
+      const d = doc.data() || {};
+      const lease = Number(d.leaseUntilMillis || 0);
+      if (lease > 0) return lease <= now;
+      // Compatibilidad con documentos creados por la versión anterior, que
+      // no tenían leaseUntilMillis: usar claimedAt/updatedAt como referencia.
+      const legacyClaim = timestampMillis(d.claimedAt) || timestampMillis(d.updatedAt);
+      return legacyClaim > 0 && legacyClaim <= now - LEASE_MS;
+    });
+    if (!stuck.length) return 0;
+    const batch = db.batch();
+    stuck.forEach((d) => batch.set(d.ref, {
+      status: 'pending',
+      recoveredAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      leaseUntilMillis: 0,
+      claimedBy: admin.firestore.FieldValue.delete(),
+    }, { merge: true }));
+    await batch.commit();
+    console.warn(`⚠️ Telegram outbox recuperó ${stuck.length} trabajo(s) atascado(s)`);
+    return stuck.length;
+  } catch (e) {
+    console.error('telegram_outbox_recover', e?.message || e);
+    return 0;
+  }
+}
+
+async function watchdog() {
+  await recoverStuckJobs();
+  await releaseDueRetries();
+  await processPendingBatch();
 }
 
 function startTelegramOutboxWorker() {
   if (global.__SUBLICUENTAS_TG_OUTBOX_STARTED__) return;
   global.__SUBLICUENTAS_TG_OUTBOX_STARTED__ = true;
-  setTimeout(processTelegramOutbox, 1000).unref?.();
-  timer = setInterval(processTelegramOutbox, 1500);
-  timer.unref?.();
-  console.log('📨 Telegram outbox activo:', WORKER_ID);
+
+  // Listener reactivo: solo despierta cuando cambia la cola pendiente.
+  try {
+    unsubscribePending = db.collection(COLLECTION).where('status', '==', 'pending').limit(20)
+      .onSnapshot((snap) => {
+        for (const change of snap.docChanges()) {
+          if (change.type === 'added' || change.type === 'modified') {
+            processOne(change.doc.ref).catch((e) => console.error('telegram_outbox_snapshot_job', e?.message || e));
+          }
+        }
+      }, (e) => console.error('telegram_outbox_snapshot', e?.message || e));
+  } catch (e) {
+    console.error('telegram_outbox_snapshot_init', e?.message || e);
+  }
+
+  const initial = setTimeout(watchdog, 1000);
+  initial.unref?.();
+  watchdogTimer = setInterval(watchdog, WATCHDOG_MS);
+  watchdogTimer.unref?.();
+  console.log(`📨 Telegram outbox v2 activo: ${WORKER_ID} (watchdog ${WATCHDOG_MS}ms)`);
+}
+
+function getTelegramOutboxHealth() {
+  return {
+    workerId: WORKER_ID,
+    running,
+    listenerActive: typeof unsubscribePending === 'function',
+    watchdogActive: !!watchdogTimer,
+    maxAttempts: MAX_ATTEMPTS,
+    leaseMs: LEASE_MS,
+  };
 }
 
 module.exports = {
@@ -203,4 +288,7 @@ module.exports = {
   startTelegramOutboxWorker,
   telegramErrorInfo,
   isUnauthorizedTelegramError,
+  getTelegramOutboxHealth,
+  recoverStuckJobs,
+  releaseDueRetries,
 };

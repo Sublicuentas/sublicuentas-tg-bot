@@ -1223,146 +1223,33 @@ function getSuperAdminIdsLocal() {
   );
 }
 
-// ✅ Lista de admins en memoria — se carga al arrancar y se refresca cada 10 min
-// Evita hits a Firestore en cada mensaje
-const _adminIds = global.__SUBLICUENTAS_ADMIN_IDS__ =
-  global.__SUBLICUENTAS_ADMIN_IDS__ || new Set();
-let _adminIdsLoaded = global.__SUBLICUENTAS_ADMIN_IDS_LOADED__ || false;
-let _adminIdsLoading = false;
-
-async function cargarAdminIds() {
-  if (_adminIdsLoading) return;
-  _adminIdsLoading = true;
-  try {
-    const snap = await db.collection("admins").get();
-    snap.forEach(doc => {
-      const d = doc.data() || {};
-      const id = String(doc.id).trim();
-      // ✅ Solo IDs numéricos válidos de Telegram (ignorar docs basura como "user_id")
-      if (d.activo !== false && /^\d+$/.test(id)) _adminIds.add(id);
-    });
-    _adminIdsLoaded = true;
-    global.__SUBLICUENTAS_ADMIN_IDS_LOADED__ = true;
-    global.__SUBLICUENTAS_ADMIN_IDS__ = _adminIds;
-    console.log(`✅ Admins cargados: ${[..._adminIds].join(", ")}`);
-    // Refrescar cada 10 minutos
-    setTimeout(() => {
-      _adminIdsLoaded = false;
-      global.__SUBLICUENTAS_ADMIN_IDS_LOADED__ = false;
-      _adminIdsLoading = false;
-      cargarAdminIds().catch(() => {});
-    }, 10 * 60 * 1000);
-  } catch (e) {
-    logErr("cargarAdminIds", e?.message || e);
-    _adminIdsLoading = false;
-    // Reintentar en 30 segundos si falla
-    setTimeout(() => cargarAdminIds().catch(() => {}), 30 * 1000);
-  }
-}
-
-// Cargar admins al iniciar (no bloquea el arranque)
-if (!_adminIdsLoaded) cargarAdminIds().catch(e => logErr("cargarAdminIds:init", e?.message || e));
-
+// Autorización centralizada. No se mantienen listas paralelas de permisos en
+// handlers: todas las decisiones pasan por index_23_access_control.js a través
+// de isAdmin / isSuperAdmin / isVendedor.
 async function safeIsSuperAdminLocal(userId) {
-  const uid = normalizeTelegramIdLocal(userId);
-  if (!uid) return false;
-
-  // Verificar contra lista en memoria (instantáneo)
-  if (_adminIds.has(uid)) {
-    try {
-      const doc = await db.collection("admins").doc(uid).get();
-      if (doc.exists) {
-        const d = doc.data() || {};
-        if (d.activo !== false && (d.superAdmin === true || d.superadmin === true || d.rol === "superadmin")) return true;
-      }
-    } catch (_) {}
-  }
-
-  try { if (await isSuperAdmin(userId)) return true; } catch (_) {}
-  if (getSuperAdminIdsLocal().includes(uid)) return true;
-  return false;
+  try { return await isSuperAdmin(userId); }
+  catch (e) { logErr("safeIsSuperAdminLocal", e?.message || e); return false; }
 }
 
 async function safeIsAdminLocal(userId) {
-  const uid = normalizeTelegramIdLocal(userId);
-  if (!uid) return false;
-
-  // ✅ Si la lista ya cargó, verificar instantáneamente sin Firestore
-  if (_adminIdsLoaded && _adminIds.has(uid)) return true;
-
-  // Si aún no cargó, esperar hasta 3 segundos a que cargue
-  if (!_adminIdsLoaded) {
-    let waited = 0;
-    while (!_adminIdsLoaded && waited < 3000) {
-      await new Promise(r => setTimeout(r, 200));
-      waited += 200;
-    }
-    if (_adminIdsLoaded && _adminIds.has(uid)) return true;
-  }
-
-  // Fallback: consulta directa a Firestore
-  try { if (await isAdmin(userId)) return true; } catch (_) {}
-  try {
-    const doc = await db.collection("admins").doc(uid).get();
-    if (doc.exists && (doc.data() || {}).activo !== false) {
-      _adminIds.add(uid); // Agregar a la lista para próximas veces
-      return true;
-    }
-  } catch (e) {
-    logErr("safeIsAdminLocal:doc", e?.message || e);
-  }
-
-  return false;
+  try { return await isAdmin(userId); }
+  catch (e) { logErr("safeIsAdminLocal", e?.message || e); return false; }
 }
 
 async function safeGetRevendedorLocal(userId) {
-  const uid = normalizeTelegramIdLocal(userId);
-  if (!uid) return null;
-
   try {
     const rev = await getRevendedorPorTelegramId(userId);
-    if (rev && typeof rev === "object") {
-      return typeof normalizeRevendedorDoc === "function" ? normalizeRevendedorDoc(rev) : rev;
-    }
+    if (!rev || typeof rev !== "object") return null;
+    return typeof normalizeRevendedorDoc === "function" ? normalizeRevendedorDoc(rev) : rev;
   } catch (e) {
-    logErr("safeGetRevendedorLocal:getRevendedorPorTelegramId", e?.stack || e?.message || e);
+    logErr("safeGetRevendedorLocal", e?.stack || e?.message || e);
+    return null;
   }
-
-  try {
-    const snap = await db.collection("revendedores").get();
-    let found = null;
-
-    snap.forEach((d) => {
-      if (found) return;
-      const data = d.data() || {};
-      const tg = normalizeTelegramIdLocal(data.telegramId || data.telegramID || data.userId || "");
-      if (tg === uid) {
-        found = { id: d.id, ...data };
-      }
-    });
-
-    if (found) {
-      return typeof normalizeRevendedorDoc === "function" ? normalizeRevendedorDoc(found) : found;
-    }
-  } catch (e) {
-    logErr("safeGetRevendedorLocal:fallback", e?.stack || e?.message || e);
-  }
-
-  return null;
 }
 
 async function safeIsVendedorLocal(userId) {
-  const uid = normalizeTelegramIdLocal(userId);
-  if (!uid) return false;
-
-  try {
-    if (await isVendedor(userId)) return true;
-  } catch (e) {
-    logErr("safeIsVendedorLocal:isVendedor", e?.stack || e?.message || e);
-  }
-
-  const rev = await safeGetRevendedorLocal(uid);
-  return !!(rev && rev.nombre);
+  try { return await isVendedor(userId); }
+  catch (e) { logErr("safeIsVendedorLocal", e?.message || e); return false; }
 }
 
 async function getActiveAdminIdsLocal() {
@@ -1385,64 +1272,6 @@ async function getActiveAdminIdsLocal() {
 
   // Solo IDs numéricos de Telegram. Un documento placeholder en "admins"
   // (ej. id "user_id") hacía fallar el AutoTXT 7AM con "chat not found".
-  return Array.from(ids).filter((id) => /^-?\d{5,}$/.test(id));
-}
-
-function ticketAdminRoleFromDataLocal(data = {}, docId = "") {
-  const aliases = [docId, data.nombre, data.nombre_norm, data.usuario, data.username, data.rol, data.role]
-    .map((v) => ticketDestNorm(v)).filter(Boolean);
-  if (aliases.some((x) => ["relojes", "libni", "daniela"].includes(x))) return "relojes";
-  if (aliases.some((x) => ["sublicuentas", "naara", "superadmin"].includes(x))) return "sublicuentas";
-  return "";
-}
-async function ticketAdminRoleByTelegramIdLocal(userId) {
-  const uid = normalizeTelegramIdLocal(userId);
-  if (!uid) return "";
-  if (uid === String(process.env.RELOJES_CHAT_ID || "411539492").trim()) return "relojes";
-  if (uid === String(process.env.SUBLICUENTAS_CHAT_ID || "5728675990").trim()) return "sublicuentas";
-  try {
-    const direct = await db.collection("admins").doc(uid).get();
-    if (direct.exists && (direct.data() || {}).activo !== false) {
-      const role = ticketAdminRoleFromDataLocal(direct.data() || {}, direct.id);
-      if (role) return role;
-      if ((direct.data() || {}).superAdmin === true || (direct.data() || {}).superadmin === true) return "sublicuentas";
-    }
-    const snap = await db.collection("admins").get();
-    for (const d of snap.docs) {
-      const data = d.data() || {};
-      if (data.activo === false) continue;
-      const tg = normalizeTelegramIdLocal(data.telegramId || data.telegramID || data.userId || d.id || "");
-      if (tg !== uid) continue;
-      return ticketAdminRoleFromDataLocal(data, d.id) || "";
-    }
-  } catch (e) {
-    logErr("ticketAdminRoleByTelegramIdLocal", e?.message || e);
-  }
-  if (getSuperAdminIdsLocal().includes(uid)) return "sublicuentas";
-  return "";
-}
-async function ticketAdminIdsByRoleLocal(role = "") {
-  const wanted = ticketDestNorm(role);
-  const ids = new Set();
-  if (wanted === "sublicuentas") {
-    const id = String(process.env.SUBLICUENTAS_CHAT_ID || "5728675990").trim();
-    if (id) ids.add(id);
-  }
-  if (wanted === "relojes") {
-    const id = String(process.env.RELOJES_CHAT_ID || "411539492").trim();
-    if (id) ids.add(id);
-  }
-  try {
-    const snap = await db.collection("admins").get();
-    snap.forEach((d) => {
-      const data = d.data() || {};
-      if (data.activo === false || ticketAdminRoleFromDataLocal(data, d.id) !== wanted) return;
-      const tg = normalizeTelegramIdLocal(data.telegramId || data.telegramID || data.userId || d.id || "");
-      if (tg) ids.add(tg);
-    });
-  } catch (e) {
-    logErr("ticketAdminIdsByRoleLocal", e?.message || e);
-  }
   return Array.from(ids).filter((id) => /^-?\d{5,}$/.test(id));
 }
 
@@ -4550,26 +4379,17 @@ async function ticketTelegramPhotoUrl(msg,ticketId){
 async function ticketAppendTelegramReply({ticketId,msg,rev,adminOk}){
   const ref=db.collection('tickets_auditoria').doc(String(ticketId||''));
   const snap=await ref.get();if(!snap.exists)throw new Error('Ese ticket ya no existe.');
-  const old=snap.data()||{};
-  const esAviso=String(old.tipo||'').toLowerCase()==='aviso';
-  const adminRole=adminOk?await ticketAdminRoleByTelegramIdLocal(msg?.from?.id||msg?.chat?.id):'';
-  const actorRol=rev?ticketDestNorm(rev.nombre_norm||rev.id||rev.nombre):(adminRole||(esAviso?'':'sublicuentas'));
-  const destinos=(Array.isArray(old.destinos)?old.destinos:[]).map(ticketDestNorm).filter(Boolean);
-  const creatorRol=ticketDestNorm(old.creadoPorRol||'sublicuentas')||'sublicuentas';
-  const adminPuede=adminOk && (!esAviso || (!!actorRol && (actorRol==='sublicuentas'||destinos.includes(actorRol)||creatorRol===actorRol)));
-  if(!(adminOk?adminPuede:ticketCanTelegramAccess(old,rev,false)))throw new Error('Este ticket no corresponde a su usuario.');
+  const old=snap.data()||{};if(!ticketCanTelegramAccess(old,rev,adminOk))throw new Error('Este ticket no corresponde a su usuario.');
   const texto=String(msg?.text||msg?.caption||'').trim().slice(0,3000);
   const imagenUrl=await ticketTelegramPhotoUrl(msg,ticketId);
   if(!texto&&!imagenUrl)throw new Error('Envíe texto o una foto como respuesta.');
-  const actor=rev?.nombre||rev?.nombre_norm||(actorRol==='relojes'?'Relojes':'Sublicuentas');
-  const paraRoles=esAviso&&actorRol!==creatorRol?[creatorRol]:[];
-  const entry={texto:texto||(imagenUrl?'Evidencia adjunta':''),por:String(actor).slice(0,100),porRol:actorRol,para:paraRoles,paraLabel:paraRoles.map((r)=>r==='sublicuentas'?'Sublicuentas':r==='relojes'?'Relojes':r).join(', '),imagenUrl,origen:'telegram',telegramUserId:String(msg?.from?.id||''),at:new Date().toISOString()};
+  const actor=rev?.nombre||rev?.nombre_norm||(adminOk?'Admin Telegram':'Socio');
+  const actorRol=rev?ticketDestNorm(rev.nombre_norm||rev.id||rev.nombre):'sublicuentas';
+  const entry={texto:texto||(imagenUrl?'Evidencia adjunta':''),por:String(actor).slice(0,100),porRol:actorRol,imagenUrl,origen:'telegram',telegramUserId:String(msg?.from?.id||''),at:new Date().toISOString()};
   await db.runTransaction(async tx=>{const fresh=await tx.get(ref);if(!fresh.exists)throw new Error('Ese ticket ya no existe.');const data=fresh.data()||{},respuestas=Array.isArray(data.respuestas)?data.respuestas.slice():[];respuestas.push(entry);tx.set(ref,{respuestas,ultimaRespuesta:entry.texto,ultimaRespuestaPor:entry.por,estado:String(data.estado||'abierto')==='resuelto'?'resuelto':'respondido',updatedAt:new Date().toISOString()},{merge:true});});
-  const label=esAviso?`aviso "${old.titulo||'Sin título'}"`:`ticket #${old.numero||String(ticketId).slice(-4)}`;
+  const label=String(old.tipo||'').toLowerCase()==='aviso'?`aviso "${old.titulo||'Sin título'}"`:`ticket #${old.numero||String(ticketId).slice(-4)}`;
   const aviso=`💬 *Respuesta desde Telegram*\n👤 ${escMD(entry.por)}\n🎫 ${escMD(label)}\n\n${escMD(entry.texto||'Evidencia adjunta')}`;
-  // En avisos la respuesta es privada: vuelve únicamente al creador del aviso
-  // (normalmente Sublicuentas). Nunca se difunde al resto de administradores.
-  const admins=esAviso?await ticketAdminIdsByRoleLocal(creatorRol):await getActiveAdminIdsLocal();
+  const admins=await getActiveAdminIdsLocal();
   for(const id of admins){if(String(id)===String(msg?.chat?.id))continue;try{if(imagenUrl)await bot.sendPhoto(id,imagenUrl,{caption:aviso,parse_mode:'Markdown'});else await bot.sendMessage(id,aviso,{parse_mode:'Markdown'});}catch(e){logErr('ticket:notify-admin',e?.message||e);}}
   return {old,entry};
 }
@@ -7792,19 +7612,6 @@ bot.on("message", async (msg) => {
 // ===============================
 // AUTO TXT 7AM
 // ===============================
-let _lastDailyRun = "";
-
-async function getLastRunDB() {
-  const ref = db.collection("config").doc("dailyRun");
-  const doc = await ref.get();
-  return doc.exists ? String(doc.data()?.lastRun || "") : "";
-}
-
-async function setLastRunDB(dmy) {
-  const ref = db.collection("config").doc("dailyRun");
-  await ref.set({ lastRun: String(dmy), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
-}
-
 function getTimePartsNow() {
   const now = new Date();
   const fmt = new Intl.DateTimeFormat("es-HN", {
@@ -8013,9 +7820,11 @@ function tarjetaRecordatorio(dmy, estado) {
 }
 
 async function enviarTxtRenovacionesDiarias7AM() {
-  if (!hasRuntimeLock()) return;
+  if (!hasRuntimeLock()) return { ok: false, error: "runtime_lock_disabled" };
   const { dmy } = getTimePartsNow();
   const adminIds = new Set(await getActiveAdminIdsLocal());
+  let enviadosRevendedores = 0;
+  let enviadosAdmins = 0;
 
   // ✅ Enviar a todos los revendedores (incluyendo admins que sean vendedores)
   // Solo el TXT filtrado por su propio nombre de vendedor
@@ -8028,6 +7837,7 @@ async function enviarTxtRenovacionesDiarias7AM() {
       const sent = await enviarTxtRenovacionesVendedorPro(rev.telegramId, rev.nombre);
       if (!sent) continue;
       revendedoresEnviados.add(normalizeTelegramIdLocal(rev.telegramId));
+      enviadosRevendedores++;
       await db.collection("revendedores").doc(rev.id).set({ autoLastSent: dmy, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
       await enviarAvisoRecordatoriosPendientes(rev.telegramId, rev.nombre);
     } catch (e) { logErr(`AutoTXT:revendedor:${rev.id}`, e); }
@@ -8039,25 +7849,16 @@ async function enviarTxtRenovacionesDiarias7AM() {
       try {
         if (revendedoresEnviados.has(normalizeTelegramIdLocal(adminId))) continue;
         await enviarTxtRenovacionesAdminPro(adminId);
+        enviadosAdmins++;
       } catch (e) { logErr(`AutoTXT:admin:${adminId}`, e); }
     }
   } catch (e) { logErr("AutoTXT:admins", e); }
+  return { ok: true, fecha: dmy, revendedores: enviadosRevendedores, admins: enviadosAdmins };
 }
 
-setInterval(async () => {
-  if (!hasRuntimeLock()) return;
-  try {
-    const { dmy, hh, mm } = getTimePartsNow();
-    if (hh === 7 && mm === 0) {
-      const dbLast = await getLastRunDB();
-      if (_lastDailyRun === dmy || dbLast === dmy) return;
-      _lastDailyRun = dmy;
-      await setLastRunDB(dmy);
-      await enviarTxtRenovacionesDiarias7AM();
-      console.log(`ℹ️ ✅ AutoTXT 7AM enviado (${dmy}) TZ=${TZ}`);
-    }
-  } catch (e) { logErr("AutoTXT", e); }
-}, 30 * 1000);
+// El disparo por minuto exacto fue retirado. La ejecución de 7AM se registra
+// en Firestore mediante index_24_durable_scheduler.js y puede ocurrir después
+// de las 7:00 si Render reinició o estuvo temporalmente fuera de línea.
 
 // ===============================
 // HARDEN
@@ -8068,6 +7869,8 @@ process.on("SIGINT", async () => { try { hardStopBot(); releaseRuntimeLock(); } 
 process.on("SIGTERM", async () => { try { hardStopBot(); releaseRuntimeLock(); } catch (_) {} process.exit(0); });
 
 console.log("✅ index_06_handlers actualizado");
+
+module.exports = { enviarTxtRenovacionesDiarias7AM };
 
 // El servidor HTTP y /health los abre index_08_api.js en el mismo Express.
 // Así el bot no intenta ocupar PORT dos veces y las rutas /api y /rev quedan activas.

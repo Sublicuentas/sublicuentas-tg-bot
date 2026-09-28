@@ -11,6 +11,7 @@
 const TelegramBot = require("node-telegram-bot-api");
 const admin = require("firebase-admin");
 const ExcelJS = require("exceljs");
+const { isPrivateTelegramContext } = require("./lib_hardening");
 
 // ===============================
 // ENV
@@ -176,6 +177,35 @@ if (!global.__SUBLICUENTAS_BOT__) {
 }
 
 const bot = global.__SUBLICUENTAS_BOT__;
+
+// ===============================
+// PRIVACIDAD GLOBAL: SOLO CHAT PRIVADO
+// ===============================
+// Se instala ANTES de cargar handlers. De esta forma ningún comando, callback
+// o flujo administrativo puede ejecutarse accidentalmente dentro de un grupo.
+if (!global.__SUBLICUENTAS_PRIVATE_CHAT_GUARD__) {
+  global.__SUBLICUENTAS_PRIVATE_CHAT_GUARD__ = true;
+
+  const originalOn = bot.on.bind(bot);
+  bot.on = function hardenedOn(event, listener) {
+    if ((event === "message" || event === "callback_query") && typeof listener === "function") {
+      return originalOn(event, async (...args) => {
+        const payload = args[0] || {};
+        if (!isPrivateTelegramContext(payload)) return;
+        return listener.apply(bot, args);
+      });
+    }
+    return originalOn(event, listener);
+  };
+
+  const originalOnText = bot.onText.bind(bot);
+  bot.onText = function hardenedOnText(regexp, callback) {
+    return originalOnText(regexp, async (msg, match) => {
+      if (!isPrivateTelegramContext(msg)) return;
+      return callback.call(bot, msg, match);
+    });
+  };
+}
 const INSTANCE_ID =
   global.__SUBLICUENTAS_INSTANCE_ID__ ||
   `inst_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -223,6 +253,8 @@ const CACHE_TTL = {
   clientes:     300 * 1000,  // 5 minutos
   inventario:   120 * 1000,  // 2 minutos
   config:       120 * 1000,  // 2 minutos
+  acl:          300 * 1000,  // 5 minutos
+  renovaciones: 30 * 1000,   // 30 segundos: reutiliza lecturas pesadas sin dejar datos viejos mucho tiempo
   default:      120 * 1000,  // 2 minutos
 };
 
@@ -377,7 +409,7 @@ async function startBotPollingSafe(reason = "manual") {
 
     try {
       await stopBotPollingSafe(`pre-start:${reason}`);
-      try { await bot.deleteWebHook({ drop_pending_updates: true }); } catch (_) {}
+      try { await bot.deleteWebHook({ drop_pending_updates: false }); } catch (_) {}
       await sleep(1200);
       await bot.startPolling({ restart: false, params: { timeout: 30, allowed_updates: ["message","callback_query"] } });
       CORE_STATE.isPolling = true;
@@ -449,7 +481,7 @@ console.log(`✅ FIREBASE PROJECT: ${FIREBASE_PROJECT_ID}`);
 console.log(`🌐 Puerto HTTP configurado: ${PORT}`);
 console.log(`📩 Cuentas IMAP cargadas: ${EMAIL_ACCOUNTS.length}`);
 console.log(`🧠 CORE INSTANCE: ${INSTANCE_ID}`);
-console.log(`🗄️ Caché en memoria activo (admins:90s, revendedores:90s, clientes:120s)`);
+console.log(`🗄️ Caché en memoria activo (ACL/admins/revendedores/clientes + renovaciones cortas)`);
 
 if (ENABLE_NETFLIX_LISTENER) {
   console.log("🚀 Netflix Codes Listener iniciado...");

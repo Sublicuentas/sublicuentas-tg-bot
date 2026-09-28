@@ -1649,6 +1649,7 @@ async function addServicioTx(clientId, servicio = {}) {
   const sync = await sincronizarCompraInventarioSeguroLocal(null, compra, resultado.nombreTitular || "");
 
   cacheInvalidatePrefix(`clientes:doc:${id}`);
+  cacheInvalidatePrefix("renovaciones:");
 
   // Sorteos: el módulo seguro nunca interrumpe la compra si Firestore falla.
   const sorteo = await registrarEventoSorteosSeguro({
@@ -1715,6 +1716,7 @@ async function patchServicio(clientId, idx, patch = {}, compraId = "") {
     : { ok: true, omitido: true };
 
   cacheInvalidatePrefix(`clientes:doc:${id}`);
+  cacheInvalidatePrefix("renovaciones:");
 
   // ✅ Registrar cambios relevantes en historial
   const cambios = [];
@@ -1776,6 +1778,7 @@ async function addPerfilTx(clientId, idx, perfil = {}, compraId = "") {
   });
   const sync = await sincronizarCompraInventarioSeguroLocal(resultado.actual, resultado.siguiente, resultado.nombreTitular || "");
   cacheInvalidatePrefix(`clientes:doc:${id}`);
+  cacheInvalidatePrefix("renovaciones:");
   await registrarEventoHistorial(id, {
     tipo: "perfil_agregado", descripcion: `Se añadió ${perfil.nombre || "un perfil"} a la compra ${humanPlataforma(resultado.actual.plataforma || "")}`,
     plataforma: resultado.actual.plataforma || "", correo: perfil.correo || "", pin: perfil.pinPerfil ?? perfil.pin ?? ""
@@ -1803,6 +1806,7 @@ async function patchPerfilTx(clientId, idx, perfilIndex, patch = {}, compraId = 
   });
   const sync = await sincronizarCompraInventarioSeguroLocal(resultado.actual, resultado.siguiente, resultado.nombreTitular || "");
   cacheInvalidatePrefix(`clientes:doc:${id}`);
+  cacheInvalidatePrefix("renovaciones:");
   await registrarEventoHistorial(id, {
     tipo: "perfil_editado", descripcion: `Se editó el perfil ${resultado.siguiente.perfiles[resultado.actualPerfilIndex]?.nombre || resultado.actualPerfilIndex + 1} de ${humanPlataforma(resultado.actual.plataforma || "")}`,
     plataforma: resultado.actual.plataforma || "", correo: resultado.siguiente.perfiles[resultado.actualPerfilIndex]?.correo || "", pin: resultado.siguiente.perfiles[resultado.actualPerfilIndex]?.pin || ""
@@ -1829,6 +1833,7 @@ async function eliminarPerfilTx(clientId, idx, perfilIndex, compraId = "", perfi
   });
   const sync = await sincronizarCompraInventarioSeguroLocal(resultado.actual, resultado.siguiente, resultado.nombreTitular || "");
   cacheInvalidatePrefix(`clientes:doc:${id}`);
+  cacheInvalidatePrefix("renovaciones:");
   await registrarEventoHistorial(id, {
     tipo: "perfil_eliminado", descripcion: `Se quitó ${resultado.eliminado.nombre || "un perfil"} de la compra ${humanPlataforma(resultado.actual.plataforma || "")}`,
     plataforma: resultado.actual.plataforma || "", correo: resultado.eliminado.correo || "", pin: resultado.eliminado.pin || ""
@@ -1905,6 +1910,7 @@ async function sincronizarCuentaEnComprasTx({ plataforma = "", correo = "", nuev
     if (resultado.changed) {
       documentosActualizados++;
       cacheInvalidatePrefix(`clientes:doc:${doc.id}`);
+      cacheInvalidatePrefix("renovaciones:");
     }
   }
   return { ok: true, perfilesActualizados, documentosActualizados };
@@ -1925,6 +1931,7 @@ async function eliminarServicioTx(clientId, idx, compraId = "") {
   const eliminado = resultado.eliminado;
   const sync = await sincronizarCompraInventarioSeguroLocal(eliminado, null, resultado.nombreTitular || "");
   cacheInvalidatePrefix(`clientes:doc:${id}`);
+  cacheInvalidatePrefix("renovaciones:");
 
   // ✅ Registrar en historial
   await registrarEventoHistorial(id, {
@@ -1960,6 +1967,7 @@ async function renovarServicioTx(clientId, idx, { dias = 0, fechaExacta = "", co
     return { servicios, anterior, siguiente, actualIdx, fechaAnterior, fechaNueva, nombreTitular: cliente.nombrePerfil || "" };
   });
   cacheInvalidatePrefix(`clientes:doc:${id}`);
+  cacheInvalidatePrefix("renovaciones:");
 
   // Solo un cambio real de fecha genera boletos; editar sin moverla no cuenta.
   const compraEvento = String(resultado.siguiente.compraId || `servicio-${resultado.actualIdx}`);
@@ -2015,6 +2023,7 @@ async function renovarTodosServiciosTx(clientId, { dias = 0, fechaExacta = "" } 
     return { servicios: siguientes, total: siguientes.length, cambios, fechaExacta: String(fechaExacta || ""), nombreTitular: cliente.nombrePerfil || "" };
   });
   cacheInvalidatePrefix(`clientes:doc:${id}`);
+  cacheInvalidatePrefix("renovaciones:");
 
   // Sorteos: dos boletos estrictos por cada servicio realmente renovado
   // (fecha distinta a la anterior) dentro de esta renovación masiva.
@@ -2077,6 +2086,7 @@ async function eliminarServiciosTx(clientId, referencias = []) {
     sync.push(await sincronizarCompraInventarioSeguroLocal(servicio, null, resultado.nombreTitular || ""));
   }
   cacheInvalidatePrefix(`clientes:doc:${id}`);
+  cacheInvalidatePrefix("renovaciones:");
   await registrarEventoHistorial(id, {
     tipo: "servicios_eliminados",
     descripcion: `Se eliminaron ${resultado.eliminados.length} servicio(s): ${resultado.eliminados.map((s) => humanPlataforma(s?.plataforma || "")).join(", ")}`
@@ -2331,46 +2341,56 @@ async function wizardNext(chatId, rawText = "") {
 async function obtenerRenovacionesPorFecha(fechaDMY, vendedor = null) {
   const fecha = String(fechaDMY || "").trim();
   if (!isFechaDMY(fecha)) return [];
-  const vendedorNorm = vendedor ? normTxt(vendedor) : "";
+  const vendedorNorm = vendedor ? normVendedor(vendedor) : "";
 
-  const snap = await db.collection(CLIENTES_COLLECTION).get();
-  const out = [];
+  // Lectura compartida por fecha. Los schedulers y menús suelen pedir la misma
+  // fecha varias veces (global + un vendedor por turno); antes cada llamada
+  // descargaba TODA la colección clientes. El caché corto evita esas lecturas
+  // duplicadas sin cambiar la estructura actual de Firestore.
+  const cacheKey = `renovaciones:${fecha}`;
+  let base = cacheGet(cacheKey);
 
-  snap.forEach((d) => {
-    const c = d.data() || {};
-    if (String(c.consolidadoEn || "").trim()) return;
+  if (!Array.isArray(base)) {
+    const snap = await db.collection(CLIENTES_COLLECTION).get();
+    base = [];
 
-    const servicios = Array.isArray(c.servicios) ? c.servicios : [];
-    servicios.forEach((s, idx) => {
-      const fechaServicio = fechaDMYLocal(s?.fechaRenovacion || "");
-      if (fechaServicio !== fecha) return;
-      const vendedorServicio = vendedorEfectivoServicio(s, c).vendedor;
-      if (vendedorNorm && normVendedor(vendedorServicio) !== normVendedor(vendedorNorm)) return;
-      out.push({
-        clientId: d.id, idx,
-        nombrePerfil: c.nombrePerfil || "Sin nombre",
-        telefono: c.telefono || "-",
-        vendedor: vendedorServicio || "-",
-        plataforma: s.plataforma || "",
-        correo: s.correo || "",
-        clave: getClaveServicioLocal(s, s.plataforma || ""),
-        pin: getPinServicioLocal(s, s.plataforma || ""),
-        perfiles: perfilesServicioLocal(s, c.nombrePerfil || ""),
-        cantidadPerfiles: cantidadPerfilesServicioLocal(s, c.nombrePerfil || ""),
-        precio: Number(s.precio || 0),
-        fechaRenovacion: fechaServicio || fecha,
+    snap.forEach((d) => {
+      const c = d.data() || {};
+      if (String(c.consolidadoEn || "").trim()) return;
+
+      const servicios = Array.isArray(c.servicios) ? c.servicios : [];
+      servicios.forEach((s, idx) => {
+        const fechaServicio = fechaDMYLocal(s?.fechaRenovacion || "");
+        if (fechaServicio !== fecha) return;
+        const vendedorServicio = vendedorEfectivoServicio(s, c).vendedor;
+        base.push({
+          clientId: d.id, idx,
+          nombrePerfil: c.nombrePerfil || "Sin nombre",
+          telefono: c.telefono || "-",
+          vendedor: vendedorServicio || "-",
+          plataforma: s.plataforma || "",
+          correo: s.correo || "",
+          clave: getClaveServicioLocal(s, s.plataforma || ""),
+          pin: getPinServicioLocal(s, s.plataforma || ""),
+          perfiles: perfilesServicioLocal(s, c.nombrePerfil || ""),
+          cantidadPerfiles: cantidadPerfilesServicioLocal(s, c.nombrePerfil || ""),
+          precio: Number(s.precio || 0),
+          fechaRenovacion: fechaServicio || fecha,
+        });
       });
     });
-  });
 
-  out.sort((a, b) => {
-    const va = normTxt(a.vendedor || "");
-    const vb = normTxt(b.vendedor || "");
-    if (va !== vb) return va.localeCompare(vb, "es");
-    return normTxt(a.nombrePerfil || "").localeCompare(normTxt(b.nombrePerfil || ""), "es");
-  });
+    base.sort((a, b) => {
+      const va = normTxt(a.vendedor || "");
+      const vb = normTxt(b.vendedor || "");
+      if (va !== vb) return va.localeCompare(vb, "es");
+      return normTxt(a.nombrePerfil || "").localeCompare(normTxt(b.nombrePerfil || ""), "es");
+    });
+    cacheSet(cacheKey, base, 30 * 1000);
+  }
 
-  return out;
+  if (!vendedorNorm) return base.slice();
+  return base.filter((x) => normVendedor(x.vendedor || "") === vendedorNorm);
 }
 
 function renovacionesTexto(rows = [], fecha = "", vendedor = null) {

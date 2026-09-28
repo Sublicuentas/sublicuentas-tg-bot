@@ -1,13 +1,12 @@
-const { startBotPollingSafe, db, admin, cacheInvalidatePrefix } = require("./index_01_core");
-const { consolidarClientesDuplicadosPorTelefono } = require("./index_19_consolidar_clientes_telefono");
-const { migrarNanotechClientes } = require("./index_21_migracion_nanotech");
+const { startBotPollingSafe, db, admin } = require("./index_01_core");
 const { startTelegramOutboxWorker } = require("./index_22_telegram_outbox");
+const { startDurableScheduler } = require("./index_24_durable_scheduler");
 
 require("./index_02_utils_roles");
 require("./index_03_clientes_crm");
 require("./index_04_inventario_correos");
-require("./index_05_finanzas_menus");
-require("./index_06_handlers");
+const finanzasMenus = require("./index_05_finanzas_menus");
+const handlers = require("./index_06_handlers");
 require("./index_07_imap");
 require("./index_09_api_auth");  // ✅ NUEVO: Módulo compartido de auth
 require("./index_08_api");
@@ -46,21 +45,51 @@ keepAliveRecurrente.unref?.();
 
 (async () => {
   startTelegramOutboxWorker();
-  try {
-    const resultado = await consolidarClientesDuplicadosPorTelefono({ db, admin });
-    cacheInvalidatePrefix?.("clientes:");
-    console.log("✅ Consolidación de teléfonos:", JSON.stringify(resultado));
-  } catch (error) {
-    // Una migración fallida no debe dejar el bot fuera de línea. Como cada
-    // ficha se respalda y cada alias se reanuda, el próximo reinicio reintenta.
-    console.error("⚠️ No se pudo completar la consolidación de teléfonos:", error?.stack || error?.message || error);
-  }
-  try {
-    const nanotech = await migrarNanotechClientes({ db, admin });
-    cacheInvalidatePrefix?.("clientes:");
-    console.log("✅ Migración Nanotech:", JSON.stringify(nanotech));
-  } catch (error) {
-    console.error("⚠️ No se pudo completar la migración Nanotech:", error?.stack || error?.message || error);
-  }
+
+  // Las migraciones dejaron de ejecutarse durante cada arranque. Si se
+  // necesitan, se lanzan explícitamente con: npm run maintenance:migrations.
+  startDurableScheduler([
+    {
+      id: "auto_txt_7am",
+      type: "daily",
+      hour: 7,
+      minute: 0,
+      run: async ({ scheduledDateDMY }) => {
+        // Compatibilidad con el scheduler anterior: si hoy ya fue marcado en
+        // config/dailyRun, no duplicar el envío durante el primer despliegue.
+        try {
+          const legacy = await db.collection("config").doc("dailyRun").get();
+          if (legacy.exists && String(legacy.data()?.lastRun || "") === scheduledDateDMY) {
+            return { ok: true, skippedLegacy: true };
+          }
+        } catch (_) {}
+        const result = await handlers.enviarTxtRenovacionesDiarias7AM();
+        if (result?.ok !== false) {
+          await db.collection("config").doc("dailyRun").set({
+            lastRun: scheduledDateDMY,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          }, { merge: true });
+        }
+        return result;
+      },
+    },
+    {
+      id: "recordatorios_11am",
+      type: "daily",
+      hour: 11,
+      minute: 0,
+      run: ({ scheduledDateDMY }) => finanzasMenus.enviarRecordatorios11AM(scheduledDateDMY),
+    },
+    {
+      id: "backup_dominical_21",
+      type: "weekly",
+      weekday: 0,
+      hour: 21,
+      minute: 0,
+      maxCatchupDays: 6,
+      run: ({ scheduledDateDMY }) => finanzasMenus.ejecutarBackupDominical(scheduledDateDMY),
+    },
+  ]);
+
   await startBotPollingSafe();
 })();

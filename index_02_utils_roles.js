@@ -16,6 +16,8 @@ const {
   cacheGet, cacheSet, cacheInvalidatePrefix,
 } = require("./index_01_core");
 
+const accessControl = require("./index_23_access_control");
+
 // ===============================
 // ESTADO GLOBAL / MAPS
 // ===============================
@@ -314,74 +316,17 @@ function parseMontoNumber(v = "") {
 // ✅ ROLES CON CACHÉ
 // ===============================
 function getSuperAdminIdSet() {
-  const raw = String(SUPER_ADMIN || "").trim();
-  const out = new Set();
-  if (!raw) return out;
-  try {
-    const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed)) { parsed.forEach((x) => { const v = String(x || "").trim(); if (v) out.add(v); }); return out; }
-  } catch (_) {}
-  raw.split(/[\s,;|]+/).map((x) => String(x || "").trim()).filter(Boolean).forEach((x) => out.add(x));
-  return out;
+  return accessControl.superAdminIds();
 }
 
 async function getAdminDocById(uid = "") {
-  try {
-    const id = String(uid || "").trim();
-    if (!id) return null;
-
-    // ✅ Caché
-    const cacheKey = `admins:doc:${id}`;
-    const cached = cacheGet(cacheKey);
-    if (cached !== null) return cached;
-
-    // Buscar por doc ID directo primero
-    try {
-      const byId = await db.collection("admins").doc(id).get();
-      if (byId.exists) {
-        const result = { id: byId.id, ...(byId.data() || {}) };
-        cacheSet(cacheKey, result);
-        return result;
-      }
-    } catch (_) {}
-
-    // Scan fallback
-    try {
-      const snap = await db.collection("admins").get();
-      let found = null;
-      snap.forEach((d) => {
-        if (found) return;
-        const data = d.data() || {};
-        const candidates = [d.id, data.telegramId, data.userId, data.uid]
-          .map((x) => String(x || "").trim()).filter(Boolean);
-        if (candidates.includes(id)) found = { id: d.id, ...data };
-      });
-      cacheSet(cacheKey, found); // guarda null también para evitar re-scan
-      return found;
-    } catch (_) { return null; }
-  } catch (e) {
-    logErr("getAdminDocById", e);
-    return null;
-  }
+  return accessControl.findAdminByTelegramId(uid);
 }
 
 async function isSuperAdmin(userId) {
   try {
-    const uid = String(userId || "").trim();
-    if (!uid) return false;
-
-    // Siempre chequear ENV primero (sin caché necesario)
-    if (getSuperAdminIdSet().has(uid)) return true;
-
-    const adminDoc = await getAdminDocById(uid);
-    if (!adminDoc) return false;
-
-    return (
-      adminDoc.superAdmin === true ||
-      adminDoc.isSuperAdmin === true ||
-      normTxt(adminDoc.rol || "") === "superadmin" ||
-      normTxt(adminDoc.role || "") === "superadmin"
-    );
+    const ctx = await accessControl.getAccessContext(userId);
+    return ctx.role === "superadmin" && ctx.active === true;
   } catch (e) {
     logErr("isSuperAdmin", e);
     return false;
@@ -390,47 +335,8 @@ async function isSuperAdmin(userId) {
 
 async function isAdmin(userId) {
   try {
-    const uid = String(userId || "").trim();
-    if (!uid) return false;
-
-    // ✅ Caché del resultado booleano
-    const cacheKey = `admins:isadmin:${uid}`;
-    const cached = cacheGet(cacheKey);
-    if (cached !== null) return cached;
-
-    if (await isSuperAdmin(uid)) { cacheSet(cacheKey, true); return true; }
-
-    const adminDoc = await getAdminDocById(uid);
-    if (adminDoc && adminDoc.activo !== false) {
-      cacheSet(cacheKey, true);
-      return true;
-    }
-
-    // Geisell pasa a ser administradora completa del bot. Para evitar depender
-    // de duplicar su Telegram ID en otra colección, usamos el ID que ya existe
-    // en su ficha de revendedor. Geissel se conserva como alias histórico.
-    try {
-      const snap = await db.collection("revendedores").get();
-      let geisellAdmin = false;
-      snap.forEach((d) => {
-        if (geisellAdmin) return;
-        const data = d.data() || {};
-        const nombre = normTxt(data.nombre_norm || data.nombre || d.id);
-        const tg = String(data.telegramId || data.userId || "").trim();
-        if (["geisell", "geissel"].includes(nombre) && data.activo !== false && tg === uid) {
-          geisellAdmin = true;
-        }
-      });
-      if (geisellAdmin) {
-        cacheSet(cacheKey, true);
-        return true;
-      }
-    } catch (e) {
-      logErr("isAdmin.geisell", e);
-    }
-
-    cacheSet(cacheKey, false);
-    return false;
+    const ctx = await accessControl.getAccessContext(userId);
+    return ctx.active === true && (ctx.role === "admin" || ctx.role === "superadmin");
   } catch (e) {
     logErr("isAdmin", e);
     return false;
@@ -441,31 +347,12 @@ async function getRevendedorPorTelegramId(userId) {
   try {
     const uid = String(userId || "").trim();
     if (!uid) return null;
-
-    if (await isAdmin(uid)) return null;
-
-    // ✅ Caché del revendedor
-    const cacheKey = `revendedores:bytg:${uid}`;
-    const cached = cacheGet(cacheKey);
-    if (cached !== null) return cached === "__null__" ? null : cached;
-
-    const snap = await db.collection("revendedores").get();
-    let found = null;
-
-    snap.forEach((d) => {
-      if (found) return;
-      const data = d.data() || {};
-      const tg = String(data.telegramId || data.userId || "").trim();
-      if (tg === uid) found = { id: d.id, ...data };
-    });
-
-    if (!found) { cacheSet(cacheKey, "__null__"); return null; }
-
+    const ctx = await accessControl.getAccessContext(uid);
+    if (!ctx.active || ctx.role !== "vendedor") return null;
+    const found = ctx.doc || await accessControl.findRevendedorByTelegramId(uid);
+    if (!found) return null;
     const rev = normalizeRevendedorDoc(found);
-    if (rev.activo === false) { cacheSet(cacheKey, "__null__"); return null; }
-
-    cacheSet(cacheKey, { id: found.id, ...rev });
-    return { id: found.id, ...rev };
+    return rev.activo === false ? null : { id: found.id || ctx.docId, ...rev };
   } catch (e) {
     logErr("getRevendedorPorTelegramId", e);
     return null;
@@ -474,9 +361,8 @@ async function getRevendedorPorTelegramId(userId) {
 
 async function isVendedor(userId) {
   try {
-    if (await isAdmin(userId)) return false;
-    const rev = await getRevendedorPorTelegramId(userId);
-    return !!(rev && rev.activo !== false);
+    const ctx = await accessControl.getAccessContext(userId);
+    return ctx.active === true && ctx.role === "vendedor";
   } catch (e) {
     logErr("isVendedor", e);
     return false;
@@ -494,8 +380,8 @@ async function setTelegramIdToRevendedor(revDocId, telegramId) {
       { merge: true }
     );
 
-    // ✅ Invalidar caché de revendedores tras cambio
     cacheInvalidatePrefix("revendedores:");
+    accessControl.invalidateAcl();
     return true;
   } catch (e) {
     logErr("setTelegramIdToRevendedor", e);
@@ -505,23 +391,35 @@ async function setTelegramIdToRevendedor(revDocId, telegramId) {
 
 async function allowMsg(userId) {
   try {
-    if (await isAdmin(userId)) return true;
-    if (await isVendedor(userId)) return true;
-    return false;
+    return await accessControl.hasPermission(userId, "bot.use");
   } catch (e) {
     logErr("allowMsg", e);
     return false;
   }
 }
 
+async function hasPermission(userId, permission) {
+  return accessControl.hasPermission(userId, permission);
+}
+
+async function getAccessContext(userId) {
+  return accessControl.getAccessContext(userId);
+}
+
+async function getBackupRecipientChatIds() {
+  return accessControl.getBackupRecipientChatIds();
+}
+
 // ✅ Invalidar caché de admins (llamar tras agregar/quitar admin)
 function invalidarCacheAdmins() {
   cacheInvalidatePrefix("admins:");
+  accessControl.invalidateAcl();
 }
 
 // ✅ Invalidar caché de revendedores (llamar tras agregar/quitar revendedor)
 function invalidarCacheRevendedores() {
   cacheInvalidatePrefix("revendedores:");
+  accessControl.invalidateAcl();
 }
 
 // ===============================
@@ -624,8 +522,8 @@ module.exports = {
   logErr,
 
   // roles
-  allowMsg, isSuperAdmin, isAdmin, isVendedor,
-  getRevendedorPorTelegramId, setTelegramIdToRevendedor,
+  allowMsg, isSuperAdmin, isAdmin, isVendedor, hasPermission, getAccessContext,
+  getRevendedorPorTelegramId, setTelegramIdToRevendedor, getBackupRecipientChatIds,
   normalizeRevendedorDoc,
 
   // ✅ invalidación de caché de roles
