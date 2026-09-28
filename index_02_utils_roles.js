@@ -348,8 +348,8 @@ async function getRevendedorPorTelegramId(userId) {
     const uid = String(userId || "").trim();
     if (!uid) return null;
     const ctx = await accessControl.getAccessContext(uid);
-    if (!ctx.active || ctx.role !== "vendedor") return null;
-    const found = ctx.doc || await accessControl.findRevendedorByTelegramId(uid);
+    if (!ctx.active) return null;
+    const found = ctx.source === "revendedores" ? (ctx.doc || await accessControl.findRevendedorByTelegramId(uid)) : await accessControl.findRevendedorByTelegramId(uid);
     if (!found) return null;
     const rev = normalizeRevendedorDoc(found);
     return rev.activo === false ? null : { id: found.id || ctx.docId, ...rev };
@@ -511,7 +511,7 @@ async function enviarTxtComoArchivo(chatId, contenido = "", nombre = `archivo_${
 // EXPORTS
 // ===============================
 const { createPremiumIcons } = require("./index_20_premium_icons");
-const premiumIcons = createPremiumIcons({ bot, db, admin, isAdmin });
+const premiumIcons = createPremiumIcons({ bot, db, admin, isAdmin, canConfigure: (userId) => accessControl.hasPermission(userId, "promociones.config") });
 
 module.exports = {
   premiumIcons,

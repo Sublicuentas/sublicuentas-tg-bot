@@ -14,7 +14,8 @@ const { ImapFlow } = require("imapflow");
 const { simpleParser } = require("mailparser");
 
 const { bot, EMAIL_ACCOUNTS } = require("./index_01_core");
-const { isAdmin, logErr, escMD } = require("./index_02_utils_roles");
+const { logErr, escMD } = require("./index_02_utils_roles");
+const accessControl = require("./index_23_access_control");
 
 // Resolución robusta de credenciales IMAP en Render.
 // Históricamente este bot ha usado varios nombres de variables. En vez de
@@ -1059,13 +1060,20 @@ try {
 } catch(e) { console.error("IMAP cleanup error:", e?.message); }
 
 // Handlers IMAP — comandos de extracción de códigos
-const _imapCodeHandler  = async(msg,m)=>{ if(await isAdmin(msg.from.id)) return cmdCode(msg.chat.id,  normalizarCorreo(m[1])); };
-const _imapLinkHandler  = async(msg,m)=>{ if(await isAdmin(msg.from.id)) return cmdLink(msg.chat.id,  normalizarCorreo(m[1])); };
-const _imapHogarHandler = async(msg,m)=>{ if(await isAdmin(msg.from.id)) return cmdHogar(msg.chat.id, normalizarCorreo(m[1])); };
-const _imapPrimeHandler = async(msg,m)=>{ if(await isAdmin(msg.from.id)) return cmdPrime(msg.chat.id, normalizarCorreo(m[1])); };
-const _imapInboxHandler = async(msg,m)=>{ if(await isAdmin(msg.from.id)) return cmdInbox(msg.chat.id, normalizarCorreo(m[1])); };
-const _imapDebugHandler = async(msg,m)=>{ if(await isAdmin(msg.from.id)) return cmdDebug(msg.chat.id, normalizarCorreo(m[1])); };
-const _imapStatusHandler = async(msg)=>{ if(await isAdmin(msg.from.id)) return cmdImapStatus(msg.chat.id); };
+async function imapAllowed(msg, permission) {
+  const userId = msg?.from?.id;
+  const chatId = msg?.chat?.id;
+  if (await accessControl.hasPermission(userId, permission)) return true;
+  try { await bot.sendMessage(chatId, "⛔ No tiene permiso para esta función."); } catch (_) {}
+  return false;
+}
+const _imapCodeHandler  = async(msg,m)=>{ if(await imapAllowed(msg,"codigos.read")) return cmdCode(msg.chat.id,  normalizarCorreo(m[1])); };
+const _imapLinkHandler  = async(msg,m)=>{ if(await imapAllowed(msg,"codigos.read")) return cmdLink(msg.chat.id,  normalizarCorreo(m[1])); };
+const _imapHogarHandler = async(msg,m)=>{ if(await imapAllowed(msg,"codigos.read")) return cmdHogar(msg.chat.id, normalizarCorreo(m[1])); };
+const _imapPrimeHandler = async(msg,m)=>{ if(await imapAllowed(msg,"codigos.read")) return cmdPrime(msg.chat.id, normalizarCorreo(m[1])); };
+const _imapInboxHandler = async(msg,m)=>{ if(await imapAllowed(msg,"codigos.read")) return cmdInbox(msg.chat.id, normalizarCorreo(m[1])); };
+const _imapDebugHandler = async(msg,m)=>{ if(await imapAllowed(msg,"system.admin")) return cmdDebug(msg.chat.id, normalizarCorreo(m[1])); };
+const _imapStatusHandler = async(msg)=>{ if(await imapAllowed(msg,"system.admin")) return cmdImapStatus(msg.chat.id); };
 
 bot.onText(/^\/code\s+(\S+)/i,  _imapCodeHandler);
 bot.onText(/^\/link\s+(\S+)/i,  _imapLinkHandler);

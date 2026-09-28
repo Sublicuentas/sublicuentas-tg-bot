@@ -19,7 +19,7 @@ function telegramEmojiError(error) {
   return code === 400 && /custom.?emoji|emoji.?id|emoji.*(?:not.allowed|invalid)|can't parse entities|can.t parse entities|unsupported start tag|entity.*(?:invalid|end|start)|premium.*(?:required|allowed)/i.test(description);
 }
 
-function createPremiumIcons({ bot, db, admin, isAdmin, now = Date.now }) {
+function createPremiumIcons({ bot, db, admin, isAdmin, canConfigure, now = Date.now }) {
   if (bot.__premiumIconsService) return bot.__premiumIconsService;
   const original = {};
   const sessions = new Map(), busy = new Set();
@@ -237,7 +237,8 @@ function createPremiumIcons({ bot, db, admin, isAdmin, now = Date.now }) {
   }
 
   async function allowed(msg) {
-    if (!msg.from?.id || !(await isAdmin(msg.from.id))) { await send(msg, "Solo los administradores pueden configurar los iconos del bot."); return false; }
+    const allowedFn = typeof canConfigure === "function" ? canConfigure : isAdmin;
+    if (!msg.from?.id || !(await allowedFn(msg.from.id))) { await send(msg, "Solo Sublicuentas puede configurar los iconos del bot."); return false; }
     if (msg.chat?.type !== "private") { await send(msg, "Para configurar los iconos, abra el chat privado de este bot y escriba /iconos."); return false; }
     return true;
   }

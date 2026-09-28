@@ -20,6 +20,7 @@ const path = require("path");
 
 const core = require("./index_01_core");
 const utils = require("./index_02_utils_roles");
+const accessControl = require("./index_23_access_control");
 const { registrarEventoSorteosSeguro } = require("./index_14_sorteos");
 const {
   normVendedor,
@@ -2561,9 +2562,9 @@ bot.onText(/^\/clientes_excel$/, async (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
 
-  // Solo admin (isAdmin es async: sin await, la Promesa es truthy y cualquiera pasaba el filtro)
-  if (!(await utils.isAdmin(userId))) {
-    return bot.sendMessage(chatId, "❌ Solo admin puede descargar listado de clientes");
+  // Exportación global de clientes: requiere permiso explícito de lectura.
+  if (!(await accessControl.hasPermission(userId, "clientes.read"))) {
+    return bot.sendMessage(chatId, "⛔ No tiene permiso para descargar el listado de clientes.");
   }
 
   try {

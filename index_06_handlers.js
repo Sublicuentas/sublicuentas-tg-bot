@@ -32,6 +32,8 @@ const {
 // ✅ PIN de configuración inicial para /addvendedor y /resetpin (cierra el
 // hueco de "auto-claim" del panel de revendedores — ver index_09_api_auth.js)
 const { generarPinSetup } = require("./index_09_api_auth");
+const accessControl = require("./index_23_access_control");
+const { callbackPermission, permissionGranted } = require("./lib_hardening");
 const { obtenerCatalogoSocio, tarifaIdParaSocio } = require("./index_15_catalogo_socios");
 const { canonicalVendedor, normVendedor, clientePerteneceAVendedor, vendedorEfectivoServicio } = require("./index_17_vendedores_servicio");
 
@@ -1252,6 +1254,22 @@ async function safeIsVendedorLocal(userId) {
   catch (e) { logErr("safeIsVendedorLocal", e?.message || e); return false; }
 }
 
+async function safeAccessContextLocal(userId) {
+  try { return await accessControl.getAccessContext(userId); }
+  catch (e) { logErr("safeAccessContextLocal", e?.message || e); return { active:false, role:"none", profile:"none", permissions:new Set() }; }
+}
+
+async function safeHasPermissionLocal(userId, permission) {
+  try { return await accessControl.hasPermission(userId, permission); }
+  catch (e) { logErr(`safeHasPermissionLocal:${permission}`, e?.message || e); return false; }
+}
+
+async function requirePermissionLocal(chatId, userId, permission, message = "⛔ No tiene permiso para esta función.") {
+  if (await safeHasPermissionLocal(userId, permission)) return true;
+  try { await bot.sendMessage(chatId, message); } catch (_) {}
+  return false;
+}
+
 async function getActiveAdminIdsLocal() {
   const ids = new Set(getSuperAdminIdsLocal());
 
@@ -1335,43 +1353,39 @@ function forceNextPanelAtBottom(chatId) {
 
 
 async function sendBottomMainMenu(chatId, userId, fromText = false) {
-  // ✅ DEBOUNCE: si ya se abrió el menú en los últimos 2s, ignorar silenciosamente
   if (fromText && isMenuDebounced(chatId)) return null;
   try {
     if (fromText) forceNextPanelAtBottom(chatId);
     clearFlowStateKeepPanel(chatId);
 
-    if (await safeIsAdminLocal(userId)) {
-      const texto = "📊 *CENTRO DE OPERACIONES*\n\nSublicuentas — Conectamos su entretenimiento\n\nSeleccione una opción:";
-      // 🎨 FIX (ago-2026): a este menú nunca se le puso el campo "style" que
-      // sí tienen los demás menús (Finanzas, Alertas, Inventario) — por eso
-      // salía sin color aunque el resto del bot sí lo mostraba. Mismos
-      // colores que ya usan en esos otros menús para las mismas acciones.
-      return upsertPanel(chatId, texto, [
-        [
-          { text: "🎯 Control cuentas", callback_data: "menu:inventario", style: "primary" },
-          { text: "👥 Clientes", callback_data: "menu:clientes", style: "primary" },
-        ],
-        [
-          { text: "💰 Control financiero", callback_data: "menu:pagos", style: "success" },
-          { text: "🚨 Riesgos", callback_data: "menu:alertas", style: "danger" },
-        ],
-        [
-          { text: "📊 Análisis", callback_data: "menu:dashboard", style: "primary" },
-          { text: "👤 Revendedores", callback_data: "menu:revendedores", style: "primary" },
-        ],
-      ], "Markdown");
-    } else if (await safeIsVendedorLocal(userId)) {
+    const ctx = await safeAccessContextLocal(userId);
+    if (!ctx.active) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+
+    if (ctx.role === "vendedor") {
       return upsertPanel(chatId, "👤 *MENÚ VENDEDOR*\n\nSeleccione una opción:", [
-        [{ text: "📅 Mis renovaciones hoy",  callback_data: "ren:mis:hoy", style: "primary" },      { text: "⏳ Próximos 3 días",      callback_data: "ren:mis:prox3", style: "primary" }],
-        [{ text: "📄 TXT renovaciones",      callback_data: "txt:mis", style: "primary" },           { text: "👥 Mis clientes",         callback_data: "vend:clientes", style: "primary" }],
-        [{ text: "🧾 TXT mis clientes",      callback_data: "vend:clientes:txt", style: "primary" }, { text: "💰 Mi resumen del mes",   callback_data: "vend:resumen", style: "success" }],
-        [{ text: "🔴 Mis vencidos",          callback_data: "vend:vencidos", style: "danger" }],
-        [{ text: "🔍 Buscar cliente",          callback_data: "vend:buscar", style: "primary" }],
+        [{ text: "📅 Mis renovaciones hoy", callback_data: "ren:mis:hoy", style: "primary" }, { text: "⏳ Próximos 3 días", callback_data: "ren:mis:prox3", style: "primary" }],
+        [{ text: "📄 TXT renovaciones", callback_data: "txt:mis", style: "primary" }, { text: "👥 Mis clientes", callback_data: "vend:clientes", style: "primary" }],
+        [{ text: "🧾 TXT mis clientes", callback_data: "vend:clientes:txt", style: "primary" }, { text: "💰 Mi resumen del mes", callback_data: "vend:resumen", style: "success" }],
+        [{ text: "🔴 Mis vencidos", callback_data: "vend:vencidos", style: "danger" }],
+        [{ text: "🔍 Buscar cliente", callback_data: "vend:buscar", style: "primary" }],
       ], "Markdown");
-    } else {
-      return bot.sendMessage(chatId, "⛔ Acceso denegado");
     }
+
+    const can = (permission) => permissionGranted(ctx.permissions, permission);
+    const buttons = [];
+    if (can("inventario.read")) buttons.push({ text: "🎯 Control cuentas", callback_data: "menu:inventario", style: "primary" });
+    if (can("clientes.read")) buttons.push({ text: "👥 Clientes", callback_data: "menu:clientes", style: "primary" });
+    if (can("finanzas.read")) buttons.push({ text: "💰 Control financiero", callback_data: "menu:pagos", style: "success" });
+    if (can("reportes.read")) buttons.push({ text: "🚨 Riesgos", callback_data: "menu:alertas", style: "danger" });
+    if (can("reportes.read")) buttons.push({ text: "📊 Análisis", callback_data: "menu:dashboard", style: "primary" });
+    if (can("equipo.manage")) buttons.push({ text: "👤 Revendedores", callback_data: "menu:revendedores", style: "primary" });
+
+    const rows = [];
+    for (let i = 0; i < buttons.length; i += 2) rows.push(buttons.slice(i, i + 2));
+    const profileLabel = ({ sublicuentas:"Sublicuentas", relojes:"Relojes", geisell:"Geisell", magdiel:"Magdiel" })[ctx.profile] || ctx.name || "Administrador";
+    const texto = `📊 *CENTRO DE OPERACIONES*\n\n👤 ${escMD(profileLabel)}\n\nSeleccione una opción:`;
+    if (!rows.length) rows.push([{ text:"🏠 Inicio", callback_data:"go:inicio" }]);
+    return upsertPanel(chatId, texto, rows, "Markdown");
   } catch (err) {
     logErr("sendBottomMainMenu", err?.stack || err?.message || err);
     return bot.sendMessage(chatId, "⚠️ Error interno al abrir el menú.");
@@ -2110,26 +2124,34 @@ async function linkRevendedorByNombre(nombre = "", telegramId = "") {
     .trim()
     .replace(/\s+/g, " ");
 
-  const snap = await db.collection("revendedores").get();
-  let foundId = null;
-
-  snap.forEach((d) => {
-    const data = d.data() || {};
-    const nom = String(data.nombre || "")
-      .toLowerCase()
-      .normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, "")
-      .trim()
-      .replace(/\s+/g, " ");
-    if (nom === nombreNorm) foundId = d.id;
-  });
-
-  if (!foundId) {
-    return { ok: false, msg: "⚠️ No encontré ese vendedor para vincular." };
+  if (!nombreNorm || !String(telegramId || "").trim()) {
+    return { ok: false, msg: "⚠️ Falta vendedor o Telegram ID." };
   }
 
-  await setTelegramIdToRevendedor(foundId, telegramId);
-  return { ok: true, msg: "✅ Vendedor vinculado correctamente." };
+  let foundId = null;
+  try {
+    const direct = await db.collection("revendedores").doc(nombreNorm).get();
+    if (direct.exists) foundId = direct.id;
+  } catch (_) {}
+  if (!foundId) {
+    try {
+      const byNorm = await db.collection("revendedores").where("nombre_norm", "==", nombreNorm).limit(1).get();
+      if (!byNorm.empty) foundId = byNorm.docs[0].id;
+    } catch (_) {}
+  }
+  if (!foundId) {
+    try {
+      const byName = await db.collection("revendedores").where("nombre", "==", String(nombre || "").trim()).limit(1).get();
+      if (!byName.empty) foundId = byName.docs[0].id;
+    } catch (_) {}
+  }
+
+  if (!foundId) return { ok: false, msg: "⚠️ No encontré ese vendedor para vincular." };
+
+  const ok = await setTelegramIdToRevendedor(foundId, telegramId);
+  return ok
+    ? { ok: true, msg: `✅ ${String(nombre || foundId).trim()} quedó vinculado al Telegram ID ${String(telegramId)}.` }
+    : { ok: false, msg: "⚠️ No se pudo vincular el vendedor." };
 }
 
 function textoBtnEliminarMovimiento(m = {}) {
@@ -2679,7 +2701,7 @@ bot.onText(/\/buscar\s+(.+)/i, async (msg, match) => {
 
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-  if (!(await safeIsAdminLocal(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+  if (!(await requirePermissionLocal(chatId, userId, "clientes.read"))) return;
 
   const q = String(match[1] || "").trim();
   if (!q) return bot.sendMessage(chatId, "⚠️ Uso: /buscar texto");
@@ -2692,7 +2714,7 @@ bot.onText(/\/cliente\s+(\S+)/i, async (msg, match) => {
 
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-  if (!(await safeIsAdminLocal(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+  if (!(await requirePermissionLocal(chatId, userId, "clientes.read"))) return;
 
   const tel = String(match[1] || "").trim();
   const resultados = await buscarPorTelefonoTodos(tel);
@@ -2708,7 +2730,7 @@ bot.onText(/\/clientes_txt/i, async (msg) => {
   if (!hasRuntimeLock()) return;
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-  if (!(await safeIsAdminLocal(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+  if (!(await requirePermissionLocal(chatId, userId, "clientes.read"))) return;
   return reporteClientesTXTGeneral(chatId);
 });
 
@@ -2716,7 +2738,7 @@ bot.onText(/\/vendedores_txt_split/i, async (msg) => {
   if (!hasRuntimeLock()) return;
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-  if (!(await safeIsAdminLocal(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+  if (!(await requirePermissionLocal(chatId, userId, "reportes.read"))) return;
   return reporteClientesSplitPorVendedorTXT(chatId);
 });
 
@@ -2726,9 +2748,7 @@ bot.onText(/\/sincronizar_claves/i, async (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
 
-  if (!(await safeIsAdminLocal(userId))) {
-    return bot.sendMessage(chatId, "⛔ Solo ADMIN puede sincronizar claves.");
-  }
+  if (!(await requirePermissionLocal(chatId, userId, "sincronizacion.claves"))) return;
 
   return upsertPanel(
     chatId,
@@ -2746,9 +2766,7 @@ bot.onText(/\/sincronizar_todo/i, async (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
 
-  if (!(await safeIsAdminLocal(userId))) {
-    return bot.sendMessage(chatId, "⛔ Solo ADMIN puede sincronizar la base de datos.");
-  }
+  if (!(await requirePermissionLocal(chatId, userId, "sincronizacion.claves"))) return;
 
   await bot.sendMessage(
     chatId,
@@ -3060,7 +3078,7 @@ bot.onText(/\/reparar_colisiones(?:\s+(confirmar))?/i, async (msg, match) => {
   if (!hasRuntimeLock()) return;
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-  if (!(await safeIsAdminLocal(userId))) return bot.sendMessage(chatId, "⛔ Solo ADMIN puede ejecutar esto.");
+  if (!(await requirePermissionLocal(chatId, userId, "auditoria.read"))) return;
 
   // SEGURIDAD: la versión anterior intentaba separar automáticamente usando
   // servicio.perfil como si siempre fuera el titular y vaciaba teléfonos. Eso
@@ -3107,7 +3125,7 @@ bot.onText(/\/auditar_fusiones/i, async (msg) => {
   if (!hasRuntimeLock()) return;
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-  if (!(await safeIsAdminLocal(userId))) return bot.sendMessage(chatId, "⛔ Solo ADMIN puede ejecutar esto.");
+  if (!(await requirePermissionLocal(chatId, userId, "auditoria.read"))) return;
 
   await bot.sendMessage(chatId, "🔎 Auditando identidad de clientes en Firestore (solo lectura)...");
   try {
@@ -3333,7 +3351,7 @@ bot.onText(/^\/auditar_cliente(?:\s+(.+))?$/i, async (msg, match) => {
   if (!hasRuntimeLock()) return;
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-  if (!(await safeIsAdminLocal(userId))) return bot.sendMessage(chatId, "⛔ Solo ADMIN puede ejecutar esto.");
+  if (!(await requirePermissionLocal(chatId, userId, "auditoria.read"))) return;
 
   const query = String(match?.[1] || "").trim();
   if (!query) {
@@ -3385,9 +3403,7 @@ bot.onText(/\/fix_duplicados(?:\s+(confirmar))?/i, async (msg, match) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
 
-  if (!(await safeIsAdminLocal(userId))) {
-    return bot.sendMessage(chatId, "⛔ Solo ADMIN puede ejecutar esto.");
-  }
+  if (!(await requirePermissionLocal(chatId, userId, "maintenance.write"))) return;
 
   const confirmar = !!(match && match[1]);
   await bot.sendMessage(
@@ -3495,9 +3511,7 @@ bot.onText(/\/buscar_raw(?:\s+([\s\S]+))?/i, async (msg, match) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
 
-  if (!(await safeIsAdminLocal(userId))) {
-    return bot.sendMessage(chatId, "⛔ Solo ADMIN puede usar este diagnóstico.");
-  }
+  if (!(await requirePermissionLocal(chatId, userId, "auditoria.read"))) return;
 
   const q = String((match && match[1]) || "").trim().toLowerCase();
   if (!q) return bot.sendMessage(chatId, "⚠️ Uso: /buscar_raw texto a buscar");
@@ -3557,9 +3571,10 @@ bot.onText(/\/renovaciones(?:\s+(.+))?/i, async (msg, match) => {
   const userId = msg.from.id;
 
   const adminOk = await safeIsAdminLocal(userId);
+  const adminCan = adminOk && await safeHasPermissionLocal(userId, "renovaciones.read");
   const vend = await safeGetRevendedorLocal(userId);
 
-  if (!adminOk && !(vend && vend.nombre)) {
+  if (!adminCan && !(vend && vend.nombre)) {
     return bot.sendMessage(chatId, "⛔ Acceso denegado");
   }
 
@@ -3581,7 +3596,7 @@ bot.onText(/\/renovaciones(?:\s+(.+))?/i, async (msg, match) => {
     }
   }
 
-  if (!adminOk && vend?.nombre) vendedor = vend.nombre;
+  if (!adminCan && vend?.nombre) vendedor = vend.nombre;
 
   const list = await obtenerRenovacionesPorFecha(fecha, vendedor || null);
   const texto = renovacionesTexto(list, fecha, vendedor || null);
@@ -3595,9 +3610,10 @@ bot.onText(/\/txt(?:\s+(.+))?/i, async (msg, match) => {
   const userId = msg.from.id;
 
   const adminOk = await safeIsAdminLocal(userId);
+  const adminCan = adminOk && await safeHasPermissionLocal(userId, "renovaciones.read");
   const vend = await safeGetRevendedorLocal(userId);
 
-  if (!adminOk && !(vend && vend.nombre)) {
+  if (!adminCan && !(vend && vend.nombre)) {
     return bot.sendMessage(chatId, "⛔ Acceso denegado");
   }
 
@@ -3619,7 +3635,7 @@ bot.onText(/\/txt(?:\s+(.+))?/i, async (msg, match) => {
     }
   }
 
-  if (!adminOk && vend?.nombre) vendedor = vend.nombre;
+  if (!adminCan && vend?.nombre) vendedor = vend.nombre;
 
   const list = await obtenerRenovacionesPorFecha(fecha, vendedor || null);
   return enviarTXT(chatId, list, fecha, vendedor || null);
@@ -3632,7 +3648,7 @@ bot.onText(/\/finanzas/i, async (msg) => {
   if (!hasRuntimeLock()) return;
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-  if (!(await safeIsAdminLocal(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+  if (!(await requirePermissionLocal(chatId, userId, "finanzas.read"))) return;
   return menuPagos(chatId);
 });
 
@@ -3640,7 +3656,7 @@ bot.onText(/\/resumen_fecha\s+(.+)/i, async (msg, match) => {
   if (!hasRuntimeLock()) return;
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-  if (!(await safeIsAdminLocal(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+  if (!(await requirePermissionLocal(chatId, userId, "finanzas.read"))) return;
   const fecha = String(match[1] || "").trim().toLowerCase() === "hoy" ? hoyDMY() : String(match[1] || "").trim();
   if (!isFechaDMY(fecha)) return bot.sendMessage(chatId, "⚠️ Uso: /resumen_fecha dd/mm/yyyy");
   const list = await getMovimientosPorFecha(fecha, userId, await safeIsSuperAdminLocal(userId));
@@ -3651,7 +3667,7 @@ bot.onText(/\/bancos_mes\s+(.+)/i, async (msg, match) => {
   if (!hasRuntimeLock()) return;
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-  if (!(await safeIsAdminLocal(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+  if (!(await requirePermissionLocal(chatId, userId, "finanzas.read"))) return;
   const key = parseMonthInputToKey(String(match[1] || "").trim());
   if (!key) return bot.sendMessage(chatId, "⚠️ Uso: /bancos_mes mm/yyyy");
   const list = await getMovimientosPorMes(key, userId, await safeIsSuperAdminLocal(userId));
@@ -3662,7 +3678,7 @@ bot.onText(/\/top_plataformas_mes\s+(.+)/i, async (msg, match) => {
   if (!hasRuntimeLock()) return;
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-  if (!(await safeIsAdminLocal(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+  if (!(await requirePermissionLocal(chatId, userId, "finanzas.read"))) return;
   const key = parseMonthInputToKey(String(match[1] || "").trim());
   if (!key) return bot.sendMessage(chatId, "⚠️ Uso: /top_plataformas_mes mm/yyyy");
   const list = await getMovimientosPorMes(key, userId, await safeIsSuperAdminLocal(userId));
@@ -3673,7 +3689,7 @@ bot.onText(/\/cierre_caja\s+(.+)/i, async (msg, match) => {
   if (!hasRuntimeLock()) return;
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-  if (!(await safeIsAdminLocal(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+  if (!(await requirePermissionLocal(chatId, userId, "finanzas.read"))) return;
   const fecha = String(match[1] || "").trim().toLowerCase() === "hoy" ? hoyDMY() : String(match[1] || "").trim();
   if (!isFechaDMY(fecha)) return bot.sendMessage(chatId, "⚠️ Uso: /cierre_caja dd/mm/yyyy");
   const list = await getMovimientosPorFecha(fecha, userId, await safeIsSuperAdminLocal(userId));
@@ -3684,7 +3700,7 @@ bot.onText(/\/cierre_caja_rango\s+(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})/
   if (!hasRuntimeLock()) return;
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-  if (!(await safeIsAdminLocal(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+  if (!(await requirePermissionLocal(chatId, userId, "finanzas.read"))) return;
   const fechaInicio = String(match[1] || "").trim();
   const fechaFin = String(match[2] || "").trim();
   const list = await getMovimientosPorRango(fechaInicio, fechaFin, userId, await safeIsSuperAdminLocal(userId));
@@ -3695,7 +3711,7 @@ bot.onText(/\/excel_finanzas\s+(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})/i, 
   if (!hasRuntimeLock()) return;
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-  if (!(await safeIsAdminLocal(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+  if (!(await requirePermissionLocal(chatId, userId, "finanzas.read"))) return;
   return exportarFinanzasRangoExcel(chatId, String(match[1] || "").trim(), String(match[2] || "").trim(), userId, await safeIsSuperAdminLocal(userId));
 });
 
@@ -3703,7 +3719,7 @@ bot.onText(/\/editar_movimiento\s+([A-Za-z0-9_-]+)/i, async (msg, match) => {
   if (!hasRuntimeLock()) return;
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-  if (!(await safeIsAdminLocal(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+  if (!(await requirePermissionLocal(chatId, userId, "finanzas.write"))) return;
 
   const id = String(match[1] || "").trim();
   const ref = db.collection(FINANZAS_COLLECTION).doc(id);
@@ -3740,7 +3756,7 @@ bot.onText(/^\/aviso\s+(.+)/is, async (msg, match) => {
   if (!hasRuntimeLock()) return;
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-  if (!(await safeIsAdminLocal(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+  if (!(await requirePermissionLocal(chatId, userId, "avisos.write"))) return;
 
   const texto = String(match[1] || "").trim();
   if (!texto) return bot.sendMessage(chatId, "⚠️ Escriba el texto del aviso.\n\nEj: `/aviso Netflix subió a Lps. 110`", { parse_mode: "Markdown" });
@@ -3768,7 +3784,7 @@ bot.onText(/^\/avisos\s*$/i, async (msg) => {
   if (!hasRuntimeLock()) return;
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-  if (!(await safeIsAdminLocal(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+  if (!(await requirePermissionLocal(chatId, userId, "avisos.read"))) return;
 
   try {
     const snap = await db.collection("avisos").orderBy("createdAt", "desc").limit(20).get();
@@ -3798,7 +3814,7 @@ bot.onText(/^\/borraraviso\s+(\S+)/i, async (msg, match) => {
   if (!hasRuntimeLock()) return;
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-  if (!(await safeIsAdminLocal(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+  if (!(await requirePermissionLocal(chatId, userId, "avisos.write"))) return;
 
   const id = String(match[1] || "").trim();
   try {
@@ -4026,8 +4042,8 @@ async function handlePromoEmojiMessageLocal(msg) {
   }
   const list = promoEmojiListLocal(msg);
   if (!command && !list && !(session?.mode && (found.length || msg.sticker || msg.photo))) return false;
-  if (!(await safeIsAdminLocal(msg.from?.id))) {
-    await bot.sendMessage(msg.chat.id, "⛔ Solo admin puede configurar los iconos Premium.");
+  if (!(await safeHasPermissionLocal(msg.from?.id, "promociones.config"))) {
+    await bot.sendMessage(msg.chat.id, "⛔ Solo Sublicuentas puede configurar los iconos Premium.");
     return true;
   }
   try {
@@ -4068,13 +4084,15 @@ bot.onText(/\/miid/i, async (msg) => {
   return bot.sendMessage(chatId, `🆔 Tu Telegram ID es:\n${userId}\n\n📩 Envíelo al administrador para activarte en el bot.`);
 });
 
-bot.onText(/\/vincular_vendedor\s+(.+)/i, async (msg, match) => {
+bot.onText(/^\/vincular_vendedor\s+(\d+)\s+(.+)/i, async (msg, match) => {
   if (!hasRuntimeLock()) return;
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-  const nombre = String(match[1] || "").trim();
-  if (!nombre) return bot.sendMessage(chatId, "⚠️ Uso: /vincular_vendedor NOMBRE");
-  const r = await linkRevendedorByNombre(nombre, userId);
+  if (!(await requirePermissionLocal(chatId, userId, "equipo.manage"))) return;
+  const telegramId = String(match[1] || "").trim();
+  const nombre = String(match[2] || "").trim();
+  if (!telegramId || !nombre) return bot.sendMessage(chatId, "⚠️ Uso: /vincular_vendedor TELEGRAM_ID NOMBRE");
+  const r = await linkRevendedorByNombre(nombre, telegramId);
   return bot.sendMessage(chatId, r.msg);
 });
 
@@ -4085,7 +4103,7 @@ bot.onText(/\/addvendedor\s+(\d+)\s+(.+)/i, async (msg, match) => {
   if (!hasRuntimeLock()) return;
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-  if (!(await safeIsAdminLocal(userId))) return bot.sendMessage(chatId, "⛔ Solo admin puede usar este comando");
+  if (!(await requirePermissionLocal(chatId, userId, "equipo.manage"))) return;
   const telegramId = String(match[1] || "").trim();
   let nombre = String(match[2] || "").trim();
   if (String(nombre).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim() === "geissel") nombre = "Geisell";
@@ -4114,7 +4132,7 @@ bot.onText(/\/resetpin\s+(.+)/i, async (msg, match) => {
   if (!hasRuntimeLock()) return;
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-  if (!(await safeIsAdminLocal(userId))) return bot.sendMessage(chatId, "⛔ Solo admin puede usar este comando");
+  if (!(await requirePermissionLocal(chatId, userId, "equipo.manage"))) return;
   const nombre = String(match[1] || "").trim();
   if (!nombre) return bot.sendMessage(chatId, "⚠️ Uso:\n/resetpin Nombre");
   const nombreNorm = String(nombre || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().replace(/\s+/g, " ");
@@ -4147,7 +4165,7 @@ bot.onText(/\/delvendedor\s+(.+)/i, async (msg, match) => {
   if (!hasRuntimeLock()) return;
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-  if (!(await safeIsAdminLocal(userId))) return bot.sendMessage(chatId, "⛔ Solo admin puede usar este comando");
+  if (!(await requirePermissionLocal(chatId, userId, "equipo.manage"))) return;
   const nombre = String(match[1] || "").trim();
   if (!nombre) return bot.sendMessage(chatId, "⚠️ Uso:\n/delvendedor Nombre");
   const nombreNorm = String(nombre || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().replace(/\s+/g, " ");
@@ -4218,23 +4236,23 @@ bot.onText(/^\/menu(?:@\w+)?$/i, async (msg) => {
 
 // ✅ ATajos DE TEXTO SIN SLASH
 const COMANDOS_SIN_SLASH = [
-  { texto: "menu",       accion: (chatId, userId) => sendBottomMainMenu(chatId, userId, true), soloAdmin: false },
-  { texto: "inicio",     accion: (chatId, userId) => sendBottomMainMenu(chatId, userId, true), soloAdmin: false },
-  { texto: "inventario", accion: (chatId) => menuInventario(chatId), soloAdmin: true },
-  { texto: "finanzas",   accion: (chatId) => menuPagos(chatId), soloAdmin: true },
-  { texto: "clientes",   accion: (chatId) => menuClientes(chatId), soloAdmin: true },
-  { texto: "alertas",    accion: (chatId) => menuAlertas(chatId), soloAdmin: true },
-  { texto: "dashboard",  accion: (chatId) => generarDashboard(chatId), soloAdmin: true },
+  { texto: "menu",       accion: (chatId, userId) => sendBottomMainMenu(chatId, userId, true), permiso: "" },
+  { texto: "inicio",     accion: (chatId, userId) => sendBottomMainMenu(chatId, userId, true), permiso: "" },
+  { texto: "inventario", accion: (chatId) => menuInventario(chatId), permiso: "inventario.read" },
+  { texto: "finanzas",   accion: (chatId) => menuPagos(chatId), permiso: "finanzas.read" },
+  { texto: "clientes",   accion: (chatId) => menuClientes(chatId), permiso: "clientes.read" },
+  { texto: "alertas",    accion: (chatId) => menuAlertas(chatId), permiso: "reportes.read" },
+  { texto: "dashboard",  accion: (chatId) => generarDashboard(chatId), permiso: "reportes.read" },
 ];
 
-COMANDOS_SIN_SLASH.forEach(({ texto, accion, soloAdmin }) => {
+COMANDOS_SIN_SLASH.forEach(({ texto, accion, permiso }) => {
   bot.onText(new RegExp(`^${escapeRegex(texto)}$`, "i"), async (msg) => {
     if (!hasRuntimeLock()) return;
     const chatId = msg.chat.id; const userId = msg.from.id;
     if (!(await userHasAccessFromMessage(msg))) return;
 
     // Modo app: mantener el panel anclado, no crear mensaje nuevo.
-    if (soloAdmin && !(await safeIsAdminLocal(userId))) return;
+    if (permiso && !(await requirePermissionLocal(chatId, userId, permiso))) return;
     // Modo app: limpiar flujos, pero mantener el panel principal.
     clearFlowStateKeepPanel(chatId);
     return accion(chatId, userId);
@@ -4250,7 +4268,7 @@ PLATFORM_KEYS.forEach((p) => {
     if (!hasRuntimeLock()) return;
     const chatId = msg.chat.id;
     const userId = msg.from.id;
-    if (!(await safeIsAdminLocal(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+    if (!(await requirePermissionLocal(chatId, userId, "inventario.read"))) return;
     return enviarInventarioPlataforma(chatId, p, 0);
   });
 });
@@ -4259,7 +4277,7 @@ bot.onText(/\/stock/i, async (msg) => {
   if (!hasRuntimeLock()) return;
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-  if (!(await safeIsAdminLocal(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+  if (!(await requirePermissionLocal(chatId, userId, "inventario.read"))) return;
   return mostrarStockGeneral(chatId);
 });
 
@@ -4268,7 +4286,7 @@ bot.onText(/\/dashboard/i, async (msg) => {
   if (!hasRuntimeLock()) return;
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-  if (!(await safeIsAdminLocal(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+  if (!(await requirePermissionLocal(chatId, userId, "reportes.read"))) return;
   return generarDashboard(chatId);
 });
 
@@ -4280,7 +4298,7 @@ bot.onText(/\/addcorreo\s+(\S+)\s+(\S+)(?:\s+(\d+))?/i, async (msg, match) => {
   if (!hasRuntimeLock()) return;
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-  if (!(await safeIsAdminLocal(userId))) return bot.sendMessage(chatId, "⛔ Acceso denegado. Solo admins pueden agregar inventario.");
+  if (!(await requirePermissionLocal(chatId, userId, "inventario.write"))) return;
 
   const platRaw = match[1];
   const accesoRaw = match[2];
@@ -4344,8 +4362,8 @@ function ticketActorAliases(rev={}){
   const nombre=String(rev.nombre||'').trim();if(nombre)vals.push(nombre.split(/\s+/)[0]);
   return [...new Set(vals.map(ticketDestNorm).filter(Boolean))];
 }
-function ticketCanTelegramAccess(ticket={},rev=null,adminOk=false){
-  if(adminOk)return true;
+function ticketCanTelegramAccess(ticket={},rev=null,isSuperOk=false){
+  if(isSuperOk)return true;
   if(!rev)return false;
   const aliases=ticketActorAliases(rev),dest=(Array.isArray(ticket.destinos)?ticket.destinos:[]).map(ticketDestNorm);
   const creator=ticketDestNorm(ticket.creadoPorRol||'');
@@ -4376,36 +4394,61 @@ async function ticketTelegramPhotoUrl(msg,ticketId){
   }
   throw new Error('No pude guardar la evidencia en Storage. '+String(last?.message||''));
 }
-async function ticketAppendTelegramReply({ticketId,msg,rev,adminOk}){
+async function ticketAppendTelegramReply({ticketId,msg,rev,isSuperOk}){
   const ref=db.collection('tickets_auditoria').doc(String(ticketId||''));
   const snap=await ref.get();if(!snap.exists)throw new Error('Ese ticket ya no existe.');
-  const old=snap.data()||{};if(!ticketCanTelegramAccess(old,rev,adminOk))throw new Error('Este ticket no corresponde a su usuario.');
+  const old=snap.data()||{};if(!ticketCanTelegramAccess(old,rev,isSuperOk))throw new Error('Este ticket no corresponde a su usuario.');
   const texto=String(msg?.text||msg?.caption||'').trim().slice(0,3000);
   const imagenUrl=await ticketTelegramPhotoUrl(msg,ticketId);
   if(!texto&&!imagenUrl)throw new Error('Envíe texto o una foto como respuesta.');
-  const actor=rev?.nombre||rev?.nombre_norm||(adminOk?'Admin Telegram':'Socio');
-  const actorRol=rev?ticketDestNorm(rev.nombre_norm||rev.id||rev.nombre):'sublicuentas';
+  const actor=rev?.nombre||rev?.nombre_norm||(isSuperOk?'Sublicuentas':'Socio');
+  const actorRol=rev?ticketDestNorm(rev.nombre_norm||rev.id||rev.nombre):(isSuperOk?'sublicuentas':'usuario');
   const entry={texto:texto||(imagenUrl?'Evidencia adjunta':''),por:String(actor).slice(0,100),porRol:actorRol,imagenUrl,origen:'telegram',telegramUserId:String(msg?.from?.id||''),at:new Date().toISOString()};
   await db.runTransaction(async tx=>{const fresh=await tx.get(ref);if(!fresh.exists)throw new Error('Ese ticket ya no existe.');const data=fresh.data()||{},respuestas=Array.isArray(data.respuestas)?data.respuestas.slice():[];respuestas.push(entry);tx.set(ref,{respuestas,ultimaRespuesta:entry.texto,ultimaRespuestaPor:entry.por,estado:String(data.estado||'abierto')==='resuelto'?'resuelto':'respondido',updatedAt:new Date().toISOString()},{merge:true});});
   const label=String(old.tipo||'').toLowerCase()==='aviso'?`aviso "${old.titulo||'Sin título'}"`:`ticket #${old.numero||String(ticketId).slice(-4)}`;
   const aviso=`💬 *Respuesta desde Telegram*\n👤 ${escMD(entry.por)}\n🎫 ${escMD(label)}\n\n${escMD(entry.texto||'Evidencia adjunta')}`;
-  const admins=await getActiveAdminIdsLocal();
-  for(const id of admins){if(String(id)===String(msg?.chat?.id))continue;try{if(imagenUrl)await bot.sendPhoto(id,imagenUrl,{caption:aviso,parse_mode:'Markdown'});else await bot.sendMessage(id,aviso,{parse_mode:'Markdown'});}catch(e){logErr('ticket:notify-admin',e?.message||e);}}
+  // PRIVACIDAD: una respuesta nunca se abanica a todos los admins.
+  // Si el aviso/ticket tiene autor identificable, vuelve únicamente a ese autor.
+  // Si no se puede resolver, el fallback exclusivo es Sublicuentas.
+  const recipients=new Set();
+  const directOwnerIds=[old.autorId,old.creadoPorTelegramId,old.remitenteTelegramId,old.ownerTelegramId]
+    .map(v=>String(v||'').trim()).filter(v=>/^-?\d{5,}$/.test(v));
+  directOwnerIds.forEach(id=>recipients.add(id));
+  if(!recipients.size){
+    // No dejar que un rol genérico (por ejemplo "admin") tape el nombre real
+    // del autor. Probamos cada identidad y detenemos al encontrar propietario.
+    const ownerCandidates=[old.creadoPor,old.remitente,old.autor,old.creadoPorRol]
+      .map(ticketDestNorm).filter(Boolean);
+    for(const ownerAlias of ownerCandidates){
+      if(['admin','administrador','usuario','socio'].includes(ownerAlias)) continue;
+      const ids=await accessControl.getTelegramIdsForAlias(ownerAlias);
+      ids.forEach(id=>recipients.add(String(id)));
+      if(recipients.size) break;
+    }
+  }
+  if(!recipients.size){
+    const ids=await accessControl.getSublicuentasRecipientChatIds();
+    ids.forEach(id=>recipients.add(String(id)));
+  }
+  for(const id of recipients){
+    if(String(id)===String(msg?.chat?.id))continue;
+    try{if(imagenUrl)await bot.sendPhoto(id,imagenUrl,{caption:aviso,parse_mode:'Markdown'});else await bot.sendMessage(id,aviso,{parse_mode:'Markdown'});}catch(e){logErr('ticket:notify-owner',e?.message||e);}
+  }
   return {old,entry};
 }
-async function ticketStartTelegramReply(chatId,userId,ticketId,adminOk,vend){
+async function ticketStartTelegramReply(chatId,userId,ticketId,isSuperOk,vend){
   const ref=db.collection('tickets_auditoria').doc(String(ticketId||''));const snap=await ref.get();if(!snap.exists)return bot.sendMessage(chatId,'⚠️ Ese ticket ya no existe.');const t=snap.data()||{};
-  if(!ticketCanTelegramAccess(t,vend,adminOk))return bot.sendMessage(chatId,'⛔ Ese ticket no corresponde a su usuario.');
+  if(!ticketCanTelegramAccess(t,vend,isSuperOk))return bot.sendMessage(chatId,'⛔ Ese ticket no corresponde a su usuario.');
   ticketReplyState.set(ticketReplyStateKey(chatId),{ticketId:String(ticketId),at:Date.now()});
   return bot.sendMessage(chatId,`💬 Respondiendo ${String(t.tipo||'').toLowerCase()==='aviso'?'al aviso':`al ticket #${t.numero||'—'}`}\n\nEscriba su respuesta. También puede enviar una foto con comentario como evidencia.\n\n/cancelar para salir.`);
 }
-async function ticketTryConsumeTelegramReply(msg,adminOk,vend){
+async function ticketTryConsumeTelegramReply(msg,isSuperOk,vend){
   const chatId=msg.chat?.id,key=ticketReplyStateKey(chatId),pendingReply=ticketReplyState.get(key);
   const nativeTicketId=await ticketResolveIdFromTelegramReply(msg);
   const ticketId=String(nativeTicketId||(pendingReply&&pendingReply.ticketId)||'');if(!ticketId)return false;
   const raw=String(msg.text||'').trim().toLowerCase();if(['/cancelar','cancelar','cancel'].includes(raw)){ticketReplyState.delete(key);await bot.sendMessage(chatId,'✅ Respuesta cancelada.');return true;}
   if(raw.startsWith('/')&&!nativeTicketId)return false;
-  try{const {old}=await ticketAppendTelegramReply({ticketId,msg,rev:vend,adminOk});ticketReplyState.delete(key);await registrarActividadTelegramLocal(msg?.from?.id,chatId,'responder_ticket',{ticketId, titulo:old.titulo||'',destino:old.creadoPor||old.remitente||'',campo:'respuesta'},`Respondió ${String(old.tipo||'').toLowerCase()==='aviso'?'el aviso':`el ticket #${old.numero||'—'}`}${old.titulo?` “${old.titulo}”`:''} desde Telegram.`,'Tickets');await bot.sendMessage(chatId,`✅ Su respuesta quedó agregada ${String(old.tipo||'').toLowerCase()==='aviso'?'al aviso':`al ticket #${old.numero||'—'}`}. Sublicuentas la verá en la misma conversación.`);return true;}catch(e){ticketReplyState.delete(key);await bot.sendMessage(chatId,'⚠️ '+String(e?.message||'No pude guardar la respuesta.'));return true;}
+  try{const {old}=await ticketAppendTelegramReply({ticketId,msg,rev:vend,isSuperOk});ticketReplyState.delete(key);await registrarActividadTelegramLocal(msg?.from?.id,chatId,'responder_ticket',{ticketId, titulo:old.titulo||'',destino:old.creadoPor||old.remitente||'',campo:'respuesta'},`Respondió ${String(old.tipo||'').toLowerCase()==='aviso'?'el aviso':`el ticket #${old.numero||'—'}`}${old.titulo?` “${old.titulo}”`:''} desde Telegram.`,'Tickets');await bot.sendMessage(chatId,`✅ Su respuesta quedó agregada ${String(old.tipo||'').toLowerCase()==='aviso'?'al aviso':`al ticket #${old.numero||'—'}`}. Solo el responsable de esa conversación recibirá la respuesta.`);return true;}catch(e){ticketReplyState.delete(key);await bot.sendMessage(chatId,'⚠️ '+String(e?.message||'No pude guardar la respuesta.'));return true;}
 }
 
 
@@ -4476,13 +4519,21 @@ bot.on("callback_query", async (q) => {
     bindPanelFromCallback(q);
 
     const adminOk = await safeIsAdminLocal(userId);
+    const superOk = await safeIsSuperAdminLocal(userId);
     const vend = await safeGetRevendedorLocal(userId);
     const vendOk = !!(vend && vend.nombre);
 
     if (!adminOk && !vendOk) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+
+    const neededPermission = callbackPermission(data);
+    if (neededPermission === "self-service" && !vendOk) return bot.sendMessage(chatId, "⛔ Esta opción corresponde a su perfil de vendedor.");
+    if (neededPermission && !["self-service", "tickets.reply"].includes(neededPermission)) {
+      if (!(await safeHasPermissionLocal(userId, neededPermission))) return bot.sendMessage(chatId, "⛔ No tiene permiso para esta función.");
+    }
+
     if (data.startsWith("tk:reply:")) {
       const ticketId=data.slice("tk:reply:".length).trim();
-      return ticketStartTelegramReply(chatId,userId,ticketId,adminOk,vend);
+      return ticketStartTelegramReply(chatId,userId,ticketId,superOk,vend);
     }
     if (data === "noop") return;
 
@@ -6468,10 +6519,11 @@ bot.on("message", async (msg) => {
     // Modo app: mantener el panel anclado, no crear mensaje nuevo.
 
     const adminOk = await safeIsAdminLocal(userId);
+    const superOk = await safeIsSuperAdminLocal(userId);
     const vend = await safeGetRevendedorLocal(userId);
     const vendOk = !!(vend && vend.nombre);
 
-    if ((adminOk || vendOk) && await ticketTryConsumeTelegramReply(msg,adminOk,vend)) return;
+    if ((adminOk || vendOk) && await ticketTryConsumeTelegramReply(msg,superOk,vend)) return;
 
     // Si hay wizard activo y mandan un comando que no sea menu/start, avisar
     if (wizard.has(String(chatId)) && text.startsWith("/")) {
@@ -6493,14 +6545,17 @@ bot.on("message", async (msg) => {
       if (!adminOk && vendOk && !vendedorCmd.has(first)) return;
 
       if (adminOk && PLATFORM_KEYS.includes(first)) {
+        if (!(await safeHasPermissionLocal(userId, "inventario.read"))) return bot.sendMessage(chatId, "⛔ No tiene permiso para consultar inventario.");
         return enviarInventarioPlataforma(chatId, first, 0);
       }
 
       if (adminOk && first === "buscar" && rest) {
+        if (!(await safeHasPermissionLocal(userId, "clientes.read"))) return bot.sendMessage(chatId, "⛔ No tiene permiso para consultar clientes.");
         return resolverBusquedaAdmin(chatId, rest);
       }
 
       if (adminOk && ["movercuenta", "mover_cuenta"].includes(first)) {
+        if (!(await safeHasPermissionLocal(userId, "inventario.write"))) return bot.sendMessage(chatId, "⛔ No tiene permiso para mover cuentas de inventario.");
         const args = partsCmd.slice(1);
         if (args.length < 2) {
           return bot.sendMessage(
@@ -6529,6 +6584,7 @@ bot.on("message", async (msg) => {
       }
 
       if (adminOk && first === "clientes_excel") {
+        if (!(await safeHasPermissionLocal(userId, "clientes.read"))) return bot.sendMessage(chatId, "⛔ No tiene permiso para exportar clientes.");
         try {
           await bot.sendMessage(chatId, "⏳ Generando Excel de clientes...");
           const { generarExcelClientesGeneral } = require("./index_11_clientes_excel");
@@ -6558,6 +6614,7 @@ bot.on("message", async (msg) => {
         "sincronizar_todo", "sincronizar_claves", "addcorreo", "finanzas", "resumen_fecha", "bancos_mes",
         "top_plataformas_mes", "cierre_caja", "cierre_caja_rango", "excel_finanzas",
         "editar_movimiento", "clientes_excel", "movercuenta", "mover_cuenta",
+        "reportes_excel_rango", "reportes_excel_mes", "imapstatus",
         // ✅ Diagnóstico / reparación de colisiones (antes faltaban aquí y por eso
         // el buscador genérico también los interceptaba y mandaba "Sin resultados").
         "reparar_colisiones", "auditar_fusiones", "auditar_cliente", "buscar_raw",
@@ -6569,7 +6626,7 @@ bot.on("message", async (msg) => {
         ...PLATFORM_KEYS,
       ]);
 
-      if (adminOk && !comandosReservados.has(first)) {
+      if (adminOk && !comandosReservados.has(first) && await safeHasPermissionLocal(userId, "clientes.read")) {
         return resolverBusquedaAdmin(chatId, rawCmd);
       }
 
@@ -6579,7 +6636,7 @@ bot.on("message", async (msg) => {
     // ── Búsqueda directa sin / desde CUALQUIER panel ──
     // Un selector que funciona únicamente con botones NUNCA puede dejar pegado
     // el buscador. Solo bloqueamos cuando el flujo realmente espera texto.
-    if (adminOk && !text.startsWith("/")) {
+    if (adminOk && !text.startsWith("/") && await safeHasPermissionLocal(userId, "clientes.read")) {
       cleanupStaleInteractiveStateLocal(chatId);
 
       const tSearch = String(text || "").trim();
@@ -7822,7 +7879,7 @@ function tarjetaRecordatorio(dmy, estado) {
 async function enviarTxtRenovacionesDiarias7AM() {
   if (!hasRuntimeLock()) return { ok: false, error: "runtime_lock_disabled" };
   const { dmy } = getTimePartsNow();
-  const adminIds = new Set(await getActiveAdminIdsLocal());
+  const adminIds = new Set(await accessControl.getSublicuentasRecipientChatIds());
   let enviadosRevendedores = 0;
   let enviadosAdmins = 0;
 
@@ -7843,7 +7900,7 @@ async function enviarTxtRenovacionesDiarias7AM() {
     } catch (e) { logErr(`AutoTXT:revendedor:${rev.id}`, e); }
   }
 
-  // ✅ Admins que NO son revendedores reciben el TXT GENERAL (con todos)
+  // 🔒 Solo Sublicuentas recibe el TXT GENERAL (con todos). Otros admins/revendedores reciben únicamente su propio TXT.
   try {
     for (const adminId of adminIds) {
       try {

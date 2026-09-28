@@ -2,7 +2,7 @@
    Una sola fuente de verdad para identidad, roles y permisos del Bot TG.
 */
 const { db, SUPER_ADMIN, cacheGet, cacheSet, cacheInvalidatePrefix } = require('./index_01_core');
-const { normalizeText, permissionsForRole, permissionGranted } = require('./lib_hardening');
+const { normalizeText, permissionsForRole, permissionsForProfile, resolveAccessProfile, roleForProfile, permissionGranted, anyPermissionGranted } = require('./lib_hardening');
 
 const NULL_SENTINEL = '__acl_null__';
 
@@ -89,6 +89,28 @@ function explicitPermissions(doc = {}, defaults = new Set()) {
   return set;
 }
 
+function identityName(doc = {}) {
+  return String(doc.nombre || doc.name || doc.usuario || doc.username || doc.nombre_norm || doc.id || '').trim();
+}
+
+function buildContextFromDoc({ uid, doc, source, fallbackRole }) {
+  const profile = resolveAccessProfile(doc, fallbackRole);
+  const role = roleForProfile(profile, fallbackRole);
+  const defaults = permissionsForProfile(profile);
+  const permissions = explicitPermissions(doc, defaults.size ? defaults : permissionsForRole(role));
+  return {
+    userId: uid,
+    role,
+    profile,
+    active: true,
+    source,
+    docId: doc.id,
+    name: identityName(doc),
+    permissions: [...permissions],
+    doc,
+  };
+}
+
 async function getAccessContext(userId = '') {
   const uid = String(userId || '').trim();
   if (!uid) return { userId: '', role: 'none', active: false, permissions: new Set(), source: 'none' };
@@ -97,7 +119,7 @@ async function getAccessContext(userId = '') {
   if (cached !== null) return { ...cached, permissions: new Set(cached.permissions || []) };
 
   if (superAdminIds().has(uid)) {
-    const ctx = { userId: uid, role: 'superadmin', active: true, permissions: ['*'], source: 'env-superadmin', name: 'Sublicuentas' };
+    const ctx = { userId: uid, role: 'superadmin', profile: 'sublicuentas', active: true, permissions: ['*'], source: 'env-superadmin', name: 'Sublicuentas' };
     cacheSet(cacheKey, ctx, 5 * 60 * 1000);
     return { ...ctx, permissions: new Set(ctx.permissions) };
   }
@@ -105,35 +127,39 @@ async function getAccessContext(userId = '') {
   const adminDoc = await findAdminByTelegramId(uid);
   if (adminDoc && adminDoc.activo !== false) {
     const rawRole = normalizeText(adminDoc.rol || adminDoc.role || 'admin').replace(/\s+/g, '');
-    const role = ['superadmin', 'admin'].includes(rawRole) ? rawRole : 'admin';
-    const permissions = explicitPermissions(adminDoc, permissionsForRole(role));
-    const ctx = {
-      userId: uid, role, active: true, source: 'admins', docId: adminDoc.id,
-      name: String(adminDoc.nombre || adminDoc.name || adminDoc.usuario || '').trim(),
-      permissions: [...permissions], doc: adminDoc,
-    };
+    const fallbackRole = rawRole === 'superadmin' ? 'superadmin' : 'admin';
+    // Algunos documentos de admins sólo contienen {activo:true} y el ID numérico.
+    // Si esa misma persona existe en revendedores, usamos su nombre/perfil como
+    // identidad sin perder los permisos explícitos guardados en admins.
+    let identityDoc = adminDoc;
+    try {
+      const revIdentity = await findRevendedorByTelegramId(uid);
+      if (revIdentity && revIdentity.activo !== false) {
+        identityDoc = {
+          ...revIdentity,
+          ...adminDoc,
+          id: adminDoc.id,
+          nombre: adminDoc.nombre || adminDoc.name || revIdentity.nombre || revIdentity.name || '',
+          nombre_norm: adminDoc.nombre_norm || revIdentity.nombre_norm || '',
+          usuario: adminDoc.usuario || revIdentity.usuario || '',
+        };
+      }
+    } catch (_) {}
+    const ctx = buildContextFromDoc({ uid, doc: identityDoc, source: 'admins', fallbackRole });
     cacheSet(cacheKey, ctx, 5 * 60 * 1000);
-    return { ...ctx, permissions };
+    return { ...ctx, permissions: new Set(ctx.permissions) };
   }
 
   const rev = await findRevendedorByTelegramId(uid);
   if (rev && rev.activo !== false) {
-    const revNameNorm = normalizeText(rev.nombre_norm || rev.nombre || rev.usuario || rev.id);
-    // Compatibilidad: Geisell/Geissel conserva el acceso administrativo existente,
-    // pero ahora la excepción vive en un solo sitio (ACL), no dispersa en handlers.
-    const promotedAdmin = ['geisell', 'geissel'].includes(revNameNorm);
-    const role = promotedAdmin ? 'admin' : 'vendedor';
-    const permissions = explicitPermissions(rev, permissionsForRole(role));
-    const ctx = {
-      userId: uid, role, active: true, source: 'revendedores', docId: rev.id,
-      name: String(rev.nombre || rev.usuario || rev.id || '').trim(),
-      permissions: [...permissions], doc: rev,
-    };
+    const profile = resolveAccessProfile(rev, 'vendedor');
+    const promoted = ['relojes', 'geisell', 'magdiel', 'sublicuentas', 'admin'].includes(profile);
+    const ctx = buildContextFromDoc({ uid, doc: rev, source: 'revendedores', fallbackRole: promoted ? 'admin' : 'vendedor' });
     cacheSet(cacheKey, ctx, 5 * 60 * 1000);
-    return { ...ctx, permissions };
+    return { ...ctx, permissions: new Set(ctx.permissions) };
   }
 
-  const ctx = { userId: uid, role: 'none', active: false, permissions: [], source: 'none', name: '' };
+  const ctx = { userId: uid, role: 'none', profile: 'none', active: false, permissions: [], source: 'none', name: '' };
   cacheSet(cacheKey, ctx, 60 * 1000);
   return { ...ctx, permissions: new Set() };
 }
@@ -143,35 +169,83 @@ async function hasPermission(userId, permission) {
   return ctx.active && permissionGranted(ctx.permissions, permission);
 }
 
-async function getBackupRecipientChatIds() {
+async function hasAnyPermission(userId, permissions = []) {
+  const ctx = await getAccessContext(userId);
+  return ctx.active && anyPermissionGranted(ctx.permissions, permissions);
+}
+
+async function getTelegramIdsForAlias(alias = '') {
+  const wanted = normalizeText(alias).replace(/\s+/g, '');
+  if (!wanted) return [];
+  const cacheKey = `acl:alias:${wanted}`;
+  const cached = cacheGet(cacheKey);
+  if (cached !== null) return Array.isArray(cached) ? cached : [];
+
   const ids = new Set();
-
-  // Sublicuentas: SUPER_ADMIN + variable explícita opcional.
-  const superIds = [...superAdminIds()];
-  if (superIds[0]) ids.add(superIds[0]);
-  parseIdList(process.env.TELEGRAM_CHAT_ID_SUBLICUENTAS || '').forEach((id) => ids.add(id));
-  parseIdList(process.env.TELEGRAM_CHAT_ID_RELOJES || '').forEach((id) => ids.add(id));
-  parseIdList(process.env.BACKUP_RECIPIENT_IDS || '').forEach((id) => ids.add(id));
-
-  // Relojes puede estar registrado como Relojes o Libni en revendedores/admins.
-  const aliasQueries = [
-    ['nombre_norm', 'relojes'], ['nombre_norm', 'libni'], ['nombre_norm', 'sublicuentas'],
-    ['usuario_norm', 'relojes'], ['usuario_norm', 'libni'], ['usuario_norm', 'sublicuentas'],
-    ['nombre', 'Relojes'], ['nombre', 'Libni'], ['nombre', 'Sublicuentas'],
-  ];
-  for (const [field, alias] of aliasQueries) {
-    try {
-      const snap = await db.collection('revendedores').where(field, '==', alias).limit(3).get();
-      snap.forEach((d) => {
-        const x = d.data() || {};
-        if (x.activo === false) return;
-        const tg = String(x.telegramId || x.userId || '').trim();
-        if (tg) ids.add(tg);
-      });
-    } catch (_) {}
+  const aliasesByProfile = {
+    sublicuentas: ['sublicuentas', 'naara', 'naara blanco'],
+    relojes: ['relojes', 'libni', 'daniela'],
+    geisell: ['geisell', 'geissel'],
+    magdiel: ['magdiel'],
+  };
+  const aliases = aliasesByProfile[wanted] || [wanted];
+  const values = new Set();
+  for (const raw of aliases) {
+    const clean = String(raw || '').trim();
+    if (!clean) continue;
+    values.add(clean);
+    values.add(clean.toLowerCase());
+    values.add(clean.toUpperCase());
+    values.add(clean.replace(/\b\w/g, (m) => m.toUpperCase()));
   }
 
-  return [...ids].filter(Boolean);
+  const take = (d) => {
+    const x = { id: d.id, ...(d.data?.() || {}) };
+    if (x.activo === false) return;
+    const tg = String(x.telegramId || x.telegramID || x.userId || (/^-?\d+$/.test(String(d.id)) ? d.id : '') || '').trim();
+    if (tg) ids.add(tg);
+  };
+
+  // Consultas puntuales por identidad: evita descargar completas las colecciones
+  // admins/revendedores cada vez que un aviso o backup necesita resolver destino.
+  const fields = ['nombre_norm', 'nombre', 'name', 'usuario_norm', 'usuario', 'username'];
+  for (const col of ['admins', 'revendedores']) {
+    for (const value of values) {
+      try {
+        const direct = await db.collection(col).doc(value).get();
+        if (direct.exists) take(direct);
+      } catch (_) {}
+      for (const field of fields) {
+        try {
+          const snap = await db.collection(col).where(field, '==', value).limit(5).get();
+          snap.forEach(take);
+        } catch (_) {}
+      }
+    }
+  }
+
+  if (wanted === 'sublicuentas') superAdminIds().forEach((id) => ids.add(id));
+  const result = [...ids].filter(Boolean);
+  cacheSet(cacheKey, result, 5 * 60 * 1000);
+  return result;
+}
+
+async function getSublicuentasRecipientChatIds() {
+  const ids = new Set([...superAdminIds()]);
+  parseIdList(process.env.TELEGRAM_CHAT_ID_SUBLICUENTAS || process.env.SUBLICUENTAS_CHAT_ID || '').forEach((id) => ids.add(id));
+  (await getTelegramIdsForAlias('sublicuentas')).forEach((id) => ids.add(id));
+  return [...ids].filter((id) => /^-?\d{5,}$/.test(String(id)));
+}
+
+async function getBackupRecipientChatIds() {
+  // REGLA FIJA DE NEGOCIO: el backup dominical sólo puede ir a
+  // Sublicuentas y Relojes. Ningún admin adicional se agrega por defecto.
+  const ids = new Set(await getSublicuentasRecipientChatIds());
+
+  parseIdList(process.env.TELEGRAM_CHAT_ID_RELOJES || process.env.RELOJES_CHAT_ID || '').forEach((id) => ids.add(id));
+  (await getTelegramIdsForAlias('relojes')).forEach((id) => ids.add(id));
+
+  return [...ids].filter((id) => /^-?\d{5,}$/.test(String(id)));
 }
 
 function invalidateAcl(userId = '') {
@@ -191,6 +265,9 @@ module.exports = {
   findRevendedorByTelegramId,
   getAccessContext,
   hasPermission,
+  hasAnyPermission,
+  getTelegramIdsForAlias,
+  getSublicuentasRecipientChatIds,
   getBackupRecipientChatIds,
   invalidateAcl,
 };

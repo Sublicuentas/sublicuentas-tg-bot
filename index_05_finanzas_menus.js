@@ -22,6 +22,7 @@ const {
 
 const { humanPlataforma, obtenerRenovacionesPorFecha } = require("./index_03_clientes_crm");
 const { vendedorEfectivoServicio, resumenVendedoresCliente, normVendedor } = require("./index_17_vendedores_servicio");
+const accessControl = require("./index_23_access_control");
 
 // ===============================
 // CONFIG
@@ -970,9 +971,8 @@ bot.onText(/^\/reportes_excel_rango\s+(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{
   const userId = msg.from.id;
   const [, fechaInicio, fechaFin] = match;
 
-  // Solo admin
-  if (!(await isAdmin(userId))) {
-    return bot.sendMessage(chatId, "❌ Solo admin puede descargar reportes");
+  if (!(await accessControl.hasPermission(userId, "finanzas.read"))) {
+    return bot.sendMessage(chatId, "⛔ No tiene permiso para descargar reportes financieros.");
   }
 
   try {
@@ -1011,8 +1011,8 @@ bot.onText(/^\/reportes_excel_mes\s+(\d{2}\/\d{4})$/, async (msg, match) => {
   const userId = msg.from.id;
   const mesStr = match[1];
 
-  if (!(await isAdmin(userId))) {
-    return bot.sendMessage(chatId, "❌ Solo admin");
+  if (!(await accessControl.hasPermission(userId, "finanzas.read"))) {
+    return bot.sendMessage(chatId, "⛔ No tiene permiso para descargar reportes financieros.");
   }
 
   try {
