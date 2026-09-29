@@ -59,9 +59,11 @@ test('arranque no descarta mensajes pendientes de Telegram', () => {
   assert.equal(core.includes('drop_pending_updates: false'), true);
 });
 
-test('migraciones no corren automáticamente en index.js', () => {
+test('solo la consolidación de duplicados corre al arrancar; Nanotech sigue manual', () => {
   const index = read('index.js');
-  assert.equal(index.includes('consolidarClientesDuplicadosPorTelefono({'), false);
+  // La consolidación debe correr al arrancar: Sublichat HQ y el bot piden
+  // "reinicie el bot" cuando detectan fichas duplicadas nombre+teléfono.
+  assert.equal(index.includes('consolidarClientesDuplicadosPorTelefono({'), true);
   assert.equal(index.includes('migrarNanotechClientes({'), false);
   assert.equal(index.includes('maintenance:migrations'), true);
 });
