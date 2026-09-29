@@ -5721,7 +5721,7 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
         const resultado = await eliminarClienteConPapelera(clientId, {
           actor: { userId:String(userId||""), name:q.from?.first_name || q.from?.username || "", source:"Telegram" },
         });
-        await registrarActividadTelegramLocal(userId,chatId,'eliminar_cliente',{clienteId,cliente:nombre,telefono:c2?.telefono||'',campo:'cliente completo',papeleraId:resultado.papeleraId},`Movió al cliente ${nombre} a la Papelera de Integridad desde Telegram · respaldo ${resultado.papeleraId}.`);
+        await registrarActividadTelegramLocal(userId,chatId,'eliminar_cliente',{clienteId:clientId,cliente:nombre,telefono:c2?.telefono||'',campo:'cliente completo',papeleraId:resultado.papeleraId},`Movió al cliente ${nombre} a la Papelera de Integridad desde Telegram · respaldo ${resultado.papeleraId}.`);
         forceNextPanelAtBottom(chatId);
         return bot.sendMessage(chatId, `✅ Cliente *${escMD(nombre)}* movido a papelera.
 🔐 Respaldo: ${escMD(resultado.papeleraId)}`, { parse_mode: "Markdown" });
@@ -6216,7 +6216,7 @@ Revise que el correo exista en inventario con esa plataforma o coloque la clave 
         const clientId = data.slice("cli:ren:all:ok:".length);
         const cAudit=await getCliente(clientId);
         await renovarTodosServiciosTx(clientId, { dias: 30 });
-        await registrarActividadTelegramLocal(userId,chatId,'renovar_todos',{clienteId,cliente:cAudit?.nombrePerfil||cAudit?.nombre||'Cliente',telefono:cAudit?.telefono||'',campo:'todos los servicios',cambio:'+30 días'},`Renovó todos los servicios de ${cAudit?.nombrePerfil||cAudit?.nombre||'Cliente'} +30 días.`);
+        await registrarActividadTelegramLocal(userId,chatId,'renovar_todos',{clienteId:clientId,cliente:cAudit?.nombrePerfil||cAudit?.nombre||'Cliente',telefono:cAudit?.telefono||'',campo:'todos los servicios',cambio:'+30 días'},`Renovó todos los servicios de ${cAudit?.nombrePerfil||cAudit?.nombre||'Cliente'} +30 días.`);
         await bot.sendMessage(chatId, `✅ Todos los servicios renovados +30 días.`);
         return enviarFichaCliente(chatId, clientId);
       }
@@ -6234,7 +6234,7 @@ Revise que el correo exista en inventario con esa plataforma o coloque la clave 
         const clientId = data.slice("cli:ren:all31:ok:".length);
         const cAudit=await getCliente(clientId);
         await renovarTodosServiciosTx(clientId, { dias: 31 });
-        await registrarActividadTelegramLocal(userId,chatId,'renovar_todos',{clienteId,cliente:cAudit?.nombrePerfil||cAudit?.nombre||'Cliente',telefono:cAudit?.telefono||'',campo:'todos los servicios',cambio:'+31 días'},`Renovó todos los servicios de ${cAudit?.nombrePerfil||cAudit?.nombre||'Cliente'} +31 días.`);
+        await registrarActividadTelegramLocal(userId,chatId,'renovar_todos',{clienteId:clientId,cliente:cAudit?.nombrePerfil||cAudit?.nombre||'Cliente',telefono:cAudit?.telefono||'',campo:'todos los servicios',cambio:'+31 días'},`Renovó todos los servicios de ${cAudit?.nombrePerfil||cAudit?.nombre||'Cliente'} +31 días.`);
         await bot.sendMessage(chatId, `✅ Todos los servicios renovados +31 días.`);
         return enviarFichaCliente(chatId, clientId);
       }
@@ -6333,7 +6333,7 @@ Revise que el correo exista en inventario con esa plataforma o coloque la clave 
         const servicios = baja.servicios || [];
         pending.delete(String(chatId));
         const resumenEliminados=eliminados.map(x=>humanPlatAlertLocal(x.plataforma||'')).filter(Boolean).join(', ');
-        await registrarActividadTelegramLocal(userId,chatId,'baja_masiva',{clienteId,cliente:cAudit?.nombrePerfil||cAudit?.nombre||'Cliente',telefono:cAudit?.telefono||'',campo:'servicios',cambio:`eliminó ${eliminados.length}: ${resumenEliminados}`},`Hizo baja masiva a ${cAudit?.nombrePerfil||cAudit?.nombre||'Cliente'} · eliminó ${eliminados.length} servicio(s)${resumenEliminados?`: ${resumenEliminados}`:''}.`);
+        await registrarActividadTelegramLocal(userId,chatId,'baja_masiva',{clienteId:clientId,cliente:cAudit?.nombrePerfil||cAudit?.nombre||'Cliente',telefono:cAudit?.telefono||'',campo:'servicios',cambio:`eliminó ${eliminados.length}: ${resumenEliminados}`},`Hizo baja masiva a ${cAudit?.nombrePerfil||cAudit?.nombre||'Cliente'} · eliminó ${eliminados.length} servicio(s)${resumenEliminados?`: ${resumenEliminados}`:''}.`);
       forceNextPanelAtBottom(chatId);
 
         let msg = `✅ *Baja masiva completada*\n\n`;

@@ -46,8 +46,23 @@ keepAliveRecurrente.unref?.();
 (async () => {
   startTelegramOutboxWorker();
 
-  // Las migraciones dejaron de ejecutarse durante cada arranque. Si se
-  // necesitan, se lanzan explícitamente con: npm run maintenance:migrations.
+  // Consolidación de fichas duplicadas (mismo nombre + mismo teléfono).
+  // Sublichat HQ y el bot responden "reinicie el bot para ejecutar la
+  // consolidación segura" cuando encuentran duplicados, así que DEBE correr
+  // al arrancar. Va en segundo plano para no retrasar el polling. La
+  // migración Nanotech sigue siendo manual (npm run maintenance:migrations).
+  const consolidacionArranque = setTimeout(async () => {
+    try {
+      const { consolidarClientesDuplicadosPorTelefono } = require("./index_19_consolidar_clientes_telefono");
+      const r = await consolidarClientesDuplicadosPorTelefono({ db, admin });
+      try { require("./index_01_core").cacheInvalidatePrefix?.("clientes:"); } catch (_) {}
+      console.log("✅ Consolidación de fichas duplicadas:", JSON.stringify(r));
+    } catch (e) {
+      console.error("❌ Consolidación de fichas duplicadas:", e?.message || e);
+    }
+  }, 15_000);
+  consolidacionArranque.unref?.();
+
   startDurableScheduler([
     {
       id: "auto_txt_7am",
