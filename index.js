@@ -12,6 +12,7 @@ require("./index_09_api_auth");  // ✅ NUEVO: Módulo compartido de auth
 require("./index_08_api");
 require("./index_10_reportes_excel");  // ✅ NUEVO: Generador de reportes Excel
 require("./index_11_clientes_excel");  // ✅ NUEVO: Generador de clientes Excel
+const respaldoDiario = require("./index_29_respaldo_diario"); // 🗄️ Respaldo diario 11 PM (solo Sublicuentas y Relojes)
 
 // Render puede dormir el servicio web después de varios minutos sin tráfico;
 // por eso el primer login llegaba a tardar más de 20 segundos. Mientras este
@@ -94,6 +95,14 @@ keepAliveRecurrente.unref?.();
       hour: 11,
       minute: 0,
       run: ({ scheduledDateDMY }) => finanzasMenus.enviarRecordatorios11AM(scheduledDateDMY),
+    },
+    {
+      // Respaldo diario: reemplaza el Keep manual. Solo Sublicuentas y Relojes.
+      id: "respaldo_diario_23",
+      type: "daily",
+      hour: 23,
+      minute: 0,
+      run: () => respaldoDiario.ejecutarRespaldoDiario(),
     },
     {
       id: "backup_dominical_21",
