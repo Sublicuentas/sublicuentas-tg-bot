@@ -391,7 +391,7 @@ app.get("/rev/clientes", revAuth, async (req, res) => {
     // Datos antiguos pueden tener el vendedor únicamente dentro de
     // servicios[]. Este respaldo evita que esos clientes desaparezcan.
     if (!docs.size && vendedorNorm === "geisell") {
-      const legacySnap = await db.collection("clientes").get();
+      const legacySnap = await require("./index_30_espejo_firestore").getColeccion("clientes");
       legacySnap.docs.forEach((d) => {
         const visible = filtrarClienteParaVendedor(d.data() || {}, vendedorNorm);
         if (visible.servicios.length) docs.set(d.id, d);
@@ -426,7 +426,7 @@ app.get("/rev/admin/revendedores", revAdminAuth, adminPermission("equipo.manage"
   try {
     const [revSnap, cliSnap] = await Promise.all([
       db.collection("revendedores").get(),
-      db.collection("clientes").get(),
+      require("./index_30_espejo_firestore").getColeccion("clientes"),
     ]);
     const porVend = {};
     cliSnap.docs.forEach((d) => {

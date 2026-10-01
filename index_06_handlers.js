@@ -678,7 +678,7 @@ async function cargarVendedoresDescubiertosLocal() {
   try {
     const [revSnap, cliSnap] = await Promise.all([
       db.collection("revendedores").get(),
-      db.collection("clientes").get(),
+      require("./index_30_espejo_firestore").getColeccion("clientes"),
     ]);
     revSnap.forEach((doc) => {
       const data = doc.data() || {};
@@ -853,7 +853,7 @@ async function buildInventarioClaveIndexLocal() {
   const byIdent = new Map();
 
   try {
-    const snapInv = await db.collection("inventario").get();
+    const snapInv = await require("./index_30_espejo_firestore").getColeccion("inventario");
     snapInv.forEach((docInv) => {
       const data = docInv.data() || {};
       const plataforma = normalizarPlataforma(data.plataforma || "");
@@ -1542,7 +1542,7 @@ async function enviarResumenVendedorPro(chatId, vendedorNombre = "") {
   const fechaMas3 = addDaysDMY(fechaHoy, 3);
   const hoyTs = parseDMYtoTS(fechaHoy);
 
-  const snap = await db.collection("clientes").get();
+  const snap = await require("./index_30_espejo_firestore").getColeccion("clientes");
 
   let clientesActivos = 0;
   let renovacionesHoy = 0;
@@ -1594,7 +1594,7 @@ function getClienteEstadoCRM(c = {}) {
 }
 
 async function getClientesRowsLocal() {
-  const snap = await db.collection("clientes").get();
+  const snap = await require("./index_30_espejo_firestore").getColeccion("clientes");
   return snap.docs
     .map((d) => ({ id: d.id, ...(d.data() || {}) }))
     .filter((cliente) => !String(cliente.consolidadoEn || "").trim())
@@ -2297,7 +2297,7 @@ function dmyToSortKey(dmy = "") {
 
 async function getAlertaClientesLocal(tipo = "hoy") {
   try {
-    const snap = await db.collection("clientes").get();
+    const snap = await require("./index_30_espejo_firestore").getColeccion("clientes");
     const hoy = hoyDMY();
     const fecha3 = addDaysDMY(hoy, 3);
     const hoyKey = dmyToSortKey(hoy); // "yyyy-mm-dd" de hoy para comparar
@@ -2410,7 +2410,7 @@ function buildAlertNavKeyboard(tipo = "", page = 0, totalRows = 0) {
 
 async function getInventarioCriticoLocal() {
   try {
-    const snap = await db.collection("inventario").get();
+    const snap = await require("./index_30_espejo_firestore").getColeccion("inventario");
     const rows = [];
 
     snap.forEach((doc) => {
@@ -3037,7 +3037,7 @@ async function detectarColisionesTelefono() {
   // en vez de dejar al admin esperando sin saber qué pasó.
   const TIMEOUT_MS = 25000;
   const snap = await Promise.race([
-    db.collection("clientes").get(),
+    require("./index_30_espejo_firestore").getColeccion("clientes"),
     new Promise((_, reject) => setTimeout(() => reject(new Error("timeout_firestore_25s")), TIMEOUT_MS)),
   ]);
 
@@ -3133,7 +3133,7 @@ bot.onText(/\/auditar_fusiones/i, async (msg) => {
 
   await bot.sendMessage(chatId, "🔎 Auditando identidad de clientes en Firestore (solo lectura)...");
   try {
-    const snap = await db.collection("clientes").get();
+    const snap = await require("./index_30_espejo_firestore").getColeccion("clientes");
     const docs = snap.docs.map(d => ({ id: d.id, ...(d.data() || {}) }));
     const norm = (v) => String(v || "").trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, " ");
     const slug = (v) => norm(v).replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80) || "cliente";
@@ -3523,7 +3523,7 @@ bot.onText(/\/buscar_raw(?:\s+([\s\S]+))?/i, async (msg, match) => {
   await bot.sendMessage(chatId, `🔎 Buscando "${q}" en TODA la colección clientes (sin filtros)...`);
 
   try {
-    const snap = await db.collection("clientes").get();
+    const snap = await require("./index_30_espejo_firestore").getColeccion("clientes");
     const hits = [];
 
     snap.forEach((doc) => {

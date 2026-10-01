@@ -87,8 +87,8 @@ async function generarRespaldoDiario() {
   const limite = new Date(hoy.getTime() + DIAS_VENCIMIENTO * 86400000);
 
   const [snapInv, snapCli] = await Promise.all([
-    db.collection("inventario").get(),
-    db.collection("clientes").get(),
+    require("./index_30_espejo_firestore").getColeccion("inventario"),
+    require("./index_30_espejo_firestore").getColeccion("clientes"),
   ]);
 
   const wb = new ExcelJS.Workbook();

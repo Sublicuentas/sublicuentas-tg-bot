@@ -1112,7 +1112,7 @@ async function getClientesBusquedaSnapshot(force = false) {
     if (Array.isArray(cached)) return cached;
   }
 
-  const snap = await db.collection(CLIENTES_COLLECTION).get();
+  const snap = await require("./index_30_espejo_firestore").getColeccion(CLIENTES_COLLECTION);
   const rows = snap.docs
     .map((d) => ({ id: d.id, ...(d.data() || {}) }))
     .filter((row) => !String(row.consolidadoEn || "").trim())
@@ -2639,7 +2639,7 @@ async function obtenerRenovacionesPorFecha(fechaDMY, vendedor = null) {
   let base = cacheGet(cacheKey);
 
   if (!Array.isArray(base)) {
-    const snap = await db.collection(CLIENTES_COLLECTION).get();
+    const snap = await require("./index_30_espejo_firestore").getColeccion(CLIENTES_COLLECTION);
     base = [];
 
     snap.forEach((d) => {
@@ -2760,7 +2760,7 @@ async function enviarTXTATodosHoy(chatId) {
 // TXT / REPORTES CRM
 // ===============================
 async function reporteClientesTXTGeneral(chatId) {
-  const snap = await db.collection(CLIENTES_COLLECTION).get();
+  const snap = await require("./index_30_espejo_firestore").getColeccion(CLIENTES_COLLECTION);
   const rows = snap.docs
     .map((d) => ({ id: d.id, ...(d.data() || {}) }))
     .filter((c) => !String(c.consolidadoEn || "").trim());
@@ -2773,7 +2773,7 @@ async function reporteClientesTXTGeneral(chatId) {
 }
 
 async function reporteClientesSplitPorVendedorTXT(chatId) {
-  const snap = await db.collection(CLIENTES_COLLECTION).get();
+  const snap = await require("./index_30_espejo_firestore").getColeccion(CLIENTES_COLLECTION);
   const rows = snap.docs
     .map((d) => ({ id: d.id, ...(d.data() || {}) }))
     .filter((c) => !String(c.consolidadoEn || "").trim());
@@ -2808,7 +2808,7 @@ async function enviarHistorialClienteTXT(chatId, clientId) {
 }
 
 async function enviarMisClientes(chatId, vendedorNombre = "") {
-  const snap = await db.collection(CLIENTES_COLLECTION).get();
+  const snap = await require("./index_30_espejo_firestore").getColeccion(CLIENTES_COLLECTION);
   const rows = snap.docs
     .map((d) => ({ id: d.id, ...(d.data() || {}) }))
     .filter((c) => !String(c.consolidadoEn || "").trim())
@@ -2825,7 +2825,7 @@ async function enviarMisClientes(chatId, vendedorNombre = "") {
 }
 
 async function enviarMisClientesTXT(chatId, vendedorNombre = "") {
-  const snap = await db.collection(CLIENTES_COLLECTION).get();
+  const snap = await require("./index_30_espejo_firestore").getColeccion(CLIENTES_COLLECTION);
   const rows = snap.docs
     .map((d) => ({ id: d.id, ...(d.data() || {}) }))
     .filter((c) => !String(c.consolidadoEn || "").trim())

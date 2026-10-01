@@ -294,7 +294,7 @@ async function buscarInventarioPorCorreo(query = "") {
   if (!q) return [];
 
   try {
-    const snap = await db.collection("inventario").get();
+    const snap = await require("./index_30_espejo_firestore").getColeccion("inventario");
     const out = [];
 
     snap.forEach((doc) => {
@@ -410,7 +410,7 @@ async function buscarCuentaInventarioPorMoveToken(token = "") {
   if (!wanted) return null;
 
   try {
-    const snap = await db.collection("inventario").get();
+    const snap = await require("./index_30_espejo_firestore").getColeccion("inventario");
     let found = null;
     for (const doc of snap.docs) {
       if (getInventoryMoveToken(doc.id) !== wanted) continue;
@@ -519,7 +519,7 @@ async function getInventarioRowsByPlataforma(plataforma = "") {
 
   if (!rows.length) {
     try {
-      const snapAll = await db.collection("inventario").get();
+      const snapAll = await require("./index_30_espejo_firestore").getColeccion("inventario");
       rows = snapAll.docs
         .map((d) => ({ id: d.id, ...(d.data() || {}) }))
         .filter((r) => normalizarPlataforma(r.plataforma || "") === plat);
@@ -650,7 +650,7 @@ async function mostrarListaCorreosPlataforma(chatId, plataforma = "") {
 
 async function mostrarStockGeneral(chatId) {
   try {
-    const snap = await db.collection("inventario").get();
+    const snap = await require("./index_30_espejo_firestore").getColeccion("inventario");
     const map = {};
 
     snap.forEach((doc) => {

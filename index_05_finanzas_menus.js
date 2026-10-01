@@ -646,7 +646,7 @@ async function generarDashboard(chatId) {
     let resMesAnterior = { ingresos: 0, egresos: 0, utilidad: 0, topOrdenado: [] };
     try { [resMesActual, resMesAnterior] = await Promise.all([resumenFinancieroPorMonthKey(mesActualKey), resumenFinancieroPorMonthKey(mesAnteriorKey)]); } catch (e) { logErr("dashboard.finanzas", e); }
     let clientes = [];
-    try { const snapClientes = await db.collection("clientes").get(); clientes = snapClientes.docs.map((d) => ({ id: d.id, ...(d.data() || {}) })); } catch (e) { logErr("dashboard.clientes", e); }
+    try { const snapClientes = await require("./index_30_espejo_firestore").getColeccion("clientes"); clientes = snapClientes.docs.map((d) => ({ id: d.id, ...(d.data() || {}) })); } catch (e) { logErr("dashboard.clientes", e); }
     const totalClientes = clientes.length;
     const hoyDate = new Date(Number(yyyy), Number(mm) - 1, Number(dd));
     const en7Dias = new Date(hoyDate.getTime()); en7Dias.setDate(en7Dias.getDate() + 7);
@@ -777,7 +777,7 @@ async function ejecutarBackupDominical(scheduledDateDMY = "") {
     const rows = await getMovimientosPorMes(mesKey);
     let ingresos = 0, egresos = 0;
     for (const r of rows) { const monto = Number(r.monto || 0); if (String(r.tipo || "").toLowerCase() === "egreso") egresos += monto; else ingresos += monto; }
-    const snapClientes = await db.collection("clientes").get();
+    const snapClientes = await require("./index_30_espejo_firestore").getColeccion("clientes");
     const clientes = snapClientes.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
     const wb = new ExcelJS.Workbook();
     wb.creator = "Sublicuentas Bot"; wb.created = new Date();

@@ -46,6 +46,8 @@ keepAliveRecurrente.unref?.();
 
 (async () => {
   startTelegramOutboxWorker();
+  // Auditoría Firestore: un listener por colección en vez de miles de lecturas completas repetidas.
+  try { require("./index_30_espejo_firestore").iniciarEspejos(); } catch (e) { console.error("espejos", e?.message || e); }
 
   // Consolidación de fichas duplicadas (mismo nombre + mismo teléfono).
   // Sublichat HQ y el bot responden "reinicie el bot para ejecutar la

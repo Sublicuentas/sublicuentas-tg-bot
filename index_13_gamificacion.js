@@ -79,7 +79,7 @@ module.exports = function mountGamificacion(app) {
     try {
       res.set("Cache-Control", "no-store");
       const [revSnap, cliSnap, renSnap, preciosSnap] = await Promise.all([
-        db.collection("revendedores").get(), db.collection("clientes").get(),
+        db.collection("revendedores").get(), require("./index_30_espejo_firestore").getColeccion("clientes"),
         db.collection("renovaciones").get(), db.collection("precios").get(),
       ]);
       const renovaciones = renSnap.docs.map(d => d.data() || {});
@@ -185,7 +185,7 @@ module.exports = function mountGamificacion(app) {
     try {
       const caps=await liveCaps(req.rev);
       if(!caps.recompensas)return res.status(403).json({error:"sin_permiso_recompensas"});
-      const [revDoc,cliSnap]=await Promise.all([db.collection("revendedores").doc(req.rev.id).get(),db.collection("clientes").get()]);
+      const [revDoc,cliSnap]=await Promise.all([db.collection("revendedores").doc(req.rev.id).get(),require("./index_30_espejo_firestore").getColeccion("clientes")]);
       const vendedorNorm = normVendedor(req.rev.nombre_norm || req.rev.nombre || "");
       const ventas=cliSnap.docs.reduce((total,d)=>{
         const cliente=d.data()||{};

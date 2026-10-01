@@ -226,7 +226,7 @@ function buildServiceRows(clientes = []) {
 
 async function obtenerTodosLosClientes() {
   try {
-    const snap = await db.collection("clientes").get();
+    const snap = await require("./index_30_espejo_firestore").getColeccion("clientes");
     return snap.docs
       .map((doc) => ({ id: doc.id, ...(doc.data() || {}) }))
       .filter((cliente) => !String(cliente.consolidadoEn || "").trim())
