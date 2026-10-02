@@ -56,6 +56,7 @@ const PROFILE_PERMISSIONS = Object.freeze({
   ],
   geisell: [
     'bot.use',
+    'codigos.read', // revisar códigos de las cuentas (/code, /link, /hogar, /prime, /inbox)
     'clientes.read', 'clientes.write',
     'renovaciones.read', 'renovaciones.write',
     'control_maestro.read', 'control_maestro.write',
