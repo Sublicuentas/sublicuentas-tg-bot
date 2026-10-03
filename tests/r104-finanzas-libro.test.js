@@ -28,3 +28,14 @@ test("Telegram: renovar pide pago real a Sublicuentas/Relojes en todas las rutas
   for (const hoja of ["Planilla", "Distribución Planilla", "Cierres", "Saldos Libro"]) assert.ok(x.includes(`"${hoja}"`), hoja);
   assert.match(fs.readFileSync(path.join(__dirname, "..", "index_05_finanzas_menus.js"), "utf8"), /callback_data: "fl:menu"/);
 });
+
+test("registro manual de ingreso/egreso usa los bancos registrados y guarda bancoId", () => {
+  const f = fs.readFileSync(path.join(__dirname, "..", "index_05_finanzas_menus.js"), "utf8");
+  assert.match(f, /async function kbBancosLibro\(prefix\)/);
+  assert.match(f, /\.\.\.\(bancoId \? \{ bancoId: String\(bancoId\) \} : \{\}\)/);
+  const h = fs.readFileSync(path.join(__dirname, "..", "index_06_handlers.js"), "utf8");
+  assert.equal((h.match(/finLibro\.bancoDesdeBoton\(/g) || []).length, 2);
+  assert.equal((h.match(/bancoId: p\.bancoId \|\| ""/g) || []).length, 5);
+  const l = fs.readFileSync(path.join(__dirname, "..", "index_31_finanzas_libro.js"), "utf8");
+  assert.match(l, /const DESDE_SIN_BANCO = "2026-10-01"/);
+});
