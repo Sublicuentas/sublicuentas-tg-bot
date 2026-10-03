@@ -101,6 +101,9 @@ function resolveAccessProfile(doc = {}, fallbackRole = 'none') {
   for (const [profile, aliases] of Object.entries(PROFILE_ALIASES)) {
     if (candidates.some((x) => aliases.has(x))) return profile;
   }
+  // Geisell: su ficha puede tener nombre completo ("Geisell …", "Geissel …") o usuario con sufijo.
+  // Antes eso no coincidía con el alias exacto y caía en perfil "vendedor" (sin códigos).
+  if (candidates.some((x) => x.startsWith('geisell') || x.startsWith('geissel'))) return 'geisell';
 
   const roleKey = normalizeText(fallbackRole).replace(/\s+/g, '');
   if (roleKey === 'superadmin') return 'sublicuentas';
