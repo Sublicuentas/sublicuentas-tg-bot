@@ -170,7 +170,7 @@ test('ACL fase 2: perfiles nominales aplican mínimo privilegio', () => {
 
   assert.equal(permissionGranted(geisell, 'clientes.read'), true);
   assert.equal(permissionGranted(geisell, 'control_maestro.write'), true);
-  assert.equal(permissionGranted(geisell, 'codigos.read'), false);
+  assert.equal(permissionGranted(geisell, 'codigos.read'), true); // oct-2026: Sublicuentas pidió devolverle a Geisell la revisión de códigos
   assert.equal(permissionGranted(geisell, 'sincronizacion.claves'), false);
   assert.equal(permissionGranted(geisell, 'finanzas.read'), false);
 

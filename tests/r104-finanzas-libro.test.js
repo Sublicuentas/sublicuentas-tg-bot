@@ -1,0 +1,30 @@
+const test = require("node:test");
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
+const R = require("../lib_finanzas_reglas");
+
+const methods = R.publicMethods([{ id: "bac", nombre: "BAC", logoKey: "bac" }, { id: "ficohsa", nombre: "Ficohsa", logoKey: "ficohsa" }, { id: "atl", nombre: "Atlántida", logoKey: "atlantida" }, { id: "tigo", nombre: "Tigo Money", logoKey: "tigo" }]);
+const libro = { bases: { bac: { saldo: 4000, desde: "2026-10-01" }, ficohsa: { saldo: 1000, desde: "2026-10-01" }, atl: { saldo: 600, desde: "2026-10-01" }, tigo: { saldo: 400, desde: "2026-10-01" } } };
+
+test("reglas del bot = reglas del servidor/APK (casos del PDF)", () => {
+  const { bancos, total } = R.bankBalances([], libro, methods);
+  assert.equal(total, 6000);
+  const v = R.validatePlanilla({ montoTotal: 2000, asignaciones: [{ bancoId: "bac", monto: 1000 }, { bancoId: "ficohsa", monto: 1000 }], bancos });
+  assert.equal(v.ok, true);
+  assert.match(R.validatePlanilla({ montoTotal: 2000, asignaciones: [{ bancoId: "bac", monto: 1700 }], bancos }).errors.join(" "), /Faltan Lps\. 300/);
+  assert.match(R.validatePlanilla({ montoTotal: 700, asignaciones: [{ bancoId: "atl", monto: 700 }], bancos }).errors.join(" "), /Saldo insuficiente/);
+  assert.equal(R.resolveBankId("bac", methods), "bac");
+  const t = R.cycleTotals([{ tipo: "ingreso", monto: 20000, fecha: "02/10/2026" }, { tipo: "egreso", monto: 12000, fecha: "03/10/2026" }, { tipo: "egreso", subtipo: "pago_planilla", monto: 5500, fecha: "09/10/2026" }], "2026-10-01", "2026-10-10");
+  assert.equal(t.disponibleAntesPlanilla, 8000); assert.equal(t.resultado, 2500);
+});
+
+test("Telegram: renovar pide pago real a Sublicuentas/Relojes en todas las rutas; planilla y Excel conectados", () => {
+  const h = fs.readFileSync(path.join(__dirname, "..", "index_06_handlers.js"), "utf8");
+  assert.equal((h.match(/finLibro\.iniciarPagoRenovacion\(/g) || []).length, 6, "+30, +31, todos +30, todos +31, fecha manual uno y todos");
+  assert.match(h, /if \(data\.startsWith\("fl:"\)\) return finLibro\.handleCallback/);
+  assert.match(h, /return finLibro\.handleText\(chatId, userId, t, p\)/);
+  const x = fs.readFileSync(path.join(__dirname, "..", "index_10_reportes_excel.js"), "utf8");
+  for (const hoja of ["Planilla", "Distribución Planilla", "Cierres", "Saldos Libro"]) assert.ok(x.includes(`"${hoja}"`), hoja);
+  assert.match(fs.readFileSync(path.join(__dirname, "..", "index_05_finanzas_menus.js"), "utf8"), /callback_data: "fl:menu"/);
+});
