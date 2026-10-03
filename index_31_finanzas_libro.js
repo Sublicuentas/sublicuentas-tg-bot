@@ -39,7 +39,7 @@ async function loadMethods() {
 function libroFrom(data = {}) {
   const bases = data.bases && typeof data.bases === "object" ? data.bases : {};
   const desdes = Object.values(bases).map((b) => b?.desde).filter(Boolean).sort();
-  const cicloInicio = data.cicloInicio || desdes[0] || hoyYmd();
+  const cicloInicio = data.cicloInicio || desdes[0] || "2026-10-01"; // Finanzas nueva arranca el 01/10/2026
   return { ...data, bases, cicloInicio, cicloId: data.cicloId || `ciclo_${cicloInicio}`, lecturaDesde: [cicloInicio, ...desdes].sort()[0] };
 }
 function movQuery(desde) {
