@@ -440,6 +440,7 @@ async function menuPagos(chatId) {
     [{ text: "➕ Registrar ingreso", callback_data: "fin:menu:ingreso", style: "success" }, { text: "➖ Registrar egreso", callback_data: "fin:menu:egreso", style: "danger" }],
     [{ text: "📒 Ver registro", callback_data: "fin:menu:registro", style: "primary" }, { text: "🗑️ Eliminar movimiento", callback_data: "fin:menu:eliminar", style: "danger" }],
     [{ text: "📊 Reportes", callback_data: "fin:menu:reportes", style: "primary" }, { text: "🧾 Cierre de caja", callback_data: "fin:menu:cierre", style: "primary" }],
+    [{ text: "💼 Ciclo · bancos · planilla", callback_data: "fl:menu", style: "primary" }], // R104 (Sublicuentas y Relojes)
     [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
   ]);
 }

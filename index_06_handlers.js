@@ -33,6 +33,29 @@ const {
 // hueco de "auto-claim" del panel de revendedores — ver index_09_api_auth.js)
 const { generarPinSetup } = require("./index_09_api_auth");
 const accessControl = require("./index_23_access_control");
+const finLibro = require("./index_31_finanzas_libro"); // R104 · Finanzas: ciclo, planilla multi-banco y pago real al renovar
+// La renovación con pago real reutiliza las MISMAS funciones de renovación del bot (una sola vez por confirmación).
+finLibro.configurar({
+  ejecutarRenovacion: async (chatId, userId, a, { ajuste = false, motivo = "" } = {}) => {
+    const c = await getCliente(a.clientId);
+    const servicios = Array.isArray(c?.servicios) ? c.servicios : [];
+    let fechaNueva = "", plataforma = "", fechaAnterior = "";
+    if (a.tipo === "uno") {
+      let idx = a.compraId ? servicios.findIndex((s) => String(s?.compraId || "") === String(a.compraId)) : Number(a.idx);
+      if (idx < 0) idx = Number(a.idx);
+      if (!servicios[idx]) throw new Error("Esa compra cambió o ya no existe. Abra nuevamente la ficha.");
+      fechaAnterior = servicios[idx]?.fechaRenovacion || ""; plataforma = servicios[idx]?.plataforma || "";
+      const r = await renovarServicioTx(a.clientId, idx, { dias: a.dias || 0, fechaExacta: a.fechaExacta || "", compraId: a.compraId || "" });
+      fechaNueva = r?.fechaNueva || "";
+    } else {
+      await renovarTodosServiciosTx(a.clientId, a.fechaExacta ? { fechaExacta: a.fechaExacta } : { dias: a.dias || 30 });
+      plataforma = servicios.map((s) => s?.plataforma).filter(Boolean).join(", "); fechaNueva = a.fechaExacta || "";
+    }
+    try { await registrarActividadTelegramLocal(userId, chatId, a.tipo === "uno" ? "renovar_servicio" : "renovar_todos", { clienteId: a.clientId, cliente: c?.nombrePerfil || c?.nombre || "", telefono: c?.telefono || "", campo: "renovación", cambio: `${ajuste ? `ajuste sin pago (${motivo})` : "con pago real"} · ${fechaNueva || a.etiqueta || ""}` }, `Renovó ${a.etiqueta || "servicio"}${c?.nombrePerfil ? ` de ${c.nombrePerfil}` : ""}`); } catch (e) { logErr("R104 actividad renovar", e); }
+    setTimeout(() => { Promise.resolve(enviarFichaCliente(chatId, a.clientId)).catch(() => {}); }, 500);
+    return { nombre: c?.nombrePerfil || c?.nombre || "", telefono: c?.telefono || "", plataforma, fechaAnterior, fechaNueva };
+  },
+});
 const integrity = require("./index_26_integrity_guard");
 const { callbackPermission, permissionGranted } = require("./lib_hardening");
 const { obtenerCatalogoSocio, tarifaIdParaSocio } = require("./index_15_catalogo_socios");
@@ -1380,6 +1403,7 @@ async function sendBottomMainMenu(chatId, userId, fromText = false) {
     if (can("inventario.read")) buttons.push({ text: "🎯 Control cuentas", callback_data: "menu:inventario", style: "primary" });
     if (can("clientes.read")) buttons.push({ text: "👥 Clientes", callback_data: "menu:clientes", style: "primary" });
     if (can("finanzas.read")) buttons.push({ text: "💰 Control financiero", callback_data: "menu:pagos", style: "success" });
+    if (ctx.role === "superadmin" || ["sublicuentas", "relojes"].includes(String(ctx.profile || ""))) buttons.push({ text: "💼 Ciclo y planilla", callback_data: "fl:menu", style: "success" }); // R104 · solo Sublicuentas y Relojes
     if (can("reportes.read")) buttons.push({ text: "🚨 Riesgos", callback_data: "menu:alertas", style: "danger" });
     if (can("reportes.read")) buttons.push({ text: "📊 Análisis", callback_data: "menu:dashboard", style: "primary" });
     if (can("equipo.manage")) buttons.push({ text: "👤 Revendedores", callback_data: "menu:revendedores", style: "primary" });
@@ -4735,6 +4759,7 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
       if (data === "menu:inventario:designai") return menuInventarioDisenoIA(chatId);
       if (data === "menu:clientes") return menuClientes(chatId);
       if (data === "menu:pagos") return menuPagos(chatId);
+      if (data.startsWith("fl:")) return finLibro.handleCallback(chatId, userId, data); // R104 · ciclo, planilla y pago real al renovar
       if (data === "menu:alertas") return menuAlertas(chatId);
       if (data === "menu:renovaciones") return menuRenovaciones(chatId, userId);
       if (data === "menu:revendedores")  return menuGestionRevendedores(chatId);
@@ -6050,6 +6075,7 @@ Revise que el correo exista en inventario con esa plataforma o coloque la clave 
         const idx = resolverIndiceCompraSelectorLocal(servicios, compraSel);
         if (idx < 0) return bot.sendMessage(chatId, "⚠️ Esa compra cambió o ya no existe. Abra nuevamente la ficha.");
         const compraId = String(servicios[idx]?.compraId || "");
+        if (await finLibro.esLibroUser(userId)) return finLibro.iniciarPagoRenovacion(chatId, userId, { tipo: "uno", clientId, idx, compraId, dias: 30, etiqueta: `${servicios[idx]?.plataforma || "servicio"} +30 días` }); // R104
         const renovado = await renovarServicioTx(clientId, idx, { dias: 30, compraId });
         const aud=await actividadClienteServicioLocal(clientId,idx,compraId);
         await registrarActividadTelegramLocal(userId,chatId,'renovar_servicio',{...aud,campo:'renovación',cambio:`nueva fecha ${renovado.fechaNueva}`},`Renovó ${aud.plataforma||'servicio'}${aud.cliente?` de ${aud.cliente}`:''} +30 días · nueva fecha ${renovado.fechaNueva}.`);
@@ -6068,6 +6094,7 @@ Revise que el correo exista en inventario con esa plataforma o coloque la clave 
         const idx = resolverIndiceCompraSelectorLocal(servicios, compraSel);
         if (idx < 0) return bot.sendMessage(chatId, "⚠️ Esa compra cambió o ya no existe. Abra nuevamente la ficha.");
         const compraId = String(servicios[idx]?.compraId || "");
+        if (await finLibro.esLibroUser(userId)) return finLibro.iniciarPagoRenovacion(chatId, userId, { tipo: "uno", clientId, idx, compraId, dias: 31, etiqueta: `${servicios[idx]?.plataforma || "servicio"} +31 días` }); // R104
         const renovado = await renovarServicioTx(clientId, idx, { dias: 31, compraId });
         const aud=await actividadClienteServicioLocal(clientId,idx,compraId);
         await registrarActividadTelegramLocal(userId,chatId,'renovar_servicio',{...aud,campo:'renovación',cambio:`nueva fecha ${renovado.fechaNueva}`},`Renovó ${aud.plataforma||'servicio'}${aud.cliente?` de ${aud.cliente}`:''} +31 días · nueva fecha ${renovado.fechaNueva}.`);
@@ -6214,6 +6241,7 @@ Revise que el correo exista en inventario con esa plataforma o coloque la clave 
 
       if (data.startsWith("cli:ren:all:ok:")) {
         const clientId = data.slice("cli:ren:all:ok:".length);
+        if (await finLibro.esLibroUser(userId)) return finLibro.iniciarPagoRenovacion(chatId, userId, { tipo: "todos", clientId, dias: 30, etiqueta: "todos los servicios +30 días" }); // R104
         const cAudit=await getCliente(clientId);
         await renovarTodosServiciosTx(clientId, { dias: 30 });
         await registrarActividadTelegramLocal(userId,chatId,'renovar_todos',{clienteId:clientId,cliente:cAudit?.nombrePerfil||cAudit?.nombre||'Cliente',telefono:cAudit?.telefono||'',campo:'todos los servicios',cambio:'+30 días'},`Renovó todos los servicios de ${cAudit?.nombrePerfil||cAudit?.nombre||'Cliente'} +30 días.`);
@@ -6232,6 +6260,7 @@ Revise que el correo exista en inventario con esa plataforma o coloque la clave 
 
       if (data.startsWith("cli:ren:all31:ok:")) {
         const clientId = data.slice("cli:ren:all31:ok:".length);
+        if (await finLibro.esLibroUser(userId)) return finLibro.iniciarPagoRenovacion(chatId, userId, { tipo: "todos", clientId, dias: 31, etiqueta: "todos los servicios +31 días" }); // R104
         const cAudit=await getCliente(clientId);
         await renovarTodosServiciosTx(clientId, { dias: 31 });
         await registrarActividadTelegramLocal(userId,chatId,'renovar_todos',{clienteId:clientId,cliente:cAudit?.nombrePerfil||cAudit?.nombre||'Cliente',telefono:cAudit?.telefono||'',campo:'todos los servicios',cambio:'+31 días'},`Renovó todos los servicios de ${cAudit?.nombrePerfil||cAudit?.nombre||'Cliente'} +31 días.`);
@@ -6731,6 +6760,8 @@ bot.on("message", async (msg) => {
 
       const p = pending.get(String(chatId));
       const t = String(text || "").trim();
+
+      if (/^fl[A-Z]/.test(String(p?.mode || ""))) return finLibro.handleText(chatId, userId, t, p); // R104
 
       if (p.mode === "finEliminarFechaAsk") {
         const fecha = parseFechaFlexible(t);
@@ -7323,6 +7354,7 @@ bot.on("message", async (msg) => {
         }
 
         forceNextPanelAtBottom(chatId);
+        if (await finLibro.esLibroUser(userId)) { pending.delete(String(chatId)); return finLibro.iniciarPagoRenovacion(chatId, userId, { tipo: "todos", clientId: p.clientId, fechaExacta: fechaFinal, etiqueta: `todos los servicios hasta ${fechaFinal}` }); } // R104
         const cAudit=await getCliente(p.clientId);
         try {
           await renovarTodosServiciosTx(p.clientId, { fechaExacta: fechaFinal });
@@ -7364,6 +7396,7 @@ bot.on("message", async (msg) => {
         }
 
       forceNextPanelAtBottom(chatId);
+        if (await finLibro.esLibroUser(userId)) { pending.delete(String(chatId)); return finLibro.iniciarPagoRenovacion(chatId, userId, { tipo: "uno", clientId: p.clientId, idx: p.idx, compraId: p.compraId || "", fechaExacta: fechaFinal, etiqueta: `hasta ${fechaFinal}` }); } // R104
         try {
           await renovarServicioTx(p.clientId, p.idx, { fechaExacta: fechaFinal, compraId: p.compraId || "" });
         } catch (e) {
