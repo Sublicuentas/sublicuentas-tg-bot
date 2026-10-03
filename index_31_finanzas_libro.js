@@ -78,6 +78,50 @@ async function registrarCobroRenovacion({ monto, bancoId, opId, actor, cliente =
   return { duplicado: false, id: ref.id };
 }
 
+// Saldo inicial (una vez por banco) — igual que registrar_saldo_inicial de /api/finanzas.
+async function registrarSaldoInicial({ bancoId, monto, desde, actor }) {
+  const methods = await loadMethods();
+  const banco = methods.find((m) => m.id === bancoId);
+  if (!banco) throw Object.assign(new Error("Banco no válido."), { userError: true });
+  const hoy = hoyYmd(); const d = /^\d{4}-\d{2}-\d{2}$/.test(String(desde)) && desde <= hoy ? desde : hoy;
+  const now = new Date().toISOString();
+  return db.runTransaction(async (tx) => {
+    const snap = await tx.get(LIBRO());
+    const data = snap.exists ? (snap.data() || {}) : {};
+    const bases = { ...(data.bases || {}) };
+    if (bases[bancoId]) throw Object.assign(new Error(`${banco.nombre} ya tiene saldo inicial. Para corregir use “Ajuste de saldo”.`), { userError: true });
+    if (data.ultimoCierreFin && d <= data.ultimoCierreFin) throw Object.assign(new Error(`La fecha debe ser posterior al último cierre (${ymdToDmy(data.ultimoCierreFin)}).`), { userError: true });
+    bases[bancoId] = { saldo: R.money(monto), desde: d, registradoPor: actor.usuario, at: now };
+    const movRef = db.collection("finanzas_movimientos").doc(`saldoini_${bancoId}`);
+    tx.set(movRef, { movimientoId: movRef.id, origen: "telegram", origenCanal: "tg", registradoPor: actor.usuario, registradoPorId: actor.uid, tipo: "saldo_inicial", subtipo: "saldo_inicial", bancoId, banco: banco.nombre, monto: R.money(monto), ...fechaCampos(d), createdAt: now, updatedAt: now });
+    const cicloInicio = !data.cicloInicio ? d : (!data.ultimoCierreFin && d < data.cicloInicio ? d : data.cicloInicio);
+    tx.set(LIBRO(), { bases, cicloInicio, cicloId: data.ultimoCierreFin ? (data.cicloId || `ciclo_${cicloInicio}`) : `ciclo_${cicloInicio}`, updatedAt: now }, { merge: true });
+    tx.set(db.collection("auditoria_eventos").doc(), { tipo: "finanzas_saldo_inicial", bancoId, monto: R.money(monto), desde: d, registradoPor: actor.usuario, origen: "tg", createdAt: now });
+    return { banco: banco.nombre, desde: d };
+  });
+}
+// Ajuste auditado (+ suma / − resta) — nunca se edita el saldo directo.
+async function registrarAjuste({ bancoId, monto, motivo, opId, actor }) {
+  const methods = await loadMethods(); const banco = methods.find((m) => m.id === bancoId);
+  const ref = db.collection("finanzas_movimientos").doc(opDocId("ajuste", actor.uid, opId));
+  const now = new Date().toISOString();
+  try { await ref.create({ movimientoId: ref.id, origen: "telegram", origenCanal: "tg", registradoPor: actor.usuario, registradoPorId: actor.uid, tipo: "ajuste_saldo", subtipo: "ajuste_saldo", bancoId, banco: banco?.nombre || bancoId, monto: R.money(monto), motivo, operationId: opId, ...fechaCampos(hoyYmd()), createdAt: now, updatedAt: now }); }
+  catch (e) { if (String(e?.code) === "6" || /already exists/i.test(String(e?.message))) return { duplicado: true }; throw e; }
+  await db.collection("auditoria_eventos").add({ tipo: "finanzas_ajuste_saldo", bancoId, monto: R.money(monto), motivo, movimientoId: ref.id, registradoPor: actor.usuario, origen: "tg", createdAt: now });
+  return { duplicado: false };
+}
+async function panelBancos(chatId) {
+  const { saldos } = await estadoLibro();
+  const lines = saldos.bancos.map((b) => b.activado ? `✅ ${b.nombre}: *${lps(b.saldo)}* (desde ${ymdToDmy(b.desde)})` : `⚪ ${b.nombre}: sin saldo inicial`);
+  const kb = [];
+  const pend = saldos.bancos.filter((b) => !b.activado).map((b) => ({ text: `➕ ${b.nombre}`, callback_data: `fl:si:pick:${b.id}` }));
+  for (let i = 0; i < pend.length; i += 2) kb.push(pend.slice(i, i + 2));
+  const act = saldos.bancos.filter((b) => b.activado).map((b) => ({ text: `± Ajustar ${b.nombre}`, callback_data: `fl:aj:pick:${b.id}` }));
+  for (let i = 0; i < act.length; i += 2) kb.push(act.slice(i, i + 2));
+  kb.push([{ text: "⬅️ Ciclo", callback_data: "fl:menu" }]);
+  return upsertPanel(chatId, ["🏦 *SALDOS POR BANCO*", "", ...lines, "", pend.length ? "Toque ➕ para registrar el saldo inicial (una sola vez por banco)." : "Todos los bancos tienen saldo inicial. Para corregir use ± Ajustar (pide motivo)."].join("\n"), kb);
+}
+
 async function confirmarPagoPlanilla({ draft, actor }) {
   const pagoRef = db.collection("planilla_pagos").doc(opDocId("planilla", actor.uid, draft.opId));
   const hoy = hoyYmd(), now = new Date().toISOString();
@@ -172,9 +216,10 @@ async function menuLibro(chatId) {
     `💵 Ingresos: ${lps(t.ingresos)}`, `🧾 Egresos operativos: −${lps(t.egresosOperativos)}`, `= Disponible antes de planilla: *${lps(t.disponibleAntesPlanilla)}*`,
     `👥 Planilla / comisiones: −${lps(t.planilla)}`, `= Resultado: *${lps(t.resultado)}*`, "",
     ...(sinBanco.length ? [`⚠️ *${sinBanco.length} movimiento${sinBanco.length === 1 ? "" : "s"} sin banco* desde el 01/10 → toque 🏷 para enlazarlos.`, ""] : []),
-    `🏦 *Saldos reales* · ${lps(saldos.total)}`, ...(bancos.length ? bancos.map((b) => `• ${b.nombre}: ${lps(b.saldo)}`) : ["(Registre el saldo inicial de cada banco desde la APK → Control financiero → Bancos)"]),
+    `🏦 *Saldos reales* · ${lps(saldos.total)}`, ...(bancos.length ? bancos.map((b) => `• ${b.nombre}: ${lps(b.saldo)}`) : ["(Toque 🏦 Saldos por banco para registrar el saldo inicial de cada banco)"]),
   ].join("\n");
   return upsertPanel(chatId, txt, [
+    [{ text: "🏦 Saldos por banco", callback_data: "fl:bancos" }],
     [{ text: "👥 Nuevo pago de planilla", callback_data: "fl:pl:new" }],
     [{ text: "🏷 Movimientos sin banco", callback_data: "fl:sb:list:0" }],
     [{ text: "🔄 Actualizar", callback_data: "fl:menu" }, { text: "🏠 Inicio", callback_data: "go:inicio" }],
@@ -225,6 +270,19 @@ async function handleCallback(chatId, userId, data) {
   const p = pending.get(String(chatId)) || {};
   try {
     if (data === "fl:menu") return menuLibro(chatId);
+    if (data === "fl:bancos") return panelBancos(chatId);
+    if (data.startsWith("fl:si:pick:")) {
+      const bancoId = data.slice("fl:si:pick:".length); const m = (await loadMethods()).find((x) => x.id === bancoId);
+      pending.set(String(chatId), { mode: "flSiMonto", bancoId });
+      return upsertPanel(chatId, `🏦 *Saldo inicial · ${m?.nombre || bancoId}*\n\n¿Cuánto tenía este banco al EMPEZAR el 01/10/2026? Escriba el monto (0 si estaba vacío).`, [[{ text: "❌ Cancelar", callback_data: "fl:bancos" }]]);
+    }
+    if (data.startsWith("fl:si:dia:") && p.mode === "flSiDia") {
+      const v = data.slice("fl:si:dia:".length); return confirmarSaldoInicialTg(chatId, userId, p, v === "hoy" ? hoyYmd() : v);
+    }
+    if (data.startsWith("fl:aj:pick:")) {
+      pending.set(String(chatId), { mode: "flAjMonto", bancoId: data.slice("fl:aj:pick:".length), opId: newOpId() });
+      return bot.sendMessage(chatId, "± Escriba el ajuste: positivo suma (ej. 150), negativo resta (ej. -150).");
+    }
     if (data.startsWith("fl:sb:list:")) return panelSinBanco(chatId, Number(data.split(":")[3] || 0));
     if (data.startsWith("fl:sb:pick:")) {
       const i = Number(data.split(":")[3]); const id = (p.ids || [])[i];
@@ -266,10 +324,41 @@ async function handleCallback(chatId, userId, data) {
   return null;
 }
 
+async function confirmarSaldoInicialTg(chatId, userId, p, desde) {
+  try {
+    const r = await registrarSaldoInicial({ bancoId: p.bancoId, monto: p.monto, desde, actor: await actorDe(userId) });
+    pending.delete(String(chatId));
+    await bot.sendMessage(chatId, `✅ Saldo inicial de ${r.banco}: ${lps(p.monto)} al empezar el ${ymdToDmy(r.desde)}.`);
+  } catch (e) { pending.delete(String(chatId)); await bot.sendMessage(chatId, `⚠️ ${String(e?.message || e).slice(0, 220)}`); }
+  return panelBancos(chatId);
+}
+
 async function handleText(chatId, userId, text, p) {
   const t = String(text || "").trim();
   const num = Number(t.replace(/[^0-9.\-]/g, ""));
   try {
+    if (p.mode === "flSiMonto") {
+      if (!(num >= 0) || t === "") return bot.sendMessage(chatId, "Escriba el monto (0 o más), ej. 4000.");
+      p.monto = R.money(num); p.mode = "flSiDia"; pending.set(String(chatId), p);
+      return upsertPanel(chatId, `Saldo: *${lps(p.monto)}*\n¿Desde qué día cuenta este saldo?\n(o escriba otra fecha dd/mm/yyyy)`, [
+        [{ text: "📅 01/10/2026 (recomendado)", callback_data: "fl:si:dia:2026-10-01" }], [{ text: "Hoy", callback_data: "fl:si:dia:hoy" }], [{ text: "❌ Cancelar", callback_data: "fl:bancos" }]]);
+    }
+    if (p.mode === "flSiDia") {
+      const m = t.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+      if (!m) return bot.sendMessage(chatId, "Escriba la fecha como dd/mm/yyyy o toque un botón.");
+      return confirmarSaldoInicialTg(chatId, userId, p, `${m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}`);
+    }
+    if (p.mode === "flAjMonto") {
+      if (!num) return bot.sendMessage(chatId, "Escriba el ajuste (ej. 150 o -150).");
+      p.monto = R.money(num); p.mode = "flAjMotivo"; pending.set(String(chatId), p);
+      return bot.sendMessage(chatId, "Escriba el motivo del ajuste:");
+    }
+    if (p.mode === "flAjMotivo") {
+      if (t.length < 4) return bot.sendMessage(chatId, "El ajuste necesita un motivo (mínimo 4 letras).");
+      await registrarAjuste({ bancoId: p.bancoId, monto: p.monto, motivo: t.slice(0, 200), opId: p.opId, actor: await actorDe(userId) });
+      pending.delete(String(chatId)); await bot.sendMessage(chatId, `✅ Ajuste de ${lps(p.monto)} guardado.`);
+      return panelBancos(chatId);
+    }
     if (p.mode === "flRenMonto") {
       if (!(num > 0)) return bot.sendMessage(chatId, "Escriba solo el monto que pagó (mayor que 0), ej. 220.");
       p.monto = R.money(num); p.mode = "flRenBanco"; pending.set(String(chatId), p);
@@ -309,4 +398,4 @@ async function handleText(chatId, userId, text, p) {
   return bot.sendMessage(chatId, "Use los botones del panel o toque ❌ Cancelar.");
 }
 
-module.exports = { bancoDesdeBoton, movimientosSinBanco, configurar, esLibroUser, iniciarPagoRenovacion, handleCallback, handleText, menuLibro, estadoLibro, loadMethods, registrarCobroRenovacion, confirmarPagoPlanilla };
+module.exports = { registrarSaldoInicial, registrarAjuste, bancoDesdeBoton, movimientosSinBanco, configurar, esLibroUser, iniciarPagoRenovacion, handleCallback, handleText, menuLibro, estadoLibro, loadMethods, registrarCobroRenovacion, confirmarPagoPlanilla };
