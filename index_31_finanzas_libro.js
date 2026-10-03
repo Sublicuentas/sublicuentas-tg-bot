@@ -108,18 +108,75 @@ async function confirmarPagoPlanilla({ draft, actor }) {
   });
 }
 
+// ---------------------------------------------------------------- bancos enlazados (registro manual)
+// Botón del registro manual → banco configurado. Acepta el id nuevo o el texto de un botón viejo.
+async function bancoDesdeBoton(valor = "") {
+  const methods = await loadMethods();
+  const v = String(valor || "").trim();
+  const m = methods.find((x) => x.id === v) || methods.find((x) => x.id === R.resolveBankId(v, methods));
+  return m ? { id: m.id, nombre: m.nombre } : { id: "", nombre: v };
+}
+
+// Movimientos desde el 01/10/2026 que no se pueden enlazar a ningún banco registrado.
+const DESDE_SIN_BANCO = "2026-10-01";
+async function movimientosSinBanco() {
+  const methods = await loadMethods();
+  const snap = await movQuery(DESDE_SIN_BANCO).get();
+  return snap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }))
+    .filter((m) => ["ingreso", "egreso", "planilla"].includes(R.movementKind(m)) && R.movementBankId(m, methods) === R.SIN_BANCO)
+    .sort((a, b) => R.movementYmd(a).localeCompare(R.movementYmd(b)));
+}
+function lineaMov(m) {
+  const k = R.movementKind(m);
+  return `${k === "ingreso" ? "➕" : "➖"} ${ymdToDmy(R.movementYmd(m))} · ${lps(m.monto)} · ${String(m.motivo || m.clienteNombre || m.detalle || m.plataforma || k).slice(0, 40)}${m.banco || m.metodoPago ? ` · “${String(m.banco || m.metodoPago).slice(0, 18)}”` : ""}`;
+}
+async function panelSinBanco(chatId, page = 0) {
+  const rows = await movimientosSinBanco();
+  const per = 8, total = rows.length, pages = Math.max(1, Math.ceil(total / per));
+  page = Math.min(Math.max(0, page), pages - 1);
+  const slice = rows.slice(page * per, page * per + per);
+  pending.set(String(chatId), { mode: "flSinBanco", ids: slice.map((m) => m.id), page });
+  if (!total) return upsertPanel(chatId, "🏷 *MOVIMIENTOS SIN BANCO*\n\n✅ Todo enlazado: no hay ingresos ni egresos sin banco desde el 01/10/2026.", [[{ text: "⬅️ Ciclo", callback_data: "fl:menu" }]]);
+  const txt = [`🏷 *MOVIMIENTOS SIN BANCO* (desde 01/10/2026)`, `Faltan *${total}*. Toque el número para elegir su banco.`, "", ...slice.map((m, i) => `${i + 1}) ${lineaMov(m)}`), pages > 1 ? `\nPágina ${page + 1}/${pages}` : ""].join("\n");
+  const nums = slice.map((_, i) => ({ text: String(i + 1), callback_data: `fl:sb:pick:${i}` }));
+  const kb = []; for (let i = 0; i < nums.length; i += 4) kb.push(nums.slice(i, i + 4));
+  const nav = []; if (page > 0) nav.push({ text: "⬅️", callback_data: `fl:sb:list:${page - 1}` }); if (page < pages - 1) nav.push({ text: "➡️", callback_data: `fl:sb:list:${page + 1}` }); if (nav.length) kb.push(nav);
+  kb.push([{ text: "⬅️ Ciclo", callback_data: "fl:menu" }]);
+  return upsertPanel(chatId, txt, kb);
+}
+async function asignarBanco(chatId, userId, idx, bankIdx) {
+  const p = pending.get(String(chatId)) || {};
+  const id = (p.ids || [])[idx];
+  const methods = await loadMethods();
+  const banco = methods[bankIdx];
+  if (!id || !banco) return bot.sendMessage(chatId, "⚠️ La lista cambió. Ábrala de nuevo.");
+  const ref = db.collection("finanzas_movimientos").doc(id);
+  const actor = await actorDe(userId), now = new Date().toISOString();
+  await db.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    if (!snap.exists) throw new Error("Ese movimiento ya no existe.");
+    const d = snap.data() || {};
+    tx.set(ref, { bancoId: banco.id, banco: banco.nombre, ...(d.banco || d.metodoPago ? { bancoOriginal: String(d.banco || d.metodoPago) } : {}), bancoAsignadoPor: actor.usuario, bancoAsignadoAt: now, updatedAt: now }, { merge: true });
+    tx.set(db.collection("auditoria_eventos").doc(), { tipo: "finanzas_banco_asignado", movimientoId: id, bancoId: banco.id, anterior: String(d.banco || d.metodoPago || ""), registradoPor: actor.usuario, origen: "tg", createdAt: now });
+  });
+  await bot.sendMessage(chatId, `✅ Enlazado a ${banco.nombre}.`);
+  return panelSinBanco(chatId, p.page || 0);
+}
+
 // ---------------------------------------------------------------- pantallas
 async function menuLibro(chatId) {
-  const { libro, totales: t, saldos } = await estadoLibro();
+  const [{ libro, totales: t, saldos }, sinBanco] = await Promise.all([estadoLibro(), movimientosSinBanco().catch(() => [])]);
   const bancos = saldos.bancos.filter((b) => b.activado);
   const txt = [
     "💼 *CICLO FINANCIERO*", `Desde ${ymdToDmy(libro.cicloInicio)}`, "",
     `💵 Ingresos: ${lps(t.ingresos)}`, `🧾 Egresos operativos: −${lps(t.egresosOperativos)}`, `= Disponible antes de planilla: *${lps(t.disponibleAntesPlanilla)}*`,
     `👥 Planilla / comisiones: −${lps(t.planilla)}`, `= Resultado: *${lps(t.resultado)}*`, "",
+    ...(sinBanco.length ? [`⚠️ *${sinBanco.length} movimiento${sinBanco.length === 1 ? "" : "s"} sin banco* desde el 01/10 → toque 🏷 para enlazarlos.`, ""] : []),
     `🏦 *Saldos reales* · ${lps(saldos.total)}`, ...(bancos.length ? bancos.map((b) => `• ${b.nombre}: ${lps(b.saldo)}`) : ["(Registre el saldo inicial de cada banco desde la APK → Control financiero → Bancos)"]),
   ].join("\n");
   return upsertPanel(chatId, txt, [
     [{ text: "👥 Nuevo pago de planilla", callback_data: "fl:pl:new" }],
+    [{ text: "🏷 Movimientos sin banco", callback_data: "fl:sb:list:0" }],
     [{ text: "🔄 Actualizar", callback_data: "fl:menu" }, { text: "🏠 Inicio", callback_data: "go:inicio" }],
   ]);
 }
@@ -168,6 +225,18 @@ async function handleCallback(chatId, userId, data) {
   const p = pending.get(String(chatId)) || {};
   try {
     if (data === "fl:menu") return menuLibro(chatId);
+    if (data.startsWith("fl:sb:list:")) return panelSinBanco(chatId, Number(data.split(":")[3] || 0));
+    if (data.startsWith("fl:sb:pick:")) {
+      const i = Number(data.split(":")[3]); const id = (p.ids || [])[i];
+      if (!id) return panelSinBanco(chatId, 0);
+      const doc = await db.collection("finanzas_movimientos").doc(id).get();
+      const methods = await loadMethods(); const kb = [];
+      const btns = methods.map((m, j) => ({ text: m.nombre, callback_data: `fl:sb:set:${i}:${j}` }));
+      for (let k = 0; k < btns.length; k += 2) kb.push(btns.slice(k, k + 2));
+      kb.push([{ text: "⬅️ Lista", callback_data: `fl:sb:list:${p.page || 0}` }]);
+      return upsertPanel(chatId, `🏷 *Elegir banco*\n\n${lineaMov({ id, ...(doc.data() || {}) })}\n\n¿De qué banco entró / salió este dinero?`, kb);
+    }
+    if (data.startsWith("fl:sb:set:")) { const [, , , i, j] = data.split(":"); return asignarBanco(chatId, userId, Number(i), Number(j)); }
     if (data === "fl:pl:new") { pending.set(String(chatId), { mode: "flPlBen", draft: { opId: newOpId(), asignaciones: {} } }); return upsertPanel(chatId, "👥 *Nuevo pago*\n\n1) Escriba el nombre del beneficiario (libre):", [[{ text: "❌ Cancelar", callback_data: "fl:pl:cancel" }]]); }
     if (data === "fl:pl:cancel") { pending.delete(String(chatId)); await bot.sendMessage(chatId, "Borrador cancelado. No se movió ningún saldo."); return menuLibro(chatId); }
     if (data.startsWith("fl:pl:con:") && p.draft) {
@@ -240,4 +309,4 @@ async function handleText(chatId, userId, text, p) {
   return bot.sendMessage(chatId, "Use los botones del panel o toque ❌ Cancelar.");
 }
 
-module.exports = { configurar, esLibroUser, iniciarPagoRenovacion, handleCallback, handleText, menuLibro, estadoLibro, loadMethods, registrarCobroRenovacion, confirmarPagoPlanilla };
+module.exports = { bancoDesdeBoton, movimientosSinBanco, configurar, esLibroUser, iniciarPagoRenovacion, handleCallback, handleText, menuLibro, estadoLibro, loadMethods, registrarCobroRenovacion, confirmarPagoPlanilla };

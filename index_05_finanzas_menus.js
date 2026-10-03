@@ -489,33 +489,41 @@ async function menuFinReportes(chatId) {
 // ===============================
 // KEYBOARDS FINANZAS
 // ===============================
-function kbBancosFinanzas() { const buttons = FIN_BANCOS_LOCAL.map((b) => ({ text: String(b), callback_data: `fin:ing:banco:${encodeURIComponent(String(b))}` })); const rows = pairButtons(buttons); rows.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]); return { inline_keyboard: rows }; }
-function kbBancosFinanzasEgreso() { const buttons = FIN_BANCOS_LOCAL.map((b) => ({ text: String(b), callback_data: `fin:egr:banco:${encodeURIComponent(String(b))}` })); const rows = pairButtons(buttons); rows.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]); return { inline_keyboard: rows }; }
+// R104: los bancos salen de la configuración central (portal_cliente/configuracion, solo activos) y el
+// movimiento guarda bancoId → queda enlazado al saldo real del banco y a la planilla. Sin lista fija.
+async function kbBancosLibro(prefix) {
+  let methods = [];
+  try { methods = await require("./index_31_finanzas_libro").loadMethods(); } catch (e) { logErr("kbBancosLibro", e); }
+  const list = methods.length ? methods.map((m) => ({ text: m.nombre, callback_data: `${prefix}${encodeURIComponent(m.id)}` })) : FIN_BANCOS_LOCAL.map((b) => ({ text: String(b), callback_data: `${prefix}${encodeURIComponent(String(b))}` }));
+  const rows = pairButtons(list); rows.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]); return { inline_keyboard: rows };
+}
+function kbBancosFinanzas() { return kbBancosLibro("fin:ing:banco:"); }
+function kbBancosFinanzasEgreso() { return kbBancosLibro("fin:egr:banco:"); }
 function kbMotivosFinanzas() { const buttons = FIN_MOTIVOS_EGRESO_LOCAL.map((m) => ({ text: String(m), callback_data: `fin:egr:motivo:${encodeURIComponent(String(m))}` })); const rows = pairButtons(buttons); rows.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]); return { inline_keyboard: rows }; }
 
 // ===============================
 // CRUD FINANZAS
 // ===============================
-async function registrarIngresoTx({ monto, banco = "", plataforma = "", detalle = "", fecha = "", userId = "", userName = "" }) {
+async function registrarIngresoTx({ monto, bancoId = "", banco = "", plataforma = "", detalle = "", fecha = "", userId = "", userName = "" }) {
   const fechaOk = parseFechaFlexible(fecha || hoyDMY());
   if (!fechaOk) throw new Error("Fecha inválida");
   const montoOk = Number(monto || 0);
   if (!Number.isFinite(montoOk) || montoOk <= 0) throw new Error("Monto inválido");
   const mesKey = monthKeyFromDMYLocal(fechaOk);
   const docId = db.collection(FINANCE_COLLECTION_PRIMARY).doc().id;
-  const payload = { tipo: "ingreso", monto: montoOk, banco: humanBanco(String(banco || "").trim()), plataforma: String(plataforma || "").trim(), detalle: String(detalle || "").trim(), fecha: fechaOk, fechaTS: dmyToTimestamp(fechaOk), mesKey, monthKey: mesKey, userId: String(userId || ""), userName: String(userName || ""), createdAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp() };
+  const payload = { tipo: "ingreso", monto: montoOk, ...(bancoId ? { bancoId: String(bancoId) } : {}), banco: bancoId ? String(banco || "").trim() : humanBanco(String(banco || "").trim()), plataforma: String(plataforma || "").trim(), detalle: String(detalle || "").trim(), fecha: fechaOk, fechaTS: dmyToTimestamp(fechaOk), mesKey, monthKey: mesKey, userId: String(userId || ""), userName: String(userName || ""), createdAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp() };
   await saveFinancePayload(docId, payload);
   return { id: docId, ...payload };
 }
 
-async function registrarEgresoTx({ monto, banco = "", motivo = "", detalle = "", fecha = "", userId = "", userName = "" }) {
+async function registrarEgresoTx({ monto, bancoId = "", banco = "", motivo = "", detalle = "", fecha = "", userId = "", userName = "" }) {
   const fechaOk = parseFechaFlexible(fecha || hoyDMY());
   if (!fechaOk) throw new Error("Fecha inválida");
   const montoOk = Number(monto || 0);
   if (!Number.isFinite(montoOk) || montoOk <= 0) throw new Error("Monto inválido");
   const mesKey = monthKeyFromDMYLocal(fechaOk);
   const docId = db.collection(FINANCE_COLLECTION_PRIMARY).doc().id;
-  const payload = { tipo: "egreso", monto: montoOk, banco: humanBanco(String(banco || "").trim()), motivo: String(motivo || "").trim(), detalle: String(detalle || "").trim(), fecha: fechaOk, fechaTS: dmyToTimestamp(fechaOk), mesKey, monthKey: mesKey, userId: String(userId || ""), userName: String(userName || ""), createdAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp() };
+  const payload = { tipo: "egreso", subtipo: "egreso_operativo", monto: montoOk, ...(bancoId ? { bancoId: String(bancoId) } : {}), banco: bancoId ? String(banco || "").trim() : humanBanco(String(banco || "").trim()), motivo: String(motivo || "").trim(), detalle: String(detalle || "").trim(), fecha: fechaOk, fechaTS: dmyToTimestamp(fechaOk), mesKey, monthKey: mesKey, userId: String(userId || ""), userName: String(userName || ""), createdAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp() };
   await saveFinancePayload(docId, payload);
   return { id: docId, ...payload };
 }

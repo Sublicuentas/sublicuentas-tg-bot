@@ -5008,10 +5008,11 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
       }
 
       if (data.startsWith("fin:ing:banco:")) {
-        const banco = decodeURIComponent(data.split(":").slice(3).join(":") || "");
+        const bancoSel = await finLibro.bancoDesdeBoton(decodeURIComponent(data.split(":").slice(3).join(":") || "")); // R104: banco registrado y enlazado
+        const banco = bancoSel.nombre;
         const p = pending.get(String(chatId));
         if (!p || p.mode !== "finIngresoBancoPick") return bot.sendMessage(chatId, "⚠️ Flujo de ingreso no activo.");
-        pending.set(String(chatId), { mode: "finIngresoPlataformaManual", monto: p.monto, banco });
+        pending.set(String(chatId), { mode: "finIngresoPlataformaManual", monto: p.monto, banco, bancoId: bancoSel.id });
         return upsertPanel(chatId, `➕ *REGISTRAR INGRESO*\n\n🏦 Banco: *${escMD(banco)}*\n\n📦 Escriba manualmente la plataforma o plataformas.\nEjemplo:\nNetflix\nDisney\nHBO Max\nPrime Video`, [
           [{ text: "⬅️ Volver Finanzas", callback_data: "fin:menu:registro" }],
           [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
@@ -5025,15 +5026,16 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
         pending.set(String(chatId), { mode: "finEgresoBancoPick", monto: p.monto, motivo });
         return bot.sendMessage(chatId, `➖ *REGISTRAR EGRESO*\n\n🧾 Motivo: *${escMD(motivo)}*\n\n🏦 Seleccione el banco desde donde salió el dinero:`, {
           parse_mode: "Markdown",
-          reply_markup: kbBancosFinanzasEgreso(),
+          reply_markup: await kbBancosFinanzasEgreso(),
         });
       }
 
       if (data.startsWith("fin:egr:banco:")) {
-        const banco = decodeURIComponent(data.split(":").slice(3).join(":") || "");
+        const bancoSel = await finLibro.bancoDesdeBoton(decodeURIComponent(data.split(":").slice(3).join(":") || "")); // R104: banco registrado y enlazado
+        const banco = bancoSel.nombre;
         const p = pending.get(String(chatId));
         if (!p || p.mode !== "finEgresoBancoPick") return bot.sendMessage(chatId, "⚠️ Flujo de egreso no activo.");
-        pending.set(String(chatId), { mode: "finEgresoDetalle", monto: p.monto, motivo: p.motivo, banco });
+        pending.set(String(chatId), { mode: "finEgresoDetalle", monto: p.monto, motivo: p.motivo, banco, bancoId: bancoSel.id });
         return upsertPanel(chatId, `➖ *REGISTRAR EGRESO*\n\n🧾 Motivo: *${escMD(p.motivo)}*\n🏦 Banco: *${escMD(banco)}*\n\n📝 Escriba el detalle del egreso:`, [
           [{ text: "⬅️ Volver Finanzas", callback_data: "fin:menu:registro" }],
           [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
@@ -6789,17 +6791,17 @@ bot.on("message", async (msg) => {
         const monto = parseMontoNumber(t);
         if (!Number.isFinite(monto) || monto <= 0) return bot.sendMessage(chatId, "⚠️ Monto inválido. Escriba solo número.");
         pending.set(String(chatId), { mode: "finIngresoBancoPick", monto });
-        return bot.sendMessage(chatId, "🏦 Seleccione el banco:", { reply_markup: kbBancosFinanzas() });
+        return bot.sendMessage(chatId, "🏦 Seleccione el banco:", { reply_markup: await kbBancosFinanzas() });
       }
 
       if (p.mode === "finIngresoPlataformaManual") {
         if (!t) return bot.sendMessage(chatId, "⚠️ Escriba la plataforma o plataformas manualmente.");
-        pending.set(String(chatId), { mode: "finIngresoDetalle", monto: p.monto, banco: p.banco, plataforma: t });
+        pending.set(String(chatId), { mode: "finIngresoDetalle", monto: p.monto, banco: p.banco, bancoId: p.bancoId || "", plataforma: t });
         return bot.sendMessage(chatId, "📝 Escriba el detalle del ingreso:");
       }
 
       if (p.mode === "finIngresoDetalle") {
-        pending.set(String(chatId), { mode: "finIngresoFecha", monto: p.monto, banco: p.banco, plataforma: p.plataforma, detalle: p.detalle || t });
+        pending.set(String(chatId), { mode: "finIngresoFecha", monto: p.monto, banco: p.banco, bancoId: p.bancoId || "", plataforma: p.plataforma, detalle: p.detalle || t });
         return bot.sendMessage(chatId, "📅 Escriba la fecha del ingreso en formato dd/mm/yyyy o escriba hoy:");
       }
 
@@ -6811,7 +6813,7 @@ bot.on("message", async (msg) => {
         if (!vf.ok) return bot.sendMessage(chatId, vf.msg, { parse_mode: "Markdown" });
         pending.delete(String(chatId));
       forceNextPanelAtBottom(chatId);
-        const ok = await registrarIngresoTx({ monto: p.monto, banco: p.banco, plataforma: p.plataforma, detalle: p.detalle || "", fecha, userId, userName: msg.from?.first_name || "", operationId:`tg-fin-ingreso:${chatId}:${msg.message_id}` });
+        const ok = await registrarIngresoTx({ monto: p.monto, banco: p.banco, bancoId: p.bancoId || "", plataforma: p.plataforma, detalle: p.detalle || "", fecha, userId, userName: msg.from?.first_name || "", operationId:`tg-fin-ingreso:${chatId}:${msg.message_id}` });
         await registrarActividadTelegramLocal(userId,chatId,'registrar_ingreso',{id:ok.id,plataforma:ok.plataforma||p.plataforma||'',cambio:`${moneyLps(ok.monto)} · ${ok.banco||''} · ${ok.fecha||fecha}`,motivo:ok.detalle||''},`Registró ingreso de ${moneyLps(ok.monto)} · ${ok.banco||p.banco||'-'} · ${ok.plataforma||p.plataforma||'-'} · fecha ${ok.fecha||fecha}.`,'Finanzas');
         return bot.sendMessage(chatId, `✅ *Ingreso registrado*\n\n💰 Monto: ${moneyLps(ok.monto)}\n🏦 Banco: ${escMD(ok.banco)}\n📦 Plataforma(s): ${escMD(ok.plataforma || "-")}\n📝 Detalle: ${escMD(ok.detalle || "-")}\n📅 Fecha: ${escMD(ok.fecha)}\n🆔 ID: \`${ok.id}\``, {
           parse_mode: "Markdown",
@@ -6827,7 +6829,7 @@ bot.on("message", async (msg) => {
       }
 
       if (p.mode === "finEgresoDetalle") {
-        pending.set(String(chatId), { mode: "finEgresoFecha", monto: p.monto, motivo: p.motivo, banco: p.banco, detalle: t });
+        pending.set(String(chatId), { mode: "finEgresoFecha", monto: p.monto, motivo: p.motivo, banco: p.banco, bancoId: p.bancoId || "", detalle: t });
         return bot.sendMessage(chatId, "📅 Escriba la fecha del egreso en formato dd/mm/yyyy o escriba hoy:");
       }
 
@@ -6839,7 +6841,7 @@ bot.on("message", async (msg) => {
         if (!vf2.ok) return bot.sendMessage(chatId, vf2.msg, { parse_mode: "Markdown" });
         pending.delete(String(chatId));
       forceNextPanelAtBottom(chatId);
-        const ok = await registrarEgresoTx({ monto: p.monto, banco: p.banco, motivo: p.motivo, detalle: p.detalle || "", fecha, userId, userName: msg.from?.first_name || "", operationId:`tg-fin-egreso:${chatId}:${msg.message_id}` });
+        const ok = await registrarEgresoTx({ monto: p.monto, banco: p.banco, bancoId: p.bancoId || "", motivo: p.motivo, detalle: p.detalle || "", fecha, userId, userName: msg.from?.first_name || "", operationId:`tg-fin-egreso:${chatId}:${msg.message_id}` });
         await registrarActividadTelegramLocal(userId,chatId,'registrar_egreso',{id:ok.id,motivo:ok.motivo||p.motivo||'',cambio:`${moneyLps(ok.monto)} · ${ok.banco||''} · ${ok.fecha||fecha}`},`Registró egreso de ${moneyLps(ok.monto)} · ${ok.banco||p.banco||'-'} · ${ok.motivo||p.motivo||'-'} · fecha ${ok.fecha||fecha}.`,'Finanzas');
         return bot.sendMessage(chatId, `✅ *Egreso registrado*\n\n💸 Monto: ${moneyLps(ok.monto)}\n🏦 Banco: ${escMD(ok.banco || "-")}\n🧾 Motivo: ${escMD(ok.motivo)}\n📝 Detalle: ${escMD(ok.detalle || "-")}\n📅 Fecha: ${escMD(ok.fecha)}\n🆔 ID: \`${ok.id}\``, {
           parse_mode: "Markdown",
