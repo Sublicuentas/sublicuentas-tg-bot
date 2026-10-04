@@ -6750,6 +6750,9 @@ bot.on("message", async (msg) => {
       }
     }
 
+    // R106: la hoja de pago de una compra nueva tiene prioridad sobre el wizard (que queda esperando botones).
+    { const pFl = pending.get(String(chatId)); if (pFl && /^fl[A-Z]/.test(String(pFl.mode || ""))) return finLibro.handleText(chatId, userId, String(text || "").trim(), pFl); }
+
     // ── Flujo wizard (texto libre, admin) ──
     if (wizard.has(String(chatId))) {
       if (!adminOk) return;
@@ -7588,8 +7591,9 @@ bot.on("message", async (msg) => {
         const vendedorNorm = vendedorData.nombre_norm || vendedorNormCanonicoLocal(vendedor);
         pending.delete(String(chatId));
         forceNextPanelAtBottom(chatId);
+        let guardadoServ = null;
         try {
-          await addServicioTx(String(p.clientId), {
+          guardadoServ = await addServicioTx(String(p.clientId), {
             plataforma: p.plat,
             correo: p.mail,
             clave: p.clave || "",
@@ -7604,6 +7608,11 @@ bot.on("message", async (msg) => {
           return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo agregar el servicio."}`);
         }
         {const cAudit=await getCliente(p.clientId);await registrarActividadTelegramLocal(userId,chatId,'agregar_servicio',{clienteId:p.clientId,cliente:cAudit?.nombrePerfil||cAudit?.nombre||'Cliente',telefono:cAudit?.telefono||'',plataforma:humanPlataforma(p.plat),cuenta:p.mail||'',vendedor,campo:'servicio',cambio:`precio L ${p.precio} · renovación ${p.fechaRenovacion}`},`Agregó ${humanPlataforma(p.plat)} a ${cAudit?.nombrePerfil||cAudit?.nombre||'Cliente'}${p.mail?` · cuenta ${p.mail}`:''} · L ${p.precio} · renueva ${p.fechaRenovacion}.`);}
+        if (await finLibro.esLibroUser(userId)) { // R106: compra nueva = operación financiera (total + recibido + banco/responsable)
+          const cF = await getCliente(p.clientId);
+          await enviarFichaCliente(chatId, p.clientId);
+          return finLibro.iniciarPagoCompra(chatId, userId, { clientId: String(p.clientId), compraId: String(guardadoServ?.servicio?.compraId || ""), plataforma: p.plat, cliente: cF?.nombrePerfil || cF?.nombre || "Cliente" });
+        }
         return enviarFichaCliente(chatId, p.clientId);
       }
 

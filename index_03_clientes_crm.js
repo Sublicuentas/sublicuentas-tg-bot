@@ -2609,6 +2609,14 @@ async function wizardNext(chatId, rawText = "") {
       });
 
       wizard.set(String(chatId), { step: 4, clientId, nombre: st.nombre, telefono: st.telefono, vendedor: st.vendedor, servicio: {}, servStep: 1 });
+      // R106: Sublicuentas/Relojes registran el pago de la compra (total + recibido + banco/responsable).
+      // (se abre justo después del mensaje "Compra guardada" para que el orden en el chat sea natural)
+      setTimeout(async () => {
+        try {
+          const finLibro = require("./index_31_finanzas_libro");
+          if (await finLibro.esLibroUser(chatId)) await finLibro.iniciarPagoCompra(chatId, chatId, { clientId: String(clientId), compraId: String(guardado?.servicio?.compraId || ""), plataforma: plat, cliente: st.nombre });
+        } catch (e) { logErr("R106 pago compra wizard", e); }
+      }, 600);
 
       return bot.sendMessage(chatId, "✅ *Compra guardada correctamente*\n\nTiene un solo precio y una sola fecha. Si esta compra incluye a otra persona (por ejemplo, una promoción 2x1), añádala como perfil aquí:", {
         parse_mode: "Markdown",

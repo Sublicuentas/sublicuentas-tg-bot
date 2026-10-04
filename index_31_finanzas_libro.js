@@ -209,17 +209,18 @@ async function asignarBanco(chatId, userId, idx, bankIdx) {
 
 // ---------------------------------------------------------------- pantallas
 async function menuLibro(chatId) {
-  const [{ libro, totales: t, saldos }, sinBanco] = await Promise.all([estadoLibro(), movimientosSinBanco().catch(() => [])]);
+  const [{ libro, totales: t, saldos }, sinBanco, cart] = await Promise.all([estadoLibro(), movimientosSinBanco().catch(() => []), carteraResumen().catch(() => ({ clientes: 0, vendedores: 0 }))]);
   const bancos = saldos.bancos.filter((b) => b.activado);
   const txt = [
     "💼 *CICLO FINANCIERO*", `Desde ${ymdToDmy(libro.cicloInicio)}`, "",
     `💵 Ingresos: ${lps(t.ingresos)}`, `🧾 Egresos operativos: −${lps(t.egresosOperativos)}`, `= Disponible antes de planilla: *${lps(t.disponibleAntesPlanilla)}*`,
     `👥 Planilla / comisiones: −${lps(t.planilla)}`, `= Resultado: *${lps(t.resultado)}*`, "",
+    `🧾 Ventas generadas: ${lps(t.ventasGeneradas || 0)}`, `📋 Pendiente clientes: ${lps(cart.clientes)} · vendedores: ${lps(cart.vendedores)} (no es efectivo)`, "",
     ...(sinBanco.length ? [`⚠️ *${sinBanco.length} movimiento${sinBanco.length === 1 ? "" : "s"} sin banco* desde el 01/10 → toque 🏷 para enlazarlos.`, ""] : []),
     `🏦 *Saldos reales* · ${lps(saldos.total)}`, ...(bancos.length ? bancos.map((b) => `• ${b.nombre}: ${lps(b.saldo)}`) : ["(Toque 🏦 Saldos por banco para registrar el saldo inicial de cada banco)"]),
   ].join("\n");
   return upsertPanel(chatId, txt, [
-    [{ text: "🏦 Saldos por banco", callback_data: "fl:bancos" }],
+    [{ text: "🏦 Saldos por banco", callback_data: "fl:bancos" }, { text: "📋 Pendientes de cobro", callback_data: "fl:cxc:menu" }],
     [{ text: "👥 Nuevo pago de planilla", callback_data: "fl:pl:new" }],
     [{ text: "🏷 Movimientos sin banco", callback_data: "fl:sb:list:0" }],
     [{ text: "🔄 Actualizar", callback_data: "fl:menu" }, { text: "🏠 Inicio", callback_data: "go:inicio" }],
@@ -243,13 +244,119 @@ async function panelPlanilla(chatId, draft) {
 }
 
 // ---------------------------------------------------------------- renovación con pago real
-async function iniciarPagoRenovacion(chatId, userId, accion) {
-  pending.set(String(chatId), { mode: "flRenMonto", accion, opId: newOpId(), userId: String(userId) });
-  return upsertPanel(chatId, `💵 *RENOVAR · ${accion.etiqueta || "servicio"}*\n\n¿Cuánto pagó el cliente?\nEscriba el monto real (ej. 220). No hay monto predeterminado.`, [
-    [{ text: "🛠 Ajuste sin pago (garantía/cortesía)", callback_data: "fl:ren:ajuste" }],
-    [{ text: "❌ Cancelar", callback_data: "fl:ren:cancel" }],
-  ]);
+// ---------------------------------------------------------------- R106 · centro financiero en Telegram
+// Compra/renovación con monto total + recibido ahora (pagado / parcial / pendiente), cartera por cobrar
+// (cliente o vendedor) y abonos. Mismas colecciones y campos que /api/finanzas (registrar_operacion_pago,
+// registrar_abono): la APK, la web, el bot y el Excel ven lo mismo.
+const CXC = "cuentas_por_cobrar";
+function auditarTg(tx, actor, ev) {
+  tx.set(db.collection("auditoria_eventos").doc(), { actorUsuario: actor.usuario, rol: "telegram", origen: "tg", modulo: ev.modulo || "finanzas", accion: ev.accion, targetType: ev.targetType || "", targetId: ev.targetId || "", clienteId: ev.clienteId || "", compraId: ev.compraId || "", movimientoId: ev.movimientoId || "", cuentaId: ev.cuentaId || "", operationId: ev.operationId || "", before: ev.before ?? null, after: ev.after ?? null, motivo: "", detalle: ev.detalle || "", monto: ev.monto ?? null, bancos: ev.bancos || [], resultado: "ok", tipo: `finanzas_${ev.accion}`, createdAt: new Date().toISOString() });
 }
+async function registrarOperacionPago({ tipoOrigen, total, recibido, bancoId, responsable, vendedorNombre, cliente = {}, opId, actor }) {
+  const ep = R.estadoPago(total, recibido);
+  if (!(ep.total > 0) || ep.recibido < 0 || ep.recibido > ep.total) throw Object.assign(new Error("Montos inválidos."), { userError: true });
+  const methods = await loadMethods(); const banco = methods.find((m) => m.id === bancoId);
+  if (ep.recibido > 0 && !banco) throw Object.assign(new Error("Elija el banco donde entró el dinero."), { userError: true });
+  const deudorTipo = responsable === "vendedor" ? "vendedor" : "cliente";
+  const id = opDocId("oper", actor.uid, opId);
+  const ventaRef = db.collection("finanzas_movimientos").doc(`${id}_venta`), ingRef = db.collection("finanzas_movimientos").doc(`${id}_cobro`), cxcRef = db.collection(CXC).doc(id);
+  const hoy = hoyYmd(), now = new Date().toISOString();
+  return db.runTransaction(async (tx) => {
+    if ((await tx.get(ventaRef)).exists) return { duplicado: true, ...ep };
+    const { libro } = await estadoLibro(tx);
+    const base = { origen: "telegram", origenCanal: "tg", registradoPor: actor.usuario, registradoPorId: actor.uid, ...fechaCampos(hoy), createdAt: now, updatedAt: now };
+    const rel = { clienteId: cliente.clienteId || "", clienteNombre: String(cliente.nombre || "").slice(0, 80), compraId: cliente.compraId || "", plataforma: String(cliente.plataforma || "").slice(0, 40), tipoOrigen, operacionId: id, cicloId: libro.cicloId, operationId: opId, fechaNueva: cliente.fechaNueva || "", fechaAnterior: cliente.fechaAnterior || "", vendedor: String(vendedorNombre || "").slice(0, 60) };
+    tx.set(ventaRef, { ...base, movimientoId: ventaRef.id, tipo: "venta", subtipo: tipoOrigen === "compra" ? "compra_nueva" : "renovacion", monto: ep.total, montoRecibido: ep.recibido, saldoPendiente: ep.saldo, estadoPago: ep.estado, ...rel });
+    if (ep.recibido > 0) tx.set(ingRef, { ...base, movimientoId: ingRef.id, tipo: "ingreso", subtipo: tipoOrigen === "compra" ? "cobro_compra" : "cobro_renovacion", monto: ep.recibido, bancoId: banco.id, banco: banco.nombre, metodoPago: banco.nombre, cobradoPor: actor.usuario, ...(ep.saldo > 0 ? { cuentaId: cxcRef.id } : {}), ...rel });
+    if (ep.saldo > 0) tx.set(cxcRef, { cuentaId: cxcRef.id, deudorTipo, deudorId: deudorTipo === "cliente" ? rel.clienteId : String(vendedorNombre || ""), deudorNombre: deudorTipo === "cliente" ? rel.clienteNombre : String(vendedorNombre || ""), ...rel, montoTotalOperacion: ep.total, montoRecibidoInicial: ep.recibido, montoOriginalPendiente: ep.saldo, montoRecibidoPosterior: 0, saldoPendiente: ep.saldo, estado: ep.recibido > 0 ? "parcial" : "pendiente", cicloOrigen: libro.cicloId, abonos: [], creadoPor: actor.usuario, createdAt: now, updatedAt: now });
+    auditarTg(tx, actor, { modulo: tipoOrigen === "compra" ? "compras" : "renovaciones", accion: tipoOrigen === "compra" ? "compra_pago" : "renovacion_pago", targetType: "operacion", targetId: id, clienteId: rel.clienteId, compraId: rel.compraId, operationId: opId, monto: ep.total, after: { total: ep.total, recibido: ep.recibido, saldo: ep.saldo, estado: ep.estado, banco: banco?.nombre || "", responsable: ep.saldo > 0 ? deudorTipo : "" }, detalle: `${rel.clienteNombre} · ${rel.plataforma} · total ${ep.total} · recibido ${ep.recibido}${banco ? ` en ${banco.nombre}` : ""}${ep.saldo > 0 ? ` · pendiente ${ep.saldo} (${deudorTipo})` : ""}`, bancos: ep.recibido > 0 ? [{ bancoId: banco.id, monto: ep.recibido, direccion: "entrada" }] : [] });
+    return { duplicado: false, ...ep, cuentaId: ep.saldo > 0 ? cxcRef.id : "" };
+  });
+}
+async function registrarAbonoTg({ cuentaId, monto, bancoId, opId, actor }) {
+  const methods = await loadMethods(); const banco = methods.find((m) => m.id === bancoId);
+  if (!banco || !(R.money(monto) > 0)) throw Object.assign(new Error("Abono inválido."), { userError: true });
+  const ref = db.collection("finanzas_movimientos").doc(opDocId("abono", actor.uid, opId)), cxcRef = db.collection(CXC).doc(cuentaId);
+  const hoy = hoyYmd(), now = new Date().toISOString(); monto = R.money(monto);
+  return db.runTransaction(async (tx) => {
+    const [ya, cs] = await Promise.all([tx.get(ref), tx.get(cxcRef)]);
+    if (ya.exists) return { duplicado: true };
+    if (!cs.exists) throw Object.assign(new Error("Esa cuenta por cobrar no existe."), { userError: true });
+    const c = cs.data() || {};
+    if (monto > R.money(c.saldoPendiente) + 0.001) throw Object.assign(new Error(`El abono es mayor que el saldo pendiente (${lps(c.saldoPendiente)}).`), { userError: true });
+    const { libro } = await estadoLibro(tx);
+    const saldo = R.money(c.saldoPendiente - monto);
+    tx.set(ref, { origen: "telegram", origenCanal: "tg", registradoPor: actor.usuario, registradoPorId: actor.uid, movimientoId: ref.id, tipo: "ingreso", subtipo: c.deudorTipo === "vendedor" ? "cobro_pendiente_vendedor" : "cobro_pendiente_cliente", monto, bancoId: banco.id, banco: banco.nombre, metodoPago: banco.nombre, cobradoPor: actor.usuario, cuentaId, clienteId: c.clienteId || "", clienteNombre: c.clienteNombre || "", compraId: c.compraId || "", plataforma: c.plataforma || "", tipoOrigen: c.tipoOrigen || "", operacionId: c.operacionId || "", deudorTipo: c.deudorTipo, deudorNombre: c.deudorNombre || "", cicloId: libro.cicloId, cicloOrigen: c.cicloOrigen || "", deCicloAnterior: !!(c.cicloOrigen && c.cicloOrigen !== libro.cicloId), operationId: opId, ...fechaCampos(hoy), createdAt: now, updatedAt: now });
+    tx.set(cxcRef, { saldoPendiente: saldo, montoRecibidoPosterior: R.money((c.montoRecibidoPosterior || 0) + monto), estado: saldo <= 0 ? "pagado" : "parcial", abonos: [...(c.abonos || []), { movimientoId: ref.id, monto, bancoId: banco.id, banco: banco.nombre, fecha: hoy, por: actor.usuario }], updatedAt: now }, { merge: true });
+    auditarTg(tx, actor, { modulo: "cartera", accion: "abono", targetType: "cuenta_por_cobrar", targetId: cuentaId, cuentaId, movimientoId: ref.id, clienteId: c.clienteId, compraId: c.compraId, operationId: opId, monto, before: { saldo: R.money(c.saldoPendiente) }, after: { saldo, estado: saldo <= 0 ? "pagado" : "parcial" }, detalle: `${c.deudorNombre} (${c.deudorTipo}) abonó ${monto} en ${banco.nombre} · pendiente ${saldo}`, bancos: [{ bancoId: banco.id, monto, direccion: "entrada" }] });
+    return { duplicado: false, saldoPendiente: saldo, banco: banco.nombre };
+  });
+}
+async function carteraResumen() {
+  const snap = await db.collection(CXC).where("estado", "in", ["pendiente", "parcial"]).get().catch(() => ({ docs: [] }));
+  const rows = snap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
+  const sum = (t) => R.money(rows.filter((c) => (t === "vendedor" ? c.deudorTipo === "vendedor" : c.deudorTipo !== "vendedor")).reduce((a, c) => a + R.money(c.saldoPendiente), 0));
+  return { rows, clientes: sum("cliente"), vendedores: sum("vendedor") };
+}
+
+// -- hoja de pago (compra y renovación): total → recibido → banco → responsable → confirmar
+async function iniciarPago(chatId, userId, datos) {
+  pending.set(String(chatId), { mode: "flPgTotal", ...datos, opId: newOpId(), userId: String(userId) });
+  const compra = datos.tipoOrigen === "compra";
+  const kb = compra ? [] : [[{ text: "🛠 Ajuste sin pago (garantía/cortesía)", callback_data: "fl:ren:ajuste" }], [{ text: "❌ Cancelar", callback_data: "fl:ren:cancel" }]];
+  return upsertPanel(chatId, `💵 *${compra ? "COMPRA NUEVA" : "RENOVAR"} · ${datos.etiqueta || "servicio"}*\n\n1) Escriba el *monto total* acordado (ej. 220).\nNo hay monto predeterminado.`, kb);
+}
+async function iniciarPagoRenovacion(chatId, userId, accion) { return iniciarPago(chatId, userId, { tipoOrigen: "renovacion", accion, etiqueta: accion.etiqueta }); }
+async function iniciarPagoCompra(chatId, userId, compra) { return iniciarPago(chatId, userId, { tipoOrigen: "compra", compra, etiqueta: `${compra.cliente || "Cliente"} · ${compra.plataforma || "servicio"}` }); }
+async function siguientePaso(chatId, p) {
+  const ep = R.estadoPago(p.total, p.recibido);
+  if (ep.recibido > 0 && !p.bancoId) {
+    p.mode = "flPgBanco"; pending.set(String(chatId), p);
+    const methods = await loadMethods(); const kb = [];
+    for (let i = 0; i < methods.length; i += 2) kb.push(methods.slice(i, i + 2).map((m) => ({ text: m.nombre, callback_data: `fl:pg:bank:${m.id}` })));
+    return upsertPanel(chatId, `Recibido ahora: *${lps(ep.recibido)}*\n3) ¿Dónde entró el dinero?`, kb);
+  }
+  if (ep.saldo > 0 && !p.responsable) {
+    p.mode = "flPgResp"; pending.set(String(chatId), p);
+    return upsertPanel(chatId, `Queda pendiente: *${lps(ep.saldo)}*\n4) ¿Quién debe el pendiente?\n(No suma a bancos hasta que se cobre)`, [[{ text: "👤 El cliente", callback_data: "fl:pg:resp:cliente" }, { text: "🧑‍💼 Un vendedor", callback_data: "fl:pg:resp:vendedor" }]]);
+  }
+  p.mode = "flPgConfirm"; pending.set(String(chatId), p);
+  const banco = p.bancoId ? (await loadMethods()).find((m) => m.id === p.bancoId) : null;
+  const txt = [`💵 *Revisar ${p.tipoOrigen === "compra" ? "compra" : "renovación"}* · ${p.etiqueta || ""}`, "", `Monto total: *${lps(ep.total)}*`, `Recibido ahora: *${lps(ep.recibido)}*${banco ? ` en ${banco.nombre}` : ""}`, `Saldo pendiente: *${lps(ep.saldo)}*${ep.saldo > 0 ? ` (${p.responsable === "vendedor" ? `vendedor ${p.vendedorNombre}` : "cliente"})` : ""}`, `Estado: *${ep.estado.toUpperCase()}*`].join("\n");
+  const kb = [[{ text: p.tipoOrigen === "compra" ? "✅ Confirmar operación" : "✅ Confirmar y renovar", callback_data: "fl:pg:ok" }]];
+  if (p.tipoOrigen !== "compra") kb.push([{ text: "❌ Cancelar", callback_data: "fl:ren:cancel" }]);
+  return upsertPanel(chatId, txt, kb);
+}
+async function confirmarPago(chatId, userId, p) {
+  const actor = await actorDe(userId);
+  pending.delete(String(chatId));
+  let cliente = {};
+  if (p.tipoOrigen === "compra") cliente = { clienteId: p.compra.clientId, nombre: p.compra.cliente, compraId: p.compra.compraId, plataforma: p.compra.plataforma };
+  else {
+    if (typeof cfg.ejecutarRenovacion !== "function") throw new Error("Renovación no configurada.");
+    const info = await cfg.ejecutarRenovacion(chatId, userId, p.accion, { ajuste: false });
+    cliente = { ...(info || {}), clienteId: p.accion.clientId, compraId: p.accion.compraId || "" };
+  }
+  const r = await registrarOperacionPago({ tipoOrigen: p.tipoOrigen, total: p.total, recibido: p.recibido, bancoId: p.bancoId, responsable: p.responsable, vendedorNombre: p.vendedorNombre, cliente, opId: p.opId, actor });
+  return bot.sendMessage(chatId, `✅ ${p.tipoOrigen === "compra" ? "Compra" : "Renovación"} registrada · *${r.estado.toUpperCase()}*${r.duplicado ? " (ya estaba registrada)" : ""}\nTotal ${lps(r.total)} · Recibido ${lps(r.recibido)} · Pendiente ${lps(r.saldo)}${cliente.fechaNueva ? `\nNueva fecha: ${cliente.fechaNueva}` : ""}`, { parse_mode: "Markdown" });
+}
+
+// -- pendientes de cobro
+async function panelPendientes(chatId, tipo = "", page = 0) {
+  const { rows, clientes, vendedores } = await carteraResumen();
+  if (!tipo) return upsertPanel(chatId, `📋 *PENDIENTES DE COBRO*\n\n👤 Clientes: *${lps(clientes)}*\n🧑‍💼 Vendedores: *${lps(vendedores)}*\nTotal: *${lps(clientes + vendedores)}*\n\n(No suman a bancos ni al disponible hasta que se cobren)`, [[{ text: "👤 Clientes", callback_data: "fl:cxc:list:cliente:0" }, { text: "🧑‍💼 Vendedores", callback_data: "fl:cxc:list:vendedor:0" }], [{ text: "⬅️ Ciclo", callback_data: "fl:menu" }]]);
+  const list = rows.filter((c) => (tipo === "vendedor" ? c.deudorTipo === "vendedor" : c.deudorTipo !== "vendedor")).sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
+  const per = 8, pages = Math.max(1, Math.ceil(list.length / per)); page = Math.min(Math.max(0, page), pages - 1);
+  const slice = list.slice(page * per, page * per + per);
+  pending.set(String(chatId), { mode: "flCxcList", ids: slice.map((c) => c.id), tipo, page });
+  const txt = [`📋 *Pendientes · ${tipo === "vendedor" ? "Vendedores" : "Clientes"}* (${list.length})`, "", ...(slice.length ? slice.map((c, i) => `${i + 1}) ${c.deudorNombre || "—"} · ${lps(c.saldoPendiente)} · ${c.tipoOrigen === "compra" ? "Compra" : "Renovación"}${c.plataforma ? ` ${c.plataforma}` : ""}${c.deudorTipo === "vendedor" && c.clienteNombre ? ` (cliente ${c.clienteNombre})` : ""}`) : ["✅ Nada pendiente."])].join("\n");
+  const nums = slice.map((_, i) => ({ text: `💵 ${i + 1}`, callback_data: `fl:cxc:pick:${i}` })); const kb = [];
+  for (let i = 0; i < nums.length; i += 4) kb.push(nums.slice(i, i + 4));
+  const nav = []; if (page > 0) nav.push({ text: "⬅️", callback_data: `fl:cxc:list:${tipo}:${page - 1}` }); if (page < pages - 1) nav.push({ text: "➡️", callback_data: `fl:cxc:list:${tipo}:${page + 1}` }); if (nav.length) kb.push(nav);
+  kb.push([{ text: "⬅️ Pendientes", callback_data: "fl:cxc:menu" }]);
+  return upsertPanel(chatId, txt, kb);
+}
+
 async function ejecutarYCobrar(chatId, userId, p, { bancoId = "", motivo = "" } = {}) {
   if (typeof cfg.ejecutarRenovacion !== "function") throw new Error("Renovación no configurada.");
   pending.delete(String(chatId));
@@ -320,6 +427,37 @@ async function handleCallback(chatId, userId, data) {
     if (data === "fl:ren:cancel") { pending.delete(String(chatId)); return bot.sendMessage(chatId, "Renovación cancelada. No se cambió nada."); }
     if (data === "fl:ren:ajuste" && p.accion) { p.mode = "flRenMotivo"; pending.set(String(chatId), p); return bot.sendMessage(chatId, "🛠 Escriba el motivo del ajuste (garantía, cortesía, corrección…):"); }
     if (data.startsWith("fl:ren:bank:") && p.accion && p.monto) return ejecutarYCobrar(chatId, userId, p, { bancoId: data.slice("fl:ren:bank:".length) });
+    // R106 · hoja de pago (compra / renovación)
+    if (data.startsWith("fl:pg:bank:") && p.mode === "flPgBanco") { p.bancoId = data.slice("fl:pg:bank:".length); return siguientePaso(chatId, p); }
+    if (data.startsWith("fl:pg:resp:") && p.mode === "flPgResp") {
+      p.responsable = data.endsWith("vendedor") ? "vendedor" : "cliente";
+      if (p.responsable === "vendedor") { p.mode = "flPgVendedor"; pending.set(String(chatId), p); return bot.sendMessage(chatId, "🧑‍💼 Escriba el nombre del vendedor que tiene el dinero:"); }
+      return siguientePaso(chatId, p);
+    }
+    if (data === "fl:pg:ok" && p.mode === "flPgConfirm") {
+      try { return await confirmarPago(chatId, userId, p); } catch (e) { if (e.userError) return bot.sendMessage(chatId, `⚠️ ${e.message}`); throw e; }
+    }
+    // R106 · pendientes de cobro y abonos
+    if (data === "fl:cxc:menu") return panelPendientes(chatId);
+    if (data.startsWith("fl:cxc:list:")) { const [, , , tipo, pg] = data.split(":"); return panelPendientes(chatId, tipo, Number(pg || 0)); }
+    if (data.startsWith("fl:cxc:pick:") && p.mode === "flCxcList") {
+      const id = (p.ids || [])[Number(data.split(":")[3])]; if (!id) return panelPendientes(chatId, p.tipo || "");
+      const c = (await db.collection(CXC).doc(id).get()).data() || {};
+      pending.set(String(chatId), { mode: "flAbMonto", cuentaId: id, tipo: p.tipo, opId: newOpId() });
+      return bot.sendMessage(chatId, `💵 *Abono · ${c.deudorNombre || "—"}* (${c.deudorTipo})
+${c.tipoOrigen === "compra" ? "Compra" : "Renovación"} ${c.plataforma || ""} · total ${lps(c.montoTotalOperacion)}
+Pendiente: *${lps(c.saldoPendiente)}*
+
+Escriba cuánto pagó ahora:`, { parse_mode: "Markdown" });
+    }
+    if (data.startsWith("fl:ab:bank:") && p.mode === "flAbBanco") {
+      try {
+        const r = await registrarAbonoTg({ cuentaId: p.cuentaId, monto: p.monto, bancoId: data.slice("fl:ab:bank:".length), opId: p.opId, actor: await actorDe(userId) });
+        pending.delete(String(chatId));
+        await bot.sendMessage(chatId, r.duplicado ? "Ese abono ya estaba registrado." : `✅ Abono de ${lps(p.monto)} en ${r.banco}. Pendiente: ${lps(r.saldoPendiente)}${r.saldoPendiente <= 0 ? " · PAGADO" : ""}.`);
+      } catch (e) { pending.delete(String(chatId)); await bot.sendMessage(chatId, `⚠️ ${String(e?.message || e).slice(0, 200)}`); }
+      return panelPendientes(chatId, p.tipo || "");
+    }
   } catch (e) { logErr("finanzas_libro.callback", e); return bot.sendMessage(chatId, `⚠️ ${String(e?.message || e).slice(0, 220)}`); }
   return null;
 }
@@ -337,6 +475,27 @@ async function handleText(chatId, userId, text, p) {
   const t = String(text || "").trim();
   const num = Number(t.replace(/[^0-9.\-]/g, ""));
   try {
+    if (p.mode === "flPgTotal") {
+      if (!(num > 0)) return bot.sendMessage(chatId, "Escriba el monto total acordado (mayor que 0), ej. 220.");
+      p.total = R.money(num); p.mode = "flPgRecibido"; pending.set(String(chatId), p);
+      return bot.sendMessage(chatId, `Total: ${lps(p.total)}\n2) ¿Cuánto recibió *ahora*? (escriba 0 si no pagó nada)`, { parse_mode: "Markdown" });
+    }
+    if (p.mode === "flPgRecibido") {
+      if (!(num >= 0) || t === "") return bot.sendMessage(chatId, "Escriba lo recibido ahora (0 o más).");
+      if (num > p.total) return bot.sendMessage(chatId, `No puede ser mayor que el total (${lps(p.total)}).`);
+      p.recibido = R.money(num); return siguientePaso(chatId, p);
+    }
+    if (p.mode === "flPgVendedor") {
+      if (t.length < 2) return bot.sendMessage(chatId, "Escriba el nombre del vendedor.");
+      p.vendedorNombre = t.slice(0, 60); return siguientePaso(chatId, p);
+    }
+    if (p.mode === "flAbMonto") {
+      if (!(num > 0)) return bot.sendMessage(chatId, "Escriba el monto del abono (mayor que 0).");
+      p.monto = R.money(num); p.mode = "flAbBanco"; pending.set(String(chatId), p);
+      const methods = await loadMethods(); const kb = [];
+      for (let i = 0; i < methods.length; i += 2) kb.push(methods.slice(i, i + 2).map((m) => ({ text: m.nombre, callback_data: `fl:ab:bank:${m.id}` })));
+      return upsertPanel(chatId, `Abono: *${lps(p.monto)}*\n¿Dónde entró el dinero?`, kb);
+    }
     if (p.mode === "flSiMonto") {
       if (!(num >= 0) || t === "") return bot.sendMessage(chatId, "Escriba el monto (0 o más), ej. 4000.");
       p.monto = R.money(num); p.mode = "flSiDia"; pending.set(String(chatId), p);
@@ -398,4 +557,4 @@ async function handleText(chatId, userId, text, p) {
   return bot.sendMessage(chatId, "Use los botones del panel o toque ❌ Cancelar.");
 }
 
-module.exports = { registrarSaldoInicial, registrarAjuste, bancoDesdeBoton, movimientosSinBanco, configurar, esLibroUser, iniciarPagoRenovacion, handleCallback, handleText, menuLibro, estadoLibro, loadMethods, registrarCobroRenovacion, confirmarPagoPlanilla };
+module.exports = { iniciarPagoCompra, registrarOperacionPago, registrarAbonoTg, carteraResumen, registrarSaldoInicial, registrarAjuste, bancoDesdeBoton, movimientosSinBanco, configurar, esLibroUser, iniciarPagoRenovacion, handleCallback, handleText, menuLibro, estadoLibro, loadMethods, registrarCobroRenovacion, confirmarPagoPlanilla };
