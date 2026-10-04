@@ -207,6 +207,37 @@ async function asignarBanco(chatId, userId, idx, bankIdx) {
   return panelSinBanco(chatId, p.page || 0);
 }
 
+// ---------------------------------------------------------------- R109 · reparar fechas UTC
+// Movimientos de APK/web registrados de 6 PM a medianoche (hora de Honduras) quedaron con fecha del día siguiente.
+// Se detectan con la misma regla del Excel (fechaRealHonduras) y se corrigen con auditoría (fecha anterior → nueva).
+async function movimientosFechaUtc() {
+  const { fechaRealHonduras } = require("./index_10_reportes_excel");
+  const snap = await movQuery("2026-09-25").get();
+  return snap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) })).map((m) => ({ m, real: fechaRealHonduras(m) })).filter((x) => x.real && x.real !== x.m.fecha);
+}
+async function panelFechas(chatId) {
+  const rows = await movimientosFechaUtc();
+  if (!rows.length) return upsertPanel(chatId, "🗓 *FECHAS*\n\n✅ Todas las fechas están bien (hora de Honduras).", [[{ text: "⬅️ Ciclo", callback_data: "fl:menu" }]]);
+  const txt = ["🗓 *FECHAS A CORREGIR*", `Hay *${rows.length}* movimientos registrados de 6 PM a medianoche que quedaron con la fecha del día siguiente.`, "", ...rows.slice(0, 15).map(({ m, real }) => `• ${m.fecha} → *${real}* · ${lps(m.monto)} · ${String(m.clienteNombre || m.plataforma || m.motivo || m.tipo).slice(0, 30)}`), rows.length > 15 ? `… y ${rows.length - 15} más` : ""].join("\n");
+  return upsertPanel(chatId, txt, [[{ text: `✅ Corregir las ${rows.length} fechas`, callback_data: "fl:rf:ok" }], [{ text: "⬅️ Ciclo", callback_data: "fl:menu" }]]);
+}
+async function corregirFechas(chatId, userId) {
+  const rows = await movimientosFechaUtc(); const actor = await actorDe(userId); const now = new Date().toISOString();
+  let n = 0;
+  for (let i = 0; i < rows.length; i += 200) {
+    const batch = db.batch();
+    for (const { m, real } of rows.slice(i, i + 200)) {
+      const [d, mo, y] = real.split("/");
+      batch.set(db.collection("finanzas_movimientos").doc(m.id), { ...fechaCampos(`${y}-${mo}-${d}`), fechaCorregidaDe: m.fecha || "", fechaCorregidaPor: actor.usuario, fechaCorregidaAt: now, createdAt: m.createdAt, updatedAt: now }, { merge: true });
+      batch.set(db.collection("auditoria_eventos").doc(), { actorUsuario: actor.usuario, rol: "telegram", origen: "tg", modulo: "finanzas", accion: "corregir_fecha_utc", targetType: "movimiento", targetId: m.id, movimientoId: m.id, before: { fecha: m.fecha || "" }, after: { fecha: real }, motivo: "Fecha guardada con hora UTC (6 PM–medianoche Honduras)", detalle: `${m.fecha} → ${real} · L${m.monto}`, resultado: "ok", tipo: "finanzas_corregir_fecha_utc", createdAt: now });
+      n++;
+    }
+    await batch.commit();
+  }
+  await bot.sendMessage(chatId, `✅ ${n} fecha${n === 1 ? "" : "s"} corregida${n === 1 ? "" : "s"} a la hora de Honduras. Quedó registrado en auditoría.`);
+  return menuLibro(chatId);
+}
+
 // ---------------------------------------------------------------- pantallas
 async function menuLibro(chatId) {
   const [{ libro, totales: t, saldos }, sinBanco, cart] = await Promise.all([estadoLibro(), movimientosSinBanco().catch(() => []), carteraResumen().catch(() => ({ clientes: 0, vendedores: 0 }))]);
@@ -222,7 +253,7 @@ async function menuLibro(chatId) {
   return upsertPanel(chatId, txt, [
     [{ text: "🏦 Saldos por banco", callback_data: "fl:bancos" }, { text: "📋 Pendientes de cobro", callback_data: "fl:cxc:menu" }],
     [{ text: "👥 Nuevo pago de planilla", callback_data: "fl:pl:new" }],
-    [{ text: "🏷 Movimientos sin banco", callback_data: "fl:sb:list:0" }],
+    [{ text: "🏷 Movimientos sin banco", callback_data: "fl:sb:list:0" }, { text: "🗓 Revisar fechas", callback_data: "fl:rf:ver" }],
     [{ text: "🔄 Actualizar", callback_data: "fl:menu" }, { text: "🏠 Inicio", callback_data: "go:inicio" }],
   ]);
 }
@@ -393,6 +424,8 @@ async function handleCallback(chatId, userId, data) {
   try {
     if (data === "fl:menu") return menuLibro(chatId);
     if (data === "fl:bancos") return panelBancos(chatId);
+    if (data === "fl:rf:ver") return panelFechas(chatId);
+    if (data === "fl:rf:ok") return corregirFechas(chatId, userId);
     if (data.startsWith("fl:si:pick:")) {
       const bancoId = data.slice("fl:si:pick:".length); const m = (await loadMethods()).find((x) => x.id === bancoId);
       pending.set(String(chatId), { mode: "flSiMonto", bancoId });

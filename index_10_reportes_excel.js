@@ -117,7 +117,52 @@ function dateFromAny(v) {
   }
 }
 
+// R109 · Fecha REAL de Honduras. Hasta el 04/10 la APK/web fechaban con la hora de Londres (UTC): lo cobrado
+// de 6 PM a medianoche quedaba con fecha del día siguiente. Si la fecha guardada es la del día UTC de createdAt
+// y se registró entre 00:00 y 05:59 UTC, la fecha real es la del día anterior (hora de Honduras).
+function fechaRealHonduras(data = {}) {
+  const iso = typeof data.createdAt === "string" ? data.createdAt : "";
+  const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):/);
+  if (!m || Number(m[4]) >= 6) return "";
+  const utcYmd = `${m[1]}-${m[2]}-${m[3]}`;
+  const guardada = String(data.fechaPago || "").slice(0, 10) || (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(String(data.fecha || "")) ? (() => { const [d, mo, y] = String(data.fecha).split("/"); return `${y}-${mo.padStart(2, "0")}-${d.padStart(2, "0")}`; })() : "");
+  if (guardada !== utcYmd) return ""; // fecha elegida a mano o ya correcta: se respeta
+  const hn = new Date(Date.parse(iso) - 6 * 3600000);
+  return `${String(hn.getUTCDate()).padStart(2, "0")}/${String(hn.getUTCMonth() + 1).padStart(2, "0")}/${hn.getUTCFullYear()}`;
+}
+const USUARIOS_LABEL = { naara: "Sublicuentas", sublicuentas: "Sublicuentas", relojes: "Relojes", libni: "Relojes" };
+function usuarioMovimiento(data = {}) {
+  const u = safeText(data.userName || data.registradoPorNombre || data.usuario || data.cobradoPor || data.registradoPor || data.admin || data.creadoPor || data.createdBy || "");
+  if (!u) return "";
+  const canal = { apk: "APK", web: "Web", tg: "Telegram", telegram: "Telegram", socios: "Socios" }[String(data.origenCanal || data.origen || "").toLowerCase()] || "";
+  const label = USUARIOS_LABEL[u.toLowerCase()] || u;
+  return canal ? `${label} · ${canal}` : label;
+}
+const SUBTIPO_LABEL = { cobro_renovacion: "Renovación", cobro_compra: "Compra nueva", cobro_pendiente_cliente: "Abono de cliente", cobro_pendiente_vendedor: "Entrega de vendedor", compra_socio: "Compra socio", renovacion_socio: "Renovación socio", cobro_cliente: "Cobro" };
+function detalleMovimiento(data = {}) {
+  const directo = safeText(data.detalle || data.descripcion || data.nota || data.observacion || "");
+  if (directo) return directo;
+  const partes = [];
+  const quien = safeText(data.clienteNombre || data.socioNombre || data.beneficiario || data.deudorNombre || "");
+  if (quien) partes.push(quien);
+  const tipo = SUBTIPO_LABEL[String(data.subtipo || "")];
+  if (tipo) partes.push(tipo);
+  if (data.fechaNueva) partes.push(`vence ${safeText(data.fechaNueva)}`);
+  if (data.reversaDe) partes.push("REVERSA");
+  return partes.join(" · ");
+}
+let platLabel = null;
+function plataformaLegible(v = "") {
+  const t = safeText(v);
+  if (!t) return "Sin plataforma";
+  try { if (!platLabel) platLabel = require("./index_02_utils_roles").humanPlataforma; } catch (_) { platLabel = (x) => x; }
+  // Solo traduce claves internas (vipnetflix, disneyp…); los nombres ya legibles se dejan igual.
+  return /^[a-z0-9_]+$/.test(t) ? (platLabel(t) || t) : t;
+}
+
 function extraerFechaMovimiento(data = {}) {
+  const real = fechaRealHonduras(data);
+  if (real) return real;
   return normalizeDMY(data.fecha || data.fechaPago || data.fecha_pago || data.fecha_dmy || data.fechaMovimiento || data.date || "") ||
     dmyFromDate(dateFromAny(data.fechaTS || data.fecha_ts || data.createdAt || data.created_at || data.updatedAt || data.updated_at || data.timestamp || data.ts));
 }
@@ -148,10 +193,10 @@ function normalizeMovimiento(id, data = {}, source = "") {
     tipo,
     monto,
     banco: safeText(data.banco || data.metodo || data.cuenta || data.bank || "Sin banco"),
-    plataforma: safeText(data.plataforma || data.servicio || data.producto || data.platform || "Sin plataforma"),
+    plataforma: plataformaLegible(data.plataforma || data.servicio || data.producto || data.platform || ""),
     motivo: safeText(data.motivo || data.concepto || data.descripcion || data.detalle || "Egreso"),
-    detalle: safeText(data.detalle || data.descripcion || data.nota || data.observacion || ""),
-    userName: safeText(data.userName || data.usuario || data.admin || data.creadoPor || data.createdBy || ""),
+    detalle: detalleMovimiento(data),
+    userName: usuarioMovimiento(data),
     raw: data,
   };
 }
@@ -672,6 +717,7 @@ async function generarReporteExcelPorRango(fechaInicio, fechaFin) {
 }
 
 module.exports = {
+  fechaRealHonduras,
   generarReporteExcelPorRango,
   getMovimientosPorRango,
 };
