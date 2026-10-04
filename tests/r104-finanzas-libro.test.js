@@ -58,3 +58,9 @@ test("R106 Excel: hoja Pendientes Cobro, ventas generadas y reversas restan", ()
   assert.match(x, /!\["saldo_inicial", "venta", "transferencia"\]\.includes\(m\.kind\)/);
   assert.match(x, /const monto = data\.reversaDe \? -montoBase : montoBase;/);
 });
+
+test("R106: añadir perfil a una compra existente pide pago (es compra nueva)", () => {
+  const h = fs.readFileSync(path.join(__dirname, "..", "index_06_handlers.js"), "utf8");
+  assert.equal((h.match(/await addPerfilConPagoR106\(chatId, userId,/g) || []).length, 4);
+  assert.match(h, /perfil adicional/);
+});
