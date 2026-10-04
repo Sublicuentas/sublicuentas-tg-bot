@@ -22,6 +22,7 @@ test("reglas del bot = reglas del servidor/APK (casos del PDF)", () => {
 test("Telegram: renovar pide pago real a Sublicuentas/Relojes en todas las rutas; planilla y Excel conectados", () => {
   const h = fs.readFileSync(path.join(__dirname, "..", "index_06_handlers.js"), "utf8");
   assert.equal((h.match(/finLibro\.iniciarPagoRenovacion\(/g) || []).length, 6, "+30, +31, todos +30, todos +31, fecha manual uno y todos");
+  assert.match(h, /finLibro\.iniciarPagoCompra\(/, "R106: compra nueva pide el pago");
   assert.match(h, /if \(data\.startsWith\("fl:"\)\) return finLibro\.handleCallback/);
   assert.match(h, /return finLibro\.handleText\(chatId, userId, t, p\)/);
   const x = fs.readFileSync(path.join(__dirname, "..", "index_10_reportes_excel.js"), "utf8");
@@ -38,4 +39,14 @@ test("registro manual de ingreso/egreso usa los bancos registrados y guarda banc
   assert.equal((h.match(/bancoId: p\.bancoId \|\| ""/g) || []).length, 5);
   const l = fs.readFileSync(path.join(__dirname, "..", "index_31_finanzas_libro.js"), "utf8");
   assert.match(l, /const DESDE_SIN_BANCO = "2026-10-01"/);
+});
+
+test("R106: estado de pago y cartera (pagado / parcial / pendiente)", () => {
+  assert.deepEqual(R.estadoPago(220, 220), { total: 220, recibido: 220, saldo: 0, estado: "pagado" });
+  assert.equal(R.estadoPago(300, 100).estado, "parcial");
+  assert.equal(R.estadoPago(220, 0).estado, "pendiente");
+  const l = fs.readFileSync(path.join(__dirname, "..", "index_31_finanzas_libro.js"), "utf8");
+  for (const k of ["registrarOperacionPago", "registrarAbonoTg", "panelPendientes", "iniciarPagoCompra"]) assert.ok(l.includes(`function ${k}(`), k);
+  const c = fs.readFileSync(path.join(__dirname, "..", "index_03_clientes_crm.js"), "utf8");
+  assert.match(c, /finLibro\.iniciarPagoCompra\(chatId, chatId/);
 });
