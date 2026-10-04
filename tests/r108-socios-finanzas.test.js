@@ -35,3 +35,16 @@ test("Socios: compra/renovación + venta + ingreso en UNA transacción, idempote
   const x = fs.readFileSync(path.join(__dirname, "..", "index_10_reportes_excel.js"), "utf8");
   assert.match(x, /"Ingreso - Compra Socio"/); assert.match(x, /"Ingreso - Renovación Socio"/);
 });
+
+test("R109: fecha real de Honduras, usuario y detalle en el Excel", () => {
+  const xs = fs.readFileSync(path.join(__dirname, "..", "index_10_reportes_excel.js"), "utf8");
+  const cuerpo = xs.slice(xs.indexOf("function fechaRealHonduras("), xs.indexOf("const USUARIOS_LABEL"));
+  const X = { fechaRealHonduras: new Function(`${cuerpo}; return fechaRealHonduras;`)() };
+  assert.equal(X.fechaRealHonduras({ createdAt: "2026-10-04T02:30:00.000Z", fechaPago: "2026-10-04" }), "03/10/2026", "6 PM–medianoche HN quedaba con fecha de mañana");
+  assert.equal(X.fechaRealHonduras({ createdAt: "2026-10-04T15:00:00.000Z", fechaPago: "2026-10-04" }), "");
+  assert.equal(X.fechaRealHonduras({ createdAt: "2026-10-04T02:30:00.000Z", fechaPago: "2026-10-03" }), "", "fecha elegida a mano se respeta");
+  const x = fs.readFileSync(path.join(__dirname, "..", "index_10_reportes_excel.js"), "utf8");
+  assert.match(x, /userName: usuarioMovimiento\(data\)/); assert.match(x, /detalle: detalleMovimiento\(data\)/);
+  const l = fs.readFileSync(path.join(__dirname, "..", "index_31_finanzas_libro.js"), "utf8");
+  assert.match(l, /callback_data: "fl:rf:ver"/);
+});
