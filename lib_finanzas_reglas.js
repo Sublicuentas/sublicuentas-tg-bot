@@ -1,6 +1,6 @@
-// lib_finanzas_reglas.js · COPIA de Sublichat HQ lib/finanzas-libro.mjs en formato CommonJS (mismas reglas que el servidor y la APK).
-// Si se cambia una regla, cambiar las TRES copias (HQ lib, APK src/app/finanzas-reglas.js y este archivo).
-// lib/finanzas-libro.mjs · Libro mayor de Finanzas (ciclos, saldos por banco y planilla).
+// lib_finanzas_reglas.js · COPIA de Sublichat HQ api/_finanzas-libro.js en formato CommonJS (mismas reglas que el servidor y la APK).
+// Si se cambia una regla, cambiar las TRES copias (HQ api/_finanzas-libro.js, APK src/app/finanzas-reglas.js y este archivo).
+// api/_finanzas-libro.js · Libro mayor de Finanzas (ciclos, saldos por banco y planilla). Vive DENTRO de /api y como .js para que Vercel lo empaquete junto a api/finanzas.js (Vercel no puede hacer require() de un .mjs).
 // Lógica PURA (sin Firestore) para que el backend, las pruebas y los reportes usen exactamente
 // las mismas definiciones. El bot de Telegram replica estas reglas (index_31_finanzas_libro.js).
 //
@@ -86,10 +86,17 @@ function movementBankId(m = {}, methods = []) {
   return resolveBankId(m.banco || m.metodoPago || m.metodo || "", methods);
 }
 
+// Centro financiero (R106):
+//  · "venta": valor acordado de compra/renovación (NO es dinero; alimenta "Ventas generadas").
+//  · "transferencia": mueve dinero entre bancos (entrada/salida); no cambia el total ni el ciclo.
+//  · Anular/corregir NO borra: el original se marca estadoFinanciero "anulado"/"corregido" y se crea una
+//    REVERSA con el mismo tipo y monto negativo, así bancos y ciclo vuelven exactos y queda la traza.
 function movementKind(m = {}) {
   const tipo = norm(m.tipo);
   const sub = String(m.subtipo || "").trim();
-  if (m.estado === "anulado" || m.anulado === true) return "ignorar";
+  if ((m.estado === "anulado" || m.anulado === true) && !m.estadoFinanciero) return "ignorar"; // anulaciones antiguas sin reversa
+  if (tipo === "venta") return "venta";
+  if (tipo === "transferencia") return "transferencia";
   if (tipo === "saldo inicial" || sub === "saldo_inicial") return "saldo_inicial";
   if (tipo === "ajuste saldo" || sub === "ajuste_saldo") return "ajuste";
   if (tipo === "ingreso" || tipo === "cobro") return "ingreso";
@@ -99,7 +106,7 @@ function movementKind(m = {}) {
 
 // Totales de un ciclo [inicio, fin] (fin opcional = sin límite).
 function cycleTotals(movements = [], inicio = "", fin = "") {
-  let ingresos = 0, egresosOperativos = 0, planilla = 0, nIngresos = 0, nEgresos = 0, nPlanilla = 0;
+  let ingresos = 0, egresosOperativos = 0, planilla = 0, ventas = 0, nIngresos = 0, nEgresos = 0, nPlanilla = 0;
   for (const m of movements) {
     const f = movementYmd(m);
     if (!f || (inicio && f < inicio) || (fin && f > fin)) continue;
@@ -107,11 +114,12 @@ function cycleTotals(movements = [], inicio = "", fin = "") {
     if (kind === "ingreso") { ingresos += monto; nIngresos++; }
     else if (kind === "egreso") { egresosOperativos += monto; nEgresos++; }
     else if (kind === "planilla") { planilla += monto; nPlanilla++; }
+    else if (kind === "venta") ventas += monto;
   }
   const disponibleAntesPlanilla = money(ingresos - egresosOperativos);
   return {
     ingresos: money(ingresos), egresosOperativos: money(egresosOperativos), disponibleAntesPlanilla,
-    planilla: money(planilla), resultado: money(disponibleAntesPlanilla - planilla),
+    planilla: money(planilla), resultado: money(disponibleAntesPlanilla - planilla), ventasGeneradas: money(ventas),
     conteo: { ingresos: nIngresos, egresos: nEgresos, planilla: nPlanilla },
   };
 }
@@ -130,7 +138,7 @@ function bankBalances(movements = [], libro = {}, methods = []) {
   }
   for (const m of movements) {
     const kind = movementKind(m);
-    if (!["ingreso", "egreso", "planilla", "ajuste"].includes(kind)) continue;
+    if (!["ingreso", "egreso", "planilla", "ajuste", "transferencia"].includes(kind)) continue;
     const id = movementBankId(m, methods);
     const row = out.get(id);
     if (!row || !row.activado) continue;
@@ -141,6 +149,7 @@ function bankBalances(movements = [], libro = {}, methods = []) {
     else if (kind === "egreso") { row.egresosOperativos += monto; row.saldo -= monto; }
     else if (kind === "planilla") { row.planilla += monto; row.saldo -= monto; }
     else if (kind === "ajuste") { row.ajustes += monto; row.saldo += monto; } // ajuste con signo
+    else if (kind === "transferencia") { const d = m.direccion === "salida" ? -monto : monto; row.transferencias = money((row.transferencias || 0) + d); row.saldo += d; }
     row.movimientos++;
   }
   const bancos = [...out.values()].map((r) => ({ ...r, ingresos: money(r.ingresos), egresosOperativos: money(r.egresosOperativos), planilla: money(r.planilla), ajustes: money(r.ajustes), saldo: money(r.saldo) }));
@@ -175,8 +184,15 @@ function validatePlanilla({ montoTotal, asignaciones = [], bancos = [], disponib
   return { ok: errors.length === 0, errors, asignaciones: clean, asignado, faltante: diff };
 }
 
+// Estado de pago de una compra/renovación: saldo = total − recibido (nunca negativo).
+function estadoPago(total, recibido) {
+  const t = money(total), r = money(recibido);
+  const saldo = money(Math.max(0, t - r));
+  return { total: t, recibido: r, saldo, estado: saldo <= 0 ? "pagado" : (r > 0 ? "parcial" : "pendiente") };
+}
+
 function fmt(n) {
   return money(n).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 2 });
 }
 
-module.exports = { PLANILLA_CONCEPTOS, PLANILLA_SUBTIPOS, SIN_BANCO, norm, money, ymd, addDaysYmd, daysBetweenYmd, movementYmd, publicMethods, resolveBankId, movementBankId, movementKind, cycleTotals, bankBalances, validatePlanilla, fmt };
+module.exports = { PLANILLA_CONCEPTOS, PLANILLA_SUBTIPOS, SIN_BANCO, norm, money, ymd, addDaysYmd, daysBetweenYmd, movementYmd, publicMethods, resolveBankId, movementBankId, movementKind, cycleTotals, bankBalances, validatePlanilla, estadoPago, fmt };
