@@ -290,7 +290,11 @@ async function revActualizarFechaCliente({ clienteId, socioNorm, servicioIndex, 
     });
     return { c, svc, ix, campo, fechaFinal: revFechaDMY(nf), fechaAnterior: anterior ? revFechaDMY(anterior) : "" };
   });
-  const { c, svc, ix, campo, fechaFinal, fechaAnterior } = mutation;
+  return revPostRenovacion({ id, socioNorm, meses, ...mutation });
+}
+
+// Sorteo + historial de una renovación ya guardada (se usa con o sin pago).
+async function revPostRenovacion({ id, socioNorm, meses, c, svc, ix, campo, fechaFinal, fechaAnterior }) {
   const compraEvento = String(svc.compraId || `servicio-${ix}`);
   const sorteo = fechaFinal !== fechaAnterior
     ? await registrarEventoSorteosSeguro({
@@ -844,6 +848,83 @@ async function uploadPanelImage(imagen, folder = "comprobantes") {
 }
 
 // ── Comprobante de renovación: sube la foto + opcionalmente actualiza la fecha del servicio ──
+
+// ===================== R108 · SOCIOS EN EL CENTRO FINANCIERO =====================
+// Compra y renovación de socios entran al MISMO libro (finanzas_movimientos) que web, APK y bot.
+// El precio lo decide el servidor (catálogo mayorista / precio guardado del servicio) y el banco es obligatorio.
+// La renovación de todos los servicios elegidos + su ingreso se guardan en UNA transacción (o todo, o nada).
+const R108_CANTIDADES = new Set([...Array.from({ length: 20 }, (_, i) => i + 1), 25, 30, 40, 50]);
+function r108Ymd() { return new Date(Date.now() - 6 * 3600000).toISOString().slice(0, 10); }
+function r108Fecha(ymd) { const [y, m, d] = ymd.split("-"); return { fecha: `${d}/${m}/${y}`, fechaPago: ymd, mesKey: `${y}-${m}`, monthKey: `${y}-${m}`, fechaTS: admin.firestore.Timestamp.fromDate(new Date(Date.UTC(+y, +m - 1, +d, 12))) }; }
+async function r108Banco(bancoId) {
+  const methods = await require("./index_31_finanzas_libro").loadMethods();
+  return methods.find((m) => m.id === String(bancoId || "").trim()) || null;
+}
+async function r108CicloId(tx) {
+  const snap = await tx.get(db.collection("finanzas_config").doc("libro_mayor"));
+  const l = snap.exists ? (snap.data() || {}) : {};
+  const desdes = Object.values(l.bases || {}).map((b) => b?.desde).filter(Boolean).sort();
+  return l.cicloId || `ciclo_${l.cicloInicio || desdes[0] || "2026-10-01"}`;
+}
+function r108Movs(tx, { idBase, subtipo, total, banco, cicloId, rel, auditoria }) {
+  const now = new Date().toISOString(), f = r108Fecha(r108Ymd());
+  const base = { origen: "socios", origenCanal: "socios", registradoPor: rel.socioNorm || "socio", ...f, createdAt: now, updatedAt: now, cicloId, ...rel };
+  const venta = db.collection("finanzas_movimientos").doc(`${idBase}_venta`), ing = db.collection("finanzas_movimientos").doc(`${idBase}_cobro`);
+  tx.set(venta, { ...base, movimientoId: venta.id, tipo: "venta", subtipo, monto: total, montoRecibido: total, saldoPendiente: 0, estadoPago: "pagado" });
+  tx.set(ing, { ...base, movimientoId: ing.id, tipo: "ingreso", subtipo, monto: total, bancoId: banco.id, banco: banco.nombre, metodoPago: banco.nombre, cobradoPor: rel.socioNorm || "socio" });
+  tx.set(db.collection("auditoria_eventos").doc(), { actorUsuario: rel.socioNorm || "socio", rol: "socio", origen: "socios", modulo: "socios", resultado: "ok", createdAt: now, monto: total, bancos: [{ bancoId: banco.id, monto: total, direccion: "entrada" }], operationId: rel.operationId || "", movimientoId: ing.id, ...auditoria });
+  return { ventaId: venta.id, ingresoId: ing.id };
+}
+
+async function revRenovarSeleccionConPago({ clienteId, socioNorm, socioNombre, seleccion, nuevaFecha, meses, banco, operationId }) {
+  const id = String(clienteId || "").trim();
+  const ref = db.collection("clientes").doc(id);
+  const opKey = `socio_renov_${crypto.createHash("sha256").update(`${socioNorm}|${operationId}`).digest("hex").slice(0, 32)}`;
+  const ventaRef = db.collection("finanzas_movimientos").doc(`${opKey}_venta`);
+  const out = await db.runTransaction(async (tx) => {
+    const [snap, ya] = await Promise.all([tx.get(ref), tx.get(ventaRef)]);
+    if (ya.exists) return { duplicado: true, previo: ya.data() || {} };
+    if (!snap.exists) throw Object.assign(new Error("cliente_no_existe"), { status: 404, publicError: "cliente_no_existe" });
+    const cicloId = await r108CicloId(tx);
+    const c = snap.data() || {};
+    const servicios = heredarVendedorServicios(Array.isArray(c.servicios) ? c.servicios : [], c);
+    const ahora = new Date(), items = [];
+    for (const sel of seleccion) {
+      const compraBuscada = String(sel.compraId || "").trim();
+      const ix = compraBuscada ? servicios.findIndex((x) => String(x?.compraId || "").trim() === compraBuscada) : Number(sel.servicioIndex);
+      if (!Number.isInteger(ix) || ix < 0 || ix >= servicios.length) throw Object.assign(new Error("servicio_no_existe"), { status: 400, publicError: "servicio_no_existe" });
+      if (!servicioPerteneceAVendedor(servicios[ix], c, socioNorm)) throw Object.assign(new Error("servicio_no_permitido"), { status: 403, publicError: "servicio_no_permitido" });
+      const svc = { ...(servicios[ix] || {}) };
+      // Precio autoritativo = el guardado en el servicio del socio (snapshot). Nunca el que manda el navegador.
+      const precio = revMoneyNumber(svc.precioSocio ?? svc.precio ?? svc.precioVenta ?? svc.monto ?? 0);
+      if (!(precio > 0)) throw Object.assign(new Error("precio_no_resuelto"), { status: 409, publicError: "precio_no_resuelto", detail: `${svc.plataforma || "Servicio"} no tiene precio guardado; pida a Sublicuentas que lo registre.` });
+      const campo = revCampoFechaServicio(svc);
+      const anterior = revParseFecha(svc[campo] || svc.fechaRenovacion || svc.vencimiento || svc.vence || svc.fechaFin);
+      let nf = revParseFechaInput(nuevaFecha);
+      if (!nf && meses) nf = revAddMonths(anterior && revDiasRest(anterior) > 0 ? anterior : new Date(), Number(meses)); // mes calendario
+      if (!nf || isNaN(nf)) throw Object.assign(new Error("fecha_invalida"), { status: 400, publicError: "fecha_invalida" });
+      svc[campo] = revFechaDMY(nf); svc.ultimaRenovacionAt = ahora;
+      const pn = normVendedor(socioNorm); svc.ultimaRenovacionProcesadaPor = pn === "geissel" ? "geisell" : pn;
+      servicios[ix] = svc;
+      items.push({ c, svc, ix, campo, fechaFinal: revFechaDMY(nf), fechaAnterior: anterior ? revFechaDMY(anterior) : "", precio, compraId: String(svc.compraId || `servicio-${ix}`), servicio: svc.plataforma || svc.servicio || svc.nombre || "Servicio" });
+    }
+    tx.update(ref, { servicios, ...camposResumenVendedores(servicios, c), updatedAt: ahora, ultimaRenovacionAt: ahora });
+    const total = items.reduce((a, x) => a + x.precio, 0);
+    const rel = { socioNorm, socioNombre, clienteId: id, clienteNombre: c.nombrePerfil || c.nombre || "", compraId: items.map((x) => x.compraId).join(","), plataforma: items.map((x) => x.servicio).join(", "), tipoOrigen: "renovacion", operationId, serviciosSocio: items.map((x) => ({ compraId: x.compraId, servicio: x.servicio, precio: x.precio, fechaAnterior: x.fechaAnterior, fechaNueva: x.fechaFinal })), meses: nuevaFecha ? 0 : Math.max(1, Number(meses) || 1), fechaPersonalizada: !!nuevaFecha };
+    const movs = r108Movs(tx, { idBase: opKey, subtipo: "renovacion_socio", total, banco, cicloId, rel, auditoria: { accion: "renovacion_socio", targetType: "renovacion", targetId: opKey, clienteId: id, detalle: `Socio ${socioNombre} renovó ${items.map((x) => `${x.servicio} ${x.fechaAnterior || "—"}→${x.fechaFinal} (L${x.precio})`).join(" · ")} · total L${total} en ${banco.nombre}`, after: { total, banco: banco.nombre, servicios: rel.serviciosSocio, modo: nuevaFecha ? "fecha personalizada" : `+${Math.max(1, Number(meses) || 1)}m` } } });
+    return { duplicado: false, items, total, ...movs };
+  });
+  if (out.duplicado) return out;
+  const renovaciones = [];
+  for (const it of out.items) renovaciones.push({ ...(await revPostRenovacion({ id, socioNorm, meses, ...it })), precio: it.precio });
+  return { ...out, renovaciones };
+}
+
+app.get("/rev/metodos-pago", revAuth, async (req, res) => {
+  try { res.json({ ok: true, metodos: await require("./index_31_finanzas_libro").loadMethods() }); }
+  catch (e) { console.error("rev/metodos-pago", e); res.status(500).json({ error: "server" }); }
+});
+
 app.post("/rev/renovacion", revAuth, async (req, res) => {
   try {
     const live = await revLiveProfile(req.rev);
@@ -861,10 +942,15 @@ app.post("/rev/renovacion", revAuth, async (req, res) => {
     })).filter(x=>(x.compraId||Number.isInteger(x.servicioIndex))&&(x.compraId||x.servicioIndex>=0)).slice(0,30);
     if(!seleccionEntrada.length)return res.status(400).json({error:"sin_servicios"});
     const seleccion=await revResolverSeleccionCliente({clienteId,socioNorm:live.nombre_norm||req.rev.nombre_norm||"",seleccion:seleccionEntrada});
-    const renovacionesFecha=[];
-    if (nuevaFecha || meses) {
-      for(const item of seleccion) renovacionesFecha.push(await revActualizarFechaCliente({clienteId,socioNorm:live.nombre_norm||req.rev.nombre_norm||"",servicioIndex:item.servicioIndex,compraId:item.compraId,nuevaFecha,meses}));
-    }
+    // R108: banco obligatorio y monto automático (el servidor suma el precio guardado de cada servicio).
+    const bancoR108 = await r108Banco(req.body?.bancoId);
+    if (!bancoR108) return res.status(400).json({ error: "falta_banco", detail: "Elija el banco donde se hizo el pago." });
+    if (!(nuevaFecha || meses)) return res.status(400).json({ error: "fecha_invalida", detail: "Elija +1m/+2m/+3m/+6m o una fecha." });
+    const opR108 = cleanTg(req.body?.operationId || req.body?.requestId, 80);
+    if (!/^[A-Za-z0-9-]{8,80}$/.test(opR108)) return res.status(400).json({ error: "falta_operation_id", detail: "Actualice el panel." });
+    const pagoR108 = await revRenovarSeleccionConPago({ clienteId, socioNorm: live.nombre_norm || req.rev.nombre_norm || "", socioNombre: socio, seleccion, nuevaFecha, meses, banco: bancoR108, operationId: opR108 });
+    if (pagoR108.duplicado) return res.json({ ok: true, duplicate: true, total: Number(pagoR108.previo?.monto || 0), renovado: true });
+    const renovacionesFecha=pagoR108.renovaciones;
     const renovacionFecha=renovacionesFecha[0]||null;
     const verificacion = renovacionesFecha.length ? await revVerificarRenovacionesCliente(clienteId, renovacionesFecha) : { ok:true, detalle:[] };
     if (renovacionesFecha.length && !verificacion.ok) {
@@ -894,7 +980,8 @@ app.post("/rev/renovacion", revAuth, async (req, res) => {
       })),
       comentario: com,
       quien: (quien || "").toString().slice(0, 120),
-      monto: revMoneyNumber(monto),
+      monto: pagoR108.total, montoAutomatico: true, bancoId: bancoR108.id, banco: bancoR108.nombre, operationId: opR108, finanzasIngresoId: pagoR108.ingresoId, // R108
+      preciosSnapshot: (pagoR108.items||[]).map(x=>({ compraId:x.compraId, servicio:x.servicio, precio:x.precio })),
       socio,
       socio_norm: live.nombre_norm || req.rev.nombre_norm || "",
       destino: destino.key,
@@ -923,7 +1010,7 @@ app.post("/rev/renovacion", revAuth, async (req, res) => {
       `🙍 Cliente: ${cleanTg(doc.cliente || "—", 120)}`,
       `📦 Servicios: ${doc.servicios.map(x=>x.servicio||('Servicio '+(x.servicioIndex+1))).join(', ')}`,
       doc.renovado ? `📅 Nueva fecha: ${cleanTg(doc.nuevaFecha || "—", 30)} · ${doc.renovadosCantidad} renovado(s)` : "",
-      doc.monto ? `💵 Monto pagado: Lps. ${doc.monto}` : "",
+      `💵 Total (automático): Lps. ${doc.monto} · 🏦 ${cleanTg(doc.banco, 40)}`,
       doc.quien ? `🔁 Renovó: ${cleanTg(doc.quien, 80)}` : "",
       com ? `📝 Nota: ${cleanTg(com, 260)}` : "",
       (imagenUrl || imagenObj.buffer) ? `📎 Comprobante adjunto` : `⚠️ Sin comprobante`,
@@ -1063,6 +1150,8 @@ app.post("/rev/compra", revAuth, async (req, res) => {
         servicio,
         servicioBase: cleanTg(productoCatalogo.n || p.servicioBase, 100),
         entregaTipo: cleanTg(productoCatalogo.entregaTipo || p.entregaTipo || "", 60),
+        // R108: cantidad solo para cuentas completas (1–20, 25, 30, 40, 50); perfiles siempre 1.
+        cantidad: String(productoCatalogo.entregaTipo || p.entregaTipo || "").toLowerCase() === "cuenta_completa" && R108_CANTIDADES.has(Number(p.cantidad)) ? Number(p.cantidad) : 1,
         entregaCanal: cleanTg(productoCatalogo.entregaCanal || p.entregaCanal || "manual", 60),
         catalogCategory: cleanTg(productoCatalogo.categoria || p.catalogCategory || "", 120),
         catalogSub: cleanTg(productoCatalogo.s || p.catalogSub || "", 160),
@@ -1087,11 +1176,17 @@ app.post("/rev/compra", revAuth, async (req, res) => {
     const comentario = cleanTg(b.comentario, 700);
     const clienteNombre = cleanTg(b.clienteNombre, 80);
     const clienteApellido = cleanTg(b.clienteApellido, 80);
-    const subtotalCatalogo = productos.reduce((a, p) => a + (p.precioCatalogo !== null ? Number(p.precioCatalogo || 0) : 0), 0);
-    const conPrecio = productos.filter((p) => p.precioCatalogo !== null).length;
+    const subtotalCatalogo = productos.reduce((a, p) => a + (p.precioCatalogo !== null ? Number(p.precioCatalogo || 0) * (p.cantidad || 1) : 0), 0);
+    const conPrecio = productos.reduce((a, p) => a + (p.precioCatalogo !== null ? (p.cantidad || 1) : 0), 0);
+    const hayComisionR108 = productos.some((p) => p.precioCatalogo === null);
     const descuentoCombo = Math.min(Math.max(conPrecio - 1, 0), 4) * 10; // 2=10, 3=20, 4=30, 5+=40
     const totalCombo = Math.max(0, subtotalCatalogo - descuentoCombo);
-    const monto = revMoneyNumber(b.monto) || totalCombo || 0;
+    // R108: con precio fijo el monto es SIEMPRE el total del servidor (nunca el del navegador) y el banco es obligatorio.
+    // Si hay productos "por comisión" no se inventa un monto: siguen la regla anterior, fuera del flujo automático.
+    const monto = hayComisionR108 ? (revMoneyNumber(b.monto) || totalCombo || 0) : totalCombo;
+    const bancoR108 = hayComisionR108 ? null : await r108Banco(b.bancoId);
+    if (!hayComisionR108 && !bancoR108) return res.status(400).json({ error: "falta_banco", detail: "Elija el banco donde se hizo el pago." });
+    if (!hayComisionR108 && !requestRef) return res.status(400).json({ error: "falta_operation_id", detail: "Actualice el panel." });
     const servicio = productos.length > 1
       ? `Combo ${productos.length} plataformas`
       : productos[0].servicio;
@@ -1129,7 +1224,7 @@ app.post("/rev/compra", revAuth, async (req, res) => {
       dispositivo: productos[0].dispositivo || "",
       marcaTv: productos[0].marcaTv || "",
       comentario,
-      monto,
+      monto, montoAutomatico: !hayComisionR108, ...(bancoR108 ? { bancoId: bancoR108.id, banco: bancoR108.nombre } : {}), // R108
       destino: destino.key,
       destinoLabel: destino.label,
       socio,
@@ -1147,7 +1242,22 @@ app.post("/rev/compra", revAuth, async (req, res) => {
       estadoUpdatedAt: new Date(),
     };
     let ref;
-    if (requestRef) {
+    if (requestRef && bancoR108) {
+      // R108: pedido + venta + ingreso del socio en UNA transacción (o todo, o nada); el requestId evita duplicados.
+      ref = requestRef;
+      const r = await db.runTransaction(async (tx) => {
+        const ya = await tx.get(ref);
+        if (ya.exists) return { dup: ya.data() || {} };
+        const cicloId = await r108CicloId(tx);
+        tx.set(ref, doc);
+        r108Movs(tx, { idBase: `socio_compra_${ref.id}`, subtipo: "compra_socio", total: totalCombo, banco: bancoR108, cicloId,
+          rel: { socioNorm: live.nombre_norm || req.rev.nombre_norm || "", socioNombre: socio, compraId: ref.id, pedidoId: ref.id, plataforma: productos.map((p) => p.servicio).join(", ").slice(0, 200), tipoOrigen: "compra", operationId: requestId, destino: destino.key,
+            productosSocio: productos.map((p) => ({ servicio: p.servicio, cantidad: p.cantidad || 1, precioUnitario: p.precioCatalogo, entregaTipo: p.entregaTipo })), subtotal: subtotalCatalogo, descuento: descuentoCombo },
+          auditoria: { accion: "compra_socio", targetType: "compra", targetId: ref.id, detalle: `Socio ${socio} compró ${productos.map((p) => `${p.servicio}${(p.cantidad || 1) > 1 ? ` x${p.cantidad}` : ""} (L${p.precioCatalogo})`).join(" + ")} · subtotal L${subtotalCatalogo} − desc L${descuentoCombo} = L${totalCombo} en ${bancoR108.nombre}`, after: { subtotal: subtotalCatalogo, descuento: descuentoCombo, total: totalCombo, banco: bancoR108.nombre } } });
+        return {};
+      });
+      if (r.dup) { const d = r.dup; return res.json({ ok:true, id:ref.id, duplicate:true, estado:d.estado||"pendiente", destino:d.destino||"", destinoLabel:d.destinoLabel||"", totalCombo:Number(d.totalCombo||0), descuentoCombo:Number(d.descuentoCombo||0) }); }
+    } else if (requestRef) {
       ref = requestRef;
       try {
         await ref.create(doc);

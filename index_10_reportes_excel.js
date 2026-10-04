@@ -577,6 +577,17 @@ async function agregarHojasLibroR104(wb, { ini, fin, subtitle, ingresosTotal, eg
   for (const p of pagos) for (const a of p.asignaciones || []) dist.push([p.planillaPagoId || p.id, p.fecha, p.beneficiario, a.banco || a.bancoId, Number(a.monto || 0), Number(a.saldoAntes || 0), Number(a.saldoDespues || 0)]);
   simpleSheet(wb, "Distribución Planilla", "DISTRIBUCIÓN DE PLANILLA POR BANCO", subtitle,
     ["pagoPlanillaId", "Fecha", "Beneficiario", "Banco", "Monto tomado", "Saldo antes", "Saldo después"], [34, 12, 22, 20, 14, 14, 14], dist, [5, 6, 7], [5]);
+  // R108 · Socios: "Ingreso - Compra Socio" / "Ingreso - Renovación Socio" (mismo libro, sin libro aparte).
+  let socios = [];
+  try { socios = (await getMovimientosPorRango(ini, fin)).map((m) => m.raw || {}).filter((r) => String(r.tipo) === "ingreso" && ["compra_socio", "renovacion_socio"].includes(String(r.subtipo))); } catch (e) { logErr("R108 socios excel", e); }
+  simpleSheet(wb, "Socios", "INGRESOS DE SOCIOS (COMPRAS Y RENOVACIONES)", subtitle,
+    ["Fecha", "Socio", "Tipo", "Cliente", "Servicio / producto", "Cantidad", "Precio unitario (snapshot)", "Descuento", "Total", "Banco", "operationId", "Pedido / compra", "Estado"],
+    [12, 18, 22, 20, 34, 10, 16, 12, 12, 16, 26, 26, 12],
+    socios.map((r) => {
+      const prod = Array.isArray(r.productosSocio) ? r.productosSocio : (Array.isArray(r.serviciosSocio) ? r.serviciosSocio.map((x) => ({ servicio: x.servicio, cantidad: 1, precioUnitario: x.precio })) : []);
+      return [r.fecha || "", r.socioNombre || r.socioNorm || "", r.subtipo === "compra_socio" ? "Ingreso - Compra Socio" : "Ingreso - Renovación Socio", r.clienteNombre || "", prod.map((x) => `${x.servicio}${x.cantidad > 1 ? ` x${x.cantidad}` : ""}`).join(" + ") || r.plataforma || "",
+        prod.reduce((a, x) => a + Number(x.cantidad || 1), 0), prod.map((x) => x.precioUnitario).filter((x) => x != null).join(" / "), Number(r.descuento || 0), Number(r.monto || 0), r.banco || "", r.operationId || "", r.pedidoId || r.compraId || "", r.estadoFinanciero ? String(r.estadoFinanciero).toUpperCase() : "CONFIRMADO"];
+    }), [8, 9], [9]);
   simpleSheet(wb, "Pendientes Cobro", "PENDIENTES DE COBRO (CLIENTES / VENDEDORES)", "Estado actual de la cartera · no es efectivo disponible",
     ["Tipo deudor", "Deudor", "Origen", "Cliente", "Plataforma", "compraId", "Monto total", "Recibido inicial", "Abonos posteriores", "Saldo pendiente", "Estado", "Ciclo origen", "Creado"],
     [12, 22, 12, 22, 16, 22, 13, 14, 15, 15, 11, 18, 22],
