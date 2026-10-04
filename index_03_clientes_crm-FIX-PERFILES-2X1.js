@@ -1,0 +1,2920 @@
+/* ✅ SUBLICUENTAS TG BOT — PARTE 3/6 OPTIMIZADA v5
+   CLIENTES / CRM / WIZARD / TXT / RENOVACIONES / HISTORIAL REAL
+   -----------------------------------------------
+   ✅ NUEVO v5 — FIX BÚSQUEDA TELEFÓNICA:
+   - buscarPorTelefonoTodos: ahora busca EXACTO primero, luego parcial
+   - Elimina bug donde escribía 87945442 pero devolvía 87989267
+   - Búsqueda exacta post-procesada (no depende de telefono_norm en Firestore)
+   
+   ✅ PREVIO v4 — HISTORIAL REAL:
+   - registrarEventoHistorial: guarda cada cambio en colección historial_clientes
+   - getHistorialCliente: lee todos los eventos de un cliente
+   - generarHistorialTXT: genera TXT con servicios actuales + línea de tiempo de eventos
+   - enviarHistorialClienteTXTReal: envía el TXT real al chat
+   - Registro automático en: addServicioTx, patchServicio, eliminarServicioTx,
+     renovaciones (+30, +31, manual), cambio de servicio, no renovó
+*/
+
+const fs = require("fs");
+const path = require("path");
+
+const core = require("./index_01_core");
+const utils = require("./index_02_utils_roles");
+const accessControl = require("./index_23_access_control");
+const integrity = require("./index_26_integrity_guard");
+const { registrarEventoSorteosSeguro } = require("./index_14_sorteos");
+const {
+  normVendedor,
+  canonicalVendedor,
+  vendedorEfectivoServicio,
+  heredarVendedorServicios,
+  resumenVendedoresCliente,
+  camposResumenVendedores,
+  clientePerteneceAVendedor,
+  filtrarClienteParaVendedor,
+} = require("./index_17_vendedores_servicio");
+
+const { bot, admin, db, PLATAFORMAS } = core;
+
+const cacheGet           = typeof core.cacheGet            === "function" ? core.cacheGet            : () => null;
+const cacheSet           = typeof core.cacheSet            === "function" ? core.cacheSet            : () => {};
+const cacheInvalidatePrefix = typeof core.cacheInvalidatePrefix === "function" ? core.cacheInvalidatePrefix : () => {};
+
+const escMD = typeof utils.escMD === "function"
+  ? utils.escMD
+  : (v = "") => String(v || "").replace(/([_*\[\]()~`>#+\-=|{}.!\\])/g, "\\$1");
+
+const upsertPanel = typeof utils.upsertPanel === "function"
+  ? utils.upsertPanel
+  : async (chatId, text, keyboard = [], parseMode = "Markdown") =>
+      bot.sendMessage(chatId, text, { parse_mode: parseMode, reply_markup: { inline_keyboard: keyboard } });
+
+const wizard  = utils.wizard  instanceof Map ? utils.wizard  : new Map();
+const pending = utils.pending instanceof Map ? utils.pending : new Map();
+
+const onlyDigits          = typeof utils.onlyDigits          === "function" ? utils.onlyDigits          : (v = "") => String(v || "").replace(/\D+/g, "");
+const normalizarTelefonoCliente = typeof utils.normalizarTelefonoCliente === "function"
+  ? utils.normalizarTelefonoCliente
+  : (v = "") => { let d = onlyDigits(v); if (d.length === 11 && d.startsWith("504")) d = d.slice(3); return d; };
+const logErr              = typeof utils.logErr              === "function" ? utils.logErr              : (...a) => console.error(...a);
+const isFechaDMY          = typeof utils.isFechaDMY          === "function" ? utils.isFechaDMY          : (v = "") => /^\d{2}\/\d{2}\/\d{4}$/.test(String(v || "").trim());
+const parseMontoNumber    = typeof utils.parseMontoNumber    === "function" ? utils.parseMontoNumber    : (v = "") => { const n = Number(String(v||"").replace(/,/g,"").trim()); return Number.isFinite(n) ? n : NaN; };
+const hoyDMY              = typeof utils.hoyDMY              === "function" ? utils.hoyDMY              : () => { const d = new Date(); return `${String(d.getDate()).padStart(2,"0")}/${String(d.getMonth()+1).padStart(2,"0")}/${d.getFullYear()}`; };
+const normalizarPlataforma= typeof utils.normalizarPlataforma=== "function" ? utils.normalizarPlataforma: (v = "") => String(v||"").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/\s+/g,"").trim();
+const esPlataformaValida  = typeof utils.esPlataformaValida  === "function" ? utils.esPlataformaValida  : (v = "") => PLATFORM_KEYS.includes(normalizarPlataforma(v));
+const isEmailLike         = typeof utils.isEmailLike         === "function" ? utils.isEmailLike         : (v = "") => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(v||"").trim());
+
+const PLATFORM_KEYS = Array.isArray(PLATAFORMAS) ? PLATAFORMAS.map((x) => String(x||"").trim().toLowerCase()) : Object.keys(PLATAFORMAS || {}).map((x) => String(x||"").trim().toLowerCase());
+
+const CLIENTES_COLLECTION    = "clientes";
+const INVENTARIO_COLLECTION  = "inventario";
+const REVENDEDORES_COLLECTION= "revendedores";
+const HISTORIAL_COLLECTION   = "historial_clientes";
+
+const IPTV_USUARIO_KEYS_LOCAL = new Set([
+  "stellatv1", "stellatv2", "stellatv3",
+  "oleadatv1", "oleadatv3",
+  "latintv1", "latintv2", "latintv3", "latintv4",
+  "liontv1", "liontv2", "liontv3", "liontv5",
+  "evoutouch1", "evoutouch2", "evoutouch3",
+  // Compatibilidad de solo lectura/edición con registros anteriores.
+  "iptv1", "iptv3", "iptv4",
+]);
+
+const TV_DIGITAL_BRANDS_LOCAL = {
+  stella: { label: "Stella TV", icon: "⭐", keys: ["stellatv1", "stellatv2", "stellatv3"] },
+  oleada: { label: "Oleada TV", icon: "🌊", keys: ["oleadatv1", "oleadatv3"] },
+  lion: { label: "Lion TV", icon: "🦁", keys: ["liontv1", "liontv2", "liontv3", "liontv5"] },
+  latin: { label: "Latin TV", icon: "📡", keys: ["latintv1", "latintv2", "latintv3", "latintv4"] },
+  evoutouch: { label: "Nanotech", icon: "📺", keys: ["evoutouch1","evoutouch2","evoutouch3"] },
+};
+const TV_DIGITAL_KEYS_LOCAL = new Set(Object.values(TV_DIGITAL_BRANDS_LOCAL).flatMap((marca) => marca.keys));
+// Claves que solo existen para LEER registros viejos. Nunca se ofrecen como botón:
+// evoutouch4 era un "Nanotech 1" duplicado que aparecía suelto fuera de TV Digital.
+const PLATAFORMAS_ALIAS_OCULTAS_LOCAL = new Set(["iptv1", "iptv3", "iptv4", "evoutouch4"]);
+const TV_DIGITAL_URLS_LOCAL = {
+  latintv: "http://latgt.com:8080",
+  latintv2: "http://enlatv.com",
+  liontv: "http://liontv.es:80",
+  evoutouch: "http://smarterstv99.dyndns.tv:25461/",
+};
+
+// Planes reales de duración. El número guardado representa la vigencia TOTAL
+// que recibe el cliente, incluyendo los meses promocionales gratis.
+const TV_DIGITAL_MESES_VALIDOS_LOCAL = Object.freeze({
+  latintv: [1, 4, 8, 12],      // 3 + 1 gratis = 4
+  liontv: [1, 3, 5, 12],       // 10 + 2 gratis = 12
+  stellatv: [1, 3, 7],         // 6 + 1 gratis = 7
+  oleadatv: [1, 3, 7, 14],     // 6 + 1 = 7 / 12 + 2 = 14
+  evoutouch: [1, 3, 6, 12],    // Nanotech: 1, 3, 6 y 12 meses (sin meses gratis)
+});
+
+function familiaTvDigitalMesesLocal(plataforma = "") {
+  const p = normalizarPlataforma(plataforma);
+  if (p.startsWith("latintv")) return "latintv";
+  if (p.startsWith("liontv")) return "liontv";
+  if (p.startsWith("stellatv")) return "stellatv";
+  if (p.startsWith("oleadatv")) return "oleadatv";
+  if (p.startsWith("evoutouch")) return "evoutouch";
+  return "";
+}
+
+function mesesValidosTvDigitalLocal(plataforma = "") {
+  return TV_DIGITAL_MESES_VALIDOS_LOCAL[familiaTvDigitalMesesLocal(plataforma)] || [];
+}
+
+function validarMesesTvDigitalLocal(plataforma = "", meses = 1) {
+  const permitidos = mesesValidosTvDigitalLocal(plataforma);
+  const n = Math.max(1, Math.min(24, Math.round(Number(meses) || 1)));
+  if (!permitidos.length) return n;
+  if (!permitidos.includes(n)) {
+    const nombre = humanPlataforma(plataforma) || plataforma;
+    throw new Error(`${nombre}: plan de ${n} meses no válido. Use ${permitidos.join(", ")} meses.`);
+  }
+  return n;
+}
+
+// Renovar/cambiar la fecha NO debe bloquearse por la tabla comercial de planes IPTV.
+// La tabla de planes se valida al vender/asignar el servicio. En una renovación manual
+// el administrador puede fijar cualquier fecha (por ejemplo, una fecha exacta o +3m).
+// Si la diferencia de fechas coincide con un plan IPTV válido, actualizamos el dato
+// mesesContratados; si no coincide, conservamos el plan que ya tenía el servicio.
+function mesesContratadosRenovacionLocal(plataforma = "", mesesActuales = 1, fechaAnterior = "", fechaNueva = "") {
+  const calculados = mesesEntreDMYLocal(fechaAnterior, fechaNueva);
+  const permitidos = mesesValidosTvDigitalLocal(plataforma);
+  if (!permitidos.length) return calculados;
+  if (permitidos.includes(calculados)) return calculados;
+
+  const actualNormalizado = normalizarMesesLegacyTvDigitalLocal(plataforma, mesesActuales || 1);
+  if (permitidos.includes(actualNormalizado)) return actualNormalizado;
+
+  // Registro antiguo/incompleto: no impedir la renovación por un dato auxiliar.
+  return permitidos[0] || 1;
+}
+
+// Solo para registros antiguos que guardaron meses pagados en vez de la
+// vigencia total. Las fechas nuevas siguen validándose contra el plan real.
+function normalizarMesesLegacyTvDigitalLocal(plataforma = "", meses = 1) {
+  const familia = familiaTvDigitalMesesLocal(plataforma);
+  const n = Math.max(1, Math.min(24, Math.round(Number(meses) || 1)));
+  const bonus = {
+    latintv: { 3: 4 },
+    liontv: { 10: 12 },
+    stellatv: { 6: 7 },
+    oleadatv: { 6: 7, 12: 14 },
+  };
+  return bonus[familia]?.[n] || n;
+}
+function tvDigitalUrlLocal(servicio = {}) {
+  const p = normalizarPlataforma(servicio.plataforma || "");
+  if (p.startsWith("latintv")) return String(servicio.iptvProveedor || "") === "latintv2" ? TV_DIGITAL_URLS_LOCAL.latintv2 : TV_DIGITAL_URLS_LOCAL.latintv;
+  if (p.startsWith("liontv")) return TV_DIGITAL_URLS_LOCAL.liontv;
+  if (p.startsWith("evoutouch")) return TV_DIGITAL_URLS_LOCAL.evoutouch;
+  return "";
+}
+
+// ===============================
+// HELPERS GENERALES
+// ===============================
+function normTxt(v = "") {
+  return String(v || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, " ").trim();
+}
+
+function humanPlataforma(key = "") {
+  const k = normalizarPlataforma(key);
+  const map = {
+    netflix:"Netflix Premium", vipnetflix:"Netflix VIP", disneyp:"Disney Premium", disneys:"Disney Premium sin ESPN",
+    hbomax:"HBO Max", primevideo:"Prime Video", paramount:"Paramount+", crunchyroll:"Crunchyroll",
+    vix:"Vix", appletv:"Apple TV", universal:"Universal+", spotify:"Spotify", youtube:"YouTube", office:"Microsoft 365",
+    deezer:"Deezer", canva:"Canva", gemini:"Gemini Pro", chatgpt:"ChatGPT", duolingo:"Duolingo", office2021:"Office 2021",
+    stellatv1:"Stella TV (1 dispositivo)", stellatv2:"Stella TV (2 dispositivos)", stellatv3:"Stella TV (3 dispositivos)",
+    oleadatv1:"Oleada TV (1 dispositivo)", oleadatv3:"Oleada TV (3 dispositivos)",
+    latintv1:"LatinTV (1 dispositivo)", latintv2:"LatinTV (2 dispositivos)", latintv3:"LatinTV (3 dispositivos)", latintv4:"LatinTV (4 dispositivos)",
+    liontv1:"LionTV (1 dispositivo)", liontv2:"LionTV (2 dispositivos)", liontv3:"LionTV (3 dispositivos)", liontv5:"LionTV (5 dispositivos)", evoutouch1:"Nanotech (1 dispositivo)", evoutouch2:"Nanotech (2 dispositivos)", evoutouch3:"Nanotech (3 dispositivos)", evoutouch4:"Nanotech (1 dispositivo)",
+    iptv1:"IPTV anterior (1)", iptv3:"IPTV anterior (3)", iptv4:"IPTV anterior (4)",
+  };
+  return map[k] || String(key || "");
+}
+
+function iconPlataforma(key = "") {
+  const k = normalizarPlataforma(key);
+  const map = { netflix:"📺", vipnetflix:"🔥", disneyp:"🏰", disneys:"🎬", hbomax:"🎞️", primevideo:"🎥", paramount:"💿", crunchyroll:"🍥", vix:"📱", appletv:"🍎", universal:"🌍", spotify:"🎵", youtube:"▶️", office:"📎", deezer:"🎧", canva:"🎨", gemini:"✨", chatgpt:"🤖", duolingo:"🦉", stellatv1:"⭐", stellatv2:"⭐", stellatv3:"⭐", oleadatv1:"🌊", oleadatv3:"🌊", latintv1:"📡", latintv2:"📡", latintv3:"📡", latintv4:"📡", liontv1:"🦁", liontv2:"🦁", liontv3:"🦁", liontv5:"🦁", evoutouch1:"📺", evoutouch2:"📺", evoutouch3:"📺", evoutouch4:"📺", iptv1:"📡", iptv3:"📡", iptv4:"📡" };
+  return map[k] || "📦";
+}
+
+function getIdentLabelLocal(plataforma = "") {
+  const p = normalizarPlataforma(plataforma);
+  return IPTV_USUARIO_KEYS_LOCAL.has(p) ? "Usuario" : "Correo";
+}
+
+function platformConfigLocal(plataforma = "") {
+  const p = normalizarPlataforma(plataforma);
+  if (!p) return {};
+  if (!Array.isArray(PLATAFORMAS) && PLATAFORMAS && PLATAFORMAS[p]) return PLATAFORMAS[p] || {};
+  return {};
+}
+
+function requiereClaveLocal(plataforma = "") {
+  const cfg = platformConfigLocal(plataforma);
+  if (Object.prototype.hasOwnProperty.call(cfg, "requiereClave")) return cfg.requiereClave === true;
+  const p = normalizarPlataforma(plataforma);
+  return !["canva", "gemini", "chatgpt", "duolingo"].includes(p);
+}
+
+function requiereCorreoLocal(plataforma = "") {
+  const cfg = platformConfigLocal(plataforma);
+  // El campo CRM se llama "correo", pero en Oleada/Lion/Latin guarda el
+  // usuario. permiteUsuario significa que ese identificador también es
+  // obligatorio y debe pedirse/entregarse.
+  if (cfg.permiteUsuario === true) return true;
+  if (Object.prototype.hasOwnProperty.call(cfg, "requiereCorreo")) return cfg.requiereCorreo === true;
+  return true;
+}
+
+function requierePinLocal(plataforma = "") {
+  const cfg = platformConfigLocal(plataforma);
+  if (Object.prototype.hasOwnProperty.call(cfg, "requierePin")) return cfg.requierePin === true;
+  return ["netflix","disneyp","disneys","hbomax","primevideo","crunchyroll","universal"].includes(normalizarPlataforma(plataforma));
+}
+
+function esSoloCorreoLocal(plataforma = "") {
+  return requiereCorreoLocal(plataforma) && !requiereClaveLocal(plataforma) && !requierePinLocal(plataforma);
+}
+
+function getAccessTypeLabelLocal(plataforma = "") {
+  const p = normalizarPlataforma(plataforma);
+  if (!requiereCorreoLocal(p) && !requiereClaveLocal(p) && requierePinLocal(p)) return "Solo PIN";
+  if (esSoloCorreoLocal(p)) return "Solo correo";
+  if (IPTV_USUARIO_KEYS_LOCAL.has(p)) return "Usuario + clave";
+  if (requiereClaveLocal(p) && requierePinLocal(p)) return "Correo + clave + PIN";
+  if (requiereClaveLocal(p)) return "Correo + clave";
+  if (requierePinLocal(p)) return requiereCorreoLocal(p) ? "Correo + PIN" : "Solo PIN";
+  return "Correo";
+}
+
+function recordIdLocal(prefix = "id") {
+  return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function perfilesServicioLocal(servicio = {}, titular = "") {
+  const lista = Array.isArray(servicio.perfiles) && servicio.perfiles.length
+    ? servicio.perfiles
+    : [{
+        perfilId: servicio.perfilId || "",
+        nombre: servicio.nombrePerfil || servicio.perfil || titular || "Cliente",
+        perfil: servicio.perfil || servicio.nombrePerfil || titular || "",
+        correo: servicio.correo || "",
+        clave: servicio.clave || servicio.password || servicio.pass || "",
+        pin: servicio.pinPerfil || servicio.pin_perfil || servicio.perfilPin || servicio.pin || ""
+      }];
+  return lista.map((p, index) => {
+    const nombreGuardado = String(p?.nombre || p?.nombrePerfil || p?.cliente || p?.perfil || titular || `Perfil ${index + 1}`).trim();
+    const esTercero = String(servicio?.beneficiarioTipo || "").trim().toLowerCase() === "tercero";
+    const beneficiario = esTercero ? String(servicio?.beneficiarioNombre || servicio?.beneficiario || "").trim() : "";
+    const nombre = beneficiario && (lista.length === 1 || !nombreGuardado || normTxt(nombreGuardado) === normTxt(titular))
+      ? beneficiario
+      : nombreGuardado;
+    return {
+      perfilId: String(p?.perfilId || p?.id || ""),
+      nombre,
+      perfil: String(p?.perfil || p?.nombrePerfil || p?.nombre || nombre).trim(),
+      correo: String(p?.correo ?? servicio.correo ?? "").trim(),
+      clave: String(p?.clave ?? p?.password ?? p?.pass ?? servicio.clave ?? servicio.password ?? servicio.pass ?? "").trim(),
+      pin: String(p?.pinPerfil ?? p?.pin_perfil ?? p?.perfilPin ?? p?.pin ?? (index === 0 ? (servicio.pinPerfil ?? servicio.pin_perfil ?? servicio.perfilPin ?? servicio.pin ?? "") : "")).trim()
+    };
+  });
+}
+
+function cantidadPerfilesServicioLocal(servicio = {}, titular = "") {
+  return perfilesServicioLocal(servicio, titular).length;
+}
+
+function servicioParaPerfilLocal(servicio = {}, perfil = {}, titular = "") {
+  const p = perfil || {};
+  return {
+    ...servicio,
+    nombrePerfil: p.nombre || titular || servicio.nombrePerfil || "",
+    perfil: p.perfil || p.nombre || servicio.perfil || "",
+    correo: p.correo ?? servicio.correo ?? "",
+    clave: p.clave ?? servicio.clave ?? "",
+    pin: p.pin ?? "",
+    pinPerfil: p.pin ?? "",
+    perfiles: undefined
+  };
+}
+
+function getClaveServicioLocal(servicio = {}, plataforma = "") {
+  const p = normalizarPlataforma(plataforma || servicio.plataforma || "");
+  const principal = Array.isArray(servicio.perfiles) && servicio.perfiles.length ? servicio.perfiles[0] || {} : {};
+  const directa = String(principal.clave || principal.password || principal.pass || servicio.clave || servicio.password || servicio.pass || "").trim();
+  if (directa) return directa;
+  if (requiereClaveLocal(p) && !requierePinLocal(p)) return String(servicio.pin || "").trim();
+  return "";
+}
+
+function extraerPinServicioLocal(servicio = {}) {
+  const principal = Array.isArray(servicio.perfiles) && servicio.perfiles.length ? servicio.perfiles[0] || {} : {};
+  const valores = [
+    principal.pinPerfil,
+    principal.pin_perfil,
+    principal.perfilPin,
+    principal.pin,
+    servicio.pin,
+    servicio.pinPerfil,
+    servicio.pin_perfil,
+    servicio.perfilPin,
+    servicio.perfil_pin,
+    servicio.profilePin,
+    servicio.profile_pin,
+    servicio.pinCliente,
+    servicio.pin_cliente,
+    servicio.pinServicio,
+    servicio.pin_servicio,
+  ];
+
+  for (const v of valores) {
+    const s = String(v || "").trim();
+    if (!s) continue;
+    const n = normTxt(s);
+    if (["-", "sin pin", "n/a", "na", "null", "undefined"].includes(n)) continue;
+    return s;
+  }
+  return "";
+}
+
+function getPinServicioLocal(servicio = {}, plataforma = "") {
+  const p = normalizarPlataforma(plataforma || servicio.plataforma || "");
+  if (!requierePinLocal(p)) return "";
+  return extraerPinServicioLocal(servicio);
+}
+
+function renderCredencialesServicioLocal(servicio = {}, markdown = true, indent = "") {
+  const p = normalizarPlataforma(servicio.plataforma || "");
+  const esc = markdown ? escMD : (v = "") => String(v ?? "");
+  const perfiles = perfilesServicioLocal(servicio, servicio.nombrePerfil || servicio.titular || "");
+  if (perfiles.length > 1) {
+    let multi = `${indent}👥 ${markdown ? "*Perfiles incluidos:*" : "Perfiles incluidos:"} ${perfiles.length}\n`;
+    perfiles.forEach((perfil, index) => {
+      const individual = servicioParaPerfilLocal(servicio, perfil, servicio.nombrePerfil || servicio.titular || "");
+      multi += `${indent}${index + 1}. ${markdown ? `*${esc(perfil.nombre || `Perfil ${index + 1}`)}*` : (perfil.nombre || `Perfil ${index + 1}`)}\n`;
+      if (requiereCorreoLocal(p)) {
+        const identLabel = getIdentLabelLocal(p);
+        const identIcon = identLabel === "Usuario" ? "👤" : "📧";
+        multi += `${indent}   ${identIcon} ${markdown ? `*${esc(identLabel)}:*` : `${identLabel}:`} ${esc(individual.correo || "-")}\n`;
+      }
+      if (requiereClaveLocal(p)) multi += `${indent}   🔑 ${markdown ? "*Clave:*" : "Clave:"} ${esc(getClaveServicioLocal(individual, p) || "-")}\n`;
+      if (requierePinLocal(p)) multi += `${indent}   🔐 ${markdown ? "*PIN:*" : "PIN:"} ${esc(getPinServicioLocal(individual, p) || "-")}\n`;
+    });
+    return multi;
+  }
+  const individual = servicioParaPerfilLocal(servicio, perfiles[0] || {}, servicio.nombrePerfil || servicio.titular || "");
+  let out = "";
+  if (requiereCorreoLocal(p)) {
+    const identLabel = getIdentLabelLocal(p);
+    const identIcon = identLabel === "Usuario" ? "👤" : "📧";
+    out += `${indent}${identIcon} ${markdown ? `*${esc(identLabel)}:*` : `${identLabel}:`} ${esc(individual.correo || "-")}\n`;
+  }
+  if (requiereClaveLocal(p)) out += `${indent}🔑 ${markdown ? "*Clave:*" : "Clave:"} ${esc(getClaveServicioLocal(individual, p) || "-")}\n`;
+  if (requierePinLocal(p)) out += `${indent}🔐 ${markdown ? "*PIN:*" : "PIN:"} ${esc(getPinServicioLocal(individual, p) || "-")}\n`;
+  return out;
+}
+
+// ✅ Distingue si una compra/servicio es para el CLIENTE TITULAR o para un
+// TERCERO (otra persona/beneficiario). Sublichat HQ guarda esto por servicio
+// como beneficiarioTipo ("titular" | "tercero") + beneficiarioNombre, pero el
+// bot mostraba todo en una sola lista sin marcarlo. Esta etiqueta se usa en
+// todas las fichas/listas para que quede claro cuál compra es de un tercero.
+function etiquetaBeneficiarioServicioLocal(servicio = {}) {
+  const tipo = String(servicio.beneficiarioTipo || "").trim().toLowerCase();
+  if (tipo !== "tercero") {
+    return { esTercero: false, texto: "Titular", corto: "👤 Titular" };
+  }
+  const nombre = String(servicio.beneficiarioNombre || servicio.beneficiario || "").trim();
+  const texto = nombre ? `Tercero: ${nombre}` : "Tercero";
+  return { esTercero: true, texto, corto: `🔑 ${texto}` };
+}
+
+function nombrePerfilRealServicioLocal(servicio = {}, titular = "") {
+  const perfiles = perfilesServicioLocal(servicio, titular);
+  const principal = perfiles[0] || {};
+  return String(principal.nombre || principal.perfil || servicio.beneficiarioNombre || servicio.perfil || titular || "Sin nombre").trim();
+}
+
+function validateIdentByPlatformLocal(plataforma = "", ident = "") {
+  const p = normalizarPlataforma(plataforma);
+  const v = String(ident || "").trim();
+  if (!v) return false;
+  if (IPTV_USUARIO_KEYS_LOCAL.has(p)) return v.length >= 3 && !/\s/.test(v);
+  return isEmailLike(v);
+}
+
+function normalizeIdentByPlatformLocal(plataforma = "", ident = "") {
+  const p = normalizarPlataforma(plataforma);
+  const v = String(ident || "").trim();
+  return IPTV_USUARIO_KEYS_LOCAL.has(p) ? v : v.toLowerCase();
+}
+
+function docIdInventarioLocal(ident = "", plataforma = "") {
+  const p = normalizarPlataforma(plataforma);
+  const i = normalizeIdentByPlatformLocal(p, ident).toLowerCase().replace(/[.#$/\[\]\s]+/g, "_");
+  return `${p}__${i}`;
+}
+
+function getTotalPorPlataformaLocal(plat = "") {
+  const p = normalizarPlataforma(plat);
+  const map = { netflix:5, vipnetflix:1, disneyp:6, disneys:3, hbomax:5, primevideo:5, paramount:5, crunchyroll:5, vix:4, appletv:4, universal:4, spotify:1, youtube:1, deezer:1, stellatv1:1, stellatv2:2, stellatv3:3, oleadatv1:1, oleadatv3:3, latintv1:1, latintv2:2, latintv3:3, latintv4:4, liontv1:1, liontv2:2, liontv3:3, liontv5:5, evoutouch1:1, evoutouch2:2, evoutouch3:3, evoutouch4:1, iptv1:1, iptv3:3, iptv4:4, canva:1, gemini:1, chatgpt:1, duolingo:1, office:1, office2021:1 };
+  return map[p] || 1;
+}
+
+function fechaDMYLocal(v = "") {
+  const raw = String(v || "").trim();
+  if (!raw) return "";
+  if (isFechaDMY(raw)) return raw;
+  const parsed = typeof utils.parseFechaFinanceInput === "function" ? utils.parseFechaFinanceInput(raw) : null;
+  if (parsed && isFechaDMY(parsed)) return parsed;
+  const m = raw.match(/^(\d{4})-(\d{2})-(\d{2})(?:[T\s].*)?$/);
+  if (m) {
+    const dmy = `${m[3]}/${m[2]}/${m[1]}`;
+    return isFechaDMY(dmy) ? dmy : "";
+  }
+  return "";
+}
+
+function parseDMYtoDate(dmy = "") {
+  const s = fechaDMYLocal(dmy);
+  if (!isFechaDMY(s)) return null;
+  const [dd, mm, yyyy] = s.split("/").map(Number);
+  const dt = new Date(yyyy, mm - 1, dd, 12, 0, 0, 0);
+  if (dt.getFullYear() !== yyyy || dt.getMonth() !== mm - 1 || dt.getDate() !== dd) return null;
+  return dt;
+}
+
+function parseDMYtoTS(dmy = "") {
+  const dt = parseDMYtoDate(dmy);
+  return dt ? dt.getTime() : 0;
+}
+
+function addDaysDMY(baseDmy = "", days = 0) {
+  const dt = parseDMYtoDate(baseDmy) || parseDMYtoDate(hoyDMY());
+  dt.setDate(dt.getDate() + Number(days || 0));
+  return `${String(dt.getDate()).padStart(2,"0")}/${String(dt.getMonth()+1).padStart(2,"0")}/${dt.getFullYear()}`;
+}
+
+function mesesEntreDMYLocal(inicio = "", fin = "") {
+  const a = parseDMYtoDate(inicio);
+  const b = parseDMYtoDate(fin);
+  if (!a || !b || b <= a) return 1;
+  // Una renovación de +30/+31 días representa 1 mes comercial.
+  // El cálculo calendario anterior convertía +31 días en 2 meses cuando
+  // cruzaba un mes corto (p. ej. 19/09 -> 20/10), haciendo fallar IPTV
+  // porque 2 meses no es un plan permitido para Stella/Latin/Lion/Oleada.
+  const dias = Math.max(1, Math.round((b.getTime() - a.getTime()) / 86400000));
+  return Math.max(1, Math.min(24, Math.round(dias / 30) || 1));
+}
+
+function mesesContratadosDesdeFechaLocal(fechaRenovacion = "", fechaBase = "") {
+  const base = isFechaDMY(fechaBase) ? fechaBase : hoyDMY();
+  return mesesEntreDMYLocal(base, fechaRenovacion);
+}
+
+function safeBtnLabel(txt = "", max = 58) {
+  const s = String(txt || "").replace(/\s+/g, " ").trim();
+  return s.length > max ? `${s.slice(0, max - 1).trim()}…` : s;
+}
+
+function getEstadoServicio(fechaRenovacion = "") {
+  const hoy = parseDMYtoTS(hoyDMY());
+  const f = parseDMYtoTS(fechaRenovacion);
+  if (!f) return { emoji: "⚪", texto: "Sin fecha", orden: 99 };
+  if (f < hoy) return { emoji: "🔴", texto: "Vencido", orden: 0 };
+  if (f === hoy) return { emoji: "🟠", texto: "Vence hoy", orden: 1 };
+  const diffDays = Math.ceil((f - hoy) / 86400000);
+  if (diffDays <= 3) return { emoji: "🟡", texto: "Próximo", orden: 2 };
+  return { emoji: "🟢", texto: "Activo", orden: 3 };
+}
+
+function resumenGeneralCliente(servicios = []) {
+  const rows = Array.isArray(servicios) ? servicios : [];
+  let total = 0, proxima = "", proximaTS = Infinity;
+  let worst = { emoji: "⚪", texto: "Sin fecha", orden: 99 };
+
+  for (const s of rows) {
+    total += Number(s.precio || 0);
+    const fecha = fechaDMYLocal(s.fechaRenovacion || "");
+    const ts = parseDMYtoTS(fecha);
+    if (ts && ts < proximaTS) { proximaTS = ts; proxima = fecha; }
+    const est = getEstadoServicio(fecha);
+    if (est.orden < worst.orden) worst = est;
+  }
+
+  return {
+    total, proxima: proxima || "Sin fecha",
+    estadoEmoji: worst.emoji, estadoTexto: rows.length ? worst.texto : "Sin servicios",
+    activos: rows.length,
+    perfiles: rows.reduce((sum, s) => sum + cantidadPerfilesServicioLocal(s), 0),
+  };
+}
+
+function fileSafeName(v = "", fallback = "archivo") {
+  let s = String(v || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-zA-Z0-9._-]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 80);
+  if (!s) s = fallback;
+  if (!/\.txt$/i.test(s)) s += ".txt";
+  return s;
+}
+
+const enviarTxtComoArchivo = typeof utils.enviarTxtComoArchivo === "function"
+  ? utils.enviarTxtComoArchivo
+  : async (chatId, contenido = "", fileName = "reporte.txt") => {
+      const safeName = fileSafeName(fileName, "reporte.txt");
+      const tempPath = path.join("/tmp", safeName);
+      fs.writeFileSync(tempPath, String(contenido || ""), "utf8");
+      try { return await bot.sendDocument(chatId, tempPath, {}, { filename: safeName, contentType: "text/plain" }); }
+      finally { try { fs.unlinkSync(tempPath); } catch (_) {} }
+    };
+
+function serviciosConIndiceOriginal(servicios = []) {
+  return (Array.isArray(servicios) ? servicios : []).map((s, idxOriginal) => ({ ...(s || {}), idxOriginal }));
+}
+
+function dedupeClientes(rows = []) {
+  const map = new Map();
+  for (const r of Array.isArray(rows) ? rows : []) {
+    if (String(r?.consolidadoEn || "").trim()) continue;
+    const id = String(r?.id || "").trim();
+    if (id && !map.has(id)) map.set(id, r);
+  }
+  return Array.from(map.values());
+}
+
+function appendCallbackContextLocal(base = "", clientId = null, idx = null) {
+  let cb = String(base || "");
+  if (clientId !== null && clientId !== undefined) cb += `:${clientId}`;
+  if (idx !== null && idx !== undefined) cb += `:${idx}`;
+  return cb;
+}
+
+function modoSelectorPlataformasLocal(prefix = "") {
+  if (prefix === "wiz:plat") return "wiz";
+  if (prefix === "cli:add:plat") return "add";
+  if (prefix === "cli:serv:set:plat") return "set";
+  return "";
+}
+
+function prefijoSelectorPlataformasLocal(mode = "") {
+  return ({ wiz: "wiz:plat", add: "cli:add:plat", set: "cli:serv:set:plat" })[String(mode || "")] || "";
+}
+
+function kbTvDigitalMarcasWiz(mode = "wiz", clientId = null, idx = null) {
+  const rows = [];
+  const marcas = Object.entries(TV_DIGITAL_BRANDS_LOCAL).map(([key, marca]) => ({
+    text: `${marca.icon} ${marca.label}`,
+    callback_data: appendCallbackContextLocal(`platgrp:${mode}:brand:${key}`, clientId, idx),
+  }));
+  for (let i = 0; i < marcas.length; i += 2) rows.push(marcas.slice(i, i + 2));
+  rows.push([{
+    text: "⬅️ Todas las plataformas",
+    callback_data: appendCallbackContextLocal(`platgrp:${mode}:all`, clientId, idx),
+  }]);
+  return rows;
+}
+
+function kbTvDigitalPlanesWiz(mode = "wiz", brand = "", clientId = null, idx = null) {
+  const marca = TV_DIGITAL_BRANDS_LOCAL[String(brand || "").toLowerCase()];
+  const prefix = prefijoSelectorPlataformasLocal(mode);
+  if (!marca || !prefix) return [];
+  const rows = [];
+  // El selector de TV Digital se construye desde las claves canónicas de la marca,
+  // no desde aliases legacy del inventario. Además deduplicamos por cantidad para
+  // que un registro viejo (p. ej. evoutouch4) nunca vuelva a crear un segundo botón.
+  const vistos = new Set();
+  const planes = marca.keys.map((key) => {
+    const m = String(key || "").match(/([1-5])$/);
+    const cantidad = m ? Number(m[1]) : Number(PLATAFORMAS?.[key]?.capacidadDefault || 1);
+    return { key, cantidad };
+  }).filter(({ key, cantidad }) => {
+    if (String(brand || "").toLowerCase() === "evoutouch" && ![1,2,3].includes(cantidad)) return false;
+    if (vistos.has(cantidad)) return false;
+    vistos.add(cantidad);
+    return Boolean(PLATAFORMAS?.[key]);
+  }).map(({ key, cantidad }) => ({
+    text: `${cantidad} dispositivo${cantidad === 1 ? "" : "s"}`,
+    callback_data: appendCallbackContextLocal(`${prefix}:${key}`, clientId, idx),
+  }));
+  for (let i = 0; i < planes.length; i += 2) rows.push(planes.slice(i, i + 2));
+  rows.push([{
+    text: "⬅️ TV Digital",
+    callback_data: appendCallbackContextLocal(`platgrp:${mode}:brands`, clientId, idx),
+  }]);
+  return rows;
+}
+
+function kbPlataformasWiz(prefix = "wiz:plat", clientId = null, idx = null) {
+  const rows = [];
+  const items = [];
+  const mode = modoSelectorPlataformasLocal(prefix);
+  let grupoAgregado = false;
+
+  PLATFORM_KEYS.filter((k) => !PLATAFORMAS_ALIAS_OCULTAS_LOCAL.has(k)).forEach((k) => {
+    // Cualquier clave de TV Digital (Stella, Oleada, Lion, Latin, Nanotech) vive dentro
+    // del grupo "📺 TV Digital"; nunca como botón suelto en la lista general.
+    if ((TV_DIGITAL_KEYS_LOCAL.has(k) || familiaTvDigitalMesesLocal(k)) && mode) {
+      if (!grupoAgregado) {
+        items.push({
+          text: "📺 TV Digital",
+          callback_data: appendCallbackContextLocal(`platgrp:${mode}:brands`, clientId, idx),
+        });
+        grupoAgregado = true;
+      }
+      return;
+    }
+    items.push({
+      text: `${iconPlataforma(k)} ${humanPlataforma(k)}`,
+      callback_data: appendCallbackContextLocal(`${prefix}:${k}`, clientId, idx),
+    });
+  });
+
+  for (let i = 0; i < items.length; i += 2) rows.push(items.slice(i, i + 2));
+  return rows;
+}
+
+// ===============================
+// INVENTARIO SYNC HELPERS
+// ===============================
+async function getInventarioDoc(plataforma = "", acceso = "") {
+  const plat = normalizarPlataforma(plataforma);
+  const ident = normalizeIdentByPlatformLocal(plat, acceso);
+  const docId = docIdInventarioLocal(ident, plat);
+  const ref = db.collection(INVENTARIO_COLLECTION).doc(docId);
+  const doc = await ref.get();
+  if (doc.exists) return { ref, data: doc.data() || {} };
+
+  const snap = await db.collection(INVENTARIO_COLLECTION).where("plataforma", "==", plat).where("correo", "==", ident).limit(1).get();
+  if (!snap.empty) { const d = snap.docs[0]; return { ref: d.ref, data: d.data() || {} }; }
+  return null;
+}
+
+async function syncServicioEnInventario({ clienteNombre = "", pagadoPor = "", plataforma = "", correo = "", clave = "", pin = "", clienteId = "", compraId = "", perfilId = "" }) {
+  const plat = normalizarPlataforma(plataforma);
+  const acceso = normalizeIdentByPlatformLocal(plat, correo);
+  const found = await getInventarioDoc(plat, acceso);
+  if (!found) return { ok: false, reason: "not_found" };
+  const { ref } = found;
+  return db.runTransaction(async (tx) => {
+    const latest = await tx.get(ref);
+    if (!latest.exists) return { ok: false, reason: "not_found" };
+    const data = latest.data() || {};
+    let clientes = Array.isArray(data.clientes) ? data.clientes.slice() : [];
+    const pinNorm = String(pin || "").trim();
+    const perfilKey = String(perfilId || "").trim();
+    const compraKey = String(compraId || "").trim();
+    const clienteKey = String(clienteId || "").trim();
+    let idxExiste = perfilKey
+      ? clientes.findIndex((x) => String(x?.perfilId || "").trim() === perfilKey)
+      : -1;
+    // Primero el nombre real + PIN. Un mismo compraId puede contener varios
+    // perfiles y no debe provocar que un perfil pise a otro.
+    if (idxExiste === -1) {
+      idxExiste = clientes.findIndex((x) =>
+        normTxt(x?.nombre || "") === normTxt(clienteNombre)
+        && (!pinNorm || String(x?.pin || "") === pinNorm)
+      );
+    }
+    // Compatibilidad con inventario antiguo: si el nombre guardado era el
+    // pagador, lo adoptamos únicamente cuando el PIN también coincide.
+    if (idxExiste === -1 && pagadoPor) {
+      idxExiste = clientes.findIndex((x) =>
+        normTxt(x?.nombre || "") === normTxt(pagadoPor)
+        && (!pinNorm || String(x?.pin || "") === pinNorm)
+      );
+    }
+    // Último fallback por compraId solo si existe una única coincidencia.
+    if (idxExiste === -1 && !perfilKey && compraKey) {
+      const porCompra = clientes.map((x, i) => ({ x, i })).filter(({ x }) =>
+        String(x?.compraId || "").trim() === compraKey
+        && (!clienteKey || !String(x?.clienteId || "").trim() || String(x?.clienteId || "").trim() === clienteKey)
+        && (!pinNorm || String(x?.pin || "") === pinNorm)
+      );
+      if (porCompra.length === 1) idxExiste = porCompra[0].i;
+    }
+    if (idxExiste !== -1) {
+      const patch = {};
+      const identificado = {
+        ...clientes[idxExiste],
+        nombre: String(clienteNombre || clientes[idxExiste]?.nombre || "").trim(),
+        ...(clienteKey ? { clienteId: clienteKey } : {}),
+        ...(compraKey ? { compraId: compraKey } : {}),
+        ...(perfilKey ? { perfilId: perfilKey } : {}),
+      };
+      if (pagadoPor && normTxt(pagadoPor) !== normTxt(identificado.nombre)) identificado.pagadoPor = String(pagadoPor).trim();
+      else delete identificado.pagadoPor;
+      if (pinNorm) identificado.pin = pinNorm;
+      if (JSON.stringify(identificado) !== JSON.stringify(clientes[idxExiste])) {
+        clientes[idxExiste] = identificado;
+        patch.clientes = clientes;
+      }
+      const claveNorm = String(clave || "").trim();
+      if (claveNorm && requiereClaveLocal(plat) && (!data.clave || String(data.clave || "").toLowerCase() === "sin clave")) patch.clave = claveNorm;
+      if (Object.keys(patch).length) {
+        patch.updatedAt = admin.firestore.FieldValue.serverTimestamp();
+        tx.set(ref, patch, { merge: true });
+      }
+      return { ok: true, synced: true, added: false };
+    }
+
+    const capacidad = Number(data.capacidad || data.total || getTotalPorPlataformaLocal(plat) || 1);
+    if (clientes.length >= capacidad) return { ok: false, reason: "full" };
+    clientes.push({
+      nombre: String(clienteNombre || "").trim(), pin: pinNorm, slot: clientes.length + 1,
+      ...(pagadoPor && normTxt(pagadoPor) !== normTxt(clienteNombre) ? { pagadoPor: String(pagadoPor).trim() } : {}),
+      ...(clienteKey ? { clienteId: clienteKey } : {}),
+      ...(compraKey ? { compraId: compraKey } : {}),
+      ...(perfilKey ? { perfilId: perfilKey } : {}),
+    });
+    clientes = clientes.map((x, i) => ({ ...x, slot: i + 1 }));
+    const ocupados = clientes.length;
+    const disponibles = Math.max(0, capacidad - ocupados);
+    const patch = { clientes, ocupados, disponibles, disp: disponibles, capacidad, estado: disponibles === 0 ? "llena" : "activa", updatedAt: admin.firestore.FieldValue.serverTimestamp() };
+    const claveNorm = String(clave || "").trim();
+    if (claveNorm && requiereClaveLocal(plat) && (!data.clave || String(data.clave || "").toLowerCase() === "sin clave")) patch.clave = claveNorm;
+    tx.set(ref, patch, { merge: true });
+    return { ok: true, synced: true, added: true, ocupados, disponibles, capacidad };
+  });
+}
+
+async function removeServicioDeInventario({ clienteNombre = "", plataforma = "", correo = "", pin = "", clienteId = "", compraId = "", perfilId = "" }) {
+  const plat = normalizarPlataforma(plataforma);
+  const acceso = normalizeIdentByPlatformLocal(plat, correo);
+  const found = await getInventarioDoc(plat, acceso);
+  if (!found) return { ok: false, reason: "not_found" };
+
+  const { ref } = found;
+  return db.runTransaction(async (tx) => {
+    const latest = await tx.get(ref);
+    if (!latest.exists) return { ok: false, reason: "not_found" };
+    const data = latest.data() || {};
+    let clientes = Array.isArray(data.clientes) ? data.clientes.slice() : [];
+    const pinFiltro = String(pin || "").trim();
+    let idx = String(perfilId || "").trim()
+      ? clientes.findIndex((x) => String(x?.perfilId || "").trim() === String(perfilId).trim())
+      : -1;
+    // Nombre + PIN antes que compraId para no eliminar el perfil equivocado
+    // dentro de una compra multiperfil.
+    if (idx === -1 && pinFiltro) {
+      idx = clientes.findIndex((x) => normTxt(x?.nombre || "") === normTxt(clienteNombre) && String(x?.pin || "") === pinFiltro);
+    }
+    if (idx === -1) idx = clientes.findIndex((x) => normTxt(x?.nombre || "") === normTxt(clienteNombre));
+    if (idx === -1 && !String(perfilId || "").trim() && String(compraId || "").trim()) {
+      const compraKey = String(compraId).trim();
+      const clienteKey = String(clienteId || "").trim();
+      const porCompra = clientes.map((x, i) => ({ x, i })).filter(({ x }) =>
+        String(x?.compraId || "").trim() === compraKey
+        && (!clienteKey || !String(x?.clienteId || "").trim() || String(x?.clienteId || "").trim() === clienteKey)
+        && (!pinFiltro || String(x?.pin || "") === pinFiltro)
+      );
+      if (porCompra.length === 1) idx = porCompra[0].i;
+    }
+    if (idx === -1) return { ok: true, removed: false };
+    clientes.splice(idx, 1);
+    clientes = clientes.map((x, i) => ({ ...x, slot: i + 1 }));
+    const capacidad = Number(data.capacidad || data.total || getTotalPorPlataformaLocal(plat) || 1);
+    const ocupados = clientes.length;
+    const disponibles = Math.max(0, capacidad - ocupados);
+    tx.set(ref, { clientes, ocupados, disponibles, disp: disponibles, capacidad, estado: disponibles === 0 ? "llena" : "activa", updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+    return { ok: true, removed: true };
+  });
+}
+
+function normalizarCompraLocal(servicio = {}, titular = "", anterior = {}) {
+  const plat = normalizarPlataforma(servicio.plataforma || anterior.plataforma || "");
+  const tienePerfiles = Array.isArray(servicio.perfiles);
+  let base;
+  if (tienePerfiles && servicio.perfiles.length) base = servicio.perfiles;
+  else if (!tienePerfiles && Array.isArray(anterior.perfiles) && anterior.perfiles.length) base = anterior.perfiles;
+  else base = perfilesServicioLocal({ ...anterior, ...servicio }, titular);
+  const prev = perfilesServicioLocal(anterior, titular);
+  const perfiles = base.map((raw = {}, index) => {
+    const previo = prev.find((p) => p.perfilId && p.perfilId === String(raw.perfilId || raw.id || "")) || prev[index] || {};
+    const nombre = String(raw.nombre || raw.nombrePerfil || raw.cliente || raw.perfil || previo.nombre || titular || `Perfil ${index + 1}`).trim();
+    const correoTop = index === 0 && servicio.correo != null ? servicio.correo : undefined;
+    const claveTop = index === 0 && servicio.clave != null ? servicio.clave : undefined;
+    const pinTop = index === 0 && (servicio.pin != null || servicio.pinPerfil != null) ? (servicio.pinPerfil ?? servicio.pin) : undefined;
+    return {
+      perfilId: String(raw.perfilId || raw.id || previo.perfilId || recordIdLocal("perfil")),
+      nombre,
+      perfil: String(raw.perfil || raw.nombrePerfil || raw.nombre || previo.perfil || nombre).trim(),
+      correo: requiereCorreoLocal(plat)
+        ? normalizeIdentByPlatformLocal(plat, raw.correo ?? correoTop ?? previo.correo ?? servicio.correo ?? anterior.correo ?? "")
+        : "",
+      clave: requiereClaveLocal(plat) ? String(raw.clave ?? raw.password ?? raw.pass ?? claveTop ?? previo.clave ?? servicio.clave ?? anterior.clave ?? "").trim() : "",
+      pin: requierePinLocal(plat) ? String(raw.pinPerfil ?? raw.pin_perfil ?? raw.perfilPin ?? raw.pin ?? pinTop ?? previo.pin ?? "").trim() : ""
+    };
+  });
+  const principal = perfiles[0] || {};
+  const fechaNueva = String(servicio.fechaRenovacion ?? anterior.fechaRenovacion ?? "").trim();
+  const mesesExplicitos = Number(servicio.mesesContratados);
+  const mesesPrevios = Number(anterior.mesesContratados);
+  let mesesContratados = Number.isFinite(mesesExplicitos) && mesesExplicitos > 0
+    ? Math.max(1, Math.min(24, Math.round(mesesExplicitos)))
+    : (Number.isFinite(mesesPrevios) && mesesPrevios > 0 && fechaNueva === String(anterior.fechaRenovacion || "").trim()
+        ? normalizarMesesLegacyTvDigitalLocal(plat, mesesPrevios)
+        : (isFechaDMY(fechaNueva) ? mesesContratadosDesdeFechaLocal(fechaNueva) : 1));
+  const compraFinal = {
+    ...anterior,
+    ...servicio,
+    compraId: String(servicio.compraId || anterior.compraId || recordIdLocal("compra")),
+    modalidad: perfiles.length > 1 ? "multiperfil" : "individual",
+    plataforma: plat,
+    mesesContratados,
+    correo: principal.correo || "",
+    clave: principal.clave || "",
+    pin: principal.pin || "",
+    perfil: principal.perfil || principal.nombre || titular || "",
+    perfiles
+  };
+  // Nanotech: mismos campos que guarda Sublichat HQ (proveedor + dispositivos), para que
+  // una cuenta creada en Telegram se abra completa en la ficha del CRM y viceversa.
+  if (plat.startsWith("evoutouch")) {
+    const mDisp = plat.match(/([123])$/);
+    compraFinal.iptvProveedor = "evoutouch";
+    compraFinal.iptvPantallas = mDisp ? Number(mDisp[1]) : 1;
+  }
+  return compraFinal;
+}
+
+function validarCompraLocal(compra = {}) {
+  const plat = normalizarPlataforma(compra.plataforma || "");
+  if (!esPlataformaValida(plat)) throw new Error("Plataforma inválida.");
+  compra.mesesContratados = validarMesesTvDigitalLocal(plat, compra.mesesContratados || 1);
+  const perfiles = perfilesServicioLocal(compra, "");
+  if (!perfiles.length) throw new Error("Agregue al menos un perfil.");
+  perfiles.forEach((p, index) => {
+    if (!String(p.nombre || "").trim()) throw new Error(`Falta el nombre del perfil ${index + 1}.`);
+    if (requiereCorreoLocal(plat) && !validateIdentByPlatformLocal(plat, p.correo || "")) throw new Error(`${getIdentLabelLocal(plat)} inválido en ${p.nombre || `perfil ${index + 1}`}.`);
+    if (requiereClaveLocal(plat) && !String(p.clave || "").trim()) throw new Error(`Falta la clave de ${p.nombre || `perfil ${index + 1}`}.`);
+    if (requierePinLocal(plat) && !String(p.pin || "").trim()) throw new Error(`Falta el PIN individual de ${p.nombre || `perfil ${index + 1}`}.`);
+  });
+}
+
+async function sincronizarCompraInventarioLocal(anterior, nuevo, titular = "") {
+  const platAntes = normalizarPlataforma(anterior?.plataforma || nuevo?.plataforma || "");
+  const platNuevo = normalizarPlataforma(nuevo?.plataforma || anterior?.plataforma || "");
+  const antes = anterior && requiereCorreoLocal(platAntes) ? perfilesServicioLocal(anterior, titular) : [];
+  const despues = nuevo && requiereCorreoLocal(platNuevo) ? perfilesServicioLocal(nuevo, titular) : [];
+  const key = (p, plat) => `${plat}|${normalizeIdentByPlatformLocal(plat, p.correo || "")}|${normTxt(p.nombre || "")}`;
+  const nuevas = new Set(despues.map((p) => key(p, platNuevo)));
+  const removidos = [];
+  const agregados = [];
+
+  try {
+    for (const p of antes) {
+      if (!nuevas.has(key(p, platAntes))) {
+        const result = await removeServicioDeInventario({ clienteNombre: p.nombre || titular, plataforma: platAntes, correo: p.correo, pin: p.pin, compraId: anterior?.compraId || "", perfilId: p.perfilId || "" });
+        if (result?.removed) removidos.push(p);
+      }
+    }
+    for (const p of despues) {
+      const result = await syncServicioEnInventario({ clienteNombre: p.nombre || titular, pagadoPor: titular, plataforma: platNuevo, correo: p.correo, clave: p.clave, pin: p.pin, compraId: nuevo?.compraId || "", perfilId: p.perfilId || "" });
+      if (result?.reason === "full") throw new Error(`La cuenta de ${p.nombre || "ese perfil"} ya está llena.`);
+      if (result?.added) agregados.push(p);
+    }
+    return { ok: true, perfiles: despues.length, agregados: agregados.length, removidos: removidos.length };
+  } catch (error) {
+    for (const p of agregados) {
+      try { await removeServicioDeInventario({ clienteNombre: p.nombre || titular, plataforma: platNuevo, correo: p.correo, pin: p.pin, compraId: nuevo?.compraId || "", perfilId: p.perfilId || "" }); } catch (_) {}
+    }
+    for (const p of removidos) {
+      try { await syncServicioEnInventario({ clienteNombre: p.nombre || titular, pagadoPor: titular, plataforma: platAntes, correo: p.correo, clave: p.clave, pin: p.pin, compraId: anterior?.compraId || "", perfilId: p.perfilId || "" }); } catch (_) {}
+    }
+    throw error;
+  }
+}
+
+async function sincronizarCompraInventarioSeguroLocal(anterior, nuevo, titular = "") {
+  try {
+    return await sincronizarCompraInventarioLocal(anterior, nuevo, titular);
+  } catch (error) {
+    logErr("sincronizarCompraInventarioSeguroLocal", error);
+    return { ok: false, warning: String(error?.message || "No se pudo sincronizar inventario.") };
+  }
+}
+
+// ===============================
+// ✅ HISTORIAL REAL DE CLIENTE
+// ===============================
+
+/**
+ * Registra un evento en la colección historial_clientes.
+ * Se llama automáticamente desde addServicioTx, patchServicio,
+ * eliminarServicioTx y acciones de renovación.
+ */
+async function registrarEventoHistorial(clientId, evento = {}) {
+  try {
+    const ref = db.collection(HISTORIAL_COLLECTION).doc();
+    await ref.set({
+      clientId: String(clientId || ""),
+      fecha: hoyDMY(),
+      fechaTS: admin.firestore.FieldValue.serverTimestamp(),
+      ...evento,
+    });
+  } catch (e) {
+    logErr("registrarEventoHistorial", e);
+  }
+}
+
+/**
+ * Lee todos los eventos históricos de un cliente, ordenados por fecha.
+ */
+async function getHistorialCliente(clientId) {
+  try {
+    const snap = await db.collection(HISTORIAL_COLLECTION)
+      .where("clientId", "==", String(clientId || ""))
+      .get();
+
+    const eventos = snap.docs
+      .map((d) => ({ id: d.id, ...(d.data() || {}) }))
+      .sort((a, b) => {
+        const ta = a.fechaTS?.toMillis?.() || parseDMYtoTS(a.fecha || "") || 0;
+        const tb = b.fechaTS?.toMillis?.() || parseDMYtoTS(b.fecha || "") || 0;
+        return ta - tb;
+      });
+
+    return eventos;
+  } catch (e) {
+    logErr("getHistorialCliente", e);
+    return [];
+  }
+}
+
+/**
+ * Genera el TXT completo de historial:
+ * - Datos del cliente
+ * - Servicios actuales
+ * - Línea de tiempo de eventos (correos que ha tenido, cambios, pagos, renovaciones)
+ */
+async function generarHistorialTXT(clientId) {
+  const c = await getCliente(clientId);
+  if (!c) return null;
+
+  const eventos = await getHistorialCliente(c.id);
+  const servicios = Array.isArray(c.servicios) ? c.servicios : [];
+  const resumen = resumenGeneralCliente(servicios);
+
+  let txt = "============================\n";
+  txt += "HISTORIAL DEL CLIENTE\n";
+  txt += "============================\n\n";
+
+  txt += `Nombre: ${c.nombrePerfil || "Sin nombre"}\n`;
+  txt += `Telefono: ${c.telefono || "-"}\n`;
+  txt += `Vendedores: ${resumenVendedoresCliente(servicios, c).vendedores.join(" + ") || "-"}\n`;
+  txt += `Estado actual: ${resumen.estadoTexto}\n`;
+  txt += `Total mensual actual: ${Number(resumen.total || 0).toFixed(2)} Lps\n`;
+  txt += `Proxima renovacion: ${resumen.proxima}\n`;
+  txt += `Compras activas: ${servicios.length}\n`;
+  txt += `Perfiles activos: ${resumen.perfiles}\n\n`;
+
+  txt += "============================\n";
+  txt += "COMPRAS / SERVICIOS ACTUALES\n";
+  txt += "============================\n";
+
+  if (!servicios.length) {
+    txt += "(sin servicios)\n";
+  } else {
+    servicios.forEach((s, i) => {
+      const est = getEstadoServicio(s.fechaRenovacion || "");
+      const benef = etiquetaBeneficiarioServicioLocal(s);
+      txt += `\n${i + 1}) ${humanPlataforma(s.plataforma || "")}\n`;
+      txt += `Uso: ${benef.texto}\n`;
+      txt += renderCredencialesServicioLocal(s, false, "");
+      txt += `Precio: ${Number(s.precio || 0).toFixed(2)} Lps\n`;
+      txt += `Renovacion: ${fechaDMYLocal(s.fechaRenovacion || "") || "-"}\n`;
+      txt += `Vendedor responsable: ${vendedorEfectivoServicio(s, c).vendedor || "-"}\n`;
+      txt += `Estado: ${est.texto}\n`;
+    });
+  }
+
+  txt += "\n============================\n";
+  txt += "HISTORIAL DE EVENTOS\n";
+  txt += "============================\n\n";
+
+  if (!eventos.length) {
+    txt += "(Sin historial de eventos registrados aun)\n";
+  } else {
+    eventos.forEach((ev, i) => {
+      txt += `${i + 1}) [${ev.fecha || "-"}] ${ev.tipo || "evento"}\n`;
+      if (ev.descripcion)         txt += `   Detalle: ${ev.descripcion}\n`;
+      if (ev.plataforma)          txt += `   Plataforma: ${humanPlataforma(ev.plataforma)}\n`;
+      if (ev.correo)              txt += `   Correo/Usuario: ${ev.correo}\n`;
+      if (ev.correoAnterior)      txt += `   Correo anterior: ${ev.correoAnterior}\n`;
+      if (ev.clave)               txt += `   Clave: ${ev.clave}\n`;
+      if (ev.pin)                 txt += `   PIN: ${ev.pin}\n`;
+      if (ev.precio !== undefined && ev.precio !== null)
+                                  txt += `   Precio: ${Number(ev.precio || 0).toFixed(2)} Lps\n`;
+      if (ev.precioAnterior !== undefined && ev.precioAnterior !== null)
+                                  txt += `   Precio anterior: ${Number(ev.precioAnterior || 0).toFixed(2)} Lps\n`;
+      if (ev.fechaRenovacion)     txt += `   Fecha renovacion: ${ev.fechaRenovacion}\n`;
+      if (ev.fechaAnterior)       txt += `   Fecha anterior: ${ev.fechaAnterior}\n`;
+      txt += "\n";
+    });
+  }
+
+  return txt;
+}
+
+/**
+ * Envía el historial real al chat como archivo TXT.
+ */
+async function enviarHistorialClienteTXTReal(chatId, clientId) {
+  const c = await getCliente(clientId);
+  if (!c) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
+
+  const contenido = await generarHistorialTXT(clientId);
+  if (!contenido) return bot.sendMessage(chatId, "⚠️ No se pudo generar el historial.");
+
+  return enviarTxtComoArchivo(
+    chatId,
+    contenido,
+    `historial_${fileSafeName(c.nombrePerfil || clientId, "cliente").replace(/\.txt$/i, "")}.txt`
+  );
+}
+
+// ===============================
+// ✅ LECTURAS OPTIMIZADAS
+// ===============================
+
+async function getCliente(clientId) {
+  const id = String(clientId || "").trim();
+  if (!id) return null;
+
+  // ⚠️ TTL corto a propósito (no el de 5 min por defecto del prefijo "clientes").
+  // Sublichat HQ (panel web en Vercel) escribe renovaciones directo en Firestore
+  // desde OTRO proceso — no tiene forma de avisarle a este bot que invalide su
+  // caché en memoria. Con 5 min, el bot seguía mostrando la fecha vieja y
+  // renovando sobre datos obsoletos aunque el panel ya hubiera guardado el cambio.
+  const cacheKey = `clientes:doc:${id}`;
+  const cached = cacheGet(cacheKey);
+  if (cached !== null) return cached === "__null__" ? null : cached;
+
+  let doc = await db.collection(CLIENTES_COLLECTION).doc(id).get();
+  if (!doc.exists) { cacheSet(cacheKey, "__null__", 10 * 1000); return null; }
+
+  // Los IDs antiguos siguen siendo válidos después de una consolidación. Esto
+  // evita que botones viejos de Telegram queden rotos.
+  const visited = new Set([doc.id]);
+  for (let hop = 0; hop < 4; hop++) {
+    const target = String(doc.data()?.consolidadoEn || "").trim();
+    if (!target || visited.has(target)) break;
+    visited.add(target);
+    const next = await db.collection(CLIENTES_COLLECTION).doc(target).get();
+    if (!next.exists) break;
+    doc = next;
+  }
+
+  const result = { id: doc.id, ...(doc.data() || {}) };
+  if (Array.isArray(result.servicios)) result.servicios = result.servicios.map((sv) => ({ ...sv, fechaRenovacion: fechaDMYLocal(sv?.fechaRenovacion || "") || sv?.fechaRenovacion || "" }));
+  cacheSet(cacheKey, result, 10 * 1000);
+  return result;
+}
+
+async function clienteDuplicado(nombre = "", telefono = "", excludeId = null) {
+  const nombreNorm = normTxt(nombre);
+  const telefonoNorm = normalizarTelefonoCliente(telefono);
+  if (!nombreNorm || !telefonoNorm) return false;
+  const rows = await getClientesBusquedaSnapshot();
+  return rows.some((x) => {
+    if (excludeId && String(x.id) === String(excludeId)) return false;
+    return normTxt(x.nombrePerfil || x.nombre || "") === nombreNorm
+      && normalizarTelefonoCliente(x.telefono_norm || x.telefono || "") === telefonoNorm;
+  });
+}
+
+async function clienteExactoNombreTelefono(nombre = "", telefono = "") {
+  const nombreNorm = normTxt(nombre);
+  const telefonoNorm = normalizarTelefonoCliente(telefono);
+  if (!nombreNorm || telefonoNorm.length !== 8) return null;
+  const rows = (await getClientesBusquedaSnapshot()).filter((x) =>
+    normTxt(x.nombrePerfil || x.nombre || "") === nombreNorm
+    && normalizarTelefonoCliente(x.telefono_norm || x.telefono || "") === telefonoNorm
+  );
+  if (rows.length > 1) throw new Error("Hay varias fichas con ese mismo nombre y teléfono; reinicie el bot para ejecutar la consolidación segura.");
+  return rows[0] || null;
+}
+
+
+// ===============================
+// BÚSQUEDA RÁPIDA — SNAPSHOT CACHEADO
+// Una sola lectura completa de clientes por ventana corta.
+// Evita repetir .get() varias veces para una misma búsqueda.
+// ===============================
+async function getClientesBusquedaSnapshot(force = false) {
+  const cacheKey = "clientes:busqueda_snapshot";
+  if (!force) {
+    const cached = cacheGet(cacheKey);
+    if (Array.isArray(cached)) return cached;
+  }
+
+  const snap = await require("./index_30_espejo_firestore").getColeccion(CLIENTES_COLLECTION);
+  const rows = snap.docs
+    .map((d) => ({ id: d.id, ...(d.data() || {}) }))
+    .filter((row) => !String(row.consolidadoEn || "").trim())
+    .map((row) => ({ ...row, servicios: Array.isArray(row.servicios) ? row.servicios.map((sv) => ({ ...sv, fechaRenovacion: fechaDMYLocal(sv?.fechaRenovacion || "") || sv?.fechaRenovacion || "" })) : [], telefono: normalizarTelefonoCliente(row.telefono_norm || row.telefono || "") || row.telefono || "" }));
+  // 20 s: suficientemente corto para altas/ediciones y muy útil para Telegram.
+  cacheSet(cacheKey, rows, 20 * 1000);
+  return rows;
+}
+
+function bolsasBusquedaClienteLocal(x = {}) {
+  const titular = String(x.nombrePerfil || x.nombre || x.cliente || "").trim();
+  const nombres = [
+    x.nombrePerfil, x.nombre, x.cliente, x.nombre_norm,
+    x.vendedor, x.vendedor_norm,
+    ...(Array.isArray(x.vendedores) ? x.vendedores : []),
+    ...(Array.isArray(x.vendedores_norm) ? x.vendedores_norm : []),
+  ].map((v) => normTxt(v || "")).filter(Boolean);
+
+  const telefonos = [x.telefono, x.telefono_norm, x.whatsapp, x.numero]
+    .map((v) => normalizarTelefonoCliente(v || "")).filter(Boolean);
+
+  const servicios = Array.isArray(x.servicios) ? x.servicios : [];
+  const textoServicios = [];
+  const digitosServicios = [];
+
+  for (const s of servicios) {
+    textoServicios.push(
+      normTxt(s?.correo || ""),
+      normTxt(s?.usuario || ""),
+      normTxt(s?.plataforma || ""),
+      normTxt(humanPlataforma(s?.plataforma || "")),
+      normTxt(s?.vendedor || ""),
+      normTxt(s?.vendedor_norm || ""),
+      String(s?.clave || "").trim().toLowerCase(),
+      String(s?.pin || "").trim().toLowerCase(),
+      // Permite encontrar al cliente buscando el nombre del TERCERO/beneficiario
+      // (ej. "Sorixth Godoy"), no solo el nombre del titular de la cuenta.
+      normTxt(s?.beneficiarioNombre || s?.beneficiario || ""),
+    );
+
+    for (const perfil of perfilesServicioLocal(s, titular)) {
+      textoServicios.push(
+        normTxt(perfil?.nombre || ""),
+        normTxt(perfil?.nombrePerfil || ""),
+        normTxt(perfil?.perfil || ""),
+        normTxt(perfil?.correo || ""),
+        String(perfil?.clave || "").trim().toLowerCase(),
+        String(perfil?.pin || "").trim().toLowerCase(),
+      );
+      const pt = normalizarTelefonoCliente(perfil?.telefono || perfil?.whatsapp || "");
+      if (pt) digitosServicios.push(pt);
+    }
+  }
+
+  return {
+    textos: [...nombres, ...textoServicios].filter(Boolean),
+    digitos: [...telefonos, ...digitosServicios].filter(Boolean),
+  };
+}
+
+async function buscarPorTelefonoTodos(query = "") {
+  const q = normalizarTelefonoCliente(query);
+  if (!q) return [];
+
+  const rows = await getClientesBusquedaSnapshot();
+  const exactos = [];
+  const parciales = [];
+
+  for (const x of rows) {
+    const bolsas = bolsasBusquedaClienteLocal(x);
+    if (bolsas.digitos.some((tel) => tel === q)) {
+      exactos.push(x);
+      continue;
+    }
+    if (q.length >= 4 && bolsas.digitos.some((tel) => tel.includes(q))) {
+      parciales.push(x);
+    }
+  }
+
+  return (exactos.length ? exactos : parciales).slice(0, 20);
+}
+
+async function buscarClienteRobusto(query = "") {
+  const q = String(query || "").trim();
+  const qNorm = normTxt(q);
+  const qDigits = normalizarTelefonoCliente(q);
+  if (!qNorm && !qDigits) return [];
+
+  const out = new Map();
+
+  // Primero aprovechar índices exactos cuando existan.
+  const jobs = [];
+  if (qDigits && qDigits.length >= 7) {
+    jobs.push(db.collection(CLIENTES_COLLECTION).where("telefono_norm", "==", qDigits).limit(10).get());
+  }
+  if (qNorm && qNorm.length >= 2) {
+    jobs.push(
+      db.collection(CLIENTES_COLLECTION).where("nombre_norm", "==", qNorm).limit(10).get(),
+      db.collection(CLIENTES_COLLECTION).where("vendedor_norm", "==", qNorm).limit(10).get(),
+    );
+  }
+
+  const settled = await Promise.allSettled(jobs);
+  for (const item of settled) {
+    if (item.status !== "fulfilled") continue;
+    item.value.forEach((d) => {
+      if (String(d.data()?.consolidadoEn || "").trim()) return;
+      if (!out.has(d.id)) out.set(d.id, { id: d.id, ...(d.data() || {}) });
+    });
+  }
+
+  // Para nombre parcial / campos internos: UN solo snapshot cacheado.
+  // Aunque haya coincidencia exacta, complementamos con parciales para que
+  // "Gustavo" pueda mostrar "Gustavo X" y perfiles relacionados.
+  const rows = await getClientesBusquedaSnapshot();
+  for (const x of rows) {
+    const bolsas = bolsasBusquedaClienteLocal(x);
+    let ok = false;
+
+    if (qDigits && qDigits.length >= 4 && bolsas.digitos.some((v) => v.includes(qDigits))) ok = true;
+    if (!ok && qNorm && qNorm.length >= 2 && bolsas.textos.some((v) => String(v).includes(qNorm))) ok = true;
+
+    if (ok && !out.has(x.id)) out.set(x.id, x);
+    if (out.size >= 30) break;
+  }
+
+  return Array.from(out.values()).slice(0, 30);
+}
+
+// ===============================
+// FORMATO TEXTO / FICHA CRM
+// ===============================
+function clienteResumenTXT(c = {}) {
+  const nombre = String(c.nombrePerfil || "Sin nombre").trim();
+  const telefono = String(c.telefono || "-").trim();
+  const servicios = Array.isArray(c.servicios) ? c.servicios : [];
+  const resumen = resumenGeneralCliente(servicios);
+  const vendedores = resumenVendedoresCliente(servicios, c);
+  const vendedor = vendedores.vendedores.join(" + ") || "-";
+
+  let txt = "CRM CLIENTE\n";
+  txt += `Nombre: ${nombre}\nTelefono: ${telefono}\nVendedor: ${vendedor}\n`;
+  txt += `Estado general: ${resumen.estadoTexto}\nTotal mensual: ${Number(resumen.total || 0).toFixed(2)} Lps\n`;
+  txt += `Proxima renovacion: ${resumen.proxima}\nCompras activas: ${servicios.length}\nPerfiles activos: ${resumen.perfiles}\n\nCOMPRAS / SERVICIOS\n`;
+
+  if (!servicios.length) {
+    txt += "(sin servicios)\n";
+  } else {
+    servicios.forEach((s, i) => {
+      const est = getEstadoServicio(s.fechaRenovacion || "");
+      const benef = etiquetaBeneficiarioServicioLocal(s);
+      txt += `\n${i + 1}) ${humanPlataforma(s.plataforma || "")}\n`;
+      txt += `Uso: ${benef.texto}\n`;
+      txt += `Vendedor responsable: ${vendedorEfectivoServicio(s, c).vendedor || "-"}\n`;
+      txt += renderCredencialesServicioLocal(s, false, "");
+      txt += `Precio: ${Number(s.precio || 0).toFixed(2)} Lps\n`;
+      txt += `Renovacion: ${fechaDMYLocal(s.fechaRenovacion || "") || "-"}\nEstado: ${est.texto}\n`;
+    });
+  }
+
+  return txt;
+}
+
+function renderFichaClienteMarkdown(c = {}) {
+  const nombre = String(c.nombrePerfil || "Sin nombre").trim();
+  const telefono = String(c.telefono || "-").trim();
+  const servicios = Array.isArray(c.servicios) ? c.servicios : [];
+  const resumen = resumenGeneralCliente(servicios);
+  const vendedores = resumenVendedoresCliente(servicios, c);
+  const vendedor = vendedores.vendedores.join(" + ") || "-";
+
+  let txt = `👤 *CRM CLIENTE*\n\n`;
+  txt += `🙍 *Nombre:* ${escMD(nombre)}\n📱 *Teléfono:* ${escMD(telefono)}\n🧾 *Vendedor:* ${escMD(vendedor)}\n`;
+  txt += `📊 *Estado general:* ${resumen.estadoEmoji} ${escMD(resumen.estadoTexto)}\n`;
+  txt += `💰 *Total mensual:* ${escMD(`${Number(resumen.total || 0).toFixed(2)} Lps`)}\n`;
+  txt += `📅 *Próxima renovación:* ${escMD(resumen.proxima)}\n`;
+  txt += `🛒 *Compras activas:* ${escMD(String(servicios.length))}\n👥 *Perfiles activos:* ${escMD(String(resumen.perfiles))}\n\n*COMPRAS / SERVICIOS*\n`;
+
+  if (!servicios.length) {
+    txt += `\n_Sin servicios registrados._`;
+  } else {
+    servicios.forEach((s, i) => {
+      const est = getEstadoServicio(s.fechaRenovacion || "");
+      const benef = etiquetaBeneficiarioServicioLocal(s);
+      const perfilReal = nombrePerfilRealServicioLocal(s, nombre);
+      const uso = benef.esTercero
+        ? `🔑 ${escMD(benef.texto)}`
+        : `👤 ${escMD(perfilReal || nombre)}`;
+      txt += `\n\n${i + 1}) ${iconPlataforma(s.plataforma || "")} *${escMD(humanPlataforma(s.plataforma || ""))}* — ${uso}\n`;
+      txt += `🧾 *Vendedor responsable:* ${escMD(vendedorEfectivoServicio(s, c).vendedor || "-")}\n`;
+      txt += renderCredencialesServicioLocal(s, true, "");
+      txt += `💵 *Precio:* ${escMD(`${Number(s.precio || 0).toFixed(2)} Lps`)}\n`;
+      txt += `📅 *Renovación:* ${escMD(fechaDMYLocal(s.fechaRenovacion || "") || "-")} — ${est.emoji} ${escMD(est.texto)}`;
+    });
+  }
+
+  return txt;
+}
+
+// ===============================
+// MENÚS CRM
+// ===============================
+async function enviarFichaCliente(chatId, clientId) {
+  const c = await getCliente(clientId);
+  if (!c) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
+
+  return upsertPanel(chatId, renderFichaClienteMarkdown(c), [
+    [{ text: "✏️ Editar cliente", callback_data: `cli:edit:menu:${c.id}` }],
+    [{ text: "🧩 Editar servicios", callback_data: `cli:serv:list:${c.id}` }],
+    [{ text: "🔄 Gestionar renovaciones", callback_data: `cli:ren:list:${c.id}` }],
+    [{ text: "➕ Agregar servicio", callback_data: `cli:serv:add:${c.id}` }],
+    [{ text: "📜 Historial TXT", callback_data: `cli:txt:hist:${c.id}` }, { text: "📄 TXT Cliente", callback_data: `cli:txt:one:${c.id}` }],
+    [{ text: "🗑️ Borrar cliente", callback_data: `cli:del:ask:${c.id}` }],
+    [{ text: "🏠 Inicio",         callback_data: "go:inicio" }],
+  ]);
+}
+
+// ✅ Ficha completa para revendedores — cuentas, claves, fecha, monto
+async function enviarFichaClienteVendedor(chatId, clientId, backCb = "vend:clientes", vendedorNombre = "") {
+  const original = await getCliente(clientId);
+  if (!original) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
+  const c = vendedorNombre ? filtrarClienteParaVendedor(original, vendedorNombre) : original;
+  if (vendedorNombre && !(c.servicios || []).length) return bot.sendMessage(chatId, "⛔ Ese cliente no tiene cuentas asignadas a usted.");
+
+  const servicios = Array.isArray(c.servicios) ? c.servicios : [];
+  let total = 0;
+  servicios.forEach(s => { total += Number(s.precio || 0); });
+
+  let txt = `👤 *${escMD(c.nombrePerfil || "Sin nombre")}*\n`;
+  txt += `📱 ${escMD(c.telefono || "-")}\n`;
+  if (total > 0) txt += `💰 *Total mensual: ${escMD(total.toFixed(2))} Lps*\n`;
+  txt += `\n`;
+
+  if (!servicios.length) {
+    txt += "_Sin servicios._";
+  } else {
+    servicios.forEach((s, i) => {
+      const est = getEstadoServicio(s.fechaRenovacion || "");
+      const benef = etiquetaBeneficiarioServicioLocal(s);
+      txt += `*${i + 1}.* *${escMD(humanPlataforma(s.plataforma || ""))}* — ${benef.esTercero ? "🔑" : "👤"} ${escMD(benef.texto)}\n`;
+      txt += renderCredencialesServicioLocal(s, true, "   ");
+      txt += `   📅 ${escMD(fechaDMYLocal(s.fechaRenovacion || "") || "-")} ${est.emoji}\n`;
+      txt += `   💵 ${escMD(Number(s.precio || 0).toFixed(2))} Lps\n\n`;
+    });
+  }
+
+  return upsertPanel(chatId, txt, [
+    [{ text: "⬅️ Volver", callback_data: backCb }, { text: "🏠 Inicio", callback_data: "go:inicio" }],
+  ]);
+}
+
+async function enviarListaResultadosClientes(chatId, rows = []) {
+  const items = dedupeClientes(rows);
+  if (!items.length) return bot.sendMessage(chatId, "⚠️ Sin resultados.");
+
+  const keyboard = items.slice(0, 30).map((c) => [{
+    text: safeBtnLabel(`${c.nombrePerfil || "Sin nombre"} • ${c.telefono || "sin teléfono"}`),
+    callback_data: `cli:view:${c.id}`,
+  }]);
+  keyboard.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
+
+  return upsertPanel(chatId, "🔎 *RESULTADOS DE BÚSQUEDA*\n\nSeleccione un cliente:", keyboard);
+}
+
+async function menuEditarCliente(chatId, clientId) {
+  const c = await getCliente(clientId);
+  if (!c) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
+
+  return upsertPanel(chatId,
+    `✏️ *EDITAR CLIENTE*\n\n👤 *Nombre:* ${escMD(c.nombrePerfil || "-")}\n📱 *Teléfono:* ${escMD(c.telefono || "-")}\n🧾 *Vendedores:* ${escMD(resumenVendedoresCliente(c.servicios || [], c).vendedores.join(" + ") || "-")}\n\nEl vendedor se cambia dentro de cada servicio.`,
+    [
+      [{ text: "👤 Cambiar nombre", callback_data: `cli:edit:nombre:${clientId}` }],
+      [{ text: "📱 Cambiar teléfono", callback_data: `cli:edit:tel:${clientId}` }],
+      [{ text: "🧾 Asignar vendedor por servicio", callback_data: `cli:serv:list:${clientId}` }],
+      [{ text: "⬅️ Volver Ficha",   callback_data: `cli:view:${clientId}` }],
+      [{ text: "🏠 Inicio",          callback_data: "go:inicio" }],
+    ]
+  );
+}
+
+async function menuListaServicios(chatId, clientId) {
+  const c = await getCliente(clientId);
+  if (!c) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
+
+  const servicios = serviciosConIndiceOriginal(Array.isArray(c.servicios) ? c.servicios : []);
+  if (!servicios.length) {
+    return upsertPanel(chatId, "🧩 *SERVICIOS*\n\nEste cliente no tiene servicios.", [
+      [{ text: "➕ Agregar servicio", callback_data: `cli:serv:add:${clientId}` }],
+      [{ text: "⬅️ Volver Ficha",   callback_data: `cli:view:${clientId}` }],
+      [{ text: "🏠 Inicio",          callback_data: "go:inicio" }],
+    ]);
+  }
+
+  const kb = servicios.map((s, i) => {
+    const benef = etiquetaBeneficiarioServicioLocal(s);
+    const etiqueta = benef.esTercero ? ` • 🔑 ${benef.texto}` : "";
+    return [{
+      text: safeBtnLabel(`${i + 1}) ${humanPlataforma(s.plataforma || "")} • ${cantidadPerfilesServicioLocal(s, c.nombrePerfil || "")} perfil(es)${etiqueta}`),
+      callback_data: `cli:serv:menu:${clientId}:${compraSelectorLocal(s, s.idxOriginal)}`,
+    }];
+  });
+  kb.push([{ text: "➕ Agregar servicio", callback_data: `cli:serv:add:${clientId}` }]);
+  kb.push([{ text: "⬅️ Volver Ficha",   callback_data: `cli:view:${clientId}` }]);
+  kb.push([{ text: "🏠 Inicio",          callback_data: "go:inicio" }]);
+
+  return upsertPanel(chatId, `🧩 *SERVICIOS DE ${escMD(c.nombrePerfil || "CLIENTE")}*\n\nSeleccione uno:`, kb);
+}
+
+async function menuServicio(chatId, clientId, selector) {
+  const c = await getCliente(clientId);
+  if (!c) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
+
+  const servicios = Array.isArray(c.servicios) ? c.servicios : [];
+  const idx = resolverIndiceCompraSelectorLocal(servicios, selector);
+  if (idx < 0 || idx >= servicios.length) return bot.sendMessage(chatId, "⚠️ Esa compra cambió o ya no existe. Abra nuevamente la ficha.");
+
+  const s = servicios[idx] || {};
+  const compraSel = compraSelectorLocal(s, idx);
+  const est = getEstadoServicio(s.fechaRenovacion || "");
+  const perfilReal = nombrePerfilRealServicioLocal(s, c.nombrePerfil || "");
+  const benef = etiquetaBeneficiarioServicioLocal(s);
+  let txt =
+    `🧩 *SERVICIO #${idx + 1}*\n\n` +
+    `${iconPlataforma(s.plataforma || "")} *Plataforma:* ${escMD(humanPlataforma(s.plataforma || ""))}\n` +
+    (benef.esTercero
+      ? `🔑 *Tercero:* ${escMD(s.beneficiarioNombre || s.beneficiario || perfilReal || "Tercero")}\n`
+      : `👤 *Perfil:* ${escMD(perfilReal)}\n`);
+
+  txt += renderCredencialesServicioLocal(s, true, "");
+  txt += `🧾 *Vendedor responsable:* ${escMD(vendedorEfectivoServicio(s, c).vendedor || "-")}\n`;
+  txt += `🛒 *Compra:* ${cantidadPerfilesServicioLocal(s, c.nombrePerfil || "")} perfil(es) · un solo precio\n`;
+  txt += `💰 *Precio:* ${escMD(`${Number(s.precio || 0).toFixed(2)} Lps`)}\n`;
+  txt += `📅 *Renovación:* ${escMD(fechaDMYLocal(s.fechaRenovacion || "") || "-")}\n`;
+  if (TV_DIGITAL_KEYS_LOCAL.has(normalizarPlataforma(s.plataforma || ""))) {
+    const mesesRaw = Math.max(1, Number(s.mesesContratados || (isFechaDMY(s.fechaRenovacion || "") ? mesesContratadosDesdeFechaLocal(s.fechaRenovacion) : 1)) || 1);
+    const meses = normalizarMesesLegacyTvDigitalLocal(s.plataforma || "", mesesRaw);
+    txt += `🗓️ *Plan contratado:* ${meses} mes${meses === 1 ? "" : "es"}\n`;
+    const urlServidor = tvDigitalUrlLocal(s);
+    if (urlServidor) txt += `🌐 *Servidor:* ${escMD(urlServidor)}\n`;
+  }
+  txt += `📊 *Estado:* ${est.emoji} ${escMD(est.texto)}`;
+
+  const kb = [
+    [{ text: "👥 Gestionar perfiles", callback_data: `cli:prof:list:${clientId}:${compraSel}` }],
+    [{ text: "➕ Añadir perfil a esta compra", callback_data: `cli:prof:add:${clientId}:${compraSel}` }],
+    [{ text: "📌 Cambiar plataforma", callback_data: `cli:serv:edit:plat:${clientId}:${compraSel}` }],
+  ];
+  if (requiereCorreoLocal(s.plataforma || "")) {
+    kb.push([{ text: `${getIdentLabelLocal(s.plataforma || "") === "Usuario" ? "👤" : "📧"} Cambiar acceso del perfil 1`, callback_data: `cli:serv:edit:mail:${clientId}:${compraSel}` }]);
+  }
+
+  const credBtns = [];
+  if (requiereClaveLocal(s.plataforma || "")) credBtns.push({ text: "🔑 Cambiar clave", callback_data: `cli:serv:edit:clave:${clientId}:${compraSel}` });
+  if (requierePinLocal(s.plataforma || "")) credBtns.push({ text: "🔐 Cambiar PIN", callback_data: `cli:serv:edit:pin:${clientId}:${compraSel}` });
+  if (credBtns.length) kb.push(credBtns);
+  kb.push([{ text: "💰 Cambiar precio", callback_data: `cli:serv:edit:precio:${clientId}:${compraSel}` }]);
+  kb.push([{ text: "📅 Cambiar fecha renovación", callback_data: `cli:serv:edit:fecha:${clientId}:${compraSel}` }]);
+  kb.push([{ text: "🧾 Cambiar vendedor responsable", callback_data: `cli:serv:edit:vendedor:${clientId}:${compraSel}` }]);
+  kb.push([{ text: "🗑️ Eliminar compra completa", callback_data: `cli:serv:del:ask:${clientId}:${compraSel}` }]);
+  kb.push([{ text: "⬅️ Volver Servicios", callback_data: `cli:serv:list:${clientId}` }, { text: "🏠 Inicio", callback_data: "go:inicio" }]);
+
+  return upsertPanel(chatId, txt, kb);
+}
+
+async function menuListaPerfilesServicio(chatId, clientId, selector) {
+  const c = await getCliente(clientId);
+  if (!c) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
+  const servicios = Array.isArray(c.servicios) ? c.servicios : [];
+  const idx = resolverIndiceCompraSelectorLocal(servicios, selector);
+  if (idx < 0 || idx >= servicios.length) return bot.sendMessage(chatId, "⚠️ Esa compra cambió o ya no existe. Abra nuevamente la ficha.");
+  const s = servicios[idx] || {};
+  const compraSel = compraSelectorLocal(s, idx);
+  const perfiles = perfilesServicioLocal(s, c.nombrePerfil || "");
+  const kb = perfiles.map((p, pidx) => [{
+    text: safeBtnLabel(`${pidx + 1}) ${p.nombre || "Perfil"} • ${requiereCorreoLocal(s.plataforma || "") ? (p.correo || "sin acceso") : (p.pin || "sin PIN")}`),
+    // R2X1: perfil por índice corto. Evita callback_data demasiado largo/frágil en Telegram
+    // cuando cliente + compra + perfil usan IDs/hash extensos. La compra sigue usando selector estable.
+    callback_data: `cli:prof:menu:${clientId}:${compraSel}:${pidx}`
+  }]);
+  kb.push([{ text: "➕ Añadir otro perfil", callback_data: `cli:prof:add:${clientId}:${compraSel}` }]);
+  kb.push([{ text: "⬅️ Volver compra", callback_data: `cli:serv:menu:${clientId}:${compraSel}` }]);
+  return upsertPanel(chatId,
+    `👥 *PERFILES DE LA COMPRA*\n\n👤 Titular: *${escMD(c.nombrePerfil || "Cliente")}*\n📦 ${escMD(humanPlataforma(s.plataforma || ""))}\n💰 Un solo precio: *${escMD(Number(s.precio || 0).toFixed(2))} Lps*\n📅 Una sola renovación: *${escMD(fechaDMYLocal(s.fechaRenovacion || "") || "-")}*\n\nSeleccione un perfil:`,
+    kb
+  );
+}
+
+async function menuPerfilServicio(chatId, clientId, compraSelector, perfilSelector) {
+  const c = await getCliente(clientId);
+  if (!c) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
+  const servicios = Array.isArray(c.servicios) ? c.servicios : [];
+  const idx = resolverIndiceCompraSelectorLocal(servicios, compraSelector);
+  const s = idx >= 0 ? servicios[idx] : null;
+  if (!s) return bot.sendMessage(chatId, "⚠️ Esa compra cambió o ya no existe. Abra nuevamente la ficha.");
+  const perfiles = perfilesServicioLocal(s, c.nombrePerfil || "");
+  const perfilIndex = resolverIndicePerfilSelectorLocal(perfiles, perfilSelector);
+  const p = perfilIndex >= 0 ? perfiles[perfilIndex] : null;
+  if (!p) return bot.sendMessage(chatId, "⚠️ Ese perfil cambió o ya no existe. Abra nuevamente la compra.");
+  const compraSel = compraSelectorLocal(s, idx);
+  // R2X1: mantener corto todo el flujo del perfil (editar/quitar/volver).
+  const perfilSel = String(perfilIndex);
+  const individual = servicioParaPerfilLocal(s, p, c.nombrePerfil || "");
+  let txt = `👤 *PERFIL ${perfilIndex + 1} DE ${perfiles.length}*\n\n🙍 *Nombre:* ${escMD(p.nombre || "-")}\n📦 *Plataforma:* ${escMD(humanPlataforma(s.plataforma || ""))}\n`;
+  txt += renderCredencialesServicioLocal(individual, true, "");
+  txt += `\n💰 _El precio pertenece a toda la compra: ${escMD(Number(s.precio || 0).toFixed(2))} Lps._`;
+  const kb = [
+    [{ text: "👤 Cambiar nombre", callback_data: `cli:prof:edit:name:${clientId}:${compraSel}:${perfilSel}` }],
+  ];
+  if (requiereCorreoLocal(s.plataforma || "")) kb.push([{ text: `📧 Cambiar ${getIdentLabelLocal(s.plataforma || "").toLowerCase()}`, callback_data: `cli:prof:edit:mail:${clientId}:${compraSel}:${perfilSel}` }]);
+  if (requiereClaveLocal(s.plataforma || "")) kb.push([{ text: "🔑 Cambiar clave", callback_data: `cli:prof:edit:key:${clientId}:${compraSel}:${perfilSel}` }]);
+  if (requierePinLocal(s.plataforma || "")) kb.push([{ text: "🔐 Cambiar PIN individual", callback_data: `cli:prof:edit:pin:${clientId}:${compraSel}:${perfilSel}` }]);
+  if (perfiles.length > 1) kb.push([{ text: "🗑️ Quitar este perfil", callback_data: `cli:prof:del:ask:${clientId}:${compraSel}:${perfilSel}` }]);
+  kb.push([{ text: "⬅️ Volver perfiles", callback_data: `cli:prof:list:${clientId}:${compraSel}` }]);
+  return upsertPanel(chatId, txt, kb);
+}
+
+// ===============================
+// ESCRITURAS CRM (invalidan caché + registran historial)
+// ===============================
+function stableRefLocal(value = "", prefix = "r") {
+  const str = String(value || "");
+  let h1 = 2166136261 >>> 0, h2 = 2246822519 >>> 0;
+  for (let i = 0; i < str.length; i++) {
+    const c = str.charCodeAt(i);
+    h1 ^= c; h1 = Math.imul(h1, 16777619) >>> 0;
+    h2 ^= c; h2 = Math.imul(h2, 3266489917) >>> 0;
+  }
+  return `${prefix}${h1.toString(36)}${h2.toString(36)}`.slice(0, 15);
+}
+
+function compraSelectorLocal(servicio = {}, idx = -1) {
+  const id = String(servicio?.compraId || "").trim();
+  return id ? stableRefLocal(id, "c") : String(idx);
+}
+
+function perfilSelectorLocal(perfil = {}, idx = -1) {
+  const id = String(perfil?.perfilId || perfil?.id || "").trim();
+  return id ? stableRefLocal(id, "p") : String(idx);
+}
+
+function resolverIndiceCompraSelectorLocal(servicios = [], selector = null) {
+  const lista = Array.isArray(servicios) ? servicios : [];
+  const raw = String(selector ?? "").trim();
+  if (/^c[0-9a-z]+$/i.test(raw)) {
+    const matches = [];
+    lista.forEach((s, i) => {
+      const id = String(s?.compraId || "").trim();
+      if (id && stableRefLocal(id, "c") === raw) matches.push(i);
+    });
+    return matches.length === 1 ? matches[0] : -1;
+  }
+  const n = Number(raw);
+  return Number.isInteger(n) && n >= 0 && n < lista.length ? n : -1;
+}
+
+function resolverIndicePerfilSelectorLocal(perfiles = [], selector = null) {
+  const lista = Array.isArray(perfiles) ? perfiles : [];
+  const raw = String(selector ?? "").trim();
+  if (/^p[0-9a-z]+$/i.test(raw)) {
+    const matches = [];
+    lista.forEach((p, i) => {
+      const id = String(p?.perfilId || p?.id || "").trim();
+      if (id && stableRefLocal(id, "p") === raw) matches.push(i);
+    });
+    return matches.length === 1 ? matches[0] : -1;
+  }
+  const n = Number(raw);
+  return Number.isInteger(n) && n >= 0 && n < lista.length ? n : -1;
+}
+
+function resolverIndiceCompraLocal(servicios = [], idx = null, compraId = "") {
+  const lista = Array.isArray(servicios) ? servicios : [];
+  const id = String(compraId || "").trim();
+  if (id) {
+    const porId = lista.findIndex((s) => String(s?.compraId || "").trim() === id);
+    // compraId manda. Si fue proporcionado y no existe, no reutilizamos idx:
+    // el array pudo cambiar de orden y ese índice podría ser otra compra.
+    return porId;
+  }
+  const n = Number(idx);
+  return Number.isInteger(n) && n >= 0 && n < lista.length ? n : -1;
+}
+
+async function mutarServiciosClienteTx(clientId, mutador, extra = null) { // R107: extra = pago en la MISMA transacción
+  const id = String(clientId || "").trim();
+  if (!id) throw new Error("Cliente inválido.");
+  if (typeof mutador !== "function") throw new Error("Cambio de servicios inválido.");
+  const ref = db.collection(CLIENTES_COLLECTION).doc(id);
+  return db.runTransaction(async (tx) => {
+    const doc = await tx.get(ref);
+    if (!doc.exists) throw new Error("Cliente no encontrado.");
+    const lecturaExtra = extra && typeof extra.leer === "function" ? await extra.leer(tx) : null; // lecturas antes de escribir
+    const cliente = doc.data() || {};
+    // Migración progresiva: al tocar cualquier ficha antigua aseguramos IDs
+    // persistentes para todas sus compras y perfiles, sin cambiar sus datos.
+    const serviciosHeredados = heredarVendedorServicios(
+      Array.isArray(cliente.servicios) ? cliente.servicios : [],
+      cliente
+    );
+    const servicios = serviciosHeredados.map((servicio) => {
+      const s = { ...(servicio || {}) };
+      if (!String(s.compraId || "").trim()) s.compraId = recordIdLocal("compra");
+      if (Array.isArray(s.perfiles) && s.perfiles.length) {
+        s.perfiles = s.perfiles.map((perfil) => ({
+          ...(perfil || {}),
+          perfilId: String(perfil?.perfilId || perfil?.id || recordIdLocal("perfil"))
+        }));
+      } else {
+        // Las fichas legacy de perfil único también necesitan perfilId estable.
+        s.perfilId = String(s.perfilId || recordIdLocal("perfil"));
+      }
+      return s;
+    });
+    const resultado = await mutador({ cliente: { ...cliente, servicios }, servicios, ref, tx });
+    const siguientesRaw = Array.isArray(resultado?.servicios) ? resultado.servicios : servicios;
+    const siguientes = heredarVendedorServicios(siguientesRaw, cliente);
+    const resumenVendedores = camposResumenVendedores(siguientes, cliente);
+    if (!resultado?.skipWrite) {
+      tx.set(ref, {
+        servicios: siguientes,
+        ...resumenVendedores,
+        dataVersion: admin.firestore.FieldValue.increment(1),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      }, { merge: true });
+    }
+    const pagoOperacion = extra && typeof extra.escribir === "function" ? extra.escribir(tx, resultado || {}, cliente, lecturaExtra) : null;
+    return {
+      ...(resultado || {}),
+      ...(pagoOperacion ? { pagoOperacion } : {}),
+      cliente: { ...cliente, ...resumenVendedores, servicios: siguientes },
+      servicios: siguientes,
+    };
+  });
+}
+
+async function addServicioTx(clientId, servicio = {}) {
+  const id = String(clientId || "").trim();
+  if (!id) throw new Error("Cliente inválido.");
+  const servicioEntrada = {
+    ...servicio,
+    compraId: String(servicio.compraId || recordIdLocal("compra")),
+    perfiles: Array.isArray(servicio.perfiles)
+      ? servicio.perfiles.map((p) => ({ ...(p || {}), perfilId: String(p?.perfilId || recordIdLocal("perfil")) }))
+      : servicio.perfiles
+  };
+  const resultado = await mutarServiciosClienteTx(id, ({ cliente, servicios }) => {
+    const compra = normalizarCompraLocal(servicioEntrada, cliente.nombrePerfil || "", {});
+    const precio = Number(servicioEntrada.precio || 0);
+    const fechaRenovacion = String(servicioEntrada.fechaRenovacion || "").trim();
+    if (!Number.isFinite(precio) || precio <= 0) throw new Error("Precio inválido.");
+    if (!isFechaDMY(fechaRenovacion)) throw new Error("Fecha de renovación inválida.");
+    compra.precio = precio;
+    compra.fechaRenovacion = fechaRenovacion;
+    validarCompraLocal(compra);
+    const servicioIndex = servicios.length;
+    servicios.push(compra);
+    return { servicios, compra, servicioIndex, nombreTitular: cliente.nombrePerfil || "" };
+  });
+  const compra = resultado.servicios?.[resultado.servicioIndex] || resultado.compra;
+  const plat = compra.plataforma;
+  const precio = Number(compra.precio || 0);
+  const fechaRenovacion = String(compra.fechaRenovacion || "");
+  const sync = await sincronizarCompraInventarioSeguroLocal(null, compra, resultado.nombreTitular || "");
+
+  cacheInvalidatePrefix(`clientes:doc:${id}`);
+  cacheInvalidatePrefix("renovaciones:");
+
+  // Sorteos: el módulo seguro nunca interrumpe la compra si Firestore falla.
+  const sorteo = await registrarEventoSorteosSeguro({
+    tipo: "compra", clientId: id, compraId: compra.compraId,
+    eventoId: `compra:${compra.compraId}`,
+    clienteNombre: resultado.cliente?.nombrePerfil || resultado.cliente?.nombre || resultado.nombreTitular || "Cliente",
+    telefono: resultado.cliente?.telefono || "", vendedor: compra.vendedor || resultado.cliente?.vendedor || "", origen: "Telegram"
+  });
+
+  // ✅ Registrar en historial
+  await registrarEventoHistorial(id, {
+    tipo: "servicio_agregado",
+    descripcion: `Se agregó ${humanPlataforma(plat)} con ${compra.perfiles.length} perfil(es) y un solo precio`,
+    plataforma: plat,
+    correo: compra.correo,
+    clave: compra.clave,
+    pin: compra.pin,
+    precio,
+    fechaRenovacion,
+  });
+
+  return { ok: true, servicio: compra, servicioIndex: resultado.servicioIndex, totalPerfiles: compra.perfiles.length, sync, sorteo };
+}
+
+async function patchServicio(clientId, idx, patch = {}, compraId = "") {
+  const id = String(clientId || "").trim();
+  const patchLimpio = { ...(patch || {}) };
+  const resultado = await mutarServiciosClienteTx(id, ({ cliente, servicios }) => {
+    const actualIdx = resolverIndiceCompraLocal(servicios, idx, compraId || patchLimpio.compraId);
+    if (actualIdx === -1) throw new Error("Servicio inválido.");
+    const actual = servicios[actualIdx] || {};
+  if (Object.prototype.hasOwnProperty.call(patchLimpio, "precio")) {
+    const n = Number(patchLimpio.precio || 0);
+    if (!Number.isFinite(n) || n <= 0) throw new Error("Precio inválido.");
+    patchLimpio.precio = n;
+  }
+  if (Object.prototype.hasOwnProperty.call(patchLimpio, "fechaRenovacion")) {
+    if (!isFechaDMY(String(patchLimpio.fechaRenovacion || ""))) throw new Error("Fecha inválida.");
+  }
+
+  const entrada = { ...actual, ...patchLimpio };
+  if (Array.isArray(actual.perfiles) && actual.perfiles.length && !Object.prototype.hasOwnProperty.call(patchLimpio, "perfiles")) {
+    entrada.perfiles = actual.perfiles.map((p) => ({ ...(p || {}) }));
+    const principal = entrada.perfiles[0];
+    if (Object.prototype.hasOwnProperty.call(patchLimpio, "correo")) principal.correo = patchLimpio.correo;
+    if (Object.prototype.hasOwnProperty.call(patchLimpio, "clave")) principal.clave = patchLimpio.clave;
+    if (Object.prototype.hasOwnProperty.call(patchLimpio, "pin") || Object.prototype.hasOwnProperty.call(patchLimpio, "pinPerfil")) principal.pin = patchLimpio.pinPerfil ?? patchLimpio.pin ?? "";
+  }
+  const siguiente = normalizarCompraLocal(entrada, cliente.nombrePerfil || "", actual);
+  if (!esPlataformaValida(siguiente.plataforma)) throw new Error("Plataforma inválida.");
+  siguiente.mesesContratados = validarMesesTvDigitalLocal(siguiente.plataforma, siguiente.mesesContratados || 1);
+  const credencialesTocadas = ["plataforma", "correo", "clave", "pin", "pinPerfil", "perfiles"].some((k) => Object.prototype.hasOwnProperty.call(patchLimpio, k));
+  if (credencialesTocadas) validarCompraLocal(siguiente);
+    servicios[actualIdx] = siguiente;
+    return { servicios, actual, siguiente, actualIdx, nombreTitular: cliente.nombrePerfil || "" };
+  });
+  const { actual, siguiente } = resultado;
+  const firma = (servicio) => JSON.stringify({
+    plataforma: normalizarPlataforma(servicio?.plataforma || ""),
+    perfiles: perfilesServicioLocal(servicio, resultado.nombreTitular || "").map((p) => ({ nombre: normTxt(p.nombre), correo: p.correo, clave: p.clave, pin: p.pin }))
+  });
+  const sync = firma(actual) !== firma(siguiente)
+    ? await sincronizarCompraInventarioSeguroLocal(actual, siguiente, resultado.nombreTitular || "")
+    : { ok: true, omitido: true };
+
+  cacheInvalidatePrefix(`clientes:doc:${id}`);
+  cacheInvalidatePrefix("renovaciones:");
+
+  // ✅ Registrar cambios relevantes en historial
+  const cambios = [];
+  if (patchLimpio.correo && patchLimpio.correo !== actual.correo)
+    cambios.push(`Correo: ${actual.correo || "-"} → ${patchLimpio.correo}`);
+  if (patchLimpio.clave !== undefined && patchLimpio.clave !== actual.clave)
+    cambios.push(`Clave cambiada`);
+  if (patchLimpio.pin !== undefined && patchLimpio.pin !== actual.pin)
+    cambios.push(`PIN cambiado`);
+  if (patchLimpio.precio !== undefined && patchLimpio.precio !== actual.precio)
+    cambios.push(`Precio: ${Number(actual.precio || 0).toFixed(2)} → ${Number(patchLimpio.precio || 0).toFixed(2)} Lps`);
+  if (patchLimpio.fechaRenovacion && patchLimpio.fechaRenovacion !== actual.fechaRenovacion)
+    cambios.push(`Fecha: ${fechaDMYLocal(actual.fechaRenovacion || "") || "-"} → ${fechaDMYLocal(patchLimpio.fechaRenovacion || "") || patchLimpio.fechaRenovacion}`);
+  if (patchLimpio.plataforma && normalizarPlataforma(patchLimpio.plataforma) !== normalizarPlataforma(actual.plataforma || ""))
+    cambios.push(`Plataforma: ${humanPlataforma(actual.plataforma)} → ${humanPlataforma(patchLimpio.plataforma)}`);
+  const vendedorAnterior = vendedorEfectivoServicio(actual, resultado.cliente || {}).vendedor;
+  const vendedorSiguiente = vendedorEfectivoServicio(siguiente, resultado.cliente || {}).vendedor;
+  if (normVendedor(vendedorAnterior) !== normVendedor(vendedorSiguiente))
+    cambios.push(`Vendedor responsable: ${vendedorAnterior || "-"} → ${vendedorSiguiente || "-"}`);
+
+  if (cambios.length) {
+    await registrarEventoHistorial(id, {
+      tipo: "servicio_editado",
+      descripcion: cambios.join(" | "),
+      plataforma: siguiente.plataforma,
+      correo: siguiente.correo,
+      correoAnterior: actual.correo,
+      clave: getClaveServicioLocal(siguiente, siguiente.plataforma),
+      pin: getPinServicioLocal(siguiente, siguiente.plataforma),
+      precioAnterior: actual.precio,
+      fechaAnterior: actual.fechaRenovacion,
+    });
+  }
+
+  return { ok: true, servicio: siguiente, servicioIndex: resultado.actualIdx, sync };
+}
+
+async function addPerfilTx(clientId, idx, perfil = {}, compraId = "") {
+  const id = String(clientId || "").trim();
+  const perfilEntrada = {
+    ...perfil,
+    perfilId: String(perfil.perfilId || recordIdLocal("perfil"))
+  };
+  const resultado = await mutarServiciosClienteTx(id, ({ cliente, servicios }) => {
+    const actualIdx = resolverIndiceCompraLocal(servicios, idx, compraId);
+    if (actualIdx === -1) throw new Error("Servicio inválido.");
+    const actual = servicios[actualIdx] || {};
+    const perfiles = perfilesServicioLocal(actual, cliente.nombrePerfil || "");
+    perfiles.push({
+    perfilId: perfilEntrada.perfilId,
+    nombre: String(perfil.nombre || perfil.perfil || "").trim(),
+    perfil: String(perfil.perfil || perfil.nombre || "").trim(),
+    correo: perfil.correo || "", clave: perfil.clave || "", pin: perfil.pinPerfil ?? perfil.pin ?? ""
+  });
+  const siguiente = normalizarCompraLocal({ ...actual, perfiles }, cliente.nombrePerfil || "", actual);
+  validarCompraLocal(siguiente);
+    servicios[actualIdx] = siguiente;
+    return { servicios, actual, siguiente, actualIdx, nombreTitular: cliente.nombrePerfil || "" };
+  });
+  const sync = await sincronizarCompraInventarioSeguroLocal(resultado.actual, resultado.siguiente, resultado.nombreTitular || "");
+  cacheInvalidatePrefix(`clientes:doc:${id}`);
+  cacheInvalidatePrefix("renovaciones:");
+  await registrarEventoHistorial(id, {
+    tipo: "perfil_agregado", descripcion: `Se añadió ${perfil.nombre || "un perfil"} a la compra ${humanPlataforma(resultado.actual.plataforma || "")}`,
+    plataforma: resultado.actual.plataforma || "", correo: perfil.correo || "", pin: perfil.pinPerfil ?? perfil.pin ?? ""
+  });
+  return { ok: true, servicio: resultado.siguiente, servicioIndex: resultado.actualIdx, perfilIndex: resultado.siguiente.perfiles.length - 1, sync };
+}
+
+async function patchPerfilTx(clientId, idx, perfilIndex, patch = {}, compraId = "", perfilId = "") {
+  const id = String(clientId || "").trim();
+  const resultado = await mutarServiciosClienteTx(id, ({ cliente, servicios }) => {
+    const actualIdx = resolverIndiceCompraLocal(servicios, idx, compraId);
+    if (actualIdx === -1) throw new Error("Servicio inválido.");
+    const actual = servicios[actualIdx] || {};
+    const perfiles = perfilesServicioLocal(actual, cliente.nombrePerfil || "");
+    let actualPerfilIndex = Number(perfilIndex);
+    const perfilIdBuscado = String(perfilId || "").trim();
+    if (perfilIdBuscado) actualPerfilIndex = perfiles.findIndex((p) => String(p?.perfilId || "") === perfilIdBuscado);
+    if (!Number.isInteger(actualPerfilIndex) || actualPerfilIndex < 0 || actualPerfilIndex >= perfiles.length) throw new Error("Perfil inválido.");
+    perfiles[actualPerfilIndex] = { ...perfiles[actualPerfilIndex], ...patch };
+    if (patch.nombre != null && patch.perfil == null) perfiles[actualPerfilIndex].perfil = patch.nombre;
+    const siguiente = normalizarCompraLocal({ ...actual, perfiles }, cliente.nombrePerfil || "", actual);
+  validarCompraLocal(siguiente);
+    servicios[actualIdx] = siguiente;
+    return { servicios, actual, siguiente, actualIdx, actualPerfilIndex, nombreTitular: cliente.nombrePerfil || "" };
+  });
+  const sync = await sincronizarCompraInventarioSeguroLocal(resultado.actual, resultado.siguiente, resultado.nombreTitular || "");
+  cacheInvalidatePrefix(`clientes:doc:${id}`);
+  cacheInvalidatePrefix("renovaciones:");
+  await registrarEventoHistorial(id, {
+    tipo: "perfil_editado", descripcion: `Se editó el perfil ${resultado.siguiente.perfiles[resultado.actualPerfilIndex]?.nombre || resultado.actualPerfilIndex + 1} de ${humanPlataforma(resultado.actual.plataforma || "")}`,
+    plataforma: resultado.actual.plataforma || "", correo: resultado.siguiente.perfiles[resultado.actualPerfilIndex]?.correo || "", pin: resultado.siguiente.perfiles[resultado.actualPerfilIndex]?.pin || ""
+  });
+  return { ok: true, servicio: resultado.siguiente, servicioIndex: resultado.actualIdx, perfilIndex: resultado.actualPerfilIndex, sync };
+}
+
+async function eliminarPerfilTx(clientId, idx, perfilIndex, compraId = "", perfilId = "") {
+  const id = String(clientId || "").trim();
+  const resultado = await mutarServiciosClienteTx(id, ({ cliente, servicios }) => {
+    const actualIdx = resolverIndiceCompraLocal(servicios, idx, compraId);
+    if (actualIdx === -1) throw new Error("Servicio inválido.");
+    const actual = servicios[actualIdx] || {};
+    const perfiles = perfilesServicioLocal(actual, cliente.nombrePerfil || "");
+  if (perfiles.length <= 1) throw new Error("Es el único perfil. Para quitarlo, elimine la compra completa.");
+    let actualPerfilIndex = Number(perfilIndex);
+    const perfilIdBuscado = String(perfilId || "").trim();
+    if (perfilIdBuscado) actualPerfilIndex = perfiles.findIndex((p) => String(p?.perfilId || "") === perfilIdBuscado);
+    if (!Number.isInteger(actualPerfilIndex) || actualPerfilIndex < 0 || actualPerfilIndex >= perfiles.length) throw new Error("Perfil inválido.");
+    const eliminado = perfiles.splice(actualPerfilIndex, 1)[0];
+    const siguiente = normalizarCompraLocal({ ...actual, perfiles }, cliente.nombrePerfil || "", actual);
+    servicios[actualIdx] = siguiente;
+    return { servicios, actual, siguiente, eliminado, actualIdx, actualPerfilIndex, nombreTitular: cliente.nombrePerfil || "" };
+  });
+  const sync = await sincronizarCompraInventarioSeguroLocal(resultado.actual, resultado.siguiente, resultado.nombreTitular || "");
+  cacheInvalidatePrefix(`clientes:doc:${id}`);
+  cacheInvalidatePrefix("renovaciones:");
+  await registrarEventoHistorial(id, {
+    tipo: "perfil_eliminado", descripcion: `Se quitó ${resultado.eliminado.nombre || "un perfil"} de la compra ${humanPlataforma(resultado.actual.plataforma || "")}`,
+    plataforma: resultado.actual.plataforma || "", correo: resultado.eliminado.correo || "", pin: resultado.eliminado.pin || ""
+  });
+  return { ok: true, servicio: resultado.siguiente, servicioIndex: resultado.actualIdx, perfilIndex: resultado.actualPerfilIndex, eliminado: resultado.eliminado, sync };
+}
+
+async function sincronizarCuentaEnComprasTx({ plataforma = "", correo = "", nuevaClave, nuevoCorreo, asignaciones = [] } = {}) {
+  const plat = normalizarPlataforma(plataforma);
+  const acceso = normalizeIdentByPlatformLocal(plat, correo);
+  const referencias = (Array.isArray(asignaciones) ? asignaciones : []).map((item) => ({
+    clientId: String(item?.clienteId || item?.clientId || "").trim(),
+    compraId: String(item?.compraId || "").trim(),
+    perfilId: String(item?.perfilId || "").trim(),
+  })).filter((item) => item.clientId || item.compraId || item.perfilId);
+  const snap = await db.collection(CLIENTES_COLLECTION).get();
+  let perfilesActualizados = 0, documentosActualizados = 0;
+  for (const doc of snap.docs) {
+    const resultado = await db.runTransaction(async (tx) => {
+      const actualDoc = await tx.get(doc.ref);
+      if (!actualDoc.exists) return { changed: false, perfilesActualizados: 0 };
+      const data = actualDoc.data() || {};
+      if (String(data.consolidadoEn || "").trim()) return { changed: false, perfilesActualizados: 0 };
+      const servicios = Array.isArray(data.servicios) ? data.servicios : [];
+      const refsCliente = referencias.filter((item) => !item.clientId || item.clientId === doc.id);
+      let changed = false;
+      let perfilesCambiados = 0;
+      const next = servicios.map((servicio) => {
+        if (normalizarPlataforma(servicio?.plataforma || "") !== plat) return servicio;
+        const perfiles = Array.isArray(servicio?.perfiles) && servicio.perfiles.length ? servicio.perfiles : null;
+        const compraId = String(servicio?.compraId || "").trim();
+        const enlaceServicio = refsCliente.some((item) =>
+          (item.compraId && compraId && item.compraId === compraId) ||
+          (item.perfilId && Array.isArray(perfiles) && perfiles.some((perfil) => String(perfil?.perfilId || perfil?.id || "").trim() === item.perfilId))
+        );
+        if (!perfiles) {
+          if (!enlaceServicio && normalizeIdentByPlatformLocal(plat, servicio?.correo || "") !== acceso) return servicio;
+          const copy = { ...servicio };
+          if (nuevoCorreo != null) copy.correo = normalizeIdentByPlatformLocal(plat, nuevoCorreo);
+          if (nuevaClave != null) copy.clave = String(nuevaClave || "").trim();
+          perfilesCambiados++;
+          changed = true;
+          return copy;
+        }
+        let localChanged = false;
+        const nextProfiles = perfiles.map((perfil) => {
+          const perfilId = String(perfil?.perfilId || perfil?.id || "").trim();
+          const enlacePerfil = enlaceServicio || refsCliente.some((item) => item.perfilId && perfilId && item.perfilId === perfilId);
+          if (!enlacePerfil && normalizeIdentByPlatformLocal(plat, perfil?.correo || servicio?.correo || "") !== acceso) return perfil;
+          const copy = { ...(perfil || {}) };
+          if (nuevoCorreo != null) copy.correo = normalizeIdentByPlatformLocal(plat, nuevoCorreo);
+          if (nuevaClave != null) copy.clave = String(nuevaClave || "").trim();
+          perfilesCambiados++;
+          localChanged = true;
+          return copy;
+        });
+        if (!localChanged) return servicio;
+        changed = true;
+        const copy = { ...servicio, perfiles: nextProfiles };
+        const principal = nextProfiles[0] || {};
+        copy.correo = principal.correo || copy.correo || "";
+        copy.clave = principal.clave != null ? principal.clave : copy.clave || "";
+        return copy;
+      });
+      if (changed) {
+        tx.set(doc.ref, {
+          servicios: next,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        }, { merge: true });
+      }
+      return { changed, perfilesActualizados: perfilesCambiados };
+    });
+    perfilesActualizados += Number(resultado.perfilesActualizados || 0);
+    if (resultado.changed) {
+      documentosActualizados++;
+      cacheInvalidatePrefix(`clientes:doc:${doc.id}`);
+      cacheInvalidatePrefix("renovaciones:");
+    }
+  }
+  return { ok: true, perfilesActualizados, documentosActualizados };
+}
+
+// ===============================
+// ✅ ELIMINAR SERVICIO (con limpieza de inventario + historial)
+// ===============================
+async function eliminarServicioTx(clientId, idx, compraId = "", options = {}) {
+  const id = String(clientId || "").trim();
+  const actor = options.actor || {};
+  const operationId = String(options.operationId || integrity.makeWindowOperationKey(
+    "delete-service", [id, String(compraId || idx || ""), actor?.userId || actor?.id || ""], 120000
+  ));
+  const resultado = await mutarServiciosClienteTx(id, async ({ cliente, servicios, ref, tx }) => {
+    const trashRef = integrity.makeTrashRef(operationId);
+    const oldTrash = await tx.get(trashRef);
+    if (oldTrash.exists) {
+      const t = oldTrash.data() || {};
+      const snap = t.snapshot || {};
+      return {
+        servicios,
+        eliminado: snap.servicio || null,
+        actualIdx: Number(snap.index ?? idx),
+        nombreTitular: cliente.nombrePerfil || "",
+        papeleraId: trashRef.id,
+        duplicate: true,
+        skipWrite: true,
+      };
+    }
+    const actualIdx = resolverIndiceCompraLocal(servicios, idx, compraId);
+    if (actualIdx === -1) throw new Error("Servicio inválido.");
+    const eliminado = servicios[actualIdx];
+    const trash = await integrity.embeddedTrashInTransaction(tx, {
+      kind: "servicio_cliente",
+      sourceCollection: CLIENTES_COLLECTION,
+      sourceId: id,
+      sourcePath: ref.path,
+      snapshot: { servicio: eliminado, index: actualIdx },
+      actor,
+      operationId,
+      metadata: {
+        cliente: cliente.nombrePerfil || cliente.nombre || "Cliente",
+        telefono: cliente.telefono || "",
+        compraId: eliminado?.compraId || compraId || "",
+        plataforma: eliminado?.plataforma || "",
+      },
+    });
+    if (trash.duplicate) {
+      return { servicios, eliminado, actualIdx, nombreTitular: cliente.nombrePerfil || "", papeleraId: trash.trashId, duplicate: true, skipWrite: true };
+    }
+    servicios.splice(actualIdx, 1);
+    return { servicios, eliminado, actualIdx, nombreTitular: cliente.nombrePerfil || "", papeleraId: trash.trashId, duplicate: false };
+  });
+  const eliminado = resultado.eliminado;
+  if (resultado.duplicate) {
+    return { ok: true, duplicate: true, eliminado, servicioIndex: resultado.actualIdx, nombreCliente: resultado.nombreTitular || "", sync: { ok: true, omitido: true }, papeleraId: resultado.papeleraId };
+  }
+  const sync = await sincronizarCompraInventarioSeguroLocal(eliminado, null, resultado.nombreTitular || "");
+  cacheInvalidatePrefix(`clientes:doc:${id}`);
+  cacheInvalidatePrefix("renovaciones:");
+
+  await registrarEventoHistorial(id, {
+    tipo: "servicio_eliminado",
+    descripcion: `Se eliminó ${humanPlataforma(eliminado.plataforma || "")} con ${cantidadPerfilesServicioLocal(eliminado, resultado.nombreTitular || "")} perfil(es). Papelera: ${resultado.papeleraId}`,
+    plataforma: eliminado.plataforma || "",
+    correo: eliminado.correo || "",
+    clave: getClaveServicioLocal(eliminado, eliminado.plataforma || ""),
+    pin: getPinServicioLocal(eliminado, eliminado.plataforma || ""),
+    precio: eliminado.precio || 0,
+    fechaRenovacion: eliminado.fechaRenovacion || "",
+    papeleraId: resultado.papeleraId,
+  });
+
+  return { ok: true, eliminado, servicioIndex: resultado.actualIdx, nombreCliente: resultado.nombreTitular || "", sync, papeleraId: resultado.papeleraId };
+}
+
+async function renovarServicioTx(clientId, idx, { dias = 0, fechaExacta = "", compraId = "", operationId = "", pagoExtra = null } = {}) {
+  // HOTFIX 2026-09-28:
+  // La renovación debe ser una operación CRM simple y no depender de la capa
+  // de idempotencia/papelera. Esa capa continúa activa para eliminaciones y
+  // otras operaciones destructivas, pero no puede bloquear una renovación.
+  const id = String(clientId || "").trim();
+  const renovadoAt = new Date();
+  const resultado = await mutarServiciosClienteTx(id, ({ cliente, servicios }) => {
+    const actualIdx = resolverIndiceCompraLocal(servicios, idx, compraId);
+    if (actualIdx === -1) throw new Error("Servicio inválido.");
+
+    const anterior = servicios[actualIdx] || {};
+    const fechaAnterior = String(anterior.fechaRenovacion || "");
+    const fechaNueva = fechaExacta
+      ? String(fechaExacta || "").trim()
+      : addDaysDMY(isFechaDMY(fechaAnterior) ? fechaAnterior : hoyDMY(), Number(dias || 0));
+
+    if (!isFechaDMY(fechaNueva)) throw new Error("Fecha inválida.");
+
+    // Importante: una fecha personalizada NO debe validarse contra los planes
+    // comerciales IPTV. Si la duración no coincide con un plan comercial,
+    // conservamos el plan existente y únicamente cambiamos la fecha.
+    const mesesContratados = mesesContratadosRenovacionLocal(
+      anterior.plataforma || "",
+      anterior.mesesContratados || 1,
+      isFechaDMY(fechaAnterior) ? fechaAnterior : hoyDMY(),
+      fechaNueva
+    );
+
+    const siguiente = {
+      ...anterior,
+      fechaRenovacion: fechaNueva,
+      mesesContratados,
+      ultimaRenovacionAt: renovadoAt,
+      ultimaRenovacionFechaAnterior: fechaAnterior,
+    };
+    // Limpiamos cualquier marcador de una versión anterior del hardening para
+    // que nunca impida volver a renovar la misma compra.
+    delete siguiente.ultimaRenovacionOperacionId;
+
+    servicios[actualIdx] = siguiente;
+    return {
+      servicios,
+      anterior,
+      siguiente,
+      actualIdx,
+      fechaAnterior,
+      fechaNueva,
+      nombreTitular: cliente.nombrePerfil || "",
+    };
+  }, pagoExtra);
+
+  cacheInvalidatePrefix(`clientes:doc:${id}`);
+  cacheInvalidatePrefix("renovaciones:");
+
+  // Sorteos e historial son secundarios: si fallan, la renovación CRM ya
+  // guardada no debe convertirse en un error para el usuario.
+  const compraEvento = String(resultado.siguiente.compraId || `servicio-${resultado.actualIdx}`);
+  let sorteo = { ok: true, creados: 0, omitido: "fecha_sin_cambio" };
+  if (resultado.fechaNueva !== resultado.fechaAnterior) {
+    try {
+      sorteo = await registrarEventoSorteosSeguro({
+        tipo: "renovacion",
+        clientId: id,
+        compraId: compraEvento,
+        fechaEvento: resultado.fechaNueva,
+        eventoId: `renov:${compraEvento}:${resultado.fechaNueva}`,
+        meses: Math.max(1, Math.round(Number(dias || 30) / 30)),
+        clienteNombre: resultado.cliente?.nombrePerfil || resultado.cliente?.nombre || resultado.nombreTitular || "Cliente",
+        telefono: resultado.cliente?.telefono || "",
+        vendedor: resultado.siguiente?.vendedor || resultado.cliente?.vendedor || "",
+        origen: "Telegram",
+      });
+    } catch (e) {
+      logErr("renovarServicioTx.sorteo", e);
+      sorteo = { ok: false, creados: 0, error: String(e?.message || e || "") };
+    }
+  }
+
+  try {
+    await registrarEventoHistorial(id, {
+      tipo: "servicio_renovado",
+      compraId: compraEvento,
+      descripcion: `Se renovó ${humanPlataforma(resultado.siguiente.plataforma || "")}: ${resultado.fechaAnterior || "-"} → ${resultado.fechaNueva}`,
+      plataforma: resultado.siguiente.plataforma || "",
+      correo: resultado.siguiente.correo || "",
+      fechaAnterior: resultado.fechaAnterior,
+      fechaRenovacion: resultado.fechaNueva,
+      meses: Math.max(1, Math.round(Number(dias || 30) / 30)),
+      vendedor: resultado.siguiente?.vendedor || resultado.cliente?.vendedor || "",
+      servicioIndex: resultado.actualIdx,
+      sorteoOk: sorteo?.ok !== false,
+      boletosCreados: Math.max(0, Number(sorteo?.creados) || 0),
+      origen: "Telegram",
+    });
+  } catch (e) {
+    logErr("renovarServicioTx.historial", e);
+  }
+
+  return {
+    ok: true,
+    pagoOperacion: resultado.pagoOperacion || null,
+    fechaAnterior: resultado.fechaAnterior,
+    servicio: resultado.siguiente,
+    servicioIndex: resultado.actualIdx,
+    fechaAnterior: resultado.fechaAnterior,
+    fechaNueva: resultado.fechaNueva,
+    sorteo,
+  };
+}
+
+async function renovarTodosServiciosTx(clientId, { dias = 0, fechaExacta = "", operationId = "", pagoExtra = null } = {}) {
+  // HOTFIX 2026-09-28: misma regla que renovación individual. Renovar TODOS
+  // nunca debe bloquearse por plan IPTV ni por una clave de idempotencia.
+  const id = String(clientId || "").trim();
+  const renovadoAt = new Date();
+
+  const resultado = await mutarServiciosClienteTx(id, ({ cliente, servicios }) => {
+    if (!servicios.length) throw new Error("Este cliente no tiene servicios.");
+
+    const cambios = [];
+    const siguientes = servicios.map((s, index) => {
+      const fechaAnterior = String(s?.fechaRenovacion || "");
+      const base = isFechaDMY(fechaAnterior) ? fechaAnterior : hoyDMY();
+      const fechaNueva = fechaExacta
+        ? String(fechaExacta || "").trim()
+        : addDaysDMY(base, Number(dias || 0));
+
+      if (!isFechaDMY(fechaNueva)) throw new Error("Fecha inválida.");
+
+      cambios.push({
+        compraId: s?.compraId || `servicio-${index}`,
+        fechaAnterior,
+        fechaNueva,
+        vendedor: vendedorEfectivoServicio(s, cliente).vendedor,
+      });
+
+      const mesesContratados = mesesContratadosRenovacionLocal(
+        s?.plataforma || "",
+        s?.mesesContratados || 1,
+        base,
+        fechaNueva
+      );
+
+      const siguiente = {
+        ...(s || {}),
+        fechaRenovacion: fechaNueva,
+        mesesContratados,
+        ultimaRenovacionAt: renovadoAt,
+        ultimaRenovacionFechaAnterior: fechaAnterior,
+      };
+      delete siguiente.ultimaRenovacionOperacionId;
+      return siguiente;
+    });
+
+    return {
+      servicios: siguientes,
+      total: siguientes.length,
+      cambios,
+      fechaExacta: String(fechaExacta || ""),
+      nombreTitular: cliente.nombrePerfil || "",
+    };
+  }, pagoExtra);
+
+  cacheInvalidatePrefix(`clientes:doc:${id}`);
+  cacheInvalidatePrefix("renovaciones:");
+
+  // La actualización CRM ya quedó guardada. Sorteos/auditoría nunca deben
+  // hacer que Telegram responda "Error interno" después de una renovación válida.
+  const sorteos = [];
+  const sorteoPorCompra = new Map();
+  for (const cambio of resultado.cambios || []) {
+    if (cambio.fechaNueva === cambio.fechaAnterior) continue;
+    let sorteo;
+    try {
+      sorteo = await registrarEventoSorteosSeguro({
+        tipo: "renovacion",
+        clientId: id,
+        compraId: cambio.compraId,
+        fechaEvento: cambio.fechaNueva,
+        eventoId: `renov:${cambio.compraId}:${cambio.fechaNueva}`,
+        meses: Math.max(1, Math.round(Number(dias || 30) / 30)),
+        clienteNombre: resultado.cliente?.nombrePerfil || resultado.cliente?.nombre || resultado.nombreTitular || "Cliente",
+        telefono: resultado.cliente?.telefono || "",
+        vendedor: cambio.vendedor || resultado.cliente?.vendedor || "",
+        origen: "Telegram",
+      });
+    } catch (e) {
+      logErr("renovarTodosServiciosTx.sorteo", e);
+      sorteo = { ok: false, creados: 0, error: String(e?.message || e || "") };
+    }
+    sorteos.push(sorteo);
+    sorteoPorCompra.set(String(cambio.compraId || ""), sorteo);
+  }
+
+  try {
+    await registrarEventoHistorial(id, {
+      tipo: "servicios_renovados",
+      cambios: (resultado.cambios || []).map((item, index) => {
+        const sorteo = sorteoPorCompra.get(String(item.compraId || ""));
+        return {
+          compraId: item.compraId,
+          servicioIndex: index,
+          fechaAnterior: item.fechaAnterior,
+          fechaRenovacion: item.fechaNueva,
+          vendedor: item.vendedor,
+          meses: Math.max(1, Math.round(Number(dias || 30) / 30)),
+          sorteoOk: sorteo?.ok !== false,
+          boletosCreados: Math.max(0, Number(sorteo?.creados) || 0),
+        };
+      }),
+      vendedor: resultado.cliente?.vendedor || "",
+      origen: "Telegram",
+      descripcion: `Se renovaron ${resultado.total} servicio(s)${resultado.fechaExacta ? ` a ${resultado.fechaExacta}` : ` por ${Number(dias || 0)} días`}`,
+    });
+  } catch (e) {
+    logErr("renovarTodosServiciosTx.historial", e);
+  }
+
+  return {
+    ok: true,
+    pagoOperacion: resultado.pagoOperacion || null,
+    total: resultado.total,
+    servicios: resultado.servicios,
+    sorteos,
+  };
+}
+
+async function eliminarServiciosTx(clientId, referencias = [], options = {}) {
+  const id = String(clientId || "").trim();
+  const refs = (Array.isArray(referencias) ? referencias : []).map((r) =>
+    typeof r === "number" ? { idx: r, compraId: "" } : { idx: Number(r?.idx), compraId: String(r?.compraId || "") }
+  );
+  if (!refs.length) throw new Error("No seleccionó servicios para eliminar.");
+  const actor = options.actor || {};
+  const operationId = String(options.operationId || integrity.makeWindowOperationKey(
+    "delete-services", [id, refs.map(r => r.compraId || r.idx).sort(), actor?.userId || actor?.id || ""], 120000
+  ));
+  const resultado = await mutarServiciosClienteTx(id, async ({ cliente, servicios, ref, tx }) => {
+    const trashRef = integrity.makeTrashRef(operationId);
+    const oldTrash = await tx.get(trashRef);
+    if (oldTrash.exists) {
+      const t = oldTrash.data() || {};
+      const entries = Array.isArray(t.snapshot?.servicios) ? t.snapshot.servicios : [];
+      return { servicios, eliminados: entries.map(x => x.servicio).filter(Boolean), nombreTitular: cliente.nombrePerfil || "", papeleraId: trashRef.id, duplicate: true, skipWrite: true };
+    }
+    const indices = new Set();
+    refs.forEach((r) => {
+      const pos = resolverIndiceCompraLocal(servicios, r.idx, r.compraId);
+      if (pos !== -1) indices.add(pos);
+    });
+    if (!indices.size) throw new Error("Los servicios seleccionados ya no existen.");
+    const entries = [...indices].sort((a,b)=>a-b).map(pos => ({ index: pos, servicio: servicios[pos] }));
+    const trash = await integrity.embeddedTrashInTransaction(tx, {
+      kind: "servicios_cliente",
+      sourceCollection: CLIENTES_COLLECTION,
+      sourceId: id,
+      sourcePath: ref.path,
+      snapshot: { servicios: entries },
+      actor,
+      operationId,
+      metadata: { cliente: cliente.nombrePerfil || cliente.nombre || "Cliente", telefono: cliente.telefono || "", cantidad: entries.length },
+    });
+    const eliminados = [];
+    [...indices].sort((a, b) => b - a).forEach((pos) => {
+      eliminados.unshift(servicios[pos]);
+      servicios.splice(pos, 1);
+    });
+    return { servicios, eliminados, nombreTitular: cliente.nombrePerfil || "", papeleraId: trash.trashId, duplicate: false };
+  });
+  if (resultado.duplicate) return { ok: true, duplicate: true, eliminados: resultado.eliminados, servicios: resultado.servicios, sync: [], papeleraId: resultado.papeleraId };
+  const sync = [];
+  for (const servicio of resultado.eliminados) sync.push(await sincronizarCompraInventarioSeguroLocal(servicio, null, resultado.nombreTitular || ""));
+  cacheInvalidatePrefix(`clientes:doc:${id}`);
+  cacheInvalidatePrefix("renovaciones:");
+  await registrarEventoHistorial(id, {
+    tipo: "servicios_eliminados",
+    papeleraId: resultado.papeleraId,
+    descripcion: `Se eliminaron ${resultado.eliminados.length} servicio(s): ${resultado.eliminados.map((s) => humanPlataforma(s?.plataforma || "")).join(", ")}`
+  });
+  return { ok: true, eliminados: resultado.eliminados, servicios: resultado.servicios, sync, papeleraId: resultado.papeleraId };
+}
+
+async function eliminarClienteConPapelera(clientId, options = {}) {
+  const id = String(clientId || "").trim();
+  if (!id) throw new Error("Cliente inválido.");
+  const actor = options.actor || {};
+  const operationId = String(options.operationId || integrity.makeWindowOperationKey("delete-client", [id, actor?.userId || actor?.id || ""], 120000));
+  const ref = db.collection(CLIENTES_COLLECTION).doc(id);
+  const snap = await ref.get();
+  if (!snap.exists) {
+    // Doble clic/reintento: si la operación ya creó su respaldo, devolver el
+    // mismo resultado en vez de convertir el reintento en un error 404.
+    const previous = await integrity.makeTrashRef(operationId).get();
+    if (previous.exists) {
+      const t = previous.data() || {};
+      const clientePrevio = { id, ...(t.snapshot || {}) };
+      return { ok: true, duplicate: true, cliente: clientePrevio, papeleraId: previous.id, sync: [] };
+    }
+    throw new Error("Cliente no encontrado.");
+  }
+  const cliente = { id: snap.id, ...(snap.data() || {}) };
+  const servicios = heredarVendedorServicios(Array.isArray(cliente.servicios) ? cliente.servicios : [], cliente);
+  // Primero aseguramos el snapshot + borrado atómico. Solo el primer intento
+  // libera inventario; un doble clic que recibe duplicate no repite efectos.
+  const trashed = await integrity.trashDocument({
+    ref, kind: "cliente", actor, operationId,
+    metadata: { cliente: cliente.nombrePerfil || cliente.nombre || "Cliente", telefono: cliente.telefono || "", servicios: servicios.length },
+  });
+  if (trashed.duplicate) {
+    return { ok: true, duplicate: true, cliente: { id, ...(trashed.snapshot || cliente) }, papeleraId: trashed.trashId, sync: [] };
+  }
+  const sync = [];
+  for (const servicio of servicios) sync.push(await sincronizarCompraInventarioSeguroLocal(servicio, null, cliente.nombrePerfil || cliente.nombre || ""));
+  cacheInvalidatePrefix(`clientes:doc:${id}`);
+  cacheInvalidatePrefix("renovaciones:");
+  return { ok: true, duplicate: false, cliente, papeleraId: trashed.trashId, sync };
+}
+
+async function restaurarClienteDesdePapelera(papeleraId, actor = {}) {
+  const entry = await integrity.getTrashEntry(papeleraId);
+  if (!entry || entry.kind !== "cliente") throw Object.assign(new Error("papelera_cliente_invalida"), { status: 404, publicError: "papelera_cliente_invalida" });
+  const restored = await integrity.restoreDocumentTrash(papeleraId, actor);
+  const cliente = restored.snapshot || entry.snapshot || {};
+  const id = String(restored.source?.id || entry.source?.id || "");
+  const servicios = heredarVendedorServicios(Array.isArray(cliente.servicios) ? cliente.servicios : [], cliente);
+  const sync = [];
+  for (const servicio of servicios) sync.push(await sincronizarCompraInventarioSeguroLocal(null, servicio, cliente.nombrePerfil || cliente.nombre || ""));
+  cacheInvalidatePrefix(`clientes:doc:${id}`);
+  cacheInvalidatePrefix("renovaciones:");
+  if (!restored.duplicate) await registrarEventoHistorial(id, { tipo: "cliente_restaurado", papeleraId, descripcion: "Cliente restaurado desde Papelera de Integridad" });
+  return { ...restored, clienteId: id, sync };
+}
+
+async function restaurarServiciosDesdePapelera(papeleraId, actor = {}) {
+  const trashRef = db.collection(integrity.TRASH_COLLECTION).doc(String(papeleraId || "").trim());
+  let restoredEntries = [];
+  const result = await db.runTransaction(async tx => {
+    const trashSnap = await tx.get(trashRef);
+    if (!trashSnap.exists) throw Object.assign(new Error("papelera_no_existe"), { status: 404, publicError: "papelera_no_existe" });
+    const t = trashSnap.data() || {};
+    if (!["servicio_cliente", "servicios_cliente"].includes(t.kind)) throw Object.assign(new Error("papelera_servicio_invalida"), { status: 409, publicError: "papelera_servicio_invalida" });
+    if (t.status === "restored") return { duplicate: true, clienteId: t.source?.id || "", entries: [] };
+    const clientId = String(t.source?.id || "");
+    const clientRef = db.collection(CLIENTES_COLLECTION).doc(clientId);
+    const clientSnap = await tx.get(clientRef);
+    if (!clientSnap.exists) throw Object.assign(new Error("cliente_no_existe"), { status: 404, publicError: "cliente_no_existe" });
+    const cliente = clientSnap.data() || {};
+    const servicios = heredarVendedorServicios(Array.isArray(cliente.servicios) ? cliente.servicios : [], cliente);
+    const entries = t.kind === "servicio_cliente"
+      ? [{ index: Number(t.snapshot?.index ?? servicios.length), servicio: t.snapshot?.servicio }]
+      : (Array.isArray(t.snapshot?.servicios) ? t.snapshot.servicios : []);
+    const valid = entries.filter(x => x?.servicio);
+    for (const item of valid.sort((a,b)=>Number(a.index||0)-Number(b.index||0))) {
+      const compraId = String(item.servicio?.compraId || "");
+      if (compraId && servicios.some(s => String(s?.compraId || "") === compraId)) continue;
+      const pos = Math.max(0, Math.min(Number(item.index ?? servicios.length), servicios.length));
+      servicios.splice(pos, 0, item.servicio);
+      restoredEntries.push(item);
+    }
+    const resumen = camposResumenVendedores(servicios, cliente);
+    tx.set(clientRef, { servicios, ...resumen, dataVersion: admin.firestore.FieldValue.increment(1), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+    await integrity.markEmbeddedTrashRestoredInTransaction(tx, trashRef, actor, { restoredItems: restoredEntries.length });
+    return { duplicate: false, clienteId: clientId, entries: restoredEntries, cliente: { ...cliente, servicios } };
+  });
+  if (result.duplicate) return { ok: true, duplicate: true, clienteId: result.clienteId, restaurados: 0, sync: [] };
+  const sync = [];
+  for (const item of restoredEntries) sync.push(await sincronizarCompraInventarioSeguroLocal(null, item.servicio, result.cliente?.nombrePerfil || result.cliente?.nombre || ""));
+  cacheInvalidatePrefix(`clientes:doc:${result.clienteId}`);
+  cacheInvalidatePrefix("renovaciones:");
+  await registrarEventoHistorial(result.clienteId, { tipo: "servicios_restaurados", papeleraId, descripcion: `Se restauraron ${restoredEntries.length} servicio(s) desde Papelera` });
+  return { ok: true, duplicate: false, clienteId: result.clienteId, restaurados: restoredEntries.length, sync };
+}
+
+// ===============================
+// ✅ MENÚ DE LISTA RENOVACIÓN
+// ===============================
+async function menuListaRenovacion(chatId, clientId) {
+  const c = await getCliente(clientId);
+  if (!c) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
+
+  const servicios = serviciosConIndiceOriginal(Array.isArray(c.servicios) ? c.servicios : []);
+  if (!servicios.length) {
+    return upsertPanel(chatId, "🔄 *RENOVACIONES*\n\nEste cliente no tiene servicios.", [
+      [{ text: "➕ Agregar servicio", callback_data: `cli:serv:add:${clientId}` }],
+      [{ text: "⬅️ Volver Ficha",   callback_data: `cli:view:${clientId}` }],
+      [{ text: "🏠 Inicio",          callback_data: "go:inicio" }],
+    ]);
+  }
+
+  const kb = servicios.map((s) => [{
+    text: safeBtnLabel(`${iconPlataforma(s.plataforma || "")} ${humanPlataforma(s.plataforma || "")} · ${cantidadPerfilesServicioLocal(s, c.nombrePerfil || "")} perfil(es) — ${s.fechaRenovacion || "sin fecha"}`),
+    callback_data: `cli:ren:one:${clientId}:${compraSelectorLocal(s, s.idxOriginal)}`,
+  }]);
+  kb.push([
+    { text: "⏫ Todos +30 días", callback_data: `cli:ren:all:ask:${clientId}` },
+    { text: "⏫ Todos +31 días", callback_data: `cli:ren:all31:ask:${clientId}` },
+  ]);
+  kb.push([{ text: "📅 Todos — fecha personalizada", callback_data: `cli:ren:allcustom:ask:${clientId}` }]);
+  kb.push([{ text: "🗑️ Baja masiva de servicios", callback_data: `cli:baja:menu:${clientId}` }]);
+  kb.push([{ text: "⬅️ Volver Ficha", callback_data: `cli:view:${clientId}` }, { text: "🏠 Inicio", callback_data: "go:inicio" }]);
+
+  return upsertPanel(chatId,
+    `🔄 *RENOVAR SERVICIO*\n👤 *${escMD(c.nombrePerfil || "Cliente")}*\n\nSeleccione el servicio a gestionar:`,
+    kb
+  );
+}
+
+// ===============================
+// ✅ MENÚ ACCIÓN DE RENOVACIÓN — 4 opciones por servicio
+// ===============================
+async function menuRenovacionServicio(chatId, clientId, selector) {
+  const c = await getCliente(clientId);
+  if (!c) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
+
+  const servicios = Array.isArray(c.servicios) ? c.servicios : [];
+  const idx = resolverIndiceCompraSelectorLocal(servicios, selector);
+  if (idx < 0 || idx >= servicios.length) return bot.sendMessage(chatId, "⚠️ Esa compra cambió o ya no existe. Abra nuevamente la ficha.");
+
+  const s = servicios[idx];
+  const compraSel = compraSelectorLocal(s, idx);
+  const est = getEstadoServicio(s.fechaRenovacion || "");
+
+  const txt =
+    `🔄 *GESTIONAR RENOVACIÓN*\n\n` +
+    `👤 *${escMD(c.nombrePerfil || "Cliente")}*\n` +
+    `${iconPlataforma(s.plataforma || "")} *${escMD(humanPlataforma(s.plataforma || ""))}*\n` +
+    renderCredencialesServicioLocal(s, true, "") +
+    `💰 ${escMD(`${Number(s.precio || 0).toFixed(2)} Lps`)}\n` +
+    `📅 Vence: ${escMD(fechaDMYLocal(s.fechaRenovacion || "") || "-")} — ${est.emoji} ${escMD(est.texto)}\n\n` +
+    `¿Qué pasó con este servicio?`;
+
+  return upsertPanel(chatId, txt, [
+    [
+      { text: "✅ +30 días", callback_data: `cli:ren:auto:${clientId}:${compraSel}` },
+      { text: "✅ +31 días", callback_data: `cli:ren:auto31:${clientId}:${compraSel}` },
+    ],
+    [{ text: "📅 Renovó — otra fecha", callback_data: `cli:ren:manual:${clientId}:${compraSel}` }],
+    [{ text: "🔄 Cambió de servicio", callback_data: `cli:ren:cambio:${clientId}:${compraSel}` }],
+    [{ text: "❌ No renovó — eliminar", callback_data: `cli:ren:noren:ask:${clientId}:${compraSel}` }],
+    [{ text: "⬅️ Volver",                    callback_data: `cli:ren:list:${clientId}` }, { text: "🏠 Inicio", callback_data: "go:inicio" }],
+  ]);
+}
+
+// ===============================
+// ✅ PANEL DE RENOVACIONES DEL DÍA CON BOTONES
+// ===============================
+async function enviarPanelRenovacionesConAcciones(chatId, fecha, rows = []) {
+  if (!rows.length) {
+    return bot.sendMessage(chatId, `📅 *Renovaciones del ${escMD(fecha)}*\n\n_No hay renovaciones para esta fecha._`, { parse_mode: "Markdown" });
+  }
+
+  let total = 0;
+  rows.forEach((x) => { total += Number(x.precio || 0); });
+  const totalPerfiles = rows.reduce((sum, x) => sum + Number(x.cantidadPerfiles || cantidadPerfilesServicioLocal(x, x.nombrePerfil || "")), 0);
+
+  let txt =
+    `📅 *RENOVACIONES DEL ${escMD(fecha)}*\n\n` +
+    `*Compras a renovar:* ${rows.length}\n` +
+    `*Perfiles incluidos:* ${totalPerfiles}\n` +
+    `*Total esperado:* ${escMD(`${total.toFixed(2)} Lps`)}\n\n` +
+    `Seleccione una compra para gestionar su renovación:`;
+
+  const kb = rows.slice(0, 20).map((x, i) => [{
+    text: safeBtnLabel(`${i + 1}. ${iconPlataforma(x.plataforma || "")} ${x.nombrePerfil || "Sin nombre"} — ${humanPlataforma(x.plataforma || "")}`),
+    callback_data: `ren:accion:${x.clientId}:${x.idx}`,
+  }]);
+
+  if (rows.length > 20) {
+    kb.push([{ text: `📄 Ver los ${rows.length - 20} restantes como TXT`, callback_data: `txt:hoy` }]);
+  }
+
+  kb.push([{ text: "📄 TXT de todas",  callback_data: "txt:hoy" }]);
+  kb.push([{ text: "⬅️ Volver",        callback_data: "menu:renovaciones" }]);
+  kb.push([{ text: "🏠 Inicio",         callback_data: "go:inicio" }]);
+
+  return upsertPanel(chatId, txt, kb);
+}
+
+async function wizardStart(chatId) {
+  wizard.set(String(chatId), { step: 1, clientId: null, nombre: "", telefono: "", vendedor: "", servicio: {}, servStep: 1 });
+  return upsertPanel(chatId, "👤 *NUEVO CLIENTE*\n\n(1/3) Escriba el *nombre del cliente*: ", [[{ text: "🏠 Inicio", callback_data: "go:inicio" }]]);
+}
+
+async function wizardNext(chatId, rawText = "") {
+  const st = wizard.get(String(chatId));
+  if (!st) return;
+
+  const t = String(rawText || "").trim();
+  if (!t) return bot.sendMessage(chatId, "⚠️ Escriba un valor válido.");
+
+  if (st.step === 1) {
+    st.nombre = t; st.step = 2; wizard.set(String(chatId), st);
+    return bot.sendMessage(chatId, "(2/3) Teléfono del cliente:");
+  }
+
+  if (st.step === 2) {
+    const tel = normalizarTelefonoCliente(t);
+    if (tel.length < 7) return bot.sendMessage(chatId, "⚠️ Teléfono inválido. Escriba al menos 7 dígitos.");
+    st.telefono = tel; st.step = 3; wizard.set(String(chatId), st);
+    return bot.sendMessage(chatId, "(3/3) Vendedor responsable:");
+  }
+
+  if (st.step === 3) {
+    st.vendedor = t; st.step = 4; st.servStep = 1; st.servicio = {};
+    wizard.set(String(chatId), st);
+    return bot.sendMessage(chatId, "📌 Seleccione plataforma del servicio:", { reply_markup: { inline_keyboard: kbPlataformasWiz("wiz:plat", st.clientId) } });
+  }
+
+  if (st.step === 4) {
+    const plat = normalizarPlataforma(st?.servicio?.plataforma || "");
+    if (!plat) return bot.sendMessage(chatId, "⚠️ Primero seleccione la plataforma.");
+
+    if (st.servStep === 2) {
+      if (!validateIdentByPlatformLocal(plat, t)) return bot.sendMessage(chatId, `⚠️ ${getIdentLabelLocal(plat)} inválido.`);
+      st.servicio.correo = normalizeIdentByPlatformLocal(plat, t);
+
+      if (requiereClaveLocal(plat)) {
+        st.servStep = 3; wizard.set(String(chatId), st);
+        return bot.sendMessage(chatId, "(Servicio 3/6) Clave de la cuenta:");
+      }
+
+      if (requierePinLocal(plat)) {
+        st.servStep = 4; wizard.set(String(chatId), st);
+        return bot.sendMessage(chatId, "(Servicio 4/6) PIN del perfil:");
+      }
+
+      st.servStep = 5; wizard.set(String(chatId), st);
+      return bot.sendMessage(chatId, "(Servicio 5/6) Precio (solo número, Lps):");
+    }
+
+    if (st.servStep === 3) {
+      st.servicio.clave = t;
+      if (requierePinLocal(plat)) {
+        st.servStep = 4; wizard.set(String(chatId), st);
+        return bot.sendMessage(chatId, "(Servicio 4/6) PIN del perfil:");
+      }
+
+      st.servStep = 5; wizard.set(String(chatId), st);
+      return bot.sendMessage(chatId, "(Servicio 5/6) Precio (solo número, Lps):");
+    }
+
+    if (st.servStep === 4) {
+      st.servicio.pin = t;
+      st.servStep = 5; wizard.set(String(chatId), st);
+      return bot.sendMessage(chatId, "(Servicio 5/6) Precio (solo número, Lps):");
+    }
+
+    if (st.servStep === 5) {
+      const precio = parseMontoNumber(t);
+      if (!Number.isFinite(precio) || precio <= 0) return bot.sendMessage(chatId, "⚠️ Precio inválido. Escriba solo número.");
+      st.servicio.precio = precio; st.servStep = 6; wizard.set(String(chatId), st);
+      return bot.sendMessage(chatId, "(Servicio 6/6) Fecha renovación (dd/mm/yyyy):");
+    }
+
+    if (st.servStep === 6) {
+      if (!isFechaDMY(t)) return bot.sendMessage(chatId, "⚠️ Fecha inválida. Use dd/mm/yyyy.");
+      st.servicio.fechaRenovacion = t;
+
+      let clientId = st.clientId;
+      if (!clientId) {
+        const existente = await clienteExactoNombreTelefono(st.nombre, st.telefono);
+        if (existente) {
+          clientId = existente.id;
+        } else {
+          const ref = db.collection(CLIENTES_COLLECTION).doc();
+          clientId = ref.id;
+          await ref.set({
+            nombrePerfil: st.nombre, nombre_norm: normTxt(st.nombre),
+            telefono: normalizarTelefonoCliente(st.telefono), telefono_norm: normalizarTelefonoCliente(st.telefono),
+            vendedor: canonicalVendedor(st.vendedor), vendedor_norm: normVendedor(st.vendedor),
+            vendedores: [canonicalVendedor(st.vendedor)], vendedores_norm: [normVendedor(st.vendedor)],
+            clienteCompartido: false,
+            servicios: [],
+            createdAt: admin.firestore.FieldValue.serverTimestamp(),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          });
+
+          await registrarEventoHistorial(clientId, {
+            tipo: "cliente_creado",
+            descripcion: `Cliente creado por vendedor: ${st.vendedor}`,
+          });
+        }
+      }
+
+      const guardado = await addServicioTx(clientId, {
+        plataforma: plat,
+        correo: st.servicio.correo,
+        clave: st.servicio.clave || "",
+        pin: st.servicio.pin || "",
+        perfiles: [{
+          nombre: st.nombre, perfil: st.nombre, correo: st.servicio.correo,
+          clave: st.servicio.clave || "", pin: st.servicio.pin || ""
+        }],
+        precio: st.servicio.precio,
+        fechaRenovacion: st.servicio.fechaRenovacion,
+        vendedor: canonicalVendedor(st.vendedor),
+        vendedor_norm: normVendedor(st.vendedor),
+      });
+
+      wizard.set(String(chatId), { step: 4, clientId, nombre: st.nombre, telefono: st.telefono, vendedor: st.vendedor, servicio: {}, servStep: 1 });
+      // R106: Sublicuentas/Relojes registran el pago de la compra (total + recibido + banco/responsable).
+      // (se abre justo después del mensaje "Compra guardada" para que el orden en el chat sea natural)
+      setTimeout(async () => {
+        try {
+          const finLibro = require("./index_31_finanzas_libro");
+          if (await finLibro.esLibroUser(chatId)) await finLibro.iniciarPagoCompra(chatId, chatId, { clientId: String(clientId), compraId: String(guardado?.servicio?.compraId || ""), plataforma: plat, cliente: st.nombre });
+        } catch (e) { logErr("R106 pago compra wizard", e); }
+      }, 600);
+
+      return bot.sendMessage(chatId, "✅ *Compra guardada correctamente*\n\nTiene un solo precio y una sola fecha. Si esta compra incluye a otra persona (por ejemplo, una promoción 2x1), añádala como perfil aquí:", {
+        parse_mode: "Markdown",
+        reply_markup: { inline_keyboard: [
+          [{ text: "👥 Añadir otro perfil a esta compra", callback_data: `cli:prof:add:${clientId}:${guardado.servicioIndex}` }],
+          [{ text: "➕ Agregar otro servicio distinto", callback_data: `wiz:addmore:${clientId}` }],
+          [{ text: "✅ Finalizar",    callback_data: `wiz:finish:${clientId}` }],
+          [{ text: "🏠 Inicio",       callback_data: "go:inicio" }],
+        ]},
+      });
+    }
+  }
+}
+
+// ===============================
+// ✅ RENOVACIONES OPTIMIZADAS
+// ===============================
+async function obtenerRenovacionesPorFecha(fechaDMY, vendedor = null) {
+  const fecha = String(fechaDMY || "").trim();
+  if (!isFechaDMY(fecha)) return [];
+  const vendedorNorm = vendedor ? normVendedor(vendedor) : "";
+
+  // Lectura compartida por fecha. Los schedulers y menús suelen pedir la misma
+  // fecha varias veces (global + un vendedor por turno); antes cada llamada
+  // descargaba TODA la colección clientes. El caché corto evita esas lecturas
+  // duplicadas sin cambiar la estructura actual de Firestore.
+  const cacheKey = `renovaciones:${fecha}`;
+  let base = cacheGet(cacheKey);
+
+  if (!Array.isArray(base)) {
+    const snap = await require("./index_30_espejo_firestore").getColeccion(CLIENTES_COLLECTION);
+    base = [];
+
+    snap.forEach((d) => {
+      const c = d.data() || {};
+      if (String(c.consolidadoEn || "").trim()) return;
+
+      const servicios = Array.isArray(c.servicios) ? c.servicios : [];
+      servicios.forEach((s, idx) => {
+        const fechaServicio = fechaDMYLocal(s?.fechaRenovacion || "");
+        if (fechaServicio !== fecha) return;
+        const vendedorServicio = vendedorEfectivoServicio(s, c).vendedor;
+        base.push({
+          clientId: d.id, idx,
+          nombrePerfil: c.nombrePerfil || "Sin nombre",
+          telefono: c.telefono || "-",
+          vendedor: vendedorServicio || "-",
+          plataforma: s.plataforma || "",
+          correo: s.correo || "",
+          clave: getClaveServicioLocal(s, s.plataforma || ""),
+          pin: getPinServicioLocal(s, s.plataforma || ""),
+          perfiles: perfilesServicioLocal(s, c.nombrePerfil || ""),
+          cantidadPerfiles: cantidadPerfilesServicioLocal(s, c.nombrePerfil || ""),
+          precio: Number(s.precio || 0),
+          fechaRenovacion: fechaServicio || fecha,
+        });
+      });
+    });
+
+    base.sort((a, b) => {
+      const va = normTxt(a.vendedor || "");
+      const vb = normTxt(b.vendedor || "");
+      if (va !== vb) return va.localeCompare(vb, "es");
+      return normTxt(a.nombrePerfil || "").localeCompare(normTxt(b.nombrePerfil || ""), "es");
+    });
+    cacheSet(cacheKey, base, 30 * 1000);
+  }
+
+  if (!vendedorNorm) return base.slice();
+  return base.filter((x) => normVendedor(x.vendedor || "") === vendedorNorm);
+}
+
+function renovacionesTexto(rows = [], fecha = "", vendedor = null) {
+  const items = Array.isArray(rows) ? rows : [];
+  let txt = `📅 *RENOVACIONES DEL ${escMD(fecha)}*`;
+  if (vendedor) txt += `\n👤 *Vendedor:* ${escMD(vendedor)}`;
+  txt += `\n\n`;
+
+  if (!items.length) { txt += `_No hay renovaciones para esta fecha._`; return txt; }
+
+  let total = 0;
+  items.forEach((x) => { total += Number(x.precio || 0); });
+
+  const totalPerfiles = items.reduce((sum, x) => sum + Number(x.cantidadPerfiles || cantidadPerfilesServicioLocal(x, x.nombrePerfil || "")), 0);
+  txt += `*Compras a renovar:* ${escMD(String(items.length))}\n`;
+  txt += `*Perfiles incluidos:* ${escMD(String(totalPerfiles))}\n`;
+  txt += `*Total esperado:* ${escMD(`${total.toFixed(2)} Lps`)}\n\n`;
+
+  items.forEach((x, i) => {
+    txt += `${i + 1}. ${iconPlataforma(x.plataforma || "")} *${escMD(x.nombrePerfil || "Sin nombre")}*\n`;
+    txt += `   📱 ${escMD(x.telefono || "-")}\n`;
+    txt += `   📦 ${escMD(humanPlataforma(x.plataforma || ""))}\n`;
+    txt += renderCredencialesServicioLocal(x, true, "   ");
+    txt += `   💰 ${escMD(`${Number(x.precio || 0).toFixed(2)} Lps`)}\n`;
+    txt += `   🧾 ${escMD(x.vendedor || "-")}\n\n`;
+  });
+
+  return txt.trim();
+}
+
+function renovacionesTextoPlano(rows = [], fecha = "", vendedor = null) {
+  const items = Array.isArray(rows) ? rows : [];
+  let txt = `RENOVACIONES DEL ${fecha}\n`;
+  if (vendedor) txt += `Vendedor: ${vendedor}\n`;
+  txt += `\n`;
+  if (!items.length) return `${txt}No hay renovaciones para esta fecha.\n`;
+
+  let total = 0;
+  items.forEach((x) => { total += Number(x.precio || 0); });
+
+  const totalPerfiles = items.reduce((sum, x) => sum + Number(x.cantidadPerfiles || cantidadPerfilesServicioLocal(x, x.nombrePerfil || "")), 0);
+  txt += `Compras a renovar: ${items.length}\nPerfiles incluidos: ${totalPerfiles}\nTotal esperado: ${total.toFixed(2)} Lps\n\n`;
+
+  items.forEach((x, i) => {
+    txt += `${i + 1}) ${x.nombrePerfil || "Sin nombre"}\n`;
+    txt += `Telefono: ${x.telefono || "-"}\nPlataforma: ${humanPlataforma(x.plataforma || "")}\n`;
+    txt += renderCredencialesServicioLocal(x, false, "");
+    txt += `Precio: ${Number(x.precio || 0).toFixed(2)} Lps\nVendedor: ${x.vendedor || "-"}\n\n`;
+  });
+
+  return txt;
+}
+
+async function enviarTXT(chatId, rows = [], fecha = "", vendedor = null) {
+  const contenido = renovacionesTextoPlano(rows, fecha, vendedor);
+  const nombre = vendedor
+    ? `renovaciones_${fileSafeName(vendedor, "vendedor").replace(/\.txt$/i, "")}_${String(fecha || "").replace(/\//g, "-")}.txt`
+    : `renovaciones_${String(fecha || "").replace(/\//g, "-")}.txt`;
+  return enviarTxtComoArchivo(chatId, contenido, nombre);
+}
+
+async function enviarTXTATodosHoy(chatId) {
+  const fecha = hoyDMY();
+  const snap = await db.collection(REVENDEDORES_COLLECTION).get();
+  let enviados = 0;
+
+  for (const d of snap.docs) {
+    const rev = d.data() || {};
+    if (!rev.activo || !rev.telegramId || !rev.nombre) continue;
+    const rows = await obtenerRenovacionesPorFecha(fecha, rev.nombre);
+    await enviarTXT(rev.telegramId, rows, fecha, rev.nombre);
+    enviados++;
+  }
+
+  return bot.sendMessage(chatId, `✅ Listo: enviados los TXT por vendedor.\n\nFecha: ${fecha}\nTotal enviados: ${enviados}`);
+}
+
+// ===============================
+// TXT / REPORTES CRM
+// ===============================
+async function reporteClientesTXTGeneral(chatId) {
+  const snap = await require("./index_30_espejo_firestore").getColeccion(CLIENTES_COLLECTION);
+  const rows = snap.docs
+    .map((d) => ({ id: d.id, ...(d.data() || {}) }))
+    .filter((c) => !String(c.consolidadoEn || "").trim());
+  rows.sort((a, b) => normTxt(a.nombrePerfil || "").localeCompare(normTxt(b.nombrePerfil || ""), "es"));
+
+  let txt = "CLIENTES - REPORTE GENERAL\n\n";
+  rows.forEach((c, i) => { txt += `========================================\n${i + 1}) ${clienteResumenTXT(c)}\n`; });
+
+  return enviarTxtComoArchivo(chatId, txt, `clientes_general_${Date.now()}.txt`);
+}
+
+async function reporteClientesSplitPorVendedorTXT(chatId) {
+  const snap = await require("./index_30_espejo_firestore").getColeccion(CLIENTES_COLLECTION);
+  const rows = snap.docs
+    .map((d) => ({ id: d.id, ...(d.data() || {}) }))
+    .filter((c) => !String(c.consolidadoEn || "").trim());
+
+  const groups = {};
+  for (const c of rows) {
+    const resumen = resumenVendedoresCliente(c.servicios || [], c);
+    const vendedores = resumen.vendedores.length ? resumen.vendedores : ["Sin vendedor"];
+    for (const key of vendedores) {
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(key === "Sin vendedor" ? c : filtrarClienteParaVendedor(c, key));
+    }
+  }
+
+  const vendedores = Object.keys(groups).sort((a, b) => normTxt(a).localeCompare(normTxt(b), "es"));
+  let enviados = 0;
+
+  for (const vend of vendedores) {
+    const clientes = groups[vend].sort((a, b) => normTxt(a.nombrePerfil || "").localeCompare(normTxt(b.nombrePerfil || ""), "es"));
+    let txt = `CLIENTES DEL VENDEDOR: ${vend}\n\n`;
+    clientes.forEach((c, i) => { txt += `========================================\n${i + 1}) ${clienteResumenTXT(c)}\n`; });
+    await enviarTxtComoArchivo(chatId, txt, `${fileSafeName(vend, "vendedor").replace(/\.txt$/i, "")}_${Date.now()}.txt`);
+    enviados++;
+  }
+
+  return bot.sendMessage(chatId, `✅ TXT por vendedor generados: ${enviados}`);
+}
+
+// ✅ Mantiene compatibilidad — ahora llama a enviarHistorialClienteTXTReal
+async function enviarHistorialClienteTXT(chatId, clientId) {
+  return enviarHistorialClienteTXTReal(chatId, clientId);
+}
+
+async function enviarMisClientes(chatId, vendedorNombre = "") {
+  const snap = await require("./index_30_espejo_firestore").getColeccion(CLIENTES_COLLECTION);
+  const rows = snap.docs
+    .map((d) => ({ id: d.id, ...(d.data() || {}) }))
+    .filter((c) => !String(c.consolidadoEn || "").trim())
+    .filter((c) => clientePerteneceAVendedor(c, vendedorNombre))
+    .map((c) => filtrarClienteParaVendedor(c, vendedorNombre));
+
+  if (!rows.length) return bot.sendMessage(chatId, "⚠️ No tiene clientes asignados.");
+  const keyboard = rows.slice(0, 30).map((c) => [{
+    text: safeBtnLabel(`${c.nombrePerfil || "Sin nombre"} • ${c.telefono || "sin teléfono"}`),
+    callback_data: `vend:cli:${c.id}`,
+  }]);
+  keyboard.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
+  return upsertPanel(chatId, "👥 *MIS CLIENTES*\n\nSolo se muestran las cuentas administradas por usted:", keyboard);
+}
+
+async function enviarMisClientesTXT(chatId, vendedorNombre = "") {
+  const snap = await require("./index_30_espejo_firestore").getColeccion(CLIENTES_COLLECTION);
+  const rows = snap.docs
+    .map((d) => ({ id: d.id, ...(d.data() || {}) }))
+    .filter((c) => !String(c.consolidadoEn || "").trim())
+    .filter((c) => clientePerteneceAVendedor(c, vendedorNombre))
+    .map((c) => filtrarClienteParaVendedor(c, vendedorNombre));
+
+  let txt = `CLIENTES DEL VENDEDOR: ${vendedorNombre}\n\n`;
+  if (!rows.length) txt += "Sin clientes asignados.\n";
+  rows.forEach((c, i) => { txt += `========================================\n${i + 1}) ${clienteResumenTXT(c)}\n`; });
+
+  return enviarTxtComoArchivo(chatId, txt, `mis_clientes_${fileSafeName(vendedorNombre, "vendedor").replace(/\.txt$/i, "")}.txt`);
+}
+
+// ===============================
+// COMANDOS TELEGRAM — DESCARGAR EXCEL CLIENTES
+// ===============================
+const { generarExcelClientesGeneral } = require("./index_11_clientes_excel");
+
+// ✅ Comando: /clientes_excel
+bot.onText(/^\/clientes_excel$/, async (msg) => {
+  const chatId = msg.chat.id;
+  const userId = msg.from.id;
+
+  // Exportación global de clientes: requiere permiso explícito de lectura.
+  if (!(await accessControl.hasPermission(userId, "clientes.read"))) {
+    return bot.sendMessage(chatId, "⛔ No tiene permiso para descargar el listado de clientes.");
+  }
+
+  try {
+    await bot.sendMessage(chatId, "⏳ Generando Excel de clientes... espera");
+    const buffer = await generarExcelClientesGeneral();
+
+    if (!buffer || buffer.length === 0) {
+      return bot.sendMessage(chatId, "❌ Error al generar el archivo");
+    }
+
+    await bot.sendDocument(chatId, buffer, {}, {
+      filename: `clientes_${Date.now()}.xlsx`,
+      contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    });
+
+    await bot.sendMessage(chatId, `✅ Excel de clientes generado\n👥 Incluye:\n- Resumen general\n- Clientes vigentes\n- Recuperar clientes no vigentes\n- Pagos y servicios\n- Análisis por vendedor`);
+  } catch (e) {
+    logErr("clientes_excel", e);
+    bot.sendMessage(chatId, `❌ Error: ${e.message}`);
+  }
+});
+
+module.exports = {
+  // 🐛 FIX (ago-2026): iconPlataforma() se usaba en index_06_handlers.js
+  // (botones "Mis renovaciones de hoy" / "en 3 días" y el aviso diario de
+  // las 7 AM) pero nunca estuvo exportada aquí — cada vez que se llamaba
+  // tiraba ReferenceError, atrapado en silencio por el try/catch de más
+  // arriba, y el vendedor solo veía "⚠️ Error interno".
+  iconPlataforma,
+  humanPlataforma, renderFichaClienteMarkdown, serviciosConIndiceOriginal, dedupeClientes, clienteDuplicado,
+  getCliente, buscarPorTelefonoTodos, buscarClienteRobusto, getClientesBusquedaSnapshot,
+  enviarFichaCliente, enviarFichaClienteVendedor, enviarListaResultadosClientes, menuEditarCliente,
+  menuListaServicios, menuServicio,
+  menuListaPerfilesServicio, menuPerfilServicio,
+  patchServicio, addServicioTx, addPerfilTx, patchPerfilTx, eliminarPerfilTx, eliminarServicioTx,
+  renovarServicioTx, renovarTodosServiciosTx, eliminarServiciosTx,
+  eliminarClienteConPapelera, restaurarClienteDesdePapelera, restaurarServiciosDesdePapelera,
+  removeServicioDeInventario, sincronizarCuentaEnComprasTx,
+  menuListaRenovacion, menuRenovacionServicio, enviarPanelRenovacionesConAcciones,
+  kbPlataformasWiz, kbTvDigitalMarcasWiz, kbTvDigitalPlanesWiz, wizardStart, wizardNext,
+  clienteResumenTXT, reporteClientesTXTGeneral, reporteClientesSplitPorVendedorTXT,
+  enviarHistorialClienteTXT, enviarHistorialClienteTXTReal,
+  generarHistorialTXT, getHistorialCliente, registrarEventoHistorial,
+  enviarMisClientes, enviarMisClientesTXT,
+  obtenerRenovacionesPorFecha, renovacionesTexto, enviarTXT, enviarTXTATodosHoy,
+  perfilesServicioLocal, cantidadPerfilesServicioLocal,
+  compraSelectorLocal, perfilSelectorLocal, resolverIndiceCompraSelectorLocal, resolverIndicePerfilSelectorLocal,
+  etiquetaBeneficiarioServicioLocal, nombrePerfilRealServicioLocal,
+};
