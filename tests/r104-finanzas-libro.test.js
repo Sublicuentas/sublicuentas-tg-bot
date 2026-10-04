@@ -50,3 +50,11 @@ test("R106: estado de pago y cartera (pagado / parcial / pendiente)", () => {
   const c = fs.readFileSync(path.join(__dirname, "..", "index_03_clientes_crm.js"), "utf8");
   assert.match(c, /finLibro\.iniciarPagoCompra\(chatId, chatId/);
 });
+
+test("R106 Excel: hoja Pendientes Cobro, ventas generadas y reversas restan", () => {
+  const x = fs.readFileSync(path.join(__dirname, "..", "index_10_reportes_excel.js"), "utf8");
+  assert.ok(x.includes('"Pendientes Cobro"'));
+  assert.match(x, /"Ventas generadas"/);
+  assert.match(x, /!\["saldo_inicial", "venta", "transferencia"\]\.includes\(m\.kind\)/);
+  assert.match(x, /const monto = data\.reversaDe \? -montoBase : montoBase;/);
+});
