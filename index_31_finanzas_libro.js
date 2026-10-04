@@ -210,15 +210,29 @@ async function asignarBanco(chatId, userId, idx, bankIdx) {
 // ---------------------------------------------------------------- R109 · reparar fechas UTC
 // Movimientos de APK/web registrados de 6 PM a medianoche (hora de Honduras) quedaron con fecha del día siguiente.
 // Se detectan con la misma regla del Excel (fechaRealHonduras) y se corrigen con auditoría (fecha anterior → nueva).
+function dmyAYmd(v = "") { const m = String(v).match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/); return m ? `${m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}` : ""; }
 async function movimientosFechaUtc() {
   const { fechaRealHonduras } = require("./index_10_reportes_excel");
   const snap = await movQuery("2026-09-25").get();
-  return snap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) })).map((m) => ({ m, real: fechaRealHonduras(m) })).filter((x) => x.real && x.real !== x.m.fecha);
+  const out = [];
+  for (const d of snap.docs) {
+    const m = { id: d.id, ...(d.data() || {}) };
+    if (m.fechaCorregidaDe || m.reversaDe || m.estadoFinanciero) continue; // ya corregido / reversas / anulados: no se tocan
+    // 1) Hora UTC: registrado de 6 PM a medianoche quedó con fecha de mañana.
+    const utc = fechaRealHonduras(m);
+    if (utc && utc !== m.fecha) { out.push({ m, real: utc, motivo: "hora UTC" }); continue; }
+    // 2) Renovación cobrada en su FECHA DE CORTE pero registrada días después: la fecha del pago es la del corte del cliente.
+    const kind = R.movementKind(m);
+    const esRenov = ["cobro_renovacion", "renovacion"].includes(String(m.subtipo || "")) && ["ingreso", "venta"].includes(kind);
+    const corte = dmyAYmd(m.fechaAnterior), guardada = R.movementYmd(m);
+    if (esRenov && corte && guardada && corte < guardada && R.daysBetweenYmd(corte, guardada) <= 5) out.push({ m, real: ymdToDmy(corte), motivo: "fecha de corte del cliente" });
+  }
+  return out.sort((a, b) => String(a.m.createdAt).localeCompare(String(b.m.createdAt)));
 }
 async function panelFechas(chatId) {
   const rows = await movimientosFechaUtc();
-  if (!rows.length) return upsertPanel(chatId, "🗓 *FECHAS*\n\n✅ Todas las fechas están bien (hora de Honduras).", [[{ text: "⬅️ Ciclo", callback_data: "fl:menu" }]]);
-  const txt = ["🗓 *FECHAS A CORREGIR*", `Hay *${rows.length}* movimientos registrados de 6 PM a medianoche que quedaron con la fecha del día siguiente.`, "", ...rows.slice(0, 15).map(({ m, real }) => `• ${m.fecha} → *${real}* · ${lps(m.monto)} · ${String(m.clienteNombre || m.plataforma || m.motivo || m.tipo).slice(0, 30)}`), rows.length > 15 ? `… y ${rows.length - 15} más` : ""].join("\n");
+  if (!rows.length) return upsertPanel(chatId, "🗓 *FECHAS*\n\n✅ No hay fechas por corregir (ni por hora UTC ni por fecha de corte).", [[{ text: "⬅️ Ciclo", callback_data: "fl:menu" }]]);
+  const txt = ["🗓 *FECHAS A CORREGIR*", `Hay *${rows.length}* movimientos con la fecha del registro y no la del pago:\n• *hora UTC*: registrados de 6 PM a medianoche.\n• *fecha de corte*: renovaciones cobradas en la fecha de corte del cliente pero registradas después (hasta 5 días).`, "", ...rows.slice(0, 15).map(({ m, real, motivo }) => `• ${m.fecha} → *${real}* · ${lps(m.monto)} · ${String(m.clienteNombre || m.plataforma || m.motivo || m.tipo).slice(0, 26)}${R.movementKind(m) === "venta" ? " (venta)" : ""} · _${motivo}_`), rows.length > 15 ? `… y ${rows.length - 15} más` : ""].join("\n");
   return upsertPanel(chatId, txt, [[{ text: `✅ Corregir las ${rows.length} fechas`, callback_data: "fl:rf:ok" }], [{ text: "⬅️ Ciclo", callback_data: "fl:menu" }]]);
 }
 async function corregirFechas(chatId, userId) {
@@ -226,15 +240,15 @@ async function corregirFechas(chatId, userId) {
   let n = 0;
   for (let i = 0; i < rows.length; i += 200) {
     const batch = db.batch();
-    for (const { m, real } of rows.slice(i, i + 200)) {
+    for (const { m, real, motivo } of rows.slice(i, i + 200)) {
       const [d, mo, y] = real.split("/");
       batch.set(db.collection("finanzas_movimientos").doc(m.id), { ...fechaCampos(`${y}-${mo}-${d}`), fechaCorregidaDe: m.fecha || "", fechaCorregidaPor: actor.usuario, fechaCorregidaAt: now, createdAt: m.createdAt, updatedAt: now }, { merge: true });
-      batch.set(db.collection("auditoria_eventos").doc(), { actorUsuario: actor.usuario, rol: "telegram", origen: "tg", modulo: "finanzas", accion: "corregir_fecha_utc", targetType: "movimiento", targetId: m.id, movimientoId: m.id, before: { fecha: m.fecha || "" }, after: { fecha: real }, motivo: "Fecha guardada con hora UTC (6 PM–medianoche Honduras)", detalle: `${m.fecha} → ${real} · L${m.monto}`, resultado: "ok", tipo: "finanzas_corregir_fecha_utc", createdAt: now });
+      batch.set(db.collection("auditoria_eventos").doc(), { actorUsuario: actor.usuario, rol: "telegram", origen: "tg", modulo: "finanzas", accion: "corregir_fecha_utc", targetType: "movimiento", targetId: m.id, movimientoId: m.id, before: { fecha: m.fecha || "" }, after: { fecha: real }, motivo: `Fecha corregida (${motivo})`, detalle: `${m.fecha} → ${real} · L${m.monto}`, resultado: "ok", tipo: "finanzas_corregir_fecha_utc", createdAt: now });
       n++;
     }
     await batch.commit();
   }
-  await bot.sendMessage(chatId, `✅ ${n} fecha${n === 1 ? "" : "s"} corregida${n === 1 ? "" : "s"} a la hora de Honduras. Quedó registrado en auditoría.`);
+  await bot.sendMessage(chatId, `✅ ${n} fecha${n === 1 ? "" : "s"} corregida${n === 1 ? "" : "s"} a la fecha real del pago. Quedó registrado en auditoría.`);
   return menuLibro(chatId);
 }
 

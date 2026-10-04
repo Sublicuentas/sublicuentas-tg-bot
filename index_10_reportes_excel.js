@@ -140,16 +140,12 @@ function usuarioMovimiento(data = {}) {
 }
 const SUBTIPO_LABEL = { cobro_renovacion: "Renovación", cobro_compra: "Compra nueva", cobro_pendiente_cliente: "Abono de cliente", cobro_pendiente_vendedor: "Entrega de vendedor", compra_socio: "Compra socio", renovacion_socio: "Renovación socio", cobro_cliente: "Cobro" };
 function detalleMovimiento(data = {}) {
+  // Como antes: el Detalle es el nombre del cliente (o socio/beneficiario). Solo si no hay nombre se pone el tipo.
   const directo = safeText(data.detalle || data.descripcion || data.nota || data.observacion || "");
   if (directo) return directo;
-  const partes = [];
   const quien = safeText(data.clienteNombre || data.socioNombre || data.beneficiario || data.deudorNombre || "");
-  if (quien) partes.push(quien);
-  const tipo = SUBTIPO_LABEL[String(data.subtipo || "")];
-  if (tipo) partes.push(tipo);
-  if (data.fechaNueva) partes.push(`vence ${safeText(data.fechaNueva)}`);
-  if (data.reversaDe) partes.push("REVERSA");
-  return partes.join(" · ");
+  if (quien) return data.reversaDe ? `${quien} (reversa)` : quien;
+  return SUBTIPO_LABEL[String(data.subtipo || "")] || "";
 }
 let platLabel = null;
 function plataformaLegible(v = "") {
