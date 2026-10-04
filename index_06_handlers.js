@@ -35,6 +35,18 @@ const { generarPinSetup } = require("./index_09_api_auth");
 const accessControl = require("./index_23_access_control");
 const finLibro = require("./index_31_finanzas_libro"); // R104 · Finanzas: ciclo, planilla multi-banco y pago real al renovar
 // La renovación con pago real reutiliza las MISMAS funciones de renovación del bot (una sola vez por confirmación).
+// R106: añadir un perfil a una compra existente ES una compra nueva → pide el pago (total, recibido, banco/responsable).
+async function addPerfilConPagoR106(chatId, userId, clientId, idx, perfil = {}, compraId = "") {
+  const r = await addPerfilTx(clientId, idx, perfil, compraId);
+  try {
+    if (await finLibro.esLibroUser(userId)) {
+      const c = await getCliente(clientId);
+      const s = (Array.isArray(c?.servicios) ? c.servicios : [])[idx] || {};
+      setTimeout(() => { finLibro.iniciarPagoCompra(chatId, userId, { clientId: String(clientId), compraId: String(compraId || s.compraId || ""), plataforma: `${s.plataforma || "servicio"} · perfil adicional (${perfil.nombre || ""})`, cliente: c?.nombrePerfil || c?.nombre || "Cliente" }).catch(() => {}); }, 900);
+    }
+  } catch (e) { logErr("R106 pago perfil adicional", e); }
+  return r;
+}
 finLibro.configurar({
   ejecutarRenovacion: async (chatId, userId, a, { ajuste = false, motivo = "" } = {}) => {
     const c = await getCliente(a.clientId);
@@ -7467,7 +7479,7 @@ bot.on("message", async (msg) => {
             return bot.sendMessage(chatId, "🔐 Escriba el PIN individual de Apple TV:");
           }
           pending.delete(String(chatId));forceNextPanelAtBottom(chatId);
-          try { await addPerfilTx(p.clientId, p.idx, { nombre: t, perfil: t, correo: "", clave: "", pin: "" }, p.compraId || ""); }
+          try { await addPerfilConPagoR106(chatId, userId, p.clientId, p.idx, { nombre: t, perfil: t, correo: "", clave: "", pin: "" }, p.compraId || ""); }
           catch (e) { return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo añadir el perfil."}`); }
           {const aud=await actividadClienteServicioLocal(p.clientId,p.idx,p.compraId||"");await registrarActividadTelegramLocal(userId,chatId,'agregar_perfil',{...aud,perfil:t,campo:'perfil'},`Agregó el perfil ${t}${aud.cliente?` a ${aud.cliente}`:''}${aud.plataforma?` · ${aud.plataforma}`:''}.`);}
           return menuListaPerfilesServicio(chatId, p.clientId, p.idx);
@@ -7488,7 +7500,7 @@ bot.on("message", async (msg) => {
           return bot.sendMessage(chatId, "🔐 Escriba el PIN individual de este perfil:");
         }
         pending.delete(String(chatId));forceNextPanelAtBottom(chatId);
-        try { await addPerfilTx(p.clientId, p.idx, { nombre: p.nombre, perfil: p.nombre, correo: mail, clave: "", pin: "" }, p.compraId || ""); }
+        try { await addPerfilConPagoR106(chatId, userId, p.clientId, p.idx, { nombre: p.nombre, perfil: p.nombre, correo: mail, clave: "", pin: "" }, p.compraId || ""); }
         catch (e) { return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo añadir el perfil."}`); }
         {const aud=await actividadClienteServicioLocal(p.clientId,p.idx,p.compraId||"");await registrarActividadTelegramLocal(userId,chatId,'agregar_perfil',{...aud,perfil:p.nombre,cuenta:mail,campo:'perfil'},`Agregó el perfil ${p.nombre}${aud.cliente?` a ${aud.cliente}`:''}${aud.plataforma?` · ${aud.plataforma}`:''} · cuenta ${mail}.`);}
         await bot.sendMessage(chatId, "✅ Perfil añadido a la misma compra. No se creó otro precio ni otra renovación.");
@@ -7501,7 +7513,7 @@ bot.on("message", async (msg) => {
           return bot.sendMessage(chatId, "🔐 Escriba el PIN individual de este perfil:");
         }
         pending.delete(String(chatId));forceNextPanelAtBottom(chatId);
-        try { await addPerfilTx(p.clientId, p.idx, { nombre: p.nombre, perfil: p.nombre, correo: p.mail, clave: t, pin: "" }, p.compraId || ""); }
+        try { await addPerfilConPagoR106(chatId, userId, p.clientId, p.idx, { nombre: p.nombre, perfil: p.nombre, correo: p.mail, clave: t, pin: "" }, p.compraId || ""); }
         catch (e) { return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo añadir el perfil."}`); }
         {const aud=await actividadClienteServicioLocal(p.clientId,p.idx,p.compraId||"");await registrarActividadTelegramLocal(userId,chatId,'agregar_perfil',{...aud,perfil:p.nombre,cuenta:p.mail||aud.cuenta,campo:'perfil + clave'},`Agregó el perfil ${p.nombre}${aud.cliente?` a ${aud.cliente}`:''}${aud.plataforma?` · ${aud.plataforma}`:''}${(p.mail||aud.cuenta)?` · cuenta ${p.mail||aud.cuenta}`:''}.`);}
         await bot.sendMessage(chatId, "✅ Perfil añadido a la misma compra. No se creó otro precio ni otra renovación.");
@@ -7510,7 +7522,7 @@ bot.on("message", async (msg) => {
 
       if (p.mode === "cliProfAddPin") {
         pending.delete(String(chatId));forceNextPanelAtBottom(chatId);
-        try { await addPerfilTx(p.clientId, p.idx, { nombre: p.nombre, perfil: p.nombre, correo: p.mail, clave: p.clave || "", pin: t }, p.compraId || ""); }
+        try { await addPerfilConPagoR106(chatId, userId, p.clientId, p.idx, { nombre: p.nombre, perfil: p.nombre, correo: p.mail, clave: p.clave || "", pin: t }, p.compraId || ""); }
         catch (e) { return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo añadir el perfil."}`); }
         {const aud=await actividadClienteServicioLocal(p.clientId,p.idx,p.compraId||"");await registrarActividadTelegramLocal(userId,chatId,'agregar_perfil',{...aud,perfil:p.nombre,cuenta:p.mail||aud.cuenta,campo:'perfil + PIN'},`Agregó el perfil ${p.nombre}${aud.cliente?` a ${aud.cliente}`:''}${aud.plataforma?` · ${aud.plataforma}`:''}${(p.mail||aud.cuenta)?` · cuenta ${p.mail||aud.cuenta}`:''} · PIN guardado.`);}
         await bot.sendMessage(chatId, "✅ Perfil añadido a la misma compra con su PIN individual. El precio y la fecha siguen únicos.");
