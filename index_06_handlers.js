@@ -48,24 +48,24 @@ async function addPerfilConPagoR106(chatId, userId, clientId, idx, perfil = {}, 
   return r;
 }
 finLibro.configurar({
-  ejecutarRenovacion: async (chatId, userId, a, { ajuste = false, motivo = "" } = {}) => {
+  ejecutarRenovacion: async (chatId, userId, a, { ajuste = false, motivo = "", pagoExtra = null } = {}) => {
     const c = await getCliente(a.clientId);
     const servicios = Array.isArray(c?.servicios) ? c.servicios : [];
-    let fechaNueva = "", plataforma = "", fechaAnterior = "";
+    let fechaNueva = "", plataforma = "", fechaAnterior = "", pagoOperacion = null;
     if (a.tipo === "uno") {
       let idx = a.compraId ? servicios.findIndex((s) => String(s?.compraId || "") === String(a.compraId)) : Number(a.idx);
       if (idx < 0) idx = Number(a.idx);
       if (!servicios[idx]) throw new Error("Esa compra cambió o ya no existe. Abra nuevamente la ficha.");
       fechaAnterior = servicios[idx]?.fechaRenovacion || ""; plataforma = servicios[idx]?.plataforma || "";
-      const r = await renovarServicioTx(a.clientId, idx, { dias: a.dias || 0, fechaExacta: a.fechaExacta || "", compraId: a.compraId || "" });
-      fechaNueva = r?.fechaNueva || "";
+      const r = await renovarServicioTx(a.clientId, idx, { dias: a.dias || 0, fechaExacta: a.fechaExacta || "", compraId: a.compraId || "", pagoExtra });
+      fechaNueva = r?.fechaNueva || r?.servicio?.fechaRenovacion || ""; pagoOperacion = r?.pagoOperacion || null;
     } else {
-      await renovarTodosServiciosTx(a.clientId, a.fechaExacta ? { fechaExacta: a.fechaExacta } : { dias: a.dias || 30 });
+      const rt = await renovarTodosServiciosTx(a.clientId, a.fechaExacta ? { fechaExacta: a.fechaExacta, pagoExtra } : { dias: a.dias || 30, pagoExtra }); pagoOperacion = rt?.pagoOperacion || null;
       plataforma = servicios.map((s) => s?.plataforma).filter(Boolean).join(", "); fechaNueva = a.fechaExacta || "";
     }
     try { await registrarActividadTelegramLocal(userId, chatId, a.tipo === "uno" ? "renovar_servicio" : "renovar_todos", { clienteId: a.clientId, cliente: c?.nombrePerfil || c?.nombre || "", telefono: c?.telefono || "", campo: "renovación", cambio: `${ajuste ? `ajuste sin pago (${motivo})` : "con pago real"} · ${fechaNueva || a.etiqueta || ""}` }, `Renovó ${a.etiqueta || "servicio"}${c?.nombrePerfil ? ` de ${c.nombrePerfil}` : ""}`); } catch (e) { logErr("R104 actividad renovar", e); }
     setTimeout(() => { Promise.resolve(enviarFichaCliente(chatId, a.clientId)).catch(() => {}); }, 500);
-    return { nombre: c?.nombrePerfil || c?.nombre || "", telefono: c?.telefono || "", plataforma, fechaAnterior, fechaNueva };
+    return { nombre: c?.nombrePerfil || c?.nombre || "", telefono: c?.telefono || "", plataforma, fechaAnterior, fechaNueva, pagoOperacion };
   },
 });
 const integrity = require("./index_26_integrity_guard");

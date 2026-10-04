@@ -252,26 +252,36 @@ const CXC = "cuentas_por_cobrar";
 function auditarTg(tx, actor, ev) {
   tx.set(db.collection("auditoria_eventos").doc(), { actorUsuario: actor.usuario, rol: "telegram", origen: "tg", modulo: ev.modulo || "finanzas", accion: ev.accion, targetType: ev.targetType || "", targetId: ev.targetId || "", clienteId: ev.clienteId || "", compraId: ev.compraId || "", movimientoId: ev.movimientoId || "", cuentaId: ev.cuentaId || "", operationId: ev.operationId || "", before: ev.before ?? null, after: ev.after ?? null, motivo: "", detalle: ev.detalle || "", monto: ev.monto ?? null, bancos: ev.bancos || [], resultado: "ok", tipo: `finanzas_${ev.accion}`, createdAt: new Date().toISOString() });
 }
-async function registrarOperacionPago({ tipoOrigen, total, recibido, bancoId, responsable, vendedorNombre, cliente = {}, opId, actor }) {
+// R107: preparar (fuera) → leer (al inicio de la transacción) → escribir (junto con la renovación).
+async function prepararPagoTg({ tipoOrigen, total, recibido, bancoId, responsable, vendedorNombre, opId, actor }) {
   const ep = R.estadoPago(total, recibido);
   if (!(ep.total > 0) || ep.recibido < 0 || ep.recibido > ep.total) throw Object.assign(new Error("Montos inválidos."), { userError: true });
   const methods = await loadMethods(); const banco = methods.find((m) => m.id === bancoId);
   if (ep.recibido > 0 && !banco) throw Object.assign(new Error("Elija el banco donde entró el dinero."), { userError: true });
-  const deudorTipo = responsable === "vendedor" ? "vendedor" : "cliente";
-  const id = opDocId("oper", actor.uid, opId);
+  return { ep, banco, tipoOrigen, deudorTipo: responsable === "vendedor" ? "vendedor" : "cliente", vendedorNombre: String(vendedorNombre || "").slice(0, 60), opId, id: opDocId("oper", actor.uid, opId), actor };
+}
+async function leerPagoTg(tx, prep) {
+  const ventaRef = db.collection("finanzas_movimientos").doc(`${prep.id}_venta`);
+  const [libroSnap, ventaSnap] = await Promise.all([tx.get(LIBRO()), tx.get(ventaRef)]);
+  const libro = libroFrom(libroSnap.exists ? libroSnap.data() : {});
+  return { yaExiste: ventaSnap.exists, cicloId: libro.cicloId };
+}
+function escribirPagoTg(tx, prep, lectura, cliente = {}) {
+  const { ep, banco, tipoOrigen, deudorTipo, vendedorNombre, id, opId, actor } = prep;
+  if (lectura.yaExiste) return { duplicado: true, ...ep };
   const ventaRef = db.collection("finanzas_movimientos").doc(`${id}_venta`), ingRef = db.collection("finanzas_movimientos").doc(`${id}_cobro`), cxcRef = db.collection(CXC).doc(id);
   const hoy = hoyYmd(), now = new Date().toISOString();
-  return db.runTransaction(async (tx) => {
-    if ((await tx.get(ventaRef)).exists) return { duplicado: true, ...ep };
-    const { libro } = await estadoLibro(tx);
-    const base = { origen: "telegram", origenCanal: "tg", registradoPor: actor.usuario, registradoPorId: actor.uid, ...fechaCampos(hoy), createdAt: now, updatedAt: now };
-    const rel = { clienteId: cliente.clienteId || "", clienteNombre: String(cliente.nombre || "").slice(0, 80), compraId: cliente.compraId || "", plataforma: String(cliente.plataforma || "").slice(0, 40), tipoOrigen, operacionId: id, cicloId: libro.cicloId, operationId: opId, fechaNueva: cliente.fechaNueva || "", fechaAnterior: cliente.fechaAnterior || "", vendedor: String(vendedorNombre || "").slice(0, 60) };
-    tx.set(ventaRef, { ...base, movimientoId: ventaRef.id, tipo: "venta", subtipo: tipoOrigen === "compra" ? "compra_nueva" : "renovacion", monto: ep.total, montoRecibido: ep.recibido, saldoPendiente: ep.saldo, estadoPago: ep.estado, ...rel });
-    if (ep.recibido > 0) tx.set(ingRef, { ...base, movimientoId: ingRef.id, tipo: "ingreso", subtipo: tipoOrigen === "compra" ? "cobro_compra" : "cobro_renovacion", monto: ep.recibido, bancoId: banco.id, banco: banco.nombre, metodoPago: banco.nombre, cobradoPor: actor.usuario, ...(ep.saldo > 0 ? { cuentaId: cxcRef.id } : {}), ...rel });
-    if (ep.saldo > 0) tx.set(cxcRef, { cuentaId: cxcRef.id, deudorTipo, deudorId: deudorTipo === "cliente" ? rel.clienteId : String(vendedorNombre || ""), deudorNombre: deudorTipo === "cliente" ? rel.clienteNombre : String(vendedorNombre || ""), ...rel, montoTotalOperacion: ep.total, montoRecibidoInicial: ep.recibido, montoOriginalPendiente: ep.saldo, montoRecibidoPosterior: 0, saldoPendiente: ep.saldo, estado: ep.recibido > 0 ? "parcial" : "pendiente", cicloOrigen: libro.cicloId, abonos: [], creadoPor: actor.usuario, createdAt: now, updatedAt: now });
-    auditarTg(tx, actor, { modulo: tipoOrigen === "compra" ? "compras" : "renovaciones", accion: tipoOrigen === "compra" ? "compra_pago" : "renovacion_pago", targetType: "operacion", targetId: id, clienteId: rel.clienteId, compraId: rel.compraId, operationId: opId, monto: ep.total, after: { total: ep.total, recibido: ep.recibido, saldo: ep.saldo, estado: ep.estado, banco: banco?.nombre || "", responsable: ep.saldo > 0 ? deudorTipo : "" }, detalle: `${rel.clienteNombre} · ${rel.plataforma} · total ${ep.total} · recibido ${ep.recibido}${banco ? ` en ${banco.nombre}` : ""}${ep.saldo > 0 ? ` · pendiente ${ep.saldo} (${deudorTipo})` : ""}`, bancos: ep.recibido > 0 ? [{ bancoId: banco.id, monto: ep.recibido, direccion: "entrada" }] : [] });
-    return { duplicado: false, ...ep, cuentaId: ep.saldo > 0 ? cxcRef.id : "" };
-  });
+  const base = { origen: "telegram", origenCanal: "tg", registradoPor: actor.usuario, registradoPorId: actor.uid, ...fechaCampos(hoy), createdAt: now, updatedAt: now };
+  const rel = { clienteId: cliente.clienteId || "", clienteNombre: String(cliente.nombre || "").slice(0, 80), compraId: cliente.compraId || "", plataforma: String(cliente.plataforma || "").slice(0, 40), tipoOrigen, operacionId: id, cicloId: lectura.cicloId, operationId: opId, fechaNueva: cliente.fechaNueva || "", fechaAnterior: cliente.fechaAnterior || "", vendedor: vendedorNombre };
+  tx.set(ventaRef, { ...base, movimientoId: ventaRef.id, tipo: "venta", subtipo: tipoOrigen === "compra" ? "compra_nueva" : "renovacion", monto: ep.total, montoRecibido: ep.recibido, saldoPendiente: ep.saldo, estadoPago: ep.estado, ...rel });
+  if (ep.recibido > 0) tx.set(ingRef, { ...base, movimientoId: ingRef.id, tipo: "ingreso", subtipo: tipoOrigen === "compra" ? "cobro_compra" : "cobro_renovacion", monto: ep.recibido, bancoId: banco.id, banco: banco.nombre, metodoPago: banco.nombre, cobradoPor: actor.usuario, ...(ep.saldo > 0 ? { cuentaId: cxcRef.id } : {}), ...rel });
+  if (ep.saldo > 0) tx.set(cxcRef, { cuentaId: cxcRef.id, deudorTipo, deudorId: deudorTipo === "cliente" ? rel.clienteId : vendedorNombre, deudorNombre: deudorTipo === "cliente" ? rel.clienteNombre : vendedorNombre, ...rel, montoTotalOperacion: ep.total, montoRecibidoInicial: ep.recibido, montoOriginalPendiente: ep.saldo, montoRecibidoPosterior: 0, saldoPendiente: ep.saldo, estado: ep.recibido > 0 ? "parcial" : "pendiente", cicloOrigen: lectura.cicloId, abonos: [], creadoPor: actor.usuario, createdAt: now, updatedAt: now });
+  auditarTg(tx, actor, { modulo: tipoOrigen === "compra" ? "compras" : "renovaciones", accion: tipoOrigen === "compra" ? "compra_pago" : "renovacion_pago", targetType: "operacion", targetId: id, clienteId: rel.clienteId, compraId: rel.compraId, operationId: opId, monto: ep.total, after: { total: ep.total, recibido: ep.recibido, saldo: ep.saldo, estado: ep.estado, banco: banco?.nombre || "", responsable: ep.saldo > 0 ? deudorTipo : "" }, detalle: `${rel.clienteNombre} · ${rel.plataforma} · total ${ep.total} · recibido ${ep.recibido}${banco ? ` en ${banco.nombre}` : ""}${ep.saldo > 0 ? ` · pendiente ${ep.saldo} (${deudorTipo})` : ""}`, bancos: ep.recibido > 0 ? [{ bancoId: banco.id, monto: ep.recibido, direccion: "entrada" }] : [] });
+  return { duplicado: false, ...ep, cuentaId: ep.saldo > 0 ? cxcRef.id : "" };
+}
+async function registrarOperacionPago(args) {
+  const prep = await prepararPagoTg(args);
+  return db.runTransaction(async (tx) => escribirPagoTg(tx, prep, await leerPagoTg(tx, prep), args.cliente || {}));
 }
 async function registrarAbonoTg({ cuentaId, monto, bancoId, opId, actor }) {
   const methods = await loadMethods(); const banco = methods.find((m) => m.id === bancoId);
@@ -332,12 +342,17 @@ async function confirmarPago(chatId, userId, p) {
   pending.delete(String(chatId));
   let cliente = {};
   if (p.tipoOrigen === "compra") cliente = { clienteId: p.compra.clientId, nombre: p.compra.cliente, compraId: p.compra.compraId, plataforma: p.compra.plataforma };
-  else {
+  let r = null;
+  if (p.tipoOrigen !== "compra") {
     if (typeof cfg.ejecutarRenovacion !== "function") throw new Error("Renovación no configurada.");
-    const info = await cfg.ejecutarRenovacion(chatId, userId, p.accion, { ajuste: false });
+    // R107: la renovación y su pago se guardan en UNA sola transacción (o se guarda todo, o nada).
+    const prep = await prepararPagoTg({ tipoOrigen: "renovacion", total: p.total, recibido: p.recibido, bancoId: p.bancoId, responsable: p.responsable, vendedorNombre: p.vendedorNombre, opId: p.opId, actor });
+    const pagoExtra = { leer: (tx) => leerPagoTg(tx, prep), escribir: (tx, res, cl, lectura) => escribirPagoTg(tx, prep, lectura, { clienteId: p.accion.clientId, nombre: cl?.nombrePerfil || cl?.nombre || "", compraId: res?.siguiente?.compraId || p.accion.compraId || "", plataforma: res?.siguiente?.plataforma || (Array.isArray(res?.servicios) ? res.servicios.map((x) => x?.plataforma).filter(Boolean).join(", ") : ""), fechaAnterior: res?.fechaAnterior || "", fechaNueva: res?.fechaNueva || "" }) };
+    const info = await cfg.ejecutarRenovacion(chatId, userId, p.accion, { ajuste: false, pagoExtra });
     cliente = { ...(info || {}), clienteId: p.accion.clientId, compraId: p.accion.compraId || "" };
+    r = info?.pagoOperacion || null;
   }
-  const r = await registrarOperacionPago({ tipoOrigen: p.tipoOrigen, total: p.total, recibido: p.recibido, bancoId: p.bancoId, responsable: p.responsable, vendedorNombre: p.vendedorNombre, cliente, opId: p.opId, actor });
+  if (!r) r = await registrarOperacionPago({ tipoOrigen: p.tipoOrigen, total: p.total, recibido: p.recibido, bancoId: p.bancoId, responsable: p.responsable, vendedorNombre: p.vendedorNombre, cliente, opId: p.opId, actor });
   return bot.sendMessage(chatId, `✅ ${p.tipoOrigen === "compra" ? "Compra" : "Renovación"} registrada · *${r.estado.toUpperCase()}*${r.duplicado ? " (ya estaba registrada)" : ""}\nTotal ${lps(r.total)} · Recibido ${lps(r.recibido)} · Pendiente ${lps(r.saldo)}${cliente.fechaNueva ? `\nNueva fecha: ${cliente.fechaNueva}` : ""}`, { parse_mode: "Markdown" });
 }
 

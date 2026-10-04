@@ -1593,7 +1593,7 @@ function resolverIndiceCompraLocal(servicios = [], idx = null, compraId = "") {
   return Number.isInteger(n) && n >= 0 && n < lista.length ? n : -1;
 }
 
-async function mutarServiciosClienteTx(clientId, mutador) {
+async function mutarServiciosClienteTx(clientId, mutador, extra = null) { // R107: extra = pago en la MISMA transacción
   const id = String(clientId || "").trim();
   if (!id) throw new Error("Cliente inválido.");
   if (typeof mutador !== "function") throw new Error("Cambio de servicios inválido.");
@@ -1601,6 +1601,7 @@ async function mutarServiciosClienteTx(clientId, mutador) {
   return db.runTransaction(async (tx) => {
     const doc = await tx.get(ref);
     if (!doc.exists) throw new Error("Cliente no encontrado.");
+    const lecturaExtra = extra && typeof extra.leer === "function" ? await extra.leer(tx) : null; // lecturas antes de escribir
     const cliente = doc.data() || {};
     // Migración progresiva: al tocar cualquier ficha antigua aseguramos IDs
     // persistentes para todas sus compras y perfiles, sin cambiar sus datos.
@@ -1634,8 +1635,10 @@ async function mutarServiciosClienteTx(clientId, mutador) {
         updatedAt: admin.firestore.FieldValue.serverTimestamp()
       }, { merge: true });
     }
+    const pagoOperacion = extra && typeof extra.escribir === "function" ? extra.escribir(tx, resultado || {}, cliente, lecturaExtra) : null;
     return {
       ...(resultado || {}),
+      ...(pagoOperacion ? { pagoOperacion } : {}),
       cliente: { ...cliente, ...resumenVendedores, servicios: siguientes },
       servicios: siguientes,
     };
@@ -2011,7 +2014,7 @@ async function eliminarServicioTx(clientId, idx, compraId = "", options = {}) {
   return { ok: true, eliminado, servicioIndex: resultado.actualIdx, nombreCliente: resultado.nombreTitular || "", sync, papeleraId: resultado.papeleraId };
 }
 
-async function renovarServicioTx(clientId, idx, { dias = 0, fechaExacta = "", compraId = "", operationId = "" } = {}) {
+async function renovarServicioTx(clientId, idx, { dias = 0, fechaExacta = "", compraId = "", operationId = "", pagoExtra = null } = {}) {
   // HOTFIX 2026-09-28:
   // La renovación debe ser una operación CRM simple y no depender de la capa
   // de idempotencia/papelera. Esa capa continúa activa para eliminaciones y
@@ -2061,7 +2064,7 @@ async function renovarServicioTx(clientId, idx, { dias = 0, fechaExacta = "", co
       fechaNueva,
       nombreTitular: cliente.nombrePerfil || "",
     };
-  });
+  }, pagoExtra);
 
   cacheInvalidatePrefix(`clientes:doc:${id}`);
   cacheInvalidatePrefix("renovaciones:");
@@ -2112,6 +2115,8 @@ async function renovarServicioTx(clientId, idx, { dias = 0, fechaExacta = "", co
 
   return {
     ok: true,
+    pagoOperacion: resultado.pagoOperacion || null,
+    fechaAnterior: resultado.fechaAnterior,
     servicio: resultado.siguiente,
     servicioIndex: resultado.actualIdx,
     fechaAnterior: resultado.fechaAnterior,
@@ -2120,7 +2125,7 @@ async function renovarServicioTx(clientId, idx, { dias = 0, fechaExacta = "", co
   };
 }
 
-async function renovarTodosServiciosTx(clientId, { dias = 0, fechaExacta = "", operationId = "" } = {}) {
+async function renovarTodosServiciosTx(clientId, { dias = 0, fechaExacta = "", operationId = "", pagoExtra = null } = {}) {
   // HOTFIX 2026-09-28: misma regla que renovación individual. Renovar TODOS
   // nunca debe bloquearse por plan IPTV ni por una clave de idempotencia.
   const id = String(clientId || "").trim();
@@ -2171,7 +2176,7 @@ async function renovarTodosServiciosTx(clientId, { dias = 0, fechaExacta = "", o
       fechaExacta: String(fechaExacta || ""),
       nombreTitular: cliente.nombrePerfil || "",
     };
-  });
+  }, pagoExtra);
 
   cacheInvalidatePrefix(`clientes:doc:${id}`);
   cacheInvalidatePrefix("renovaciones:");
@@ -2230,6 +2235,7 @@ async function renovarTodosServiciosTx(clientId, { dias = 0, fechaExacta = "", o
 
   return {
     ok: true,
+    pagoOperacion: resultado.pagoOperacion || null,
     total: resultado.total,
     servicios: resultado.servicios,
     sorteos,
