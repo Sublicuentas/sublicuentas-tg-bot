@@ -130,12 +130,19 @@ function fechaRealHonduras(data = {}) {
   const hn = new Date(Date.parse(iso) - 6 * 3600000);
   return `${String(hn.getUTCDate()).padStart(2, "0")}/${String(hn.getUTCMonth() + 1).padStart(2, "0")}/${hn.getUTCFullYear()}`;
 }
-const USUARIOS_LABEL = { naara: "Sublicuentas", sublicuentas: "Sublicuentas", relojes: "Relojes", libni: "Relojes" };
+const USUARIOS_LABEL = { naara: "Sublicuentas", sublicuentas: "Sublicuentas", sublicuentas2: "Sublicuentas", relojes: "Relojes", libni: "Relojes", daniela: "Relojes", finanzas: "Relojes" };
 function usuarioMovimiento(data = {}) {
+  const origen = String(data.origenCanal || data.origen || "").toLowerCase();
+  const canal = { apk: "APK", web: "Web", tg: "Telegram", telegram: "Telegram", socios: "Socios" }[origen] || "";
+  // Socios/revendedores: el usuario financiero visible es SIEMPRE el nombre del socio, no un slug ni “Socios”.
+  if (["socios", "socio", "revendedor", "revendedores"].includes(origen)) {
+    const socio = safeText(data.socioNombre || data.revendedorNombre || data.nombreSocio || data.registradoPorNombre || data.registradoPor || data.cobradoPor || "Socio");
+    return canal ? `${socio} · ${canal}` : socio;
+  }
   const u = safeText(data.userName || data.registradoPorNombre || data.usuario || data.cobradoPor || data.registradoPor || data.admin || data.creadoPor || data.createdBy || "");
   if (!u) return "";
-  const canal = { apk: "APK", web: "Web", tg: "Telegram", telegram: "Telegram", socios: "Socios" }[String(data.origenCanal || data.origen || "").toLowerCase()] || "";
-  const label = USUARIOS_LABEL[u.toLowerCase()] || u;
+  const key = u.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+  const label = USUARIOS_LABEL[key] || u;
   return canal ? `${label} · ${canal}` : label;
 }
 const SUBTIPO_LABEL = { cobro_renovacion: "Renovación", cobro_compra: "Compra nueva", cobro_pendiente_cliente: "Abono de cliente", cobro_pendiente_vendedor: "Entrega de vendedor", compra_socio: "Compra socio", renovacion_socio: "Renovación socio", cobro_cliente: "Cobro" };

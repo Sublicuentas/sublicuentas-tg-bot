@@ -868,11 +868,12 @@ async function r108CicloId(tx) {
 }
 function r108Movs(tx, { idBase, subtipo, total, banco, cicloId, rel, auditoria }) {
   const now = new Date().toISOString(), f = r108Fecha(r108Ymd());
-  const base = { origen: "socios", origenCanal: "socios", registradoPor: rel.socioNorm || "socio", ...f, createdAt: now, updatedAt: now, cicloId, ...rel };
+  const actorSocio = String(rel.socioNombre || rel.socioNorm || "Socio").trim();
+  const base = { origen: "socios", origenCanal: "socios", registradoPor: actorSocio, registradoPorNombre: actorSocio, ...f, createdAt: now, updatedAt: now, cicloId, ...rel };
   const venta = db.collection("finanzas_movimientos").doc(`${idBase}_venta`), ing = db.collection("finanzas_movimientos").doc(`${idBase}_cobro`);
   tx.set(venta, { ...base, movimientoId: venta.id, tipo: "venta", subtipo, monto: total, montoRecibido: total, saldoPendiente: 0, estadoPago: "pagado" });
-  tx.set(ing, { ...base, movimientoId: ing.id, tipo: "ingreso", subtipo, monto: total, bancoId: banco.id, banco: banco.nombre, metodoPago: banco.nombre, cobradoPor: rel.socioNorm || "socio" });
-  tx.set(db.collection("auditoria_eventos").doc(), { actorUsuario: rel.socioNorm || "socio", rol: "socio", origen: "socios", modulo: "socios", resultado: "ok", createdAt: now, monto: total, bancos: [{ bancoId: banco.id, monto: total, direccion: "entrada" }], operationId: rel.operationId || "", movimientoId: ing.id, ...auditoria });
+  tx.set(ing, { ...base, movimientoId: ing.id, tipo: "ingreso", subtipo, monto: total, bancoId: banco.id, banco: banco.nombre, metodoPago: banco.nombre, cobradoPor: actorSocio });
+  tx.set(db.collection("auditoria_eventos").doc(), { actorUsuario: actorSocio, rol: "socio", origen: "socios", modulo: "socios", resultado: "ok", createdAt: now, monto: total, bancos: [{ bancoId: banco.id, monto: total, direccion: "entrada" }], operationId: rel.operationId || "", movimientoId: ing.id, ...auditoria });
   return { ventaId: venta.id, ingresoId: ing.id };
 }
 
