@@ -48,3 +48,11 @@ test("R109: fecha real de Honduras, usuario y detalle en el Excel", () => {
   const l = fs.readFileSync(path.join(__dirname, "..", "index_31_finanzas_libro.js"), "utf8");
   assert.match(l, /callback_data: "fl:rf:ver"/);
 });
+
+test("R109b: detalle = nombre del cliente; revisar fechas incluye la fecha de corte de renovaciones (≤5 días)", () => {
+  const x = fs.readFileSync(path.join(__dirname, "..", "index_10_reportes_excel.js"), "utf8");
+  assert.match(x, /if \(quien\) return data\.reversaDe \? `\$\{quien\} \(reversa\)` : quien;/);
+  const l = fs.readFileSync(path.join(__dirname, "..", "index_31_finanzas_libro.js"), "utf8");
+  assert.match(l, /motivo: "fecha de corte del cliente"/);
+  assert.match(l, /R\.daysBetweenYmd\(corte, guardada\) <= 5/);
+});
