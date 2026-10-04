@@ -64,3 +64,11 @@ test("R106: añadir perfil a una compra existente pide pago (es compra nueva)", 
   assert.equal((h.match(/await addPerfilConPagoR106\(chatId, userId,/g) || []).length, 4);
   assert.match(h, /perfil adicional/);
 });
+
+test("R107: renovación + pago en UNA transacción en el bot", () => {
+  const c = fs.readFileSync(path.join(__dirname, "..", "index_03_clientes_crm.js"), "utf8");
+  assert.match(c, /async function mutarServiciosClienteTx\(clientId, mutador, extra = null\)/);
+  assert.equal((c.match(/\}, pagoExtra\);/g) || []).length, 2);
+  const l = fs.readFileSync(path.join(__dirname, "..", "index_31_finanzas_libro.js"), "utf8");
+  assert.match(l, /cfg\.ejecutarRenovacion\(chatId, userId, p\.accion, \{ ajuste: false, pagoExtra \}\)/);
+});
