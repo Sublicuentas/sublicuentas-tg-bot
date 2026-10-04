@@ -137,7 +137,9 @@ function parseMonto(v) {
 function normalizeMovimiento(id, data = {}, source = "") {
   const tipo = normalizeTipo(data);
   const fecha = extraerFechaMovimiento(data);
-  const monto = Math.abs(parseMonto(data.monto ?? data.valor ?? data.amount ?? data.total));
+  // R106: las REVERSAS (anular/corregir) llevan monto negativo y deben restar; lo demás se toma en positivo como antes.
+  const montoBase = Math.abs(parseMonto(data.monto ?? data.valor ?? data.amount ?? data.total));
+  const monto = data.reversaDe ? -montoBase : montoBase;
   return {
     id: String(id || ""),
     source: String(source || ""),
@@ -538,12 +540,18 @@ function simpleSheet(wb, name, title, subtitle, headers, widths, rows, moneyCols
   if (headers.length) ws.autoFilter = { from: { row: first - 1, column: 1 }, to: { row: first - 1, column: headers.length } };
   return ws;
 }
-async function agregarHojasLibroR104(wb, { ini, fin, subtitle, ingresosTotal, egresosTotal, planillaTotal }) {
+async function agregarHojasLibroR104(wb, { ini, fin, subtitle, ingresosTotal, egresosTotal, planillaTotal, ventasTotal = 0 }) {
   const desde = dmyToYmd(ini), hasta = dmyToYmd(fin);
   let pagos = [], ciclos = [], libro = null;
   try { pagos = (await db.collection("planilla_pagos").get()).docs.map((d) => ({ id: d.id, ...(d.data() || {}) })).filter((p) => p.estado === "confirmado" && p.fecha >= desde && p.fecha <= hasta).sort((a, b) => String(a.fecha).localeCompare(b.fecha)); } catch (e) { logErr("R104 planilla_pagos", e); }
   try { ciclos = (await db.collection("finanzas_ciclos").get()).docs.map((d) => ({ id: d.id, ...(d.data() || {}) })).filter((c) => c.fechaInicio <= hasta && c.fechaFin >= desde).sort((a, b) => String(a.fechaInicio).localeCompare(b.fechaInicio)); } catch (e) { logErr("R104 finanzas_ciclos", e); }
   try { libro = await require("./index_31_finanzas_libro").estadoLibro(); } catch (e) { logErr("R104 estadoLibro", e); }
+  // R106: cartera por cobrar (clientes / vendedores). Estado actual; NO es efectivo.
+  let cuentas = [];
+  try { cuentas = (await db.collection("cuentas_por_cobrar").get()).docs.map((d) => ({ id: d.id, ...(d.data() || {}) })).sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt))); } catch (e) { logErr("R106 cuentas_por_cobrar", e); }
+  const abiertas = cuentas.filter((c) => ["pendiente", "parcial"].includes(c.estado));
+  const penCli = abiertas.filter((c) => c.deudorTipo !== "vendedor").reduce((s, c) => s + Number(c.saldoPendiente || 0), 0);
+  const penVen = abiertas.filter((c) => c.deudorTipo === "vendedor").reduce((s, c) => s + Number(c.saldoPendiente || 0), 0);
 
   // Resumen: bloque del ciclo con planilla y resultado final.
   const res = wb.getWorksheet("Resumen");
@@ -551,7 +559,9 @@ async function agregarHojasLibroR104(wb, { ini, fin, subtitle, ingresosTotal, eg
     res.addRow([]);
     const hh = addHeader(res, ["", "Ciclo financiero (R104)", "Monto", "", "Definición", "", "", ""]);
     const disponible = ingresosTotal - egresosTotal, resultado = disponible - planillaTotal;
-    [["Ingresos", ingresosTotal, "Cobros confirmados"], ["Egresos operativos", egresosTotal, "Gastos manuales (sin planilla)"], ["Disponible antes de planilla", disponible, "Ingresos − egresos operativos"],
+    [["Ventas generadas", ventasTotal, "Valor acordado de compras/renovaciones (no es efectivo)"], ["Dinero real recibido", ingresosTotal, "Cobros y abonos que sí entraron a bancos"],
+     ["Pendiente clientes (hoy)", penCli, "Cuentas por cobrar a clientes · NO suma a bancos"], ["Pendiente vendedores (hoy)", penVen, "Dinero que vendedores aún no entregan · NO suma"], ["Pendiente total (hoy)", penCli + penVen, "Cartera por cobrar, fuera del disponible"],
+     ["Ingresos", ingresosTotal, "Cobros confirmados"], ["Egresos operativos", egresosTotal, "Gastos manuales (sin planilla)"], ["Disponible antes de planilla", disponible, "Ingresos − egresos operativos"],
      ["Planilla / comisiones", planillaTotal, "Pagos confirmados a beneficiarios"], ["Resultado final", resultado, "Disponible − planilla"],
      ["Saldo retenido en bancos (hoy)", libro ? libro.saldos.total : 0, libro ? `Ciclo abierto desde ${libro.libro.cicloInicio}` : "Sin libro mayor"]].forEach(([l, v, d]) => {
       const r = res.addRow(["", l, v, "", d]); applyMoney(r.getCell(3)); [2, 3, 5].forEach((c) => setBorder(r.getCell(c))); r.getCell(2).font = { bold: /Resultado|Disponible/.test(l) };
@@ -567,14 +577,18 @@ async function agregarHojasLibroR104(wb, { ini, fin, subtitle, ingresosTotal, eg
   for (const p of pagos) for (const a of p.asignaciones || []) dist.push([p.planillaPagoId || p.id, p.fecha, p.beneficiario, a.banco || a.bancoId, Number(a.monto || 0), Number(a.saldoAntes || 0), Number(a.saldoDespues || 0)]);
   simpleSheet(wb, "Distribución Planilla", "DISTRIBUCIÓN DE PLANILLA POR BANCO", subtitle,
     ["pagoPlanillaId", "Fecha", "Beneficiario", "Banco", "Monto tomado", "Saldo antes", "Saldo después"], [34, 12, 22, 20, 14, 14, 14], dist, [5, 6, 7], [5]);
+  simpleSheet(wb, "Pendientes Cobro", "PENDIENTES DE COBRO (CLIENTES / VENDEDORES)", "Estado actual de la cartera · no es efectivo disponible",
+    ["Tipo deudor", "Deudor", "Origen", "Cliente", "Plataforma", "compraId", "Monto total", "Recibido inicial", "Abonos posteriores", "Saldo pendiente", "Estado", "Ciclo origen", "Creado"],
+    [12, 22, 12, 22, 16, 22, 13, 14, 15, 15, 11, 18, 22],
+    cuentas.map((c) => [c.deudorTipo === "vendedor" ? "Vendedor" : "Cliente", c.deudorNombre || "", c.tipoOrigen === "compra" ? "Compra" : "Renovación", c.clienteNombre || "", c.plataforma || "", c.compraId || "", Number(c.montoTotalOperacion || 0), Number(c.montoRecibidoInicial || 0), Number(c.montoRecibidoPosterior || 0), Number(c.saldoPendiente || 0), String(c.estado || "").toUpperCase(), c.cicloOrigen || "", c.createdAt || ""]), [7, 8, 9, 10], [10]);
   simpleSheet(wb, "Cierres", "CIERRES DE CICLO", subtitle,
     ["cicloId", "Inicio", "Fin", "Ingresos", "Egresos operativos", "Disponible antes planilla", "Planilla / comisiones", "Resultado final", "Saldo retenido", "Cerrado por", "Fecha cierre"],
     [20, 12, 12, 14, 16, 18, 16, 14, 14, 14, 22],
     ciclos.map((c) => [c.cicloId || c.id, c.fechaInicio, c.fechaFin, Number(c.ingresos || 0), Number(c.egresosOperativos || 0), Number(c.disponibleAntesPlanilla || 0), Number(c.planilla || 0), Number(c.resultado || 0), Number(c.saldoRetenido || 0), c.cerradoPor || "", c.cerradoAt || ""]), [4, 5, 6, 7, 8, 9]);
   simpleSheet(wb, "Saldos Libro", "SALDOS REALES POR BANCO (LIBRO MAYOR · HOY)", libro ? `Ciclo abierto desde ${libro.libro.cicloInicio}` : "Sin libro mayor",
-    ["Banco", "Base (inicial / último cierre)", "Desde", "Ingresos", "Egresos operativos", "Planilla / comisiones", "Ajustes", "Saldo final", "Movimientos"],
-    [22, 22, 12, 14, 16, 18, 12, 14, 12],
-    (libro ? libro.saldos.bancos.filter((b) => b.activado) : []).map((b) => [b.nombre, b.base, b.desde, b.ingresos, b.egresosOperativos, b.planilla, b.ajustes, b.saldo, b.movimientos]), [2, 4, 5, 6, 7, 8], [8]);
+    ["Banco", "Base (inicial / último cierre)", "Desde", "Ingresos", "Egresos operativos", "Planilla / comisiones", "Ajustes", "Transferencias (neto)", "Saldo final", "Movimientos"],
+    [22, 22, 12, 14, 16, 18, 12, 18, 14, 12],
+    (libro ? libro.saldos.bancos.filter((b) => b.activado) : []).map((b) => [b.nombre, b.base, b.desde, b.ingresos, b.egresosOperativos, b.planilla, b.ajustes, Number(b.transferencias || 0), b.saldo, b.movimientos]), [2, 4, 5, 6, 7, 8, 9], [9]);
 }
 
 async function generarReporteExcelPorRango(fechaInicio, fechaFin) {
@@ -586,7 +600,8 @@ async function generarReporteExcelPorRango(fechaInicio, fechaFin) {
   try {
     // R104: misma clasificación que la APK y /api/finanzas (lib_finanzas_reglas.js):
     // saldos iniciales no son ingresos; la planilla/comisiones va aparte de los egresos operativos.
-    const movimientos = (await getMovimientosPorRango(ini, fin)).map((m) => ({ ...m, kind: RL.movementKind(m.raw || {}) })).filter((m) => m.kind !== "saldo_inicial");
+    const movimientos = (await getMovimientosPorRango(ini, fin)).map((m) => ({ ...m, kind: RL.movementKind(m.raw || {}) })).filter((m) => !["saldo_inicial", "venta", "transferencia"].includes(m.kind)); // R106: ventas y transferencias no son ingreso/egreso
+    const ventasTotal = (await getMovimientosPorRango(ini, fin)).filter((m) => RL.movementKind(m.raw || {}) === "venta").reduce((s, m) => s + Number(m.monto || 0), 0);
     const ingresos = movimientos.filter((m) => m.tipo === "ingreso" && m.kind !== "ajuste");
     const egresos = movimientos.filter((m) => m.tipo === "egreso" && m.kind !== "planilla" && m.kind !== "ajuste");
     const planillaMovs = movimientos.filter((m) => m.kind === "planilla");
@@ -629,7 +644,7 @@ async function generarReporteExcelPorRango(fechaInicio, fechaFin) {
     createDetalleSheet(wb, "Ingresos", "DETALLE DE INGRESOS", subtitle, ingresos, "ingreso");
     createDetalleSheet(wb, "Egresos", "DETALLE DE EGRESOS", subtitle, egresos, "egreso");
     createBancosSheet(wb, bancos, subtitle);
-    await agregarHojasLibroR104(wb, { ini, fin, subtitle, ingresosTotal, egresosTotal, planillaTotal });
+    await agregarHojasLibroR104(wb, { ini, fin, subtitle, ingresosTotal, egresosTotal, planillaTotal, ventasTotal });
     createGraficosSheet(wb, { ini, fin, ingresosTotal, egresosTotal, utilidad, topPlats, bancos });
 
     // Vista y protección visual básica.
