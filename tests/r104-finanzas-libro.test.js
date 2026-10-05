@@ -72,3 +72,11 @@ test("R107: renovación + pago en UNA transacción en el bot", () => {
   const l = fs.readFileSync(path.join(__dirname, "..", "index_31_finanzas_libro.js"), "utf8");
   assert.match(l, /cfg\.ejecutarRenovacion\(chatId, userId, p\.accion, \{ ajuste: false, pagoExtra \}\)/);
 });
+
+test("R110: fecha del pago elegible en el bot y ajuste de fecha agrupa un solo pago por cliente", () => {
+  const l = fs.readFileSync(path.join(__dirname, "..", "index_31_finanzas_libro.js"), "utf8");
+  assert.match(l, /callback_data: `fl:pg:fecha:\$\{f\}`/);
+  assert.match(l, /const hoy = prep\.fechaPago \|\| hoyYmd\(\)/);
+  assert.match(l, /\$\{m\.n > 1 \? ` \(\$\{m\.n\} servicios\)` : ""\}/);
+  assert.match(l, /la venta va con su cobro/);
+});
