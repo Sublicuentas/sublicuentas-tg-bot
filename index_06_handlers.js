@@ -5633,6 +5633,25 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
       if (data.startsWith("cli:view:")) return enviarFichaCliente(chatId, data.split(":")[2]);
       if (data === "cli:wiz:start") { pending.delete(String(chatId)); return wizardStart(chatId); }
 
+      if (data.startsWith("platcat:")) { // R118: categoría → plataformas
+        const [, mode, code, cId, cIdx] = data.split(":");
+        const prefix = ({ wiz: "wiz:plat", add: "cli:add:plat", set: "cli:serv:set:plat" })[mode];
+        if (!prefix) return bot.sendMessage(chatId, "⚠️ Selector inválido.");
+        const clientId = cId || null, compraSel = cIdx ?? null;
+        const ctxBtn = (base) => `${base}${clientId ? `:${clientId}` : ""}${compraSel !== null && compraSel !== undefined && compraSel !== "" ? `:${compraSel}` : ""}`;
+        const kb = code === "menu" ? kbPlataformasWiz(prefix, clientId, compraSel) : kbPlataformasWiz(prefix, clientId, compraSel, code);
+        if (code !== "menu") kb.push([{ text: "⬅️ Categorías", callback_data: ctxBtn(`platcat:${mode}:menu`) }]);
+        if (mode === "add" && clientId) kb.push([{ text: "❌ Cancelar", callback_data: `cli:view:${clientId}` }]);
+        const titulo = { per: "👤 PERFILES", tv: "📺 TV DIGITAL", mus: "🎵 MÚSICA", sof: "💻 SOFTWARE", cc: "🔐 CUENTAS COMPLETAS\n_Correo + clave + precio (sin PIN ni perfiles)_" }[code] || "📌 *Seleccione una categoría*";
+        return upsertPanel(chatId, code === "menu" ? "📌 *Seleccione una categoría*" : `*${titulo}*\nSeleccione plataforma:`, kb);
+      }
+      if (data.startsWith("ccsel:")) { // R118: cuenta completa → correo → clave → precio → pago
+        const [, mode, plat, cId] = data.split(":");
+        let clientId = cId || (mode === "wiz" ? (wizard.get(String(chatId)) || {}).clientId : null);
+        if (!clientId) return bot.sendMessage(chatId, "⚠️ No encontré el cliente. Abra la ficha y vuelva a intentar.");
+        if (mode === "wiz") wizard.delete(String(chatId));
+        return finLibro.iniciarCuentaCompleta(chatId, userId, { clientId: String(clientId), plat });
+      }
       if (data.startsWith("platgrp:")) {
         const parts = data.split(":");
         const mode = parts[1];

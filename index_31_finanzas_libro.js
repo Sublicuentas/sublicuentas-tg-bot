@@ -334,6 +334,34 @@ async function ajustarFechaMovimiento({ movimientoId, nuevaFecha, actor, motivo 
   });
 }
 
+// ---------------------------------------------------------------- R118 · cuenta completa por Telegram
+// Plataforma → correo → clave → precio → meses → (pago). Sin PIN ni perfiles; se guarda tipoVenta=cuenta_completa.
+async function iniciarCuentaCompleta(chatId, userId, { clientId, plat }) {
+  const cat = require("./lib_catalogo_categorias");
+  if (!cat.puedeSerCuentaCompleta(plat)) return bot.sendMessage(chatId, "⚠️ Esa plataforma no se vende como cuenta completa.");
+  pending.set(String(chatId), { mode: "flCcCorreo", clientId, plat, userId: String(userId) });
+  return bot.sendMessage(chatId, `🔐 *CUENTA COMPLETA · ${plat.toUpperCase()}*\n\n1) Escriba el *correo* de la cuenta:`, { parse_mode: "Markdown" });
+}
+async function textoCuentaCompleta(chatId, userId, t, p) {
+  if (p.mode === "flCcCorreo") { if (!/^\S+@\S+\.\S+$/.test(t)) return bot.sendMessage(chatId, "Escriba un correo válido."); p.correo = t; p.mode = "flCcClave"; pending.set(String(chatId), p); return bot.sendMessage(chatId, "2) Escriba la *clave* de la cuenta:", { parse_mode: "Markdown" }); }
+  if (p.mode === "flCcClave") { if (t.length < 3) return bot.sendMessage(chatId, "Escriba la clave."); p.clave = t; p.mode = "flCcPrecio"; pending.set(String(chatId), p); return bot.sendMessage(chatId, "3) Escriba el *precio* real de la venta (ej. 450):", { parse_mode: "Markdown" }); }
+  if (p.mode === "flCcPrecio") { const n = Number(t.replace(/[^0-9.]/g, "")); if (!(n > 0)) return bot.sendMessage(chatId, "Escriba el precio (mayor que 0)."); p.precio = R.money(n); p.mode = "flCcMeses"; pending.set(String(chatId), p); return bot.sendMessage(chatId, "4) ¿Cuántos *meses*? (1 a 12)", { parse_mode: "Markdown" }); }
+  if (p.mode === "flCcMeses") {
+    const meses = Math.round(Number(t)); if (!(meses >= 1 && meses <= 12)) return bot.sendMessage(chatId, "Escriba los meses (1 a 12).");
+    pending.delete(String(chatId));
+    const d = new Date(Date.now() - 6 * 3600000); const dia = d.getUTCDate(); d.setUTCDate(1); d.setUTCMonth(d.getUTCMonth() + meses);
+    const ult = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate(); d.setUTCDate(Math.min(dia, ult)); // mes calendario
+    const fecha = `${String(d.getUTCDate()).padStart(2, "0")}/${String(d.getUTCMonth() + 1).padStart(2, "0")}/${d.getUTCFullYear()}`;
+    const { addServicioTx, getCliente } = require("./index_03_clientes_crm");
+    const r = await addServicioTx(p.clientId, { plataforma: p.plat, correo: p.correo, clave: p.clave, precio: p.precio, fechaRenovacion: fecha, mesesContratados: meses, tipoVenta: "cuenta_completa", categoria: "cuentas_completas", sinPinPerfil: true });
+    const c = await getCliente(p.clientId).catch(() => null);
+    await bot.sendMessage(chatId, `✅ Cuenta completa guardada · ${p.plat} · ${lps(p.precio)} · vence ${fecha}\n(la clave no se muestra en auditoría)`);
+    if (await esLibroUser(userId)) return iniciarPagoCompra(chatId, userId, { clientId: p.clientId, compraId: String(r?.servicio?.compraId || ""), plataforma: `${p.plat} · cuenta completa`, cliente: c?.nombrePerfil || c?.nombre || "Cliente" });
+    return null;
+  }
+  return null;
+}
+
 // ---------------------------------------------------------------- pantallas
 async function menuLibro(chatId) {
   const [{ libro, totales: t, saldos }, sinBanco, cart] = await Promise.all([estadoLibro(), movimientosSinBanco().catch(() => []), carteraResumen().catch(() => ({ clientes: 0, vendedores: 0 }))]);
@@ -400,7 +428,8 @@ function escribirPagoTg(tx, prep, lectura, cliente = {}) {
   const ventaRef = db.collection("finanzas_movimientos").doc(`${id}_venta`), ingRef = db.collection("finanzas_movimientos").doc(`${id}_cobro`), cxcRef = db.collection(CXC).doc(id);
   const hoy = prep.fechaPago || hoyYmd(), now = new Date().toISOString(); // R110: día real del pago
   const base = { origen: "telegram", origenCanal: "tg", registradoPor: actor.usuario, registradoPorId: actor.uid, ...fechaCampos(hoy), createdAt: now, updatedAt: now };
-  const rel = { clienteId: cliente.clienteId || "", clienteNombre: String(cliente.nombre || "").slice(0, 80), compraId: cliente.compraId || "", plataforma: String(cliente.plataforma || "").slice(0, 40), tipoOrigen, operacionId: id, cicloId: lectura.cicloId, operationId: opId, fechaNueva: cliente.fechaNueva || "", fechaAnterior: cliente.fechaAnterior || "", vendedor: vendedorNombre };
+  const clsTg = require("./lib_catalogo_categorias").clasificarServicio({ plataforma: cliente.plataforma || "", tipoVenta: cliente.tipoVenta, categoria: cliente.categoria }); // R118
+  const rel = { categoria: clsTg.categoria, tipoVenta: clsTg.tipoVenta, categoriaLabel: require("./lib_catalogo_categorias").CATEGORIAS[clsTg.categoria]?.finanzas || "", clienteId: cliente.clienteId || "", clienteNombre: String(cliente.nombre || "").slice(0, 80), compraId: cliente.compraId || "", plataforma: String(cliente.plataforma || "").slice(0, 40), tipoOrigen, operacionId: id, cicloId: lectura.cicloId, operationId: opId, fechaNueva: cliente.fechaNueva || "", fechaAnterior: cliente.fechaAnterior || "", vendedor: vendedorNombre };
   tx.set(ventaRef, { ...base, movimientoId: ventaRef.id, tipo: "venta", subtipo: tipoOrigen === "compra" ? "compra_nueva" : "renovacion", monto: ep.total, montoRecibido: ep.recibido, saldoPendiente: ep.saldo, estadoPago: ep.estado, ...rel });
   if (ep.recibido > 0) tx.set(ingRef, { ...base, movimientoId: ingRef.id, tipo: "ingreso", subtipo: tipoOrigen === "compra" ? "cobro_compra" : "cobro_renovacion", monto: ep.recibido, bancoId: banco.id, banco: banco.nombre, metodoPago: banco.nombre, cobradoPor: actor.usuario, ...(ep.saldo > 0 ? { cuentaId: cxcRef.id } : {}), ...rel });
   if (ep.saldo > 0) tx.set(cxcRef, { cuentaId: cxcRef.id, deudorTipo, deudorId: deudorTipo === "cliente" ? rel.clienteId : vendedorNombre, deudorNombre: deudorTipo === "cliente" ? rel.clienteNombre : vendedorNombre, ...rel, montoTotalOperacion: ep.total, montoRecibidoInicial: ep.recibido, montoOriginalPendiente: ep.saldo, montoRecibidoPosterior: 0, saldoPendiente: ep.saldo, estado: ep.recibido > 0 ? "parcial" : "pendiente", cicloOrigen: lectura.cicloId, abonos: [], creadoPor: actor.usuario, createdAt: now, updatedAt: now });
@@ -655,6 +684,7 @@ async function handleText(chatId, userId, text, p) {
       if (!f || f > hoyF || R.daysBetweenYmd(f, hoyF) > 30) return bot.sendMessage(chatId, "Fecha inválida: dd/mm/yyyy, no futura y máximo 30 días atrás.");
       p.fechaPago = f; p.mode = "flPgConfirm"; return siguientePaso(chatId, p);
     }
+    if (String(p.mode).startsWith("flCc")) return textoCuentaCompleta(chatId, userId, t, p); // R118
     if (p.mode === "flPgTotal") {
       if (!(num > 0)) return bot.sendMessage(chatId, "Escriba el monto total acordado (mayor que 0), ej. 220.");
       p.total = R.money(num); p.mode = "flPgRecibido"; pending.set(String(chatId), p);
@@ -737,4 +767,4 @@ async function handleText(chatId, userId, text, p) {
   return bot.sendMessage(chatId, "Use los botones del panel o toque ❌ Cancelar.");
 }
 
-module.exports = { iniciarPagoCompra, registrarOperacionPago, registrarAbonoTg, carteraResumen, registrarSaldoInicial, registrarAjuste, bancoDesdeBoton, movimientosSinBanco, configurar, esLibroUser, iniciarPagoRenovacion, handleCallback, handleText, menuLibro, estadoLibro, loadMethods, registrarCobroRenovacion, confirmarPagoPlanilla, usuarioCanonico, usuarioLabel, ajustarFechaMovimiento };
+module.exports = { iniciarCuentaCompleta, iniciarPagoCompra, registrarOperacionPago, registrarAbonoTg, carteraResumen, registrarSaldoInicial, registrarAjuste, bancoDesdeBoton, movimientosSinBanco, configurar, esLibroUser, iniciarPagoRenovacion, handleCallback, handleText, menuLibro, estadoLibro, loadMethods, registrarCobroRenovacion, confirmarPagoPlanilla, usuarioCanonico, usuarioLabel, ajustarFechaMovimiento };

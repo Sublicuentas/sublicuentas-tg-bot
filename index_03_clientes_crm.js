@@ -608,13 +608,30 @@ function kbTvDigitalPlanesWiz(mode = "wiz", brand = "", clientId = null, idx = n
   return rows;
 }
 
-function kbPlataformasWiz(prefix = "wiz:plat", clientId = null, idx = null) {
+// R118 · Telegram: primero 5 categorías, después solo las plataformas de esa categoría (mismo contrato que APK y web).
+const R118_CAT = { per: "perfiles", tv: "tv_digital", mus: "musica", sof: "software", cc: "cuentas_completas" };
+function kbCategoriasWiz(mode, clientId = null, idx = null) {
+  const cat = require("./lib_catalogo_categorias");
+  const items = Object.entries(R118_CAT).filter(([code]) => !(code === "cc" && mode === "set")).map(([code, k]) => ({ text: `${cat.CATEGORIAS[k].emoji} ${cat.CATEGORIAS[k].label}`, callback_data: appendCallbackContextLocal(`platcat:${mode}:${code}`, clientId, idx) }));
+  const rows = []; for (let i = 0; i < items.length; i += 2) rows.push(items.slice(i, i + 2));
+  return rows;
+}
+function kbPlataformasWiz(prefix = "wiz:plat", clientId = null, idx = null, categoriaCode = null) {
   const rows = [];
   const items = [];
   const mode = modoSelectorPlataformasLocal(prefix);
+  if (mode && !categoriaCode) return kbCategoriasWiz(mode, clientId, idx);
+  const catLib = require("./lib_catalogo_categorias");
+  const catSel = R118_CAT[categoriaCode] || "";
+  if (catSel === "cuentas_completas") {
+    const cc = catLib.CUENTA_COMPLETA_PLATAFORMAS.filter((k) => PLATFORM_KEYS.includes(k) || k === "viki");
+    for (const k of cc) items.push({ text: `🔐 ${humanPlataforma(k)}`, callback_data: appendCallbackContextLocal(`ccsel:${mode}:${k}`, clientId, idx) });
+    for (let i = 0; i < items.length; i += 2) rows.push(items.slice(i, i + 2));
+    return rows;
+  }
   let grupoAgregado = false;
 
-  PLATFORM_KEYS.filter((k) => !PLATAFORMAS_ALIAS_OCULTAS_LOCAL.has(k)).forEach((k) => {
+  PLATFORM_KEYS.filter((k) => !PLATAFORMAS_ALIAS_OCULTAS_LOCAL.has(k)).filter((k) => !catSel || catLib.clasificarServicio({ plataforma: k }).categoria === catSel || (catSel === "tv_digital" && (TV_DIGITAL_KEYS_LOCAL.has(k) || familiaTvDigitalMesesLocal(k)))).forEach((k) => {
     // Cualquier clave de TV Digital (Stella, Oleada, Lion, Latin, Nanotech) vive dentro
     // del grupo "📺 TV Digital"; nunca como botón suelto en la lista general.
     if ((TV_DIGITAL_KEYS_LOCAL.has(k) || familiaTvDigitalMesesLocal(k)) && mode) {
@@ -1663,7 +1680,16 @@ async function addServicioTx(clientId, servicio = {}) {
     if (!isFechaDMY(fechaRenovacion)) throw new Error("Fecha de renovación inválida.");
     compra.precio = precio;
     compra.fechaRenovacion = fechaRenovacion;
-    validarCompraLocal(compra);
+    { // R118: categoría / tipo de venta guardados (mismo contrato que APK y web)
+      const cl = require("./lib_catalogo_categorias").clasificarServicio({ plataforma: compra.plataforma || servicioEntrada.plataforma, tipoVenta: servicioEntrada.tipoVenta, categoria: servicioEntrada.categoria });
+      compra.categoria = cl.categoria; compra.tipoVenta = cl.tipoVenta;
+      if (servicioEntrada.mesesContratados) compra.mesesContratados = Math.max(1, Math.min(24, Number(servicioEntrada.mesesContratados) || 1));
+    }
+    if (compra.tipoVenta === "cuenta_completa") {
+      compra.correo = String(servicioEntrada.correo || compra.correo || "").trim(); compra.clave = String(servicioEntrada.clave || compra.clave || "").trim();
+      if (!compra.correo || !compra.clave) throw new Error("Cuenta completa: falta correo o clave.");
+      compra.sinPinPerfil = true; delete compra.pinPerfil;
+    } else validarCompraLocal(compra);
     const servicioIndex = servicios.length;
     servicios.push(compra);
     return { servicios, compra, servicioIndex, nombreTitular: cliente.nombrePerfil || "" };
