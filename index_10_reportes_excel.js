@@ -661,7 +661,19 @@ async function generarReporteExcelPorRango(fechaInicio, fechaFin) {
     // saldos iniciales no son ingresos; la planilla/comisiones va aparte de los egresos operativos.
     const movimientos = (await getMovimientosPorRango(ini, fin)).map((m) => ({ ...m, kind: RL.movementKind(m.raw || {}) })).filter((m) => !["saldo_inicial", "venta", "transferencia"].includes(m.kind)); // R106: ventas y transferencias no son ingreso/egreso
     const ventasTotal = (await getMovimientosPorRango(ini, fin)).filter((m) => RL.movementKind(m.raw || {}) === "venta").reduce((s, m) => s + Number(m.monto || 0), 0);
-    const ingresos = movimientos.filter((m) => m.tipo === "ingreso" && m.kind !== "ajuste");
+    // R114: un cliente paga UNA vez → los cobros del mismo cliente/banco/usuario/día registrados juntos (≤10 min) van en UNA fila.
+    const ingresos = (() => {
+      const lista = movimientos.filter((m) => m.tipo === "ingreso" && m.kind !== "ajuste").sort((a, b) => String(a.raw?.createdAt || "").localeCompare(String(b.raw?.createdAt || "")));
+      const out = [];
+      for (const m of lista) {
+        const r = m.raw || {}, t = Date.parse(r.createdAt || "") || 0, quien = String(r.clienteId || r.clienteNombre || "").toLowerCase();
+        const key = [quien, r.bancoId || m.banco, m.userName, m.fecha].join("|");
+        const g = quien && !r.reversaDe ? out.find((x) => x._key === key && t && Math.abs(t - x._t) <= 600000) : null;
+        if (g) { g.monto += Number(m.monto || 0); if (m.plataforma && !g.plataforma.includes(m.plataforma)) g.plataforma += ` + ${m.plataforma}`; }
+        else out.push({ ...m, _key: key, _t: t });
+      }
+      return out;
+    })();
     const egresos = movimientos.filter((m) => m.tipo === "egreso" && m.kind !== "planilla" && m.kind !== "ajuste");
     const planillaMovs = movimientos.filter((m) => m.kind === "planilla");
     const planillaTotal = planillaMovs.reduce((s, m) => s + Number(m.monto || 0), 0);
