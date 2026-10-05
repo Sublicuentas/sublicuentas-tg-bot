@@ -33,7 +33,21 @@ const {
 // hueco de "auto-claim" del panel de revendedores — ver index_09_api_auth.js)
 const { generarPinSetup } = require("./index_09_api_auth");
 const accessControl = require("./index_23_access_control");
-const finLibro = require("./index_31_finanzas_libro"); // R104 · Finanzas: ciclo, planilla multi-banco y pago real al renovar
+const finLibro = require("./index_31_finanzas_libro");
+// R111 · ids cortos para botones de Finanzas (límite de 64 bytes de Telegram) + protección del libro.
+const FIN_IDS_CORTOS = new Map();
+function idCortoFinanzas(id = "") {
+  const s = String(id || "");
+  if (Buffer.byteLength(`fin:del:pick:${s}`) <= 60) return s;
+  const k = "~" + require("crypto").createHash("sha1").update(s).digest("hex").slice(0, 16);
+  FIN_IDS_CORTOS.set(k, s); if (FIN_IDS_CORTOS.size > 2000) FIN_IDS_CORTOS.delete(FIN_IDS_CORTOS.keys().next().value);
+  return k;
+}
+function idLargoFinanzas(k = "") { return String(k).startsWith("~") ? (FIN_IDS_CORTOS.get(k) || "") : String(k); }
+function movimientoLigadoFinanzas(m = {}) {
+  const id = String(m.id || "");
+  return /_(cobro|venta|rev|in)$/.test(id) || !!(m.cuentaId || m.planillaPagoId || m.reversaDe || m.operacionId || m.transferenciaId || m.estadoFinanciero || ["venta", "transferencia", "saldo_inicial"].includes(String(m.tipo || "")));
+} // R104 · Finanzas: ciclo, planilla multi-banco y pago real al renovar
 // La renovación con pago real reutiliza las MISMAS funciones de renovación del bot (una sola vez por confirmación).
 // R106: añadir un perfil a una compra existente ES una compra nueva → pide el pago (total, recibido, banco/responsable).
 async function addPerfilConPagoR106(chatId, userId, clientId, idx, perfil = {}, compraId = "") {
@@ -5055,21 +5069,22 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
       }
 
       if (data.startsWith("fin:del:pick:")) {
-        const id = String(data.split(":")[3] || "").trim();
-        const ref = db.collection(FINANZAS_COLLECTION).doc(id);
-        const doc = await ref.get();
-        if (!doc.exists) return bot.sendMessage(chatId, "⚠️ Movimiento no encontrado.");
-        const m = { id: doc.id, ...(doc.data() || {}) };
+        const id = idLargoFinanzas(String(data.split(":")[3] || "").trim());
+        if (!id) return bot.sendMessage(chatId, "⚠️ La lista venció. Busque la fecha otra vez.");
+        const m = await require("./index_05_finanzas_menus").getMovimientoFinanzaById(id);
+        if (!m) return bot.sendMessage(chatId, "⚠️ Movimiento no encontrado.");
+        if (movimientoLigadoFinanzas(m)) return upsertPanel(chatId, `🔒 Este movimiento es parte del *centro financiero* (compra/renovación, abono, planilla o reversa).\n\nNo se borra: se *anula* para que bancos, ventas y pendientes cuadren y quede en auditoría.\n👉 APK o Web → Control financiero → *Movimientos* → *Anular*.`, [[{ text: "⬅️ Volver eliminar", callback_data: "fin:menu:eliminar" }], [{ text: "🏠 Inicio", callback_data: "go:inicio" }]]);
         const tipo = String(m.tipo || "").toLowerCase() === "egreso" ? "egreso" : "ingreso";
         return upsertPanel(chatId, textoConfirmarEliminacionMovimiento(m), [
-          [{ text: "✅ Sí, eliminar este", callback_data: `fin:del:ok:${id}` }],
+          [{ text: "✅ Sí, eliminar este", callback_data: `fin:del:ok:${idCortoFinanzas(id)}` }],
           [{ text: tipo === "egreso" ? "⬅️ Buscar egresos por fecha" : "⬅️ Buscar ingresos por fecha", callback_data: tipo === "egreso" ? "fin:menu:eliminar:egreso" : "fin:menu:eliminar:ingreso" }],
           [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
         ]);
       }
 
       if (data.startsWith("fin:del:ok:")) {
-        const id = String(data.split(":")[3] || "").trim();
+        const id = idLargoFinanzas(String(data.split(":")[3] || "").trim());
+        if (!id) return bot.sendMessage(chatId, "⚠️ La lista venció. Busque la fecha otra vez.");
         try {
           const eliminado = await eliminarMovimientoFinanzas(id, userId, await safeIsSuperAdminLocal(userId));
           const tipoEliminado = String(eliminado.tipo || "").toLowerCase() === "egreso" ? "egreso" : "ingreso";
@@ -6795,7 +6810,8 @@ bot.on("message", async (msg) => {
             [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
           ]);
         }
-        const kb = list.slice(0, 40).map((m) => [{ text: textoBtnEliminarMovimiento(m), callback_data: `fin:del:pick:${m.id}` }]);
+        // R111: Telegram rechaza TODO el teclado si un botón pasa de 64 bytes; los ids nuevos de Finanzas son largos.
+        const kb = list.slice(0, 40).map((m) => [{ text: textoBtnEliminarMovimiento(m), callback_data: `fin:del:pick:${idCortoFinanzas(m.id)}` }]);
         kb.push([{ text: p.tipo === "egreso" ? "➖ Buscar otra fecha" : "➕ Buscar otra fecha", callback_data: p.tipo === "egreso" ? "fin:menu:eliminar:egreso" : "fin:menu:eliminar:ingreso" }]);
         kb.push([{ text: "⬅️ Volver eliminar", callback_data: "fin:menu:eliminar" }]);
         kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
