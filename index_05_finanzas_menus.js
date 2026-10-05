@@ -546,8 +546,10 @@ async function getMovimientosPorFecha(fechaDMY, _userId = null, _isSuper = false
     if (range) addRowsDedup(map, await queryDocsByFieldRange(col, "fechaTS", range.iniTs, range.finTs));
   }
   let rows = Array.from(map.values()).map((r) => ({ ...r, fecha: extraerFechaMovimiento(r) || r.fecha || "" })).filter((r) => normalizeDMY(String(r.fecha || "")) === fecha).sort((a, b) => dmyToMillis(b.fecha||"") - dmyToMillis(a.fecha||""));
-  // La lectura completa concilia documentos históricos de Sublichat que sólo
-  // tenían fechaPago/createdAt y no podían aparecer en las consultas indexadas.
+  // Para eliminar por fecha, si las consultas indexadas ya encontraron movimientos,
+  // responder de inmediato. El escaneo completo queda SOLO como respaldo histórico;
+  // antes se ejecutaba siempre y podía dejar el bot esperando varios minutos.
+  if (rows.length) return rows;
   return await scanFinanceDocsFallbackByDate(fecha);
 }
 
