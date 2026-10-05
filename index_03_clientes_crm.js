@@ -1680,7 +1680,7 @@ async function addServicioTx(clientId, servicio = {}) {
   // Sorteos: el módulo seguro nunca interrumpe la compra si Firestore falla.
   const sorteo = await registrarEventoSorteosSeguro({
     tipo: "compra", clientId: id, compraId: compra.compraId,
-    eventoId: `compra:${compra.compraId}`,
+    eventoId: `compra:${compra.compraId}`, meses: Number(compra.mesesContratados) || 1, // R117: boletos según meses
     clienteNombre: resultado.cliente?.nombrePerfil || resultado.cliente?.nombre || resultado.nombreTitular || "Cliente",
     telefono: resultado.cliente?.telefono || "", vendedor: compra.vendedor || resultado.cliente?.vendedor || "", origen: "Telegram"
   });
