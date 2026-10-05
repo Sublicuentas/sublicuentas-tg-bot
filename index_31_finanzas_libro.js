@@ -239,9 +239,22 @@ function usuarioMovimientoLabel(m = {}) {
   if (["socios", "socio", "revendedor", "revendedores"].includes(origen)) return usuarioLabel("", m.socioNombre || m.revendedorNombre || m.registradoPorNombre || m.registradoPor || "Socio");
   return usuarioLabel(m.cobradoPor || m.registradoPor || m.userName || "");
 }
+// R110 · Un cliente paga UNA vez: los cobros del mismo cliente, banco, usuario y día registrados juntos
+// (p. ej. renovar 3 servicios en la APK) se muestran y ajustan como UN solo pago.
 async function movimientosAjustables() {
   const { movimientos } = await estadoLibro();
-  return movimientos.filter(movimientoAjustable).sort((a, b) => String(b.createdAt || b.updatedAt || "").localeCompare(String(a.createdAt || a.updatedAt || "")));
+  const lista = movimientos.filter(movimientoAjustable).sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
+  const grupos = [];
+  for (const m of lista) {
+    const quien = String(m.clienteId || nombreMovimiento(m)).toLowerCase().trim();
+    const key = [R.movementKind(m), quien, m.bancoId || m.banco || "", m.registradoPor || m.cobradoPor || m.userName || "", R.movementYmd(m)].join("|");
+    const t = Date.parse(m.createdAt || "") || 0;
+    const g = R.movementKind(m) === "ingreso" ? grupos.find((x) => x.key === key && t && Math.abs(t - x.t) <= 10 * 60000) : null;
+    if (g) { g.items.push(m); g.monto = R.money(g.monto + R.money(m.monto)); }
+    else grupos.push({ key, t, items: [m], monto: R.money(m.monto) });
+  }
+  return grupos.map((g) => ({ ...g.items[0], id: g.items.map((x) => x.id).join(","), monto: g.monto, servicios: g.items.map((x) => x.plataforma).filter(Boolean), n: g.items.length }))
+    .sort((a, b) => String(b.createdAt || b.updatedAt || "").localeCompare(String(a.createdAt || a.updatedAt || "")));
 }
 async function panelAjustarFechas(chatId, page = 0) {
   const all = await movimientosAjustables();
@@ -254,7 +267,7 @@ async function panelAjustarFechas(chatId, page = 0) {
     "Elija SOLO el movimiento que quiera corregir. La fecha de renovación/corte del cliente NO se usa como fecha del dinero.",
     "Ejemplo: corte 29/09, pagó 03/10 → el ingreso queda 03/10.",
     "",
-    ...(slice.length ? slice.map((m, i) => `${i + 1}) *${R.movementYmd(m) ? ymdToDmy(R.movementYmd(m)) : "Sin fecha"}* · ${lps(m.monto)} · ${nombreMovimiento(m).slice(0, 30)} · ${m.banco || m.metodoPago || "Sin banco"} · ${usuarioMovimientoLabel(m)}`) : ["No hay movimientos ajustables."]),
+    ...(slice.length ? slice.map((m, i) => `${i + 1}) *${R.movementYmd(m) ? ymdToDmy(R.movementYmd(m)) : "Sin fecha"}* · ${lps(m.monto)} · ${`${nombreMovimiento(m).slice(0, 30)}${m.n > 1 ? ` (${m.n} servicios)` : ""}`} · ${m.banco || m.metodoPago || "Sin banco"} · ${usuarioMovimientoLabel(m)}`) : ["No hay movimientos ajustables."]),
     "",
     `Página ${page + 1}/${pages}`
   ].join("\n");
@@ -266,10 +279,12 @@ async function panelAjustarFechas(chatId, page = 0) {
   return upsertPanel(chatId, txt, kb);
 }
 async function panelFechaDetalle(chatId, movimientoId, page = 0) {
-  const snap = await db.collection("finanzas_movimientos").doc(movimientoId).get();
-  if (!snap.exists) return panelAjustarFechas(chatId, page);
-  const m = { id: snap.id, ...(snap.data() || {}) };
-  if (!movimientoAjustable(m)) return bot.sendMessage(chatId, "⚠️ Ese movimiento ya no se puede ajustar.");
+  const ids = String(movimientoId || "").split(",").filter(Boolean);
+  const snaps = await Promise.all(ids.map((id) => db.collection("finanzas_movimientos").doc(id).get()));
+  const items = snaps.filter((x) => x.exists).map((x) => ({ id: x.id, ...(x.data() || {}) }));
+  if (!items.length) return panelAjustarFechas(chatId, page);
+  if (!items.every(movimientoAjustable)) return bot.sendMessage(chatId, "⚠️ Ese pago ya no se puede ajustar.");
+  const m = { ...items[0], monto: R.money(items.reduce((a, x) => a + R.money(x.monto), 0)), plataforma: items.map((x) => x.plataforma).filter(Boolean).join(" + ") };
   pending.set(String(chatId), { mode: "flFechaDetalle", movimientoId, page });
   const hoy = hoyYmd();
   const dias = [0, -1, -2, -3].map((n) => R.addDaysYmd(hoy, n));
@@ -293,22 +308,28 @@ async function panelFechaDetalle(chatId, movimientoId, page = 0) {
 async function ajustarFechaMovimiento({ movimientoId, nuevaFecha, actor, motivo = "Ajuste manual de fecha de pago" }) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(String(nuevaFecha || ""))) throw Object.assign(new Error("Fecha inválida."), { userError: true });
   if (nuevaFecha > hoyYmd()) throw Object.assign(new Error("La fecha del pago no puede ser futura."), { userError: true });
-  const ref = db.collection("finanzas_movimientos").doc(String(movimientoId || ""));
+  const ids = String(movimientoId || "").split(",").filter(Boolean);
+  const refs = ids.map((id) => db.collection("finanzas_movimientos").doc(id));
+  const ventas = ids.filter((id) => id.endsWith("_cobro")).map((id) => db.collection("finanzas_movimientos").doc(id.replace(/_cobro$/, "_venta")));
   const now = new Date().toISOString();
   return db.runTransaction(async (tx) => {
-    const snap = await tx.get(ref);
-    if (!snap.exists) throw Object.assign(new Error("Ese movimiento ya no existe."), { userError: true });
-    const m = snap.data() || {};
-    if (!movimientoAjustable(m)) throw Object.assign(new Error("Ese movimiento no admite ajuste de fecha."), { userError: true });
-    const antesYmd = R.movementYmd(m);
-    if (antesYmd === nuevaFecha) return { sinCambios: true, antes: antesYmd, despues: nuevaFecha, movimiento: m };
-    tx.set(ref, { ...fechaCampos(nuevaFecha), fechaPagoAjustadaManualmente: true, fechaAjustadaDe: antesYmd || "", fechaAjustadaPor: actor.usuario, fechaAjustadaAt: now, updatedAt: now }, { merge: true });
+    const snaps = await Promise.all(refs.map((r) => tx.get(r)));
+    const vSnaps = await Promise.all(ventas.map((r) => tx.get(r)));
+    const items = snaps.filter((x) => x.exists).map((x) => x.data() || {});
+    if (!items.length) throw Object.assign(new Error("Ese pago ya no existe."), { userError: true });
+    if (!items.every(movimientoAjustable)) throw Object.assign(new Error("Ese pago no admite ajuste de fecha."), { userError: true });
+    const antesYmd = R.movementYmd(items[0]);
+    const total = R.money(items.reduce((a, x) => a + R.money(x.monto), 0));
+    if (items.every((x) => R.movementYmd(x) === nuevaFecha)) return { sinCambios: true, antes: antesYmd, despues: nuevaFecha, movimiento: items[0] };
+    const campos = { ...fechaCampos(nuevaFecha), fechaPagoAjustadaManualmente: true, fechaAjustadaPor: actor.usuario, fechaAjustadaAt: now, updatedAt: now };
+    snaps.forEach((x, k) => { if (x.exists) tx.set(refs[k], { ...campos, fechaAjustadaDe: R.movementYmd(x.data() || {}) || "" }, { merge: true }); });
+    vSnaps.forEach((x, k) => { if (x.exists) tx.set(ventas[k], { ...campos, fechaAjustadaDe: R.movementYmd(x.data() || {}) || "" }, { merge: true }); }); // la venta va con su cobro
     tx.set(db.collection("auditoria_eventos").doc(), {
       actorUsuario: actor.usuario, actorLabel: actor.label || usuarioLabel(actor.usuario), rol: "telegram", origen: "tg", modulo: "finanzas", accion: "ajustar_fecha_pago",
-      targetType: "movimiento", targetId: ref.id, movimientoId: ref.id, before: { fechaPago: antesYmd || "" }, after: { fechaPago: nuevaFecha },
-      motivo, detalle: `${antesYmd ? ymdToDmy(antesYmd) : "Sin fecha"} → ${ymdToDmy(nuevaFecha)} · ${nombreMovimiento(m)} · ${lps(m.monto)}`, resultado: "ok", tipo: "finanzas_ajustar_fecha_pago", createdAt: now
+      targetType: "pago", targetId: ids.join(","), movimientoId: ids[0], before: { fechaPago: antesYmd || "" }, after: { fechaPago: nuevaFecha },
+      motivo, detalle: `${antesYmd ? ymdToDmy(antesYmd) : "Sin fecha"} → ${ymdToDmy(nuevaFecha)} · ${nombreMovimiento(items[0])} · ${lps(total)}${items.length > 1 ? ` (${items.length} servicios, un solo pago)` : ""}`, resultado: "ok", tipo: "finanzas_ajustar_fecha_pago", createdAt: now
     });
-    return { sinCambios: false, antes: antesYmd, despues: nuevaFecha, movimiento: m };
+    return { sinCambios: false, antes: antesYmd, despues: nuevaFecha, movimiento: { ...items[0], monto: total } };
   });
 }
 
@@ -358,12 +379,13 @@ function auditarTg(tx, actor, ev) {
   tx.set(db.collection("auditoria_eventos").doc(), { actorUsuario: actor.usuario, rol: "telegram", origen: "tg", modulo: ev.modulo || "finanzas", accion: ev.accion, targetType: ev.targetType || "", targetId: ev.targetId || "", clienteId: ev.clienteId || "", compraId: ev.compraId || "", movimientoId: ev.movimientoId || "", cuentaId: ev.cuentaId || "", operationId: ev.operationId || "", before: ev.before ?? null, after: ev.after ?? null, motivo: "", detalle: ev.detalle || "", monto: ev.monto ?? null, bancos: ev.bancos || [], resultado: "ok", tipo: `finanzas_${ev.accion}`, createdAt: new Date().toISOString() });
 }
 // R107: preparar (fuera) → leer (al inicio de la transacción) → escribir (junto con la renovación).
-async function prepararPagoTg({ tipoOrigen, total, recibido, bancoId, responsable, vendedorNombre, opId, actor }) {
+async function prepararPagoTg({ tipoOrigen, total, recibido, bancoId, responsable, vendedorNombre, opId, actor, fechaPago = "" }) {
   const ep = R.estadoPago(total, recibido);
   if (!(ep.total > 0) || ep.recibido < 0 || ep.recibido > ep.total) throw Object.assign(new Error("Montos inválidos."), { userError: true });
   const methods = await loadMethods(); const banco = methods.find((m) => m.id === bancoId);
   if (ep.recibido > 0 && !banco) throw Object.assign(new Error("Elija el banco donde entró el dinero."), { userError: true });
-  return { ep, banco, tipoOrigen, deudorTipo: responsable === "vendedor" ? "vendedor" : "cliente", vendedorNombre: String(vendedorNombre || "").slice(0, 60), opId, id: opDocId("oper", actor.uid, opId), actor };
+  const hoyP = hoyYmd(); const fp = /^\d{4}-\d{2}-\d{2}$/.test(String(fechaPago)) && fechaPago <= hoyP && R.daysBetweenYmd(fechaPago, hoyP) <= 30 ? fechaPago : hoyP; // R110
+  return { fechaPago: fp, ep, banco, tipoOrigen, deudorTipo: responsable === "vendedor" ? "vendedor" : "cliente", vendedorNombre: String(vendedorNombre || "").slice(0, 60), opId, id: opDocId("oper", actor.uid, opId), actor };
 }
 async function leerPagoTg(tx, prep) {
   const ventaRef = db.collection("finanzas_movimientos").doc(`${prep.id}_venta`);
@@ -375,7 +397,7 @@ function escribirPagoTg(tx, prep, lectura, cliente = {}) {
   const { ep, banco, tipoOrigen, deudorTipo, vendedorNombre, id, opId, actor } = prep;
   if (lectura.yaExiste) return { duplicado: true, ...ep };
   const ventaRef = db.collection("finanzas_movimientos").doc(`${id}_venta`), ingRef = db.collection("finanzas_movimientos").doc(`${id}_cobro`), cxcRef = db.collection(CXC).doc(id);
-  const hoy = hoyYmd(), now = new Date().toISOString();
+  const hoy = prep.fechaPago || hoyYmd(), now = new Date().toISOString(); // R110: día real del pago
   const base = { origen: "telegram", origenCanal: "tg", registradoPor: actor.usuario, registradoPorId: actor.uid, ...fechaCampos(hoy), createdAt: now, updatedAt: now };
   const rel = { clienteId: cliente.clienteId || "", clienteNombre: String(cliente.nombre || "").slice(0, 80), compraId: cliente.compraId || "", plataforma: String(cliente.plataforma || "").slice(0, 40), tipoOrigen, operacionId: id, cicloId: lectura.cicloId, operationId: opId, fechaNueva: cliente.fechaNueva || "", fechaAnterior: cliente.fechaAnterior || "", vendedor: vendedorNombre };
   tx.set(ventaRef, { ...base, movimientoId: ventaRef.id, tipo: "venta", subtipo: tipoOrigen === "compra" ? "compra_nueva" : "renovacion", monto: ep.total, montoRecibido: ep.recibido, saldoPendiente: ep.saldo, estadoPago: ep.estado, ...rel });
@@ -437,8 +459,12 @@ async function siguientePaso(chatId, p) {
   }
   p.mode = "flPgConfirm"; pending.set(String(chatId), p);
   const banco = p.bancoId ? (await loadMethods()).find((m) => m.id === p.bancoId) : null;
-  const txt = [`💵 *Revisar ${p.tipoOrigen === "compra" ? "compra" : "renovación"}* · ${p.etiqueta || ""}`, "", `Monto total: *${lps(ep.total)}*`, `Recibido ahora: *${lps(ep.recibido)}*${banco ? ` en ${banco.nombre}` : ""}`, `Saldo pendiente: *${lps(ep.saldo)}*${ep.saldo > 0 ? ` (${p.responsable === "vendedor" ? `vendedor ${p.vendedorNombre}` : "cliente"})` : ""}`, `Estado: *${ep.estado.toUpperCase()}*`].join("\n");
-  const kb = [[{ text: p.tipoOrigen === "compra" ? "✅ Confirmar operación" : "✅ Confirmar y renovar", callback_data: "fl:pg:ok" }]];
+  let txt = [`💵 *Revisar ${p.tipoOrigen === "compra" ? "compra" : "renovación"}* · ${p.etiqueta || ""}`, "", `Monto total: *${lps(ep.total)}*`, `Recibido ahora: *${lps(ep.recibido)}*${banco ? ` en ${banco.nombre}` : ""}`, `Saldo pendiente: *${lps(ep.saldo)}*${ep.saldo > 0 ? ` (${p.responsable === "vendedor" ? `vendedor ${p.vendedorNombre}` : "cliente"})` : ""}`, `Estado: *${ep.estado.toUpperCase()}*`].join("\n");
+  const hoyF = hoyYmd(), fSel = p.fechaPago || hoyF;
+  txt += `\n📅 Día que entró el dinero: *${ymdToDmy(fSel)}*${fSel === hoyF ? " (hoy)" : ""}`; // R110
+  const kb = [[0, "Hoy"], [-1, "Ayer"], [-2, "Antier"]].map(([n, t]) => { const f = R.addDaysYmd(hoyF, n); return { text: `${f === fSel ? "✅ " : ""}${t} ${ymdToDmy(f).slice(0, 5)}`, callback_data: `fl:pg:fecha:${f}` }; });
+  kb.splice(0, 3, kb.slice(0, 3)); kb.push([{ text: "✍️ Otra fecha", callback_data: "fl:pg:fecha:otra" }]);
+  kb.push([{ text: p.tipoOrigen === "compra" ? "✅ Confirmar operación" : "✅ Confirmar y renovar", callback_data: "fl:pg:ok" }]);
   if (p.tipoOrigen !== "compra") kb.push([{ text: "❌ Cancelar", callback_data: "fl:ren:cancel" }]);
   return upsertPanel(chatId, txt, kb);
 }
@@ -451,13 +477,13 @@ async function confirmarPago(chatId, userId, p) {
   if (p.tipoOrigen !== "compra") {
     if (typeof cfg.ejecutarRenovacion !== "function") throw new Error("Renovación no configurada.");
     // R107: la renovación y su pago se guardan en UNA sola transacción (o se guarda todo, o nada).
-    const prep = await prepararPagoTg({ tipoOrigen: "renovacion", total: p.total, recibido: p.recibido, bancoId: p.bancoId, responsable: p.responsable, vendedorNombre: p.vendedorNombre, opId: p.opId, actor });
+    const prep = await prepararPagoTg({ tipoOrigen: "renovacion", total: p.total, recibido: p.recibido, bancoId: p.bancoId, responsable: p.responsable, vendedorNombre: p.vendedorNombre, opId: p.opId, actor, fechaPago: p.fechaPago || "" });
     const pagoExtra = { leer: (tx) => leerPagoTg(tx, prep), escribir: (tx, res, cl, lectura) => escribirPagoTg(tx, prep, lectura, { clienteId: p.accion.clientId, nombre: cl?.nombrePerfil || cl?.nombre || "", compraId: res?.siguiente?.compraId || p.accion.compraId || "", plataforma: res?.siguiente?.plataforma || (Array.isArray(res?.servicios) ? res.servicios.map((x) => x?.plataforma).filter(Boolean).join(", ") : ""), fechaAnterior: res?.fechaAnterior || "", fechaNueva: res?.fechaNueva || "" }) };
     const info = await cfg.ejecutarRenovacion(chatId, userId, p.accion, { ajuste: false, pagoExtra });
     cliente = { ...(info || {}), clienteId: p.accion.clientId, compraId: p.accion.compraId || "" };
     r = info?.pagoOperacion || null;
   }
-  if (!r) r = await registrarOperacionPago({ tipoOrigen: p.tipoOrigen, total: p.total, recibido: p.recibido, bancoId: p.bancoId, responsable: p.responsable, vendedorNombre: p.vendedorNombre, cliente, opId: p.opId, actor });
+  if (!r) r = await registrarOperacionPago({ tipoOrigen: p.tipoOrigen, total: p.total, recibido: p.recibido, bancoId: p.bancoId, responsable: p.responsable, vendedorNombre: p.vendedorNombre, cliente, opId: p.opId, actor, fechaPago: p.fechaPago || "" });
   return bot.sendMessage(chatId, `✅ ${p.tipoOrigen === "compra" ? "Compra" : "Renovación"} registrada · *${r.estado.toUpperCase()}*${r.duplicado ? " (ya estaba registrada)" : ""}\nTotal ${lps(r.total)} · Recibido ${lps(r.recibido)} · Pendiente ${lps(r.saldo)}${cliente.fechaNueva ? `\nNueva fecha: ${cliente.fechaNueva}` : ""}`, { parse_mode: "Markdown" });
 }
 
@@ -570,6 +596,11 @@ async function handleCallback(chatId, userId, data) {
       if (p.responsable === "vendedor") { p.mode = "flPgVendedor"; pending.set(String(chatId), p); return bot.sendMessage(chatId, "🧑‍💼 Escriba el nombre del vendedor que tiene el dinero:"); }
       return siguientePaso(chatId, p);
     }
+    if (data.startsWith("fl:pg:fecha:") && p.mode === "flPgConfirm") { // R110: día real del pago
+      const v = data.slice("fl:pg:fecha:".length);
+      if (v === "otra") { p.mode = "flPgFecha"; pending.set(String(chatId), p); return bot.sendMessage(chatId, "✍️ Escriba el día que entró el dinero (dd/mm/yyyy), máximo 30 días atrás:"); }
+      p.fechaPago = v; return siguientePaso(chatId, p);
+    }
     if (data === "fl:pg:ok" && p.mode === "flPgConfirm") {
       try { return await confirmarPago(chatId, userId, p); } catch (e) { if (e.userError) return bot.sendMessage(chatId, `⚠️ ${e.message}`); throw e; }
     }
@@ -616,6 +647,12 @@ async function handleText(chatId, userId, text, p) {
       if (!ymd) return bot.sendMessage(chatId, "Escriba la fecha como dd/mm/yyyy. Ejemplo: 03/10/2026");
       try { const r = await ajustarFechaMovimiento({ movimientoId: p.movimientoId, nuevaFecha: ymd, actor: await actorDe(userId) }); pending.delete(String(chatId)); await bot.sendMessage(chatId, r.sinCambios ? "✅ Esa fecha ya estaba correcta." : `✅ Fecha financiera ajustada: ${r.antes ? ymdToDmy(r.antes) : "Sin fecha"} → ${ymdToDmy(r.despues)}.\nQuedó registrado en Auditoría.`); return panelAjustarFechas(chatId, p.page || 0); }
       catch (e) { return bot.sendMessage(chatId, `⚠️ ${String(e?.message || e).slice(0, 200)}`); }
+    }
+    if (p.mode === "flPgFecha") {
+      const m = t.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/); const f = m ? `${m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}` : "";
+      const hoyF = hoyYmd();
+      if (!f || f > hoyF || R.daysBetweenYmd(f, hoyF) > 30) return bot.sendMessage(chatId, "Fecha inválida: dd/mm/yyyy, no futura y máximo 30 días atrás.");
+      p.fechaPago = f; p.mode = "flPgConfirm"; return siguientePaso(chatId, p);
     }
     if (p.mode === "flPgTotal") {
       if (!(num > 0)) return bot.sendMessage(chatId, "Escriba el monto total acordado (mayor que 0), ej. 220.");
