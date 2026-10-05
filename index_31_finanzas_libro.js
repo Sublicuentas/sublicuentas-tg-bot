@@ -129,14 +129,15 @@ async function registrarAjuste({ bancoId, monto, motivo, opId, actor }) {
 }
 async function panelBancos(chatId) {
   const { saldos } = await estadoLibro();
-  const lines = saldos.bancos.map((b) => b.activado ? `✅ ${b.nombre}: *${lps(b.saldo)}* (desde ${ymdToDmy(b.desde)})` : `⚪ ${b.nombre}: sin saldo inicial`);
+  // R113: sin "saldo inicial": resumen de entradas y salidas por banco.
+  const lines = saldos.bancos.filter((b) => b.movimientos || !b.sinSaldoInicial).map((b) => `🏦 *${b.nombre}*: ${lps(b.saldo)}\n   +${lps(b.ingresos)} ingresos · −${lps(b.egresosOperativos + b.planilla)} egresos`);
   const kb = [];
   const pend = saldos.bancos.filter((b) => !b.activado).map((b) => ({ text: `➕ ${b.nombre}`, callback_data: `fl:si:pick:${b.id}` }));
   for (let i = 0; i < pend.length; i += 2) kb.push(pend.slice(i, i + 2));
   const act = saldos.bancos.filter((b) => b.activado).map((b) => ({ text: `± Ajustar ${b.nombre}`, callback_data: `fl:aj:pick:${b.id}` }));
   for (let i = 0; i < act.length; i += 2) kb.push(act.slice(i, i + 2));
   kb.push([{ text: "⬅️ Ciclo", callback_data: "fl:menu" }]);
-  return upsertPanel(chatId, ["🏦 *SALDOS POR BANCO*", "", ...lines, "", pend.length ? "Toque ➕ para registrar el saldo inicial (una sola vez por banco)." : "Todos los bancos tienen saldo inicial. Para corregir use ± Ajustar (pide motivo)."].join("\n"), kb);
+  return upsertPanel(chatId, ["🏦 *SALDOS POR BANCO*", "", ...lines, "", "Resumen desde el 01/10/2026. Para corregir un saldo use ± Ajustar (pide motivo)."].join("\n"), kb);
 }
 
 async function confirmarPagoPlanilla({ draft, actor }) {
@@ -343,7 +344,7 @@ async function menuLibro(chatId) {
     `👥 Planilla / comisiones: −${lps(t.planilla)}`, `= Resultado: *${lps(t.resultado)}*`, "",
     `🧾 Ventas generadas: ${lps(t.ventasGeneradas || 0)}`, `📋 Pendiente clientes: ${lps(cart.clientes)} · vendedores: ${lps(cart.vendedores)} (no es efectivo)`, "",
     ...(sinBanco.length ? [`⚠️ *${sinBanco.length} movimiento${sinBanco.length === 1 ? "" : "s"} sin banco* desde el 01/10 → toque 🏷 para enlazarlos.`, ""] : []),
-    `🏦 *Saldos reales* · ${lps(saldos.total)}`, ...(bancos.length ? bancos.map((b) => `• ${b.nombre}: ${lps(b.saldo)}`) : ["(Toque 🏦 Saldos por banco para registrar el saldo inicial de cada banco)"]),
+    `🏦 *Saldos reales* · ${lps(saldos.total)}`, ...(bancos.length ? bancos.map((b) => `• ${b.nombre}: ${lps(b.saldo)}`) : ["(Sin movimientos todavía)"]),
   ].join("\n");
   return upsertPanel(chatId, txt, [
     [{ text: "🏦 Saldos por banco", callback_data: "fl:bancos" }, { text: "📋 Pendientes de cobro", callback_data: "fl:cxc:menu" }],

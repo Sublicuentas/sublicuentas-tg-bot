@@ -131,9 +131,11 @@ function bankBalances(movements = [], libro = {}, methods = []) {
   const out = new Map();
   for (const m of methods) {
     const b = bases[m.id];
+    // R113: ya no se registra "saldo inicial". Cada banco es un RESUMEN desde el inicio del libro (01/10/2026):
+    // entradas − salidas. Los saldos iniciales que ya se registraron se siguen respetando.
     out.set(m.id, {
-      id: m.id, nombre: m.nombre, logoKey: m.logoKey, activado: !!b,
-      base: money(b?.saldo), desde: b?.desde || "", ingresos: 0, egresosOperativos: 0, planilla: 0, ajustes: 0, movimientos: 0, saldo: money(b?.saldo),
+      id: m.id, nombre: m.nombre, logoKey: m.logoKey, activado: true, sinSaldoInicial: !b,
+      base: money(b?.saldo), desde: b?.desde || libro.cicloInicioLibro || "2026-10-01", ingresos: 0, egresosOperativos: 0, planilla: 0, ajustes: 0, movimientos: 0, saldo: money(b?.saldo),
     });
   }
   for (const m of movements) {
