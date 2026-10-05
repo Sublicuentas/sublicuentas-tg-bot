@@ -142,7 +142,7 @@ function usuarioMovimiento(data = {}) {
   const u = safeText(data.userName || data.registradoPorNombre || data.usuario || data.cobradoPor || data.registradoPor || data.admin || data.creadoPor || data.createdBy || "");
   if (!u) return "";
   const key = u.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
-  const label = USUARIOS_LABEL[key] || u;
+  const label = USUARIOS_LABEL[key] || (/^libni|daniela$/i.test(String(u).replace(/\s+/g, "")) ? "Relojes" : u); // R119: "Libni Daniela" = Relojes
   return canal ? `${label} · ${canal}` : label;
 }
 const SUBTIPO_LABEL = { cobro_renovacion: "Renovación", cobro_compra: "Compra nueva", cobro_pendiente_cliente: "Abono de cliente", cobro_pendiente_vendedor: "Entrega de vendedor", compra_socio: "Compra socio", renovacion_socio: "Renovación socio", cobro_cliente: "Cobro" };
