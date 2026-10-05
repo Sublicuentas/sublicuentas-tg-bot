@@ -88,3 +88,15 @@ test("R111: eliminar por fecha no se cae con ids largos (límite 64 bytes) y pro
   const largo = "oper_op_" + "a".repeat(28) + "_" + "b".repeat(36) + "_cobro";
   assert.ok(Buffer.byteLength(`fin:del:pick:${largo}`) > 64, "el id nuevo sí pasaba del límite");
 });
+
+test("R118 bot: 5 categorías antes de plataformas; cuenta completa = correo → clave → precio → meses → pago", () => {
+  const c = fs.readFileSync(path.join(__dirname, "..", "index_03_clientes_crm.js"), "utf8");
+  assert.match(c, /function kbCategoriasWiz\(mode, clientId = null, idx = null\)/);
+  assert.match(c, /if \(mode && !categoriaCode\) return kbCategoriasWiz\(mode, clientId, idx\);/);
+  assert.match(c, /compra\.sinPinPerfil = true; delete compra\.pinPerfil;/);
+  const h = fs.readFileSync(path.join(__dirname, "..", "index_06_handlers.js"), "utf8");
+  assert.match(h, /data\.startsWith\("platcat:"\)/); assert.match(h, /finLibro\.iniciarCuentaCompleta\(/);
+  const cat = require("../lib_catalogo_categorias");
+  assert.equal(cat.clasificarServicio({ plataforma: "viki" }).tipoVenta, "cuenta_completa");
+  const largo = "platcat:add:cc:" + "x".repeat(20) + ":12"; assert.ok(Buffer.byteLength(largo) <= 64, "botón de categoría cabe en 64 bytes");
+});
