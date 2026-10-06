@@ -872,9 +872,53 @@ function r108Movs(tx, { idBase, subtipo, total, banco, cicloId, rel, auditoria }
   const base = { origen: "socios", origenCanal: "socios", registradoPor: actorSocio, registradoPorNombre: actorSocio, ...f, createdAt: now, updatedAt: now, cicloId, ...rel };
   const venta = db.collection("finanzas_movimientos").doc(`${idBase}_venta`), ing = db.collection("finanzas_movimientos").doc(`${idBase}_cobro`);
   tx.set(venta, { ...base, movimientoId: venta.id, tipo: "venta", subtipo, monto: total, montoRecibido: total, saldoPendiente: 0, estadoPago: "pagado" });
-  tx.set(ing, { ...base, movimientoId: ing.id, tipo: "ingreso", subtipo, monto: total, bancoId: banco.id, banco: banco.nombre, metodoPago: banco.nombre, cobradoPor: actorSocio });
+  tx.set(ing, { ...base, movimientoId: ing.id, tipo: "ingreso", subtipo, monto: total, bancoId: banco.id, banco: banco.nombre, metodoPago: banco.nombre, cobradoPor: actorSocio, ...(subtipo === "compra_socio" ? { fichaPendiente: true } : {}) }); // R121: la compra de socio queda "sin ficha" hasta que se arme (Ya pagó por Socios)
   tx.set(db.collection("auditoria_eventos").doc(), { actorUsuario: actorSocio, rol: "socio", origen: "socios", modulo: "socios", resultado: "ok", createdAt: now, monto: total, bancos: [{ bancoId: banco.id, monto: total, direccion: "entrada" }], operationId: rel.operationId || "", movimientoId: ing.id, ...auditoria });
   return { ventaId: venta.id, ingresoId: ing.id };
+}
+
+// R121 · El ingreso de una COMPRA de socio lleva el nombre del perfil (antes Finanzas lo mostraba solo como "Ingresos").
+// Varios perfiles distintos en el mismo pedido salen juntos; si el producto no lleva perfil se usa el nombre del
+// cliente del pedido y, de último, el del socio: nunca queda un ingreso sin nombre.
+function r121NombreCompraSocio(productos, cliente, socio) {
+  const vistos = new Set(), nombres = [];
+  for (const p of Array.isArray(productos) ? productos : []) {
+    const n = String(p?.perfil || `${p?.perfilNombre || ""} ${p?.perfilApellido || ""}`.trim() || p?.nombreCliente || "").replace(/\s+/g, " ").trim();
+    if (n && !vistos.has(n.toLowerCase())) { vistos.add(n.toLowerCase()); nombres.push(n); }
+  }
+  return (nombres.join(", ") || String(cliente || "").replace(/\s+/g, " ").trim() || String(socio || "").trim()).slice(0, 80);
+}
+// Las compras de socios ya guardadas se completan UNA sola vez al arrancar: se agrega el nombre del perfil y la marca
+// "sin ficha" (fichaPendiente) que usa la opción "Ya pagó por Socios". No se toca monto, banco ni fecha.
+// Queda anotado en finanzas_config/migraciones para no volver a leer nada.
+async function r121RellenarNombresCompraSocio() {
+  const marca = db.collection("finanzas_config").doc("migraciones");
+  try {
+    const m = await marca.get();
+    if (m.exists && (m.data() || {}).r121NombresCompraSocio) return 0;
+    const snap = await db.collection("finanzas_movimientos").where("subtipo", "==", "compra_socio").get();
+    const sinMarca = (x) => x.tipo === "ingreso" && x.fichaPendiente === undefined && !x.estadoFinanciero && !x.reversaDe;
+    const faltan = snap.docs.filter((d) => !String((d.data() || {}).clienteNombre || "").trim() || sinMarca(d.data() || {}));
+    const pedidos = new Map();
+    for (const id of new Set(faltan.map((d) => String((d.data() || {}).pedidoId || (d.data() || {}).compraId || "").trim()).filter(Boolean))) {
+      const c = await db.collection("compras").doc(id).get();
+      if (c.exists) pedidos.set(id, c.data() || {});
+    }
+    let n = 0;
+    for (let i = 0; i < faltan.length; i += 400) {
+      const batch = db.batch();
+      for (const d of faltan.slice(i, i + 400)) {
+        const x = d.data() || {}, ped = pedidos.get(String(x.pedidoId || x.compraId || "").trim()) || {};
+        const nombre = r121NombreCompraSocio(ped.productos, ped.cliente, x.socioNombre || x.registradoPorNombre);
+        const cambio = { ...(!String(x.clienteNombre || "").trim() && nombre ? { clienteNombre: nombre } : {}), ...(sinMarca(x) ? { fichaPendiente: true } : {}) };
+        if (Object.keys(cambio).length) { batch.update(d.ref, cambio); n++; }
+      }
+      await batch.commit();
+    }
+    await marca.set({ r121NombresCompraSocio: new Date().toISOString(), r121NombresCompraSocioDocs: n }, { merge: true });
+    if (n) console.log(`R121: ${n} movimientos de compra de socios completados (nombre del perfil / marca sin ficha)`);
+    return n;
+  } catch (e) { console.error("R121 nombres compra socio:", e.message); return 0; }
 }
 
 async function revRenovarSeleccionConPago({ clienteId, socioNorm, socioNombre, seleccion, nuevaFecha, meses, banco, operationId }) {
@@ -1252,8 +1296,8 @@ app.post("/rev/compra", revAuth, async (req, res) => {
         const cicloId = await r108CicloId(tx);
         tx.set(ref, doc);
         r108Movs(tx, { idBase: `socio_compra_${ref.id}`, subtipo: "compra_socio", total: totalCombo, banco: bancoR108, cicloId,
-          rel: { socioNorm: live.nombre_norm || req.rev.nombre_norm || "", socioNombre: socio, compraId: ref.id, pedidoId: ref.id, plataforma: productos.map((p) => p.servicio).join(", ").slice(0, 200), tipoOrigen: "compra", operationId: requestId, destino: destino.key,
-            productosSocio: productos.map((p) => ({ servicio: p.servicio, cantidad: p.cantidad || 1, precioUnitario: p.precioCatalogo, entregaTipo: p.entregaTipo })), subtotal: subtotalCatalogo, descuento: descuentoCombo },
+          rel: { socioNorm: live.nombre_norm || req.rev.nombre_norm || "", socioNombre: socio, clienteNombre: r121NombreCompraSocio(productos, doc.cliente, socio), compraId: ref.id, pedidoId: ref.id, plataforma: productos.map((p) => p.servicio).join(", ").slice(0, 200), tipoOrigen: "compra", operationId: requestId, destino: destino.key,
+            productosSocio: productos.map((p) => ({ servicio: p.servicio, perfil: p.perfil || p.nombreCliente || "", cantidad: p.cantidad || 1, precioUnitario: p.precioCatalogo, entregaTipo: p.entregaTipo })), subtotal: subtotalCatalogo, descuento: descuentoCombo },
           auditoria: { accion: "compra_socio", targetType: "compra", targetId: ref.id, detalle: `Socio ${socio} compró ${productos.map((p) => `${p.servicio}${(p.cantidad || 1) > 1 ? ` x${p.cantidad}` : ""} (L${p.precioCatalogo})`).join(" + ")} · subtotal L${subtotalCatalogo} − desc L${descuentoCombo} = L${totalCombo} en ${bancoR108.nombre}`, after: { subtotal: subtotalCatalogo, descuento: descuentoCombo, total: totalCombo, banco: bancoR108.nombre } } });
         return {};
       });
@@ -1810,4 +1854,4 @@ app.post("/rev/ask", revAuth, async (req, res) => {
 require("./index_12_admin_panel")(app);
 require("./index_13_gamificacion")(app);
 
-app.listen(PORT, () => console.log("🌐 Panel API (revendedores) activa en puerto", PORT));
+app.listen(PORT, () => { console.log("🌐 Panel API (revendedores) activa en puerto", PORT); r121RellenarNombresCompraSocio(); });

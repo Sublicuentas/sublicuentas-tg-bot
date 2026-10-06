@@ -466,11 +466,69 @@ async function carteraResumen() {
   return { rows, clientes: sum("cliente"), vendedores: sum("vendedor") };
 }
 
+// ===================== R121 · "Ya pagó por Socios" =====================
+// La compra de un socio YA dejó su venta + ingreso en el libro (server_api.js · compra_socio). Al armar la ficha de esa
+// cuenta NO se registra otro ingreso: se amarra a ese pago. Mismas reglas y campos que la web y la APK
+// (api/_finanzas-operacion.js): fichasVinculadas[] + fichaPendiente en el movimiento del socio.
+const userErr = (msg) => Object.assign(new Error(msg), { userError: true });
+function unidadesSocio(mov = {}) {
+  const vinc = Array.isArray(mov.fichasVinculadas) ? mov.fichasVinculadas : [];
+  const prods = Array.isArray(mov.productosSocio) && mov.productosSocio.length ? mov.productosSocio : [{ servicio: mov.plataforma || "Servicio", cantidad: 1 }];
+  return prods.map((x, idx) => {
+    const cantidad = Math.max(1, Math.min(50, Math.round(Number(x?.cantidad) || 1)));
+    const vinculadas = vinc.filter((v) => Number(v?.productoIdx) === idx).length;
+    return { idx, servicio: String(x?.servicio || mov.plataforma || "Servicio").slice(0, 140), perfil: String(x?.perfil || (prods.length === 1 ? mov.clienteNombre : "") || "").slice(0, 80), cantidad, vinculadas, restantes: Math.max(0, cantidad - vinculadas) };
+  });
+}
+function pagoSocioDisponible(mov = {}) { return mov.subtipo === "compra_socio" && mov.tipo === "ingreso" && !mov.estadoFinanciero && !mov.reversaDe && mov.fichaPendiente !== false; }
+async function pagosSociosSinFicha() {
+  const snap = await db.collection("finanzas_movimientos").where("fichaPendiente", "==", true).get();
+  const filas = [];
+  for (const d of snap.docs) {
+    const m = d.data() || {}; if (!pagoSocioDisponible(m)) continue;
+    for (const u of unidadesSocio(m)) if (u.restantes > 0) filas.push({ movimientoId: d.id, productoIdx: u.idx, fecha: String(m.fechaPago || ""), texto: [m.socioNombre || "Socio", u.servicio, u.perfil || m.clienteNombre, `L${R.fmt(m.monto)}`, m.banco].filter(Boolean).join(" · ") });
+  }
+  return filas.sort((a, b) => b.fecha.localeCompare(a.fecha) || b.movimientoId.localeCompare(a.movimientoId)).slice(0, 12);
+}
+async function vincularFichaSocio({ movimientoId, productoIdx, cliente = {}, opId, actor }) {
+  const ref = db.collection("finanzas_movimientos").doc(String(movimientoId));
+  return db.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    const m = snap.exists ? (snap.data() || {}) : null;
+    if (!m || m.subtipo !== "compra_socio" || m.tipo !== "ingreso") throw userErr("Esa compra de socio ya no existe en Finanzas.");
+    if (m.estadoFinanciero || m.reversaDe) throw userErr("Ese pago de socio está anulado o corregido: registre el pago normal.");
+    const previas = Array.isArray(m.fichasVinculadas) ? m.fichasVinculadas : [];
+    const resumen = { pagoSocio: true, socio: m.socioNombre || "Socio", banco: m.banco || "", total: R.money(m.monto) };
+    if (previas.some((v) => v?.operationId === opId)) return { duplicado: true, ...resumen };
+    const u = unidadesSocio(m)[Number(productoIdx)];
+    if (!u || u.restantes <= 0 || m.fichaPendiente === false) throw userErr("Esa compra de socio ya tiene su ficha armada. Si es otra venta, registre el pago normal.");
+    const ahora = new Date().toISOString();
+    const vinc = [...previas, { productoIdx: Number(productoIdx), clienteId: String(cliente.clienteId || ""), clienteNombre: String(cliente.nombre || "").slice(0, 80), compraId: String(cliente.compraId || ""), plataforma: String(cliente.plataforma || "").slice(0, 40), operationId: opId, por: actor.usuario, origen: "tg", at: ahora }];
+    const quedan = unidadesSocio({ ...m, fichasVinculadas: vinc }).reduce((a, x) => a + x.restantes, 0);
+    tx.update(ref, { fichasVinculadas: vinc, fichaPendiente: quedan > 0, updatedAt: ahora });
+    auditarTg(tx, actor, { modulo: "compras", accion: "ficha_pago_socio", targetType: "movimiento", targetId: ref.id, movimientoId: ref.id, clienteId: String(cliente.clienteId || ""), compraId: String(cliente.compraId || ""), operationId: opId, monto: R.money(m.monto), after: { socio: resumen.socio, banco: resumen.banco, fichasPendientes: quedan }, detalle: `${cliente.nombre || ""} · ${cliente.plataforma || ""} · ya pagado por el socio ${resumen.socio} (${R.money(m.monto)} en ${resumen.banco}) · sin ingreso nuevo` });
+    return { duplicado: false, ...resumen, fichasPendientes: quedan };
+  });
+}
+async function panelPagosSocios(chatId, p) {
+  const filas = await pagosSociosSinFicha();
+  p.mode = "flPgSocio"; p.socios = filas; pending.set(String(chatId), p);
+  const volver = [{ text: "⬅️ Volver: registrar pago normal", callback_data: "fl:pg:sback" }];
+  if (!filas.length) return upsertPanel(chatId, `🤝 *Ya pagó por Socios · ${p.etiqueta || ""}*
+
+No hay compras de socios pendientes de ficha.
+Si el cliente pagó aparte, registre el pago normal.`, [volver]);
+  return upsertPanel(chatId, `🤝 *Ya pagó por Socios · ${p.etiqueta || ""}*
+
+¿Cuál compra de socio es?
+La ficha queda amarrada a ese pago y *no se registra otro ingreso*.`, [...filas.map((f, i) => [{ text: f.texto.slice(0, 60), callback_data: `fl:pg:sp:${i}` }]), volver]);
+}
+
 // -- hoja de pago (compra y renovación): total → recibido → banco → responsable → confirmar
 async function iniciarPago(chatId, userId, datos) {
   pending.set(String(chatId), { mode: "flPgTotal", ...datos, opId: newOpId(), userId: String(userId) });
   const compra = datos.tipoOrigen === "compra";
-  const kb = compra ? [] : [[{ text: "🛠 Ajuste sin pago (garantía/cortesía)", callback_data: "fl:ren:ajuste" }], [{ text: "❌ Cancelar", callback_data: "fl:ren:cancel" }]];
+  const kb = compra ? [[{ text: "🤝 Ya pagó por Socios", callback_data: "fl:pg:socio" }]] : [[{ text: "🛠 Ajuste sin pago (garantía/cortesía)", callback_data: "fl:ren:ajuste" }], [{ text: "❌ Cancelar", callback_data: "fl:ren:cancel" }]];
   return upsertPanel(chatId, `💵 *${compra ? "COMPRA NUEVA" : "RENOVAR"} · ${datos.etiqueta || "servicio"}*\n\n1) Escriba el *monto total* acordado (ej. 220).\nNo hay monto predeterminado.`, kb);
 }
 async function iniciarPagoRenovacion(chatId, userId, accion) { return iniciarPago(chatId, userId, { tipoOrigen: "renovacion", accion, etiqueta: accion.etiqueta }); }
@@ -619,6 +677,19 @@ async function handleCallback(chatId, userId, data) {
     if (data === "fl:ren:cancel") { pending.delete(String(chatId)); return bot.sendMessage(chatId, "Renovación cancelada. No se cambió nada."); }
     if (data === "fl:ren:ajuste" && p.accion) { p.mode = "flRenMotivo"; pending.set(String(chatId), p); return bot.sendMessage(chatId, "🛠 Escriba el motivo del ajuste (garantía, cortesía, corrección…):"); }
     if (data.startsWith("fl:ren:bank:") && p.accion && p.monto) return ejecutarYCobrar(chatId, userId, p, { bancoId: data.slice("fl:ren:bank:".length) });
+    // R121 · compra de socio ya pagada: la ficha se amarra a ese pago, sin ingreso nuevo
+    if (data === "fl:pg:socio" && p.tipoOrigen === "compra" && ["flPgTotal", "flPgRecibido", "flPgSocio"].includes(p.mode)) return panelPagosSocios(chatId, p);
+    if (data === "fl:pg:sback" && p.mode === "flPgSocio") { const { socios, total, recibido, mode, ...resto } = p; return iniciarPago(chatId, userId, resto); }
+    if (data.startsWith("fl:pg:sp:") && p.mode === "flPgSocio") {
+      const f = (p.socios || [])[Number(data.split(":")[3])]; if (!f) return panelPagosSocios(chatId, p);
+      try {
+        const r = await vincularFichaSocio({ movimientoId: f.movimientoId, productoIdx: f.productoIdx, cliente: { clienteId: p.compra?.clientId, nombre: p.compra?.cliente, compraId: p.compra?.compraId, plataforma: p.compra?.plataforma }, opId: p.opId, actor: await actorDe(userId) });
+        pending.delete(String(chatId));
+        return bot.sendMessage(chatId, `✅ Compra registrada · *YA PAGADA POR SOCIOS*${r.duplicado ? " (ya estaba amarrada)" : ""}
+${r.socio} · ${lps(r.total)}${r.banco ? ` en ${r.banco}` : ""}
+No se registró otro ingreso.`, { parse_mode: "Markdown" });
+      } catch (e) { if (e.userError) { await bot.sendMessage(chatId, `⚠️ ${e.message}`); return panelPagosSocios(chatId, p); } throw e; }
+    }
     // R106 · hoja de pago (compra / renovación)
     if (data.startsWith("fl:pg:bank:") && p.mode === "flPgBanco") { p.bancoId = data.slice("fl:pg:bank:".length); return siguientePaso(chatId, p); }
     if (data.startsWith("fl:pg:resp:") && p.mode === "flPgResp") {
@@ -767,4 +838,4 @@ async function handleText(chatId, userId, text, p) {
   return bot.sendMessage(chatId, "Use los botones del panel o toque ❌ Cancelar.");
 }
 
-module.exports = { iniciarCuentaCompleta, iniciarPagoCompra, registrarOperacionPago, registrarAbonoTg, carteraResumen, registrarSaldoInicial, registrarAjuste, bancoDesdeBoton, movimientosSinBanco, configurar, esLibroUser, iniciarPagoRenovacion, handleCallback, handleText, menuLibro, estadoLibro, loadMethods, registrarCobroRenovacion, confirmarPagoPlanilla, usuarioCanonico, usuarioLabel, ajustarFechaMovimiento };
+module.exports = { unidadesSocio, pagoSocioDisponible, pagosSociosSinFicha, vincularFichaSocio, iniciarCuentaCompleta, iniciarPagoCompra, registrarOperacionPago, registrarAbonoTg, carteraResumen, registrarSaldoInicial, registrarAjuste, bancoDesdeBoton, movimientosSinBanco, configurar, esLibroUser, iniciarPagoRenovacion, handleCallback, handleText, menuLibro, estadoLibro, loadMethods, registrarCobroRenovacion, confirmarPagoPlanilla, usuarioCanonico, usuarioLabel, ajustarFechaMovimiento };
