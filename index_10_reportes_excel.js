@@ -415,6 +415,32 @@ function createResumenSheet(wb, meta) {
   return ws;
 }
 
+// R131: auditoría de pagos. El usuario elige en la lista y se guarda en el Excel.
+const CONCILIADO_R131 = { ok: "✔ Conciliado", mal: "✖ No cuadra", pendiente: "Pendiente" };
+function marcarCeldaConciliadoR131(cell) {
+  cell.dataValidation = {
+    type: "list",
+    allowBlank: true,
+    formulae: [`"${CONCILIADO_R131.ok},${CONCILIADO_R131.mal},${CONCILIADO_R131.pendiente}"`],
+    showErrorMessage: true,
+    errorTitle: "Conciliado",
+    error: "Elegí: Conciliado, No cuadra o Pendiente",
+  };
+  cell.alignment = { horizontal: "center", vertical: "middle" };
+  cell.protection = { locked: false };
+}
+function colorearConciliadoR131(ws, ref) {
+  const primera = ref.split(":")[0];
+  const regla = (texto, fondo, letra) => ({
+    type: "expression", formulae: [`ISNUMBER(SEARCH("${texto}",${primera}))`],
+    style: { fill: { type: "pattern", pattern: "solid", bgColor: { argb: fondo } }, font: { bold: true, color: { argb: letra } } },
+  });
+  ws.addConditionalFormatting({ ref, rules: [
+    regla("Conciliado", "FFD9F2DE", "FF1B7A34"),
+    regla("No cuadra", "FFFADBD8", "FFB3261E"),
+  ] });
+}
+
 function createDetalleSheet(wb, sheetName, title, subtitle, rows, tipo) {
   const isIngreso = tipo === "ingreso";
   const color = isIngreso ? COLORS.verde : COLORS.rojo;
@@ -422,10 +448,11 @@ function createDetalleSheet(wb, sheetName, title, subtitle, rows, tipo) {
   const ws = wb.addWorksheet(sheetName);
   ws.columns = [
     { width: 13 }, { width: 26 }, { width: 15 }, { width: 18 },
-    { width: 18 }, { width: 34 }, { width: 28 },
+    { width: 18 }, { width: 34 }, { width: 28 }, { width: 18 },
   ];
-  addTitle(ws, title, subtitle, 7);
-  const headerRow = addHeader(ws, ["Fecha", isIngreso ? "Plataforma" : "Motivo", "Monto", "Banco", "Usuario", "Detalle", "Barra visual"]);
+  addTitle(ws, title, subtitle, 8);
+  // R131: columna de auditoría para marcar que el pago entró y cuadra en la cuenta.
+  const headerRow = addHeader(ws, ["Fecha", isIngreso ? "Plataforma" : "Motivo", "Monto", "Banco", "Usuario", "Detalle", "Barra visual", "Conciliado"]);
   const firstDataRow = headerRow + 1;
 
   rows.forEach((m, i) => {
@@ -437,6 +464,7 @@ function createDetalleSheet(wb, sheetName, title, subtitle, rows, tipo) {
       m.userName || "—",
       m.detalle || "—",
       "",
+      CONCILIADO_R131.pendiente,
     ]);
     r.height = 21;
     styleRow(r, { fill: i % 2 === 1 ? COLORS.grisClaro : undefined });
@@ -450,14 +478,16 @@ function createDetalleSheet(wb, sheetName, title, subtitle, rows, tipo) {
     const barCell = ws.getCell(`G${rowNumber}`);
     barCell.value = rows.length ? { formula: formulaBar(`$C${rowNumber}`, `$C$${firstDataRow}:$C$${lastDataRow}`, 1, bloquesQueCaben(ws, 7)), result: "" } : "";
     barCell.font = { color: { argb: color } };
+    if (rows.length) marcarCeldaConciliadoR131(ws.getCell(`H${rowNumber}`));
   }
+  if (rows.length) colorearConciliadoR131(ws, `H${firstDataRow}:H${lastDataRow}`);
 
-  const totalRow = ws.addRow(["TOTAL", "", rows.length ? { formula: `SUM(C${firstDataRow}:C${lastDataRow})`, result: rows.reduce((s, x) => s + Number(x.monto || 0), 0) } : 0, "", `${rows.length} registros`, "", ""]);
+  const totalRow = ws.addRow(["TOTAL", "", rows.length ? { formula: `SUM(C${firstDataRow}:C${lastDataRow})`, result: rows.reduce((s, x) => s + Number(x.monto || 0), 0) } : 0, "", `${rows.length} registros`, "", "", rows.length ? { formula: `COUNTIF(H${firstDataRow}:H${lastDataRow},"${CONCILIADO_R131.ok}")&" de ${rows.length}"`, result: `0 de ${rows.length}` } : ""]);
   totalRow.height = 24;
   styleRow(totalRow, { fill: color, font: { bold: true, color: { argb: COLORS.blanco } } });
   totalRow.getCell(3).numFmt = MONEY_FMT;
 
-  ws.autoFilter = { from: { row: headerRow, column: 1 }, to: { row: Math.max(headerRow, lastDataRow), column: 7 } };
+  ws.autoFilter = { from: { row: headerRow, column: 1 }, to: { row: Math.max(headerRow, lastDataRow), column: 8 } };
   ws.views = [{ state: "frozen", ySplit: headerRow }];
   ws.pageSetup = { orientation: "landscape", fitToPage: true, fitToWidth: 1, fitToHeight: 0 };
   return { ws, totalRow: totalRow.number, firstDataRow, lastDataRow };
