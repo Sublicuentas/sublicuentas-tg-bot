@@ -6859,7 +6859,8 @@ bot.on("message", async (msg) => {
           ]);
         }
         // R122: ordenados por nombre (los vouchers del mismo cliente quedan juntos) y marcados si parecen repetidos.
-        list.sort((a, b) => nombreMovimientoFinanzas(a).localeCompare(nombreMovimientoFinanzas(b), "es") || String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
+        // R123: los 🚫 anulados / ↩️ reversas van AL FINAL, separados de los vigentes.
+        list.sort((a, b) => (estadoMovimientoFinanzas(a) ? 1 : 0) - (estadoMovimientoFinanzas(b) ? 1 : 0) || nombreMovimientoFinanzas(a).localeCompare(nombreMovimientoFinanzas(b), "es") || String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
         const esRepetido = R122_clavesRepetidas(list);
         const vigentes = list.filter((m) => !estadoMovimientoFinanzas(m));
         const totalVigente = vigentes.reduce((a, m) => a + Number(m.monto || 0), 0);

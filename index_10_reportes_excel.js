@@ -650,6 +650,21 @@ async function agregarHojasLibroR104(wb, { ini, fin, subtitle, ingresosTotal, eg
     (libro ? libro.saldos.bancos.filter((b) => b.activado) : []).map((b) => [b.nombre, b.base, b.desde, b.ingresos, b.egresosOperativos, b.planilla, b.ajustes, Number(b.transferencias || 0), b.saldo, b.movimientos]), [2, 4, 5, 6, 7, 8, 9], [9]);
 }
 
+// R123 · Anulados aparte (abajo / en su hoja), igual que la lista de Telegram y el Excel de la APK.
+function esAnuladoR123(m = {}) { return ["anulado", "corregido"].includes(String(m.raw?.estadoFinanciero || "")); }
+function fechaHoraHN(iso) { const d = typeof iso?.toDate === "function" ? iso.toDate() : new Date(iso); if (!d || isNaN(d)) return ""; const x = new Date(d.getTime() - 6 * 3600000).toISOString(); return `${x.slice(8, 10)}/${x.slice(5, 7)}/${x.slice(0, 4)} ${x.slice(11, 16)}`; }
+function crearHojaAnuladosR123(wb, anulados = [], subtitle = "") {
+  const filas = [...anulados].sort((a, b) => (a.fechaTs || 0) - (b.fechaTs || 0)).map((m) => {
+    const r = m.raw || {};
+    return [m.fecha, m.tipo === "egreso" ? "Egreso" : "Ingreso", m.detalle || safeText(r.clienteNombre || r.motivo || ""), m.plataforma || "", m.banco || "", Math.abs(Number(m.monto || 0)),
+      String(r.estadoFinanciero || "").toUpperCase(), safeText(r.motivoAnulacion || r.motivoCorreccion || ""), usuarioMovimiento({ usuario: r.anuladoPor }) || safeText(r.anuladoPor || ""), fechaHoraHN(r.anuladoAt), m.userName || ""];
+  });
+  const ws = simpleSheet(wb, "Anulados", "MOVIMIENTOS ANULADOS / CORREGIDOS", `${subtitle} · NO suman en Ingresos, Egresos ni Resumen`,
+    ["Fecha", "Tipo", "Cliente / detalle", "Plataforma", "Banco", "Monto", "Estado", "Motivo", "Anulado por", "Anulado el", "Registrado por"], [12, 10, 26, 26, 18, 13, 12, 30, 16, 17, 20], filas, [6], [6]);
+  if (!filas.length) ws.addRow(["Sin movimientos anulados en este período."]);
+  return ws;
+}
+
 async function generarReporteExcelPorRango(fechaInicio, fechaFin) {
   const ini = normalizeDMY(fechaInicio);
   const fin = normalizeDMY(fechaFin);
@@ -659,8 +674,12 @@ async function generarReporteExcelPorRango(fechaInicio, fechaFin) {
   try {
     // R104: misma clasificación que la APK y /api/finanzas (lib_finanzas_reglas.js):
     // saldos iniciales no son ingresos; la planilla/comisiones va aparte de los egresos operativos.
-    const movimientos = (await getMovimientosPorRango(ini, fin)).map((m) => ({ ...m, kind: RL.movementKind(m.raw || {}) })).filter((m) => !["saldo_inicial", "venta", "transferencia"].includes(m.kind)); // R106: ventas y transferencias no son ingreso/egreso
-    const ventasTotal = (await getMovimientosPorRango(ini, fin)).filter((m) => RL.movementKind(m.raw || {}) === "venta").reduce((s, m) => s + Number(m.monto || 0), 0);
+    const todosR123 = (await getMovimientosPorRango(ini, fin)).map((m) => ({ ...m, kind: RL.movementKind(m.raw || {}) }));
+    // R123: los movimientos ANULADOS/CORREGIDOS y sus reversas no se mezclan con los vigentes: van en su propia hoja
+    // "Anulados" y no suman en Ingresos, Egresos ni el Resumen (así el día muestra solo lo que de verdad entró/salió).
+    const anulados = todosR123.filter((m) => esAnuladoR123(m) && ["ingreso", "egreso", "ajuste", "planilla"].includes(m.kind));
+    const movimientos = todosR123.filter((m) => !esAnuladoR123(m) && !m.raw?.reversaDe).filter((m) => !["saldo_inicial", "venta", "transferencia"].includes(m.kind)); // R106: ventas y transferencias no son ingreso/egreso
+    const ventasTotal = todosR123.filter((m) => m.kind === "venta" && !esAnuladoR123(m) && !m.raw?.reversaDe).reduce((s, m) => s + Number(m.monto || 0), 0);
     // R114: un cliente paga UNA vez → los cobros del mismo cliente/banco/usuario/día registrados juntos (≤10 min) van en UNA fila.
     const ingresos = (() => {
       const lista = movimientos.filter((m) => m.tipo === "ingreso" && m.kind !== "ajuste").sort((a, b) => String(a.raw?.createdAt || "").localeCompare(String(b.raw?.createdAt || "")));
@@ -714,6 +733,7 @@ async function generarReporteExcelPorRango(fechaInicio, fechaFin) {
 
     createDetalleSheet(wb, "Ingresos", "DETALLE DE INGRESOS", subtitle, ingresos, "ingreso");
     createDetalleSheet(wb, "Egresos", "DETALLE DE EGRESOS", subtitle, egresos, "egreso");
+    crearHojaAnuladosR123(wb, anulados, subtitle);
     createBancosSheet(wb, bancos, subtitle);
     await agregarHojasLibroR104(wb, { ini, fin, subtitle, ingresosTotal, egresosTotal, planillaTotal, ventasTotal });
     createGraficosSheet(wb, { ini, fin, ingresosTotal, egresosTotal, utilidad, topPlats, bancos });
