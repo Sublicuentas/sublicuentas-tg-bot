@@ -510,6 +510,48 @@ async function anularMovimientoTg({ movimientoId, motivo, opId, actor }) {
   });
 }
 const userErrR122 = (msg) => Object.assign(new Error(msg), { userError: true });
+// R128 · Corregir monto y/o BANCO desde Telegram (mismo proceso que la APK/web · corregir_movimiento): el original queda
+// "corregido" con su reversa (fecha de hoy) y se crea el movimiento correcto con la fecha REAL del original.
+// Si era un cobro de una cuenta por cobrar, se ajusta solo la diferencia. Motivo obligatorio y auditado.
+async function corregirMovimientoTg({ movimientoId, monto, bancoId, motivo, opId, actor }) {
+  const mot = String(motivo || "").trim().slice(0, 200);
+  if (mot.length < 4) throw userErrR122("Escriba el motivo (obligatorio).");
+  const methods = await loadMethods();
+  const id = String(movimientoId || "").trim();
+  const ref = db.collection("finanzas_movimientos").doc(id || "x");
+  const marcaRef = db.collection("finanzas_operaciones").doc(opDocId("corr", actor.uid, opId));
+  return db.runTransaction(async (tx) => {
+    if ((await tx.get(marcaRef)).exists) return { duplicado: true };
+    const snap = await tx.get(ref);
+    if (!snap.exists) throw userErrR122("Ese movimiento no existe.");
+    const m = snap.data() || {};
+    const bloqueo = motivoBloqueoAnular(m); if (bloqueo) throw userErrR122(bloqueo.replace("anular", "corregir").replace("se anula", "se corrige"));
+    const nuevoMonto = monto != null && monto !== "" ? R.money(monto) : R.money(m.monto);
+    const b = methods.find((x) => x.id === String(bancoId || "").trim()) || methods.find((x) => x.id === (m.bancoId || R.resolveBankId(m.banco || m.metodoPago, methods)));
+    if (!(nuevoMonto > 0) || !b) throw userErrR122("Corrección inválida: revise monto y banco.");
+    if (nuevoMonto === R.money(m.monto) && b.id === m.bancoId) throw userErrR122("No cambió ni el monto ni el banco.");
+    const cxcRef = m.cuentaId ? db.collection(CXC).doc(m.cuentaId) : null;
+    const cs = cxcRef ? await tx.get(cxcRef) : null;
+    if (cs?.exists && R.movementKind(m) === "ingreso" && nuevoMonto - R.money(m.monto) > R.money((cs.data() || {}).saldoPendiente) + 0.001) throw userErrR122("La corrección deja el cobro mayor que lo que se debía.");
+    const now = new Date().toISOString();
+    const { createdAt, updatedAt, movimientoId: _mid, saldoAntes, saldoDespues, estadoFinanciero, reversaId, ...resto } = m;
+    const rev = db.collection("finanzas_movimientos").doc(`${id}_rev`);
+    tx.set(rev, { ...resto, registradoPor: actor.usuario, registradoPorId: actor.uid, rol: "telegram", origenCanal: "tg", movimientoId: rev.id, monto: -R.money(m.monto), reversaDe: id, motivo: `Reversa: ${mot}`, ...fechaCampos(hoyYmd()), createdAt: now, updatedAt: now });
+    tx.set(ref, { estadoFinanciero: "corregido", reversaId: rev.id, anuladoPor: actor.usuario, anuladoAt: now, motivoAnulacion: mot, updatedAt: now }, { merge: true });
+    const sus = db.collection("finanzas_movimientos").doc(`${id}_c${Date.now().toString(36)}`);
+    const fOrig = R.movementYmd(m) || hoyYmd(); // el corregido conserva la fecha REAL del pago
+    tx.set(sus, { ...resto, monto: nuevoMonto, bancoId: b.id, banco: b.nombre, ...(m.metodoPago ? { metodoPago: b.nombre } : {}), registradoPor: actor.usuario, registradoPorId: actor.uid, rol: "telegram", origenCanal: "tg", movimientoId: sus.id, sustituyeA: id, motivoCorreccion: mot, ...fechaCampos(fOrig), createdAt: now, updatedAt: now });
+    if (cs?.exists && R.movementKind(m) === "ingreso") {
+      const c = cs.data() || {}, delta = R.money(nuevoMonto - R.money(m.monto));
+      const saldo = R.money(Math.max(0, R.money(c.saldoPendiente) - delta)), deAbono = String(m.subtipo || "").startsWith("cobro_pendiente");
+      const posterior = R.money((c.montoRecibidoPosterior || 0) + (deAbono ? delta : 0)), inicial = R.money((c.montoRecibidoInicial || 0) + (deAbono ? 0 : delta));
+      tx.set(cxcRef, { saldoPendiente: saldo, montoRecibidoPosterior: posterior, montoRecibidoInicial: inicial, estado: saldo <= 0 ? "pagado" : (inicial + posterior > 0 ? "parcial" : "pendiente"), updatedAt: now }, { merge: true });
+    }
+    tx.set(marcaRef, { accion: "corregir_movimiento", movimientoId: id, reversaId: rev.id, sustitutoId: sus.id, por: actor.usuario, motivo: mot, origen: "tg", createdAt: now });
+    tx.set(db.collection("auditoria_eventos").doc(), { actorUsuario: actor.usuario, rol: "telegram", origen: "tg", modulo: "finanzas", accion: "corregir_movimiento", targetType: "movimiento", targetId: id, movimientoId: id, clienteId: m.clienteId || "", compraId: m.compraId || "", cuentaId: m.cuentaId || "", operationId: opId, motivo: mot, monto: R.money(m.monto), before: { monto: R.money(m.monto), banco: m.banco || "", bancoId: m.bancoId || "" }, after: { monto: nuevoMonto, banco: b.nombre, bancoId: b.id }, detalle: `${m.banco || "—"} L${R.money(m.monto)} → ${b.nombre} L${nuevoMonto}`, bancos: [{ bancoId: m.bancoId || "", monto: -R.money(m.monto) }, { bancoId: b.id, monto: nuevoMonto }], resultado: "ok", tipo: "finanzas_corregir_movimiento", createdAt: now });
+    return { duplicado: false, antes: { monto: R.money(m.monto), banco: m.banco || "" }, despues: { monto: nuevoMonto, banco: b.nombre }, cliente: m.clienteNombre || m.detalle || "" };
+  });
+}
 
 // ===================== R121 · "Ya pagó por Socios" =====================
 // La compra de un socio YA dejó su venta + ingreso en el libro (server_api.js · compra_socio). Al armar la ficha de esa
@@ -883,4 +925,4 @@ async function handleText(chatId, userId, text, p) {
   return bot.sendMessage(chatId, "Use los botones del panel o toque ❌ Cancelar.");
 }
 
-module.exports = { motivoBloqueoAnular, anularMovimientoTg, newOpId, actorDe, unidadesSocio, pagoSocioDisponible, pagosSociosSinFicha, vincularFichaSocio, iniciarCuentaCompleta, iniciarPagoCompra, registrarOperacionPago, registrarAbonoTg, carteraResumen, registrarSaldoInicial, registrarAjuste, bancoDesdeBoton, movimientosSinBanco, configurar, esLibroUser, iniciarPagoRenovacion, handleCallback, handleText, menuLibro, estadoLibro, loadMethods, registrarCobroRenovacion, confirmarPagoPlanilla, usuarioCanonico, usuarioLabel, ajustarFechaMovimiento };
+module.exports = { corregirMovimientoTg, motivoBloqueoAnular, anularMovimientoTg, newOpId, actorDe, unidadesSocio, pagoSocioDisponible, pagosSociosSinFicha, vincularFichaSocio, iniciarCuentaCompleta, iniciarPagoCompra, registrarOperacionPago, registrarAbonoTg, carteraResumen, registrarSaldoInicial, registrarAjuste, bancoDesdeBoton, movimientosSinBanco, configurar, esLibroUser, iniciarPagoRenovacion, handleCallback, handleText, menuLibro, estadoLibro, loadMethods, registrarCobroRenovacion, confirmarPagoPlanilla, usuarioCanonico, usuarioLabel, ajustarFechaMovimiento };

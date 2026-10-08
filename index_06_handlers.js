@@ -2250,6 +2250,32 @@ function R122_clavesRepetidas(list = []) {
   return (m) => !estadoMovimientoFinanzas(m) && (cuenta.get(claveNombreR124(m)) || 0) > 1;
 }
 
+// R128 · Pasos finales de "Corregir monto o banco". Movimientos del centro financiero → corrección con reversa y motivo
+// (igual que la APK/web). Ingresos/egresos manuales sueltos → se actualizan directo (bancoId + banco), sin texto libre.
+async function pasoMotivoCorreccionR128(chatId, userId, p) {
+  if (!p.ligado) return ejecutarCorreccionR128(chatId, userId, p);
+  p.mode = "finCorrMotivo"; pending.set(String(chatId), p);
+  return bot.sendMessage(chatId, "3) Escriba el *motivo* (ej. no es Ficohsa, es Tigo Money):", { parse_mode: "Markdown" });
+}
+async function ejecutarCorreccionR128(chatId, userId, p) {
+  const volver = [[{ text: "⬅️ Buscar ingresos por fecha", callback_data: "fin:menu:eliminar:ingreso" }], [{ text: "🏠 Inicio", callback_data: "go:inicio" }]];
+  try {
+    if (p.ligado) {
+      const r = await finLibro.corregirMovimientoTg({ movimientoId: p.movimientoId, monto: p.monto, bancoId: p.bancoId, motivo: p.motivo, opId: p.opId, actor: await finLibro.actorDe(userId) });
+      pending.delete(String(chatId));
+      return upsertPanel(chatId, r.duplicado ? "ℹ️ Esa corrección ya estaba hecha." : `✅ *Corregido*${r.cliente ? ` · ${escMD(String(r.cliente))}` : ""}\nAntes: ${escMD(moneyLps(r.antes.monto))} · ${escMD(r.antes.banco || "Sin banco")}\nAhora: ${escMD(moneyLps(r.despues.monto))} · ${escMD(r.despues.banco)}\nEl original queda en el historial.`, volver);
+    }
+    const banco = (await finLibro.loadMethods()).find((b) => b.id === p.bancoId);
+    if (!banco) throw Object.assign(new Error("Banco no válido."), { userError: true });
+    const ref = db.collection(FINANZAS_COLLECTION).doc(String(p.movimientoId));
+    const prev = (await ref.get()).data() || {};
+    await ref.set({ monto: Number(p.monto), bancoId: banco.id, banco: banco.nombre, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+    await registrarActividadTelegramLocal(userId, chatId, "editar_movimiento_finanzas", { id: String(p.movimientoId), campo: "banco/monto", cambio: `${prev.banco || "-"} L${prev.monto || 0} → ${banco.nombre} L${p.monto}` }, "Corrigió banco/monto de un movimiento manual");
+    pending.delete(String(chatId));
+    return upsertPanel(chatId, `✅ *Corregido*\nAhora: ${escMD(moneyLps(p.monto))} · ${escMD(banco.nombre)}`, volver);
+  } catch (e) { pending.delete(String(chatId)); return bot.sendMessage(chatId, `⚠️ ${String(e?.message || e).slice(0, 220)}`); }
+}
+
 // R124 · Lista para borrar/anular por fecha: vigentes por nombre (los repetidos juntos y marcados ⚠️), anulados al final,
 // de 30 en 30 con "Ver más" (antes se cortaba en 40 y los demás no se podían ver) y un filtro "Solo posibles repetidos".
 const R124_POR_PAGINA = 30;
@@ -5123,6 +5149,34 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
         if (!fecha) return bot.sendMessage(chatId, "⚠️ La lista venció. Busque la fecha otra vez.");
         return panelEliminarPorFechaR124(chatId, userId, t1 === "e" ? "egreso" : "ingreso", fecha, Number(pg || 0), modo === "r");
       }
+      if (data.startsWith("fin:corr:ask:") || data.startsWith("fin:edit:banco:")) { // R128 · corregir monto/banco (bancos registrados, no texto libre)
+        const id = data.startsWith("fin:corr:ask:") ? idLargoFinanzas(String(data.split(":")[3] || "").trim()) : String(data.split(":")[3] || "").trim();
+        if (!id) return bot.sendMessage(chatId, "⚠️ La lista venció. Busque la fecha otra vez.");
+        const m = await require("./index_05_finanzas_menus").getMovimientoFinanzaById(id);
+        if (!m) return bot.sendMessage(chatId, "⚠️ Movimiento no encontrado.");
+        const ligado = movimientoLigadoFinanzas(m);
+        if (ligado && !(await finLibro.esLibroUser(userId))) return bot.sendMessage(chatId, "⛔ Corregir es exclusivo de Sublicuentas y Relojes.");
+        const bloqueo = ligado ? finLibro.motivoBloqueoAnular(m) : "";
+        if (bloqueo) return bot.sendMessage(chatId, `⚠️ ${bloqueo.replace("anular", "corregir")}`);
+        const bancos = await finLibro.loadMethods();
+        pending.set(String(chatId), { mode: "finCorrBanco", movimientoId: id, ligado, opId: finLibro.newOpId(), bancos: bancos.map((b) => b.id), montoActual: Number(m.monto || 0), bancoActual: m.bancoId || "" });
+        const kb = []; for (let i = 0; i < bancos.length; i += 2) kb.push(bancos.slice(i, i + 2).map((b, j) => ({ text: `${b.id === m.bancoId ? "✅ " : ""}${b.nombre}`, callback_data: `fin:corr:bk:${i + j}` })));
+        kb.push([{ text: "❌ Cancelar", callback_data: "fin:corr:cancel" }]);
+        return upsertPanel(chatId, `✏️ *CORREGIR MOVIMIENTO*\n\n${escMD(String(m.clienteNombre || m.detalle || m.motivo || m.plataforma || "Movimiento"))} · ${escMD(moneyLps(m.monto || 0))} · ${escMD(String(m.banco || "Sin banco"))}\n\n1) ¿A qué banco entró *de verdad*?`, kb);
+      }
+      if (data === "fin:corr:cancel") { pending.delete(String(chatId)); return bot.sendMessage(chatId, "Corrección cancelada. No se cambió nada."); }
+      if (data.startsWith("fin:corr:bk:")) {
+        const p = pending.get(String(chatId)) || {};
+        if (p.mode !== "finCorrBanco") return bot.sendMessage(chatId, "⚠️ La corrección venció. Ábrala otra vez.");
+        p.bancoId = (p.bancos || [])[Number(data.split(":")[3])] || ""; if (!p.bancoId) return bot.sendMessage(chatId, "⚠️ Banco no válido.");
+        p.mode = "finCorrMonto"; pending.set(String(chatId), p);
+        return upsertPanel(chatId, `2) Escriba el *monto correcto* o toque “Mismo monto” (${escMD(moneyLps(p.montoActual))}).`, [[{ text: `Mismo monto (${moneyLps(p.montoActual)})`, callback_data: "fin:corr:same" }], [{ text: "❌ Cancelar", callback_data: "fin:corr:cancel" }]]);
+      }
+      if (data === "fin:corr:same") {
+        const p = pending.get(String(chatId)) || {};
+        if (p.mode !== "finCorrMonto") return bot.sendMessage(chatId, "⚠️ La corrección venció. Ábrala otra vez.");
+        p.monto = p.montoActual; return pasoMotivoCorreccionR128(chatId, userId, p);
+      }
       if (data.startsWith("fin:anul:ask:")) { // R122 · anular desde Telegram
         const id = idLargoFinanzas(String(data.split(":")[3] || "").trim());
         if (!id) return bot.sendMessage(chatId, "⚠️ La lista venció. Busque la fecha otra vez.");
@@ -5139,11 +5193,12 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
           const volverR122 = [[{ text: "⬅️ Buscar ingresos por fecha", callback_data: "fin:menu:eliminar:ingreso" }], [{ text: "🏠 Inicio", callback_data: "go:inicio" }]];
           const bloqueo = finLibro.motivoBloqueoAnular(m);
           if (bloqueo || !(await finLibro.esLibroUser(userId))) return upsertPanel(chatId, `${textoConfirmarEliminacionMovimiento(m).replace("🗑️ CONFIRMAR ELIMINACIÓN", "🔒 MOVIMIENTO DEL CENTRO FINANCIERO").replace("\n¿Desea eliminar este movimiento?", "")}\n⚠️ ${bloqueo || "Anular es exclusivo de Sublicuentas y Relojes."}`, volverR122);
-          return upsertPanel(chatId, `${textoConfirmarEliminacionMovimiento(m).replace("🗑️ CONFIRMAR ELIMINACIÓN", "🔒 MOVIMIENTO DEL CENTRO FINANCIERO").replace("\n¿Desea eliminar este movimiento?", "")}\nEste no se borra: se *anula*. Queda marcado 🚫 anulado, se crea su reversa (monto en negativo, con fecha de hoy) y bancos y pendientes cuadran. Queda en auditoría.`, [[{ text: "🚫 Anular este (pide motivo)", callback_data: `fin:anul:ask:${idCortoFinanzas(id)}` }], ...volverR122]);
+          return upsertPanel(chatId, `${textoConfirmarEliminacionMovimiento(m).replace("🗑️ CONFIRMAR ELIMINACIÓN", "🔒 MOVIMIENTO DEL CENTRO FINANCIERO").replace("\n¿Desea eliminar este movimiento?", "")}\nEste no se borra: se *anula*. Queda marcado 🚫 anulado, se crea su reversa (monto en negativo, con fecha de hoy) y bancos y pendientes cuadran. Queda en auditoría.`, [[{ text: "✏️ Corregir monto o banco", callback_data: `fin:corr:ask:${idCortoFinanzas(id)}` }], [{ text: "🚫 Anular este (pide motivo)", callback_data: `fin:anul:ask:${idCortoFinanzas(id)}` }], ...volverR122]);
         }
         const tipo = String(m.tipo || "").toLowerCase() === "egreso" ? "egreso" : "ingreso";
         return upsertPanel(chatId, textoConfirmarEliminacionMovimiento(m), [
           [{ text: "✅ Sí, eliminar este", callback_data: `fin:del:ok:${idCortoFinanzas(id)}` }],
+          [{ text: "✏️ Corregir monto o banco", callback_data: `fin:corr:ask:${idCortoFinanzas(id)}` }], // R128
           [{ text: tipo === "egreso" ? "⬅️ Buscar egresos por fecha" : "⬅️ Buscar ingresos por fecha", callback_data: tipo === "egreso" ? "fin:menu:eliminar:egreso" : "fin:menu:eliminar:ingreso" }],
           [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
         ]);
@@ -6881,6 +6936,15 @@ bot.on("message", async (msg) => {
 
       if (/^fl[A-Z]/.test(String(p?.mode || ""))) return finLibro.handleText(chatId, userId, t, p); // R104
 
+      if (p.mode === "finCorrMonto") { // R128
+        const n = parseMontoNumber(t);
+        if (!(n > 0)) return bot.sendMessage(chatId, "Escriba el monto correcto (mayor que 0), ej. 130.");
+        p.monto = n; return pasoMotivoCorreccionR128(chatId, userId, p);
+      }
+      if (p.mode === "finCorrMotivo") { // R128
+        if (String(t || "").trim().length < 4) return bot.sendMessage(chatId, "Escriba un motivo un poco más claro (mínimo 4 letras).");
+        p.motivo = String(t).trim(); return ejecutarCorreccionR128(chatId, userId, p);
+      }
       if (p.mode === "finAnularMotivo") { // R122
         if (String(t || "").trim().length < 4) return bot.sendMessage(chatId, "Escriba un motivo un poco más claro (mínimo 4 letras).");
         try {
