@@ -81,7 +81,7 @@ test("R122: anular un abono devuelve el dinero al pendiente; planilla y ventas n
 
 test("R122: en 'borrar por fecha' los movimientos del centro financiero ofrecen Anular (con motivo) en vez de mandar a la APK", () => {
   assert.doesNotMatch(h, /👉 APK o Web → Control financiero → \*Movimientos\* → \*Anular\*/);
-  assert.match(h, /text: "🚫 Anular este \(pide motivo\)", callback_data: `fin:anul:ask:\$\{idCortoFinanzas\(id\)\}`/);
+  assert.match(h, /text: "🚫 Anular", callback_data: `fin:anul:ask:\$\{s\}`/); // R133: dentro de Editar movimiento
   assert.match(h, /if \(data\.startsWith\("fin:anul:ask:"\)\)/);
   assert.match(h, /pending\.set\(String\(chatId\), \{ mode: "finAnularMotivo", movimientoId: id, opId: finLibro\.newOpId\(\) \}\)/);
   assert.match(h, /if \(p\.mode === "finAnularMotivo"\)/);
@@ -176,7 +176,7 @@ test("R128: 'Editar banco' ya no pide texto libre: bancos registrados; el ligado
   assert.match(h, /callback_data: `fin:corr:bk:\$\{i \+ j\}`/);
   assert.match(h, /finLibro\.corregirMovimientoTg\(\{ movimientoId: p\.movimientoId, monto: p\.monto, bancoId: p\.bancoId, motivo: p\.motivo/);
   assert.match(h, /await ref\.set\(\{ monto: Number\(p\.monto\), bancoId: banco\.id, banco: banco\.nombre/);
-  assert.match(h, /text: "✏️ Corregir monto o banco", callback_data: `fin:corr:ask:/);
+  assert.match(h, /text: "💵 Monto", callback_data: `fin:corr:m:\$\{s\}` \}, \{ text: "🏦 Banco", callback_data: `fin:corr:b:\$\{s\}`/); // R133
 });
 
 
@@ -203,4 +203,17 @@ test("R129: Excel y 'Ajustar fecha' juntan el pago por cliente + banco + día (s
   assert.match(x, /const key = \[quien, String\(r\.bancoId \|\| m\.banco\)\.toLowerCase\(\), m\.fecha\]\.join\("\|"\);/);
   assert.doesNotMatch(x, /<= 600000/);
   assert.doesNotMatch(L, /Math\.abs\(t - x\.t\) <= 10 \* 60000/);
+});
+
+test("R133: 'Eliminar' ahora es EDITAR MOVIMIENTO con Monto · Banco · Fecha · Anular", () => {
+  const m5 = fs.readFileSync(path.join(__dirname, "..", "index_05_finanzas_menus.js"), "utf8");
+  assert.match(m5, /✏️ Editar movimientos/); assert.doesNotMatch(m5, /🗑️ Eliminar [Mm]ovimiento"/);
+  assert.match(h, /if \(data\.startsWith\("fin:del:pick:"\)\) \{ \/\/ R133[\s\S]{0,500}return panelEditarMovimientoR133\(chatId, userId, m\);/);
+  assert.match(h, /\{ text: "📅 Fecha", callback_data: `fin:fecha:ask:\$\{s\}` \}, cuarto\]/);
+  assert.match(h, /if \(p\.soloBanco\) \{[\s\S]{0,200}p\.monto = p\.montoActual; return pasoMotivoCorreccionR128/);
+  assert.match(h, /finLibro\.ajustarFechaMovimiento\(\{ movimientoId: String\(m\.id\), nuevaFecha: ymd/);
+  assert.match(h, /if \(p\.mode === "finFechaR133"\)/);
+  for (const cb of ["fin:fecha:ask:", "fin:del:conf:", "fin:corr:m:"]) assert.ok(Buffer.byteLength(cb + "x".repeat(47)) <= 64, cb);
+  assert.ok(Buffer.byteLength("fin:fecha:set:2026-10-05") <= 64);
+  assert.doesNotMatch(h, /Volver eliminar/);
 });
