@@ -144,3 +144,37 @@ test("R124: el Excel del bot trae la hoja 'Revisar repetidos' (mismo cliente el 
   assert.match(x, /crearHojaRepetidosR124\(wb, movimientos\.filter\(\(m\) => m\.tipo === "ingreso" && m\.kind !== "ajuste"\), subtitle\);/);
   assert.match(x, /simpleSheet\(wb, "Revisar repetidos", "POSIBLES VOUCHERS REPETIDOS"/);
 });
+
+// ---------- R128 · corregir monto o banco (Aylen: no era Ficohsa, era Tigo Money) ----------
+function libroCorregir(store) {
+  const ref = (col, id) => ({ col, id, _k: `${col}/${id}` });
+  let n = 0;
+  const db = { collection: (col) => ({ doc: (id) => ref(col, id || `auto${++n}`) }),
+    runTransaction: async (fn) => { const buf = []; const tx = { get: async (r) => ({ exists: store.has(r._k), data: () => store.get(r._k) }), set: (r, v, o) => buf.push([r._k, v, o]) }; const out = await fn(tx); for (const [k, v, o] of buf) store.set(k, o?.merge ? { ...(store.get(k) || {}), ...v } : v); return out; } };
+  const admin = { firestore: { Timestamp: { fromDate: (d) => d } } };
+  const R = require("../lib_finanzas_reglas");
+  const methods = R.publicMethods([{ id: "ficohsa", nombre: "Ficohsa", logoKey: "ficohsa" }, { id: "tigo", nombre: "Tigo Money", logoKey: "tigo" }]);
+  return new Function("db", "R", "admin", "loadMethods", `const CXC = "cuentas_por_cobrar"; const ymdToDmy = (v) => { const [y, m, d] = String(v).split("-"); return d + "/" + m + "/" + y; }; const hoyYmd = () => "2026-10-08"; ${extraer(L, "fechaCampos")}; ${extraer(L, "opDocId")}; const userErrR122 = (msg) => Object.assign(new Error(msg), { userError: true }); ${extraer(L, "motivoBloqueoAnular")}; ${extraer(L, "corregirMovimientoTg")}; return { corregirMovimientoTg };`)(db, R, admin, async () => methods);
+}
+test("R128: corregir el BANCO desde Telegram = original 'corregido' + reversa + movimiento correcto con la fecha real", async () => {
+  const store = new Map([["finanzas_movimientos/aylen_cobro", { tipo: "ingreso", subtipo: "cobro_renovacion", monto: 130, bancoId: "ficohsa", banco: "Ficohsa", clienteNombre: "Aylen Hernandez", fechaPago: "2026-10-04", fecha: "04/10/2026" }]]);
+  const F = libroCorregir(store), actor = { usuario: "relojes", uid: "7" };
+  const r = await F.corregirMovimientoTg({ movimientoId: "aylen_cobro", monto: 130, bancoId: "tigo", motivo: "No es Ficohsa, es Tigo Money", opId: "tg-c1", actor });
+  assert.deepEqual([r.antes.banco, r.despues.banco, r.despues.monto], ["Ficohsa", "Tigo Money", 130]);
+  const orig = store.get("finanzas_movimientos/aylen_cobro"); assert.equal(orig.estadoFinanciero, "corregido");
+  assert.equal(store.get("finanzas_movimientos/aylen_cobro_rev").monto, -130);
+  const sus = [...store.entries()].find(([k]) => /aylen_cobro_c/.test(k))[1];
+  assert.deepEqual([sus.bancoId, sus.banco, sus.monto, sus.fechaPago, sus.sustituyeA], ["tigo", "Tigo Money", 130, "2026-10-04", "aylen_cobro"]);
+  assert.equal((await F.corregirMovimientoTg({ movimientoId: "aylen_cobro", monto: 130, bancoId: "tigo", motivo: "x repetido", opId: "tg-c1", actor })).duplicado, true);
+  await assert.rejects(F.corregirMovimientoTg({ movimientoId: "aylen_cobro", monto: 130, bancoId: "tigo", motivo: "otra vez", opId: "tg-c2", actor }), /ya está corregido/);
+  const s2 = new Map([["finanzas_movimientos/x", { tipo: "ingreso", monto: 50, bancoId: "tigo", banco: "Tigo Money", fechaPago: "2026-10-04" }]]);
+  await assert.rejects(libroCorregir(s2).corregirMovimientoTg({ movimientoId: "x", monto: 50, bancoId: "tigo", motivo: "nada cambia", opId: "tg-c3", actor }), /No cambió/);
+});
+test("R128: 'Editar banco' ya no pide texto libre: bancos registrados; el ligado se corrige con motivo y el manual se actualiza directo", () => {
+  assert.match(h, /if \(data\.startsWith\("fin:corr:ask:"\) \|\| data\.startsWith\("fin:edit:banco:"\)\)/);
+  assert.ok(h.indexOf('data.startsWith("fin:corr:ask:") || data.startsWith("fin:edit:banco:")') < h.indexOf('if (data.startsWith("fin:edit:banco:")) { pending.set'), "el nuevo flujo atiende antes que el viejo");
+  assert.match(h, /callback_data: `fin:corr:bk:\$\{i \+ j\}`/);
+  assert.match(h, /finLibro\.corregirMovimientoTg\(\{ movimientoId: p\.movimientoId, monto: p\.monto, bancoId: p\.bancoId, motivo: p\.motivo/);
+  assert.match(h, /await ref\.set\(\{ monto: Number\(p\.monto\), bancoId: banco\.id, banco: banco\.nombre/);
+  assert.match(h, /text: "✏️ Corregir monto o banco", callback_data: `fin:corr:ask:/);
+});
