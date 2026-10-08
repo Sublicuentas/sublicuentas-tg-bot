@@ -133,7 +133,7 @@ function finTipoLabel(tipo) { return String(tipo || "").toLowerCase() === "egres
 function finConceptoLabel(m = {}) {
   const tipo = String(m.tipo || "").toLowerCase();
   if (tipo === "egreso") return String(m.motivo || m.detalle || m.descripcion || "Egreso").trim();
-  return String(m.plataforma || m.detalle || m.descripcion || m.cliente || "Ingreso").trim();
+  return String(m.plataforma || m.detalle || m.descripcion || m.cliente || "Ingreso").replace(/[\u2B50\u2605\u2606\u2728]|\uD83C[\uDF1F\uDF20]|\uFE0F/g, "").replace(/\s+/g, " ").trim(); // R133: sin ⭐
 }
 
 function normalizarBancoKey(raw = "") {
@@ -466,7 +466,7 @@ async function menuPagos(chatId) {
   return upsertPanel(chatId,
     "💰 *FINANZAS*\n\nSeleccione una opción:", [
     [{ text: "➕ Registrar ingreso", callback_data: "fin:menu:ingreso", style: "success" }, { text: "➖ Registrar egreso", callback_data: "fin:menu:egreso", style: "danger" }],
-    [{ text: "📒 Ver registro", callback_data: "fin:menu:registro", style: "primary" }, { text: "🗑️ Eliminar movimiento", callback_data: "fin:menu:eliminar", style: "danger" }],
+    [{ text: "📒 Ver registro", callback_data: "fin:menu:registro", style: "primary" }, { text: "✏️ Editar movimientos", callback_data: "fin:menu:eliminar", style: "primary" }],
     [{ text: "📊 Reportes", callback_data: "fin:menu:reportes", style: "primary" }, { text: "🧾 Cierre de caja", callback_data: "fin:menu:cierre", style: "primary" }],
     [{ text: "💼 Ciclo · bancos · planilla", callback_data: "fl:menu", style: "primary" }], // R104 (Sublicuentas y Relojes)
     [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
@@ -488,7 +488,7 @@ async function menuFinRegistro(chatId) {
   return upsertPanel(chatId,
     "📒 *REGISTRO DE FINANZAS*\n\nSeleccione una opción:", [
     [{ text: "➕ Registrar ingreso", callback_data: "fin:menu:ingreso" }, { text: "➖ Registrar egreso", callback_data: "fin:menu:egreso" }],
-    [{ text: "🗑️ Eliminar Movimiento", callback_data: "fin:menu:eliminar" }, { text: "🧾 Cierre de Caja", callback_data: "fin:menu:cierre" }],
+    [{ text: "✏️ Editar movimientos", callback_data: "fin:menu:eliminar" }, { text: "🧾 Cierre de Caja", callback_data: "fin:menu:cierre" }],
     [{ text: "📊 Reportes", callback_data: "fin:menu:reportes" }, { text: "⬅️ Volver Finanzas", callback_data: "menu:pagos" }],
     [{ text: "⬅️ Volver Finanzas", callback_data: "menu:pagos" }, { text: "🏠 Inicio", callback_data: "go:inicio" }],
   ]);
@@ -496,7 +496,7 @@ async function menuFinRegistro(chatId) {
 
 async function menuFinEliminarTipo(chatId) {
   return upsertPanel(chatId,
-    "🗑️ *ELIMINAR MOVIMIENTO*\n\nSeleccione qué desea buscar:", [
+    "✏️ *EDITAR MOVIMIENTOS*\n\nCorrija monto, banco o fecha, o anule. Busque el pago por fecha:", [
     [{ text: "➕ Buscar ingresos", callback_data: "fin:menu:eliminar:ingreso" }, { text: "➖ Buscar egresos", callback_data: "fin:menu:eliminar:egreso" }],
     [{ text: "⬅️ Volver Finanzas", callback_data: "menu:pagos" }, { text: "🏠 Inicio", callback_data: "go:inicio" }],
   ]);
