@@ -7285,7 +7285,7 @@ bot.on("message", async (msg) => {
       forceNextPanelAtBottom(chatId);
         const finRef = db.collection(FINANZAS_COLLECTION).doc(String(p.id));
         const finPrev = (await finRef.get()).data() || {};
-        await finRef.set({ fecha: t, fechaTS: parseDMYtoTS(t), mesKey: getMonthKeyFromDMY(t), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        await finRef.set({ fecha: t, fechaPago: t.split("/").reverse().join("-"), fechaTS: admin.firestore.Timestamp.fromMillis(parseDMYtoTS(t)), /* R132: Timestamp (antes número: la APK no lo veía) */ mesKey: getMonthKeyFromDMY(t), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
         await registrarActividadTelegramLocal(userId,chatId,'editar_movimiento_finanzas',{id:String(p.id),campo:'fecha',cambio:`${finPrev.fecha||'-'} → ${t}`,cliente:finPrev.cliente||finPrev.nombreCliente||'',plataforma:finPrev.plataforma||''},`Actualizó la fecha de un movimiento: ${finPrev.fecha||'-'} → ${t}${finPrev.cliente||finPrev.nombreCliente?` · ${finPrev.cliente||finPrev.nombreCliente}`:''}.`,'Finanzas');
         return bot.sendMessage(chatId, "✅ Fecha actualizada correctamente.");
       }

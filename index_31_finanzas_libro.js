@@ -363,6 +363,81 @@ async function textoCuentaCompleta(chatId, userId, t, p) {
 }
 
 // ---------------------------------------------------------------- pantallas
+
+// R132 · CUADRE Telegram vs APK. Los dos leen finanzas_movimientos, pero la APK (y el ciclo del bot) solo toma docs con
+// fechaTS desde el inicio del libro y fecha = fechaPago; los reportes de Telegram toman la fecha escrita (dd/mm/yyyy).
+// Si un movimiento quedó sin fechaTS o con fechaPago vieja (ej. cuando se le cambiaba la fecha desde Telegram, que
+// solo tocaba "fecha"), un lado lo contaba y el otro no. Este panel enseña la diferencia y la repara.
+function dmyAYmdR132(v = "") { const m = String(v || "").match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/); return m ? `${m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}` : ""; }
+function tsMsR132(ts) { return ts && typeof ts.toMillis === "function" ? ts.toMillis() : (ts && ts._seconds ? ts._seconds * 1000 : (ts?.seconds ? ts.seconds * 1000 : NaN)); }
+function signoR132(m = {}) { const k = R.movementKind(m); return k === "ingreso" ? 1 : (k === "egreso" || k === "planilla") ? -1 : 0; }
+function lineaR132(m = {}, y = "") {
+  const k = R.movementKind(m), quien = String(m.clienteNombre || m.cliente || m.beneficiario || m.motivo || m.detalle || m.plataforma || "—").slice(0, 28);
+  return `• ${y ? ymdToDmy(y) : "?"} · ${k === "ingreso" ? "➕" : "➖"} ${lps(m.monto)} · ${quien} · ${m.banco || m.bancoId || "sin banco"}`;
+}
+// Docs del libro cuya fecha escrita no coincide con fechaPago/fechaTS (o les falta): son los que descuadran.
+async function descuadresFechaR132(desdeYmd) {
+  const snap = await db.collection("finanzas_movimientos").get();
+  const out = [];
+  snap.forEach((d) => {
+    const m = { id: d.id, ...(d.data() || {}) };
+    const yFecha = dmyAYmdR132(m.fecha);
+    if (!yFecha || yFecha < desdeYmd) return;
+    // fechaTS debe ser Timestamp de Firestore (un número no lo ve la APK) y caer en el mismo día (medianoche UTC del bot o mediodía UTC de la API).
+    const ms = typeof m.fechaTS === "number" ? NaN : tsMsR132(m.fechaTS);
+    const tsOk = Number.isFinite(ms) && [R.ymd(new Date(ms)), R.ymd(new Date(ms - 6 * 3600000))].includes(yFecha);
+    const yPago = String(m.fechaPago || "").slice(0, 10);
+    if (!tsOk || (yPago && yPago !== yFecha)) out.push({ m, yFecha, yPago });
+  });
+  return out;
+}
+async function repararFechasR132(desdeYmd, actor = "telegram") {
+  const malos = await descuadresFechaR132(desdeYmd);
+  for (let i = 0; i < malos.length; i += 400) {
+    const batch = db.batch();
+    for (const { m, yFecha } of malos.slice(i, i + 400)) {
+      const [y, mo, d] = yFecha.split("-").map(Number);
+      batch.set(db.collection("finanzas_movimientos").doc(m.id), { fecha: ymdToDmy(yFecha), fechaPago: yFecha, fechaTS: admin.firestore.Timestamp.fromDate(new Date(Date.UTC(y, mo - 1, d, 12))), mesKey: yFecha.slice(0, 7), monthKey: yFecha.slice(0, 7), fechaReparadaR132: true, fechaReparadaPor: actor, updatedAt: new Date().toISOString() }, { merge: true });
+    }
+    await batch.commit();
+  }
+  return malos.length;
+}
+async function cuadreTgApkR132(chatId) {
+  const { libro, movimientos, totales } = await estadoLibro();
+  const ini = libro.cicloInicio, hoy = hoyYmd();
+  const apk = new Map();
+  for (const m of movimientos) {
+    if (R.anuladoOReversa(m) || !signoR132(m)) continue;
+    const y = R.movementYmd(m); if (!y || y < ini) continue;
+    apk.set(m.id, { m, y, v: R.money(signoR132(m) * R.money(m.monto)) });
+  }
+  const fin = [hoy, ...Array.from(apk.values()).map((x) => x.y)].sort().pop();
+  const filas = await require("./index_05_finanzas_menus").getMovimientosPorRango(ymdToDmy(ini), ymdToDmy(fin));
+  const tg = new Map();
+  for (const r of filas) { const v = R.money((String(r.tipo || "").trim().toLowerCase() === "egreso" ? -1 : 1) * Number(r.monto || 0)); tg.set(r.id, { m: r, y: dmyAYmdR132(r.fecha), v }); }
+  const sum = (map) => R.money(Array.from(map.values()).reduce((s, x) => s + x.v, 0));
+  const soloTg = Array.from(tg.entries()).filter(([id]) => !apk.has(id)).map(([, x]) => x);
+  const soloApk = Array.from(apk.entries()).filter(([id]) => !tg.has(id)).map(([, x]) => x);
+  const distinto = Array.from(apk.entries()).filter(([id, a]) => tg.has(id) && tg.get(id).v !== a.v).map(([id, a]) => ({ a, t: tg.get(id) }));
+  const fechas = await descuadresFechaR132(ini);
+  const totTg = sum(tg), dif = R.money(totTg - totales.resultado);
+  const txt = [
+    "🧮 *CUADRE TELEGRAM vs APK*", `Ciclo desde ${ymdToDmy(ini)} hasta ${ymdToDmy(fin)}`, "",
+    `📱 APK (disponible): *${lps(totales.resultado)}*`, `🤖 Telegram mismo período: *${lps(totTg)}*`,
+    dif ? `⚠️ Diferencia: *${lps(dif)}*` : "✅ Cuadran exacto.", "",
+    ...(soloTg.length ? [`*Solo en Telegram (${soloTg.length})* — la APK no los ve:`, ...soloTg.slice(0, 15).map((x) => lineaR132(x.m, x.y)), ""] : []),
+    ...(soloApk.length ? [`*Solo en APK (${soloApk.length})*:`, ...soloApk.slice(0, 15).map((x) => lineaR132(x.m, x.y)), ""] : []),
+    ...(distinto.length ? [`*Monto o tipo distinto (${distinto.length})*:`, ...distinto.slice(0, 15).map(({ a, t }) => `${lineaR132(a.m, a.y)} → TG ${lps(t.v)} / APK ${lps(a.v)}`), ""] : []),
+    ...(fechas.length ? [`🗓 *${fechas.length} con fecha descuadrada* (la fecha escrita no es la misma que usa la APK). Toque 🔧 Reparar para dejarlos con la fecha escrita.`] : []),
+    "", "Ojo: el disponible de la APK es del ciclo hasta HOY y ya resta planilla. Compare con Telegram usando las mismas fechas.",
+  ].join("\n");
+  const kb = [];
+  if (fechas.length) kb.push([{ text: `🔧 Reparar ${fechas.length} fecha${fechas.length === 1 ? "" : "s"}`, callback_data: "fl:cuadre:fix" }]);
+  kb.push([{ text: "🔄 Actualizar", callback_data: "fl:cuadre" }, { text: "⬅️ Ciclo", callback_data: "fl:menu" }]);
+  return upsertPanel(chatId, txt.length > 3900 ? txt.slice(0, 3900) + "\n…" : txt, kb);
+}
+
 async function menuLibro(chatId) {
   const [{ libro, totales: t, saldos }, sinBanco, cart] = await Promise.all([estadoLibro(), movimientosSinBanco().catch(() => []), carteraResumen().catch(() => ({ clientes: 0, vendedores: 0 }))]);
   const bancos = saldos.bancos.filter((b) => b.activado);
@@ -378,6 +453,7 @@ async function menuLibro(chatId) {
     [{ text: "🏦 Saldos por banco", callback_data: "fl:bancos" }, { text: "📋 Pendientes de cobro", callback_data: "fl:cxc:menu" }],
     [{ text: "👥 Nuevo pago de planilla", callback_data: "fl:pl:new" }],
     [{ text: "🏷 Movimientos sin banco", callback_data: "fl:sb:list:0" }, { text: "🗓 Ajustar fecha de pago", callback_data: "fl:fd:list:0" }],
+    [{ text: "🧮 Cuadre Telegram vs APK", callback_data: "fl:cuadre" }],
     [{ text: "🔄 Actualizar", callback_data: "fl:menu" }, { text: "🏠 Inicio", callback_data: "go:inicio" }],
   ]);
 }
@@ -698,6 +774,8 @@ async function handleCallback(chatId, userId, data) {
   const p = pending.get(String(chatId)) || {};
   try {
     if (data === "fl:menu") return menuLibro(chatId);
+    if (data === "fl:cuadre") return cuadreTgApkR132(chatId);
+    if (data === "fl:cuadre:fix") { const n = await repararFechasR132((await estadoLibro()).libro.cicloInicio, String(userId)); await bot.sendMessage(chatId, `✅ ${n} movimiento${n === 1 ? "" : "s"} con la fecha reparada.`); return cuadreTgApkR132(chatId); }
     if (data === "fl:bancos") return panelBancos(chatId);
     if (data === "fl:rf:ver") return panelAjustarFechas(chatId, 0); // compatibilidad con botones antiguos
     if (data === "fl:rf:ok") return bot.sendMessage(chatId, "ℹ️ Ahora las fechas se corrigen una por una. Toque 🗓 Ajustar fecha de pago.");
@@ -925,4 +1003,4 @@ async function handleText(chatId, userId, text, p) {
   return bot.sendMessage(chatId, "Use los botones del panel o toque ❌ Cancelar.");
 }
 
-module.exports = { corregirMovimientoTg, motivoBloqueoAnular, anularMovimientoTg, newOpId, actorDe, unidadesSocio, pagoSocioDisponible, pagosSociosSinFicha, vincularFichaSocio, iniciarCuentaCompleta, iniciarPagoCompra, registrarOperacionPago, registrarAbonoTg, carteraResumen, registrarSaldoInicial, registrarAjuste, bancoDesdeBoton, movimientosSinBanco, configurar, esLibroUser, iniciarPagoRenovacion, handleCallback, handleText, menuLibro, estadoLibro, loadMethods, registrarCobroRenovacion, confirmarPagoPlanilla, usuarioCanonico, usuarioLabel, ajustarFechaMovimiento };
+module.exports = { cuadreTgApkR132, repararFechasR132, descuadresFechaR132, corregirMovimientoTg, motivoBloqueoAnular, anularMovimientoTg, newOpId, actorDe, unidadesSocio, pagoSocioDisponible, pagosSociosSinFicha, vincularFichaSocio, iniciarCuentaCompleta, iniciarPagoCompra, registrarOperacionPago, registrarAbonoTg, carteraResumen, registrarSaldoInicial, registrarAjuste, bancoDesdeBoton, movimientosSinBanco, configurar, esLibroUser, iniciarPagoRenovacion, handleCallback, handleText, menuLibro, estadoLibro, loadMethods, registrarCobroRenovacion, confirmarPagoPlanilla, usuarioCanonico, usuarioLabel, ajustarFechaMovimiento };
