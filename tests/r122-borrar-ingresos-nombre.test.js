@@ -29,7 +29,7 @@ test("R122: mismo cliente + mismo monto el mismo día se marca ⚠️ (sin conta
 });
 
 test("R122: la lista va ordenada por nombre con total vigente, y la confirmación dice cliente, banco y quién lo registró", () => {
-  assert.match(h, /list\.sort\(\(a, b\) => nombreMovimientoFinanzas\(a\)\.localeCompare\(nombreMovimientoFinanzas\(b\), "es"\)/);
+  assert.match(h, /nombreMovimientoFinanzas\(a\)\.localeCompare\(nombreMovimientoFinanzas\(b\), "es"\)/); // R123: después de poner los anulados al final
   assert.match(h, /textoBtnEliminarMovimiento\(m, esRepetido\(m\)\), callback_data: `fin:del:pick:\$\{idCortoFinanzas\(m\.id\)\}`/);
   assert.match(h, /vigente\$\{vigentes\.length === 1 \? "" : "s"\} · total/);
   const conf = new Function("finTipoLabel", "extraerFechaMovimiento", "moneyLps", "finConceptoLabel", "finExtraLabel", `${extraer(f5, "textoConfirmarEliminacionMovimiento")}; return textoConfirmarEliminacionMovimiento;`)(() => "Ingreso", (m) => m.fecha, moneyLps, (m) => m.plataforma, () => "");
@@ -88,4 +88,12 @@ test("R122: en 'borrar por fecha' los movimientos del centro financiero ofrecen 
   assert.match(h, /finLibro\.anularMovimientoTg\(\{ movimientoId: p\.movimientoId, motivo: t, opId: p\.opId, actor: await finLibro\.actorDe\(userId\) \}\)/);
   assert.match(h, /Anular es exclusivo de Sublicuentas y Relojes/);
   assert.ok(Buffer.byteLength("fin:anul:ask:~zzzzzzzzzz") <= 64);
+});
+
+test("R123: en Telegram los anulados/reversas van al final; el Excel del bot los pone en su hoja 'Anulados' y no los suma", () => {
+  assert.match(h, /list\.sort\(\(a, b\) => \(estadoMovimientoFinanzas\(a\) \? 1 : 0\) - \(estadoMovimientoFinanzas\(b\) \? 1 : 0\) \|\| nombreMovimientoFinanzas/);
+  const x = fs.readFileSync(path.join(__dirname, "..", "index_10_reportes_excel.js"), "utf8");
+  assert.match(x, /const movimientos = todosR123\.filter\(\(m\) => !esAnuladoR123\(m\) && !m\.raw\?\.reversaDe\)/);
+  assert.match(x, /simpleSheet\(wb, "Anulados", "MOVIMIENTOS ANULADOS \/ CORREGIDOS"/);
+  assert.match(x, /createDetalleSheet\(wb, "Egresos"[^\n]*\n\s*crearHojaAnuladosR123\(wb, anulados, subtitle\);/);
 });
