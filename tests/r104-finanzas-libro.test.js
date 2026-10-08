@@ -83,7 +83,7 @@ test("R110: fecha del pago elegible en el bot y ajuste de fecha agrupa un solo p
 
 test("R111: eliminar por fecha no se cae con ids largos (límite 64 bytes) y protege el libro", () => {
   const h = fs.readFileSync(path.join(__dirname, "..", "index_06_handlers.js"), "utf8");
-  assert.match(h, /callback_data: `fin:del:pick:\$\{idCortoFinanzas\(m\.id\)\}`/);
+  assert.match(h, /callback_data: `fin:del:pick:\$\{idCortoFinanzas\((m|x|it\.ms\[0\])\.id\)\}`/); // R129: también en grupos
   assert.match(h, /function movimientoLigadoFinanzas\(/);
   const largo = "oper_op_" + "a".repeat(28) + "_" + "b".repeat(36) + "_cobro";
   assert.ok(Buffer.byteLength(`fin:del:pick:${largo}`) > 64, "el id nuevo sí pasaba del límite");

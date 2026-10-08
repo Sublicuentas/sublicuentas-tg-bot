@@ -6,7 +6,7 @@ const h = fs.readFileSync(path.join(__dirname, "..", "index_06_handlers.js"), "u
 const f5 = fs.readFileSync(path.join(__dirname, "..", "index_05_finanzas_menus.js"), "utf8");
 function extraer(src, nombre) { const i = src.indexOf(`function ${nombre}(`); assert.ok(i >= 0, nombre); let d = 0; const j = src.indexOf("{", src.indexOf(")", i)); for (let k = j; k < src.length; k++) { if (src[k] === "{") d++; else if (src[k] === "}") { d--; if (!d) return src.slice(src.lastIndexOf("\n", i) + 1, k + 1); } } }
 const moneyLps = (n) => `${Number(n || 0).toFixed(2)} Lps`;
-const F = new Function("moneyLps", `${["safeBtnLabelLocal", "nombreMovimientoFinanzas", "claveNombreR124", "estadoMovimientoFinanzas", "textoBtnEliminarMovimiento", "R122_montoCorto", "R122_clavesRepetidas"].map((n) => extraer(h, n)).join("\n")}; return { textoBtnEliminarMovimiento, R122_clavesRepetidas };`)(moneyLps);
+const F = new Function("moneyLps", `${["safeBtnLabelLocal", "nombreMovimientoFinanzas", "claveNombreR124", "estadoMovimientoFinanzas", "textoBtnEliminarMovimiento", "R122_montoCorto", "servicioClaveR129", "R122_clavesRepetidas"].map((n) => extraer(h, n)).join("\n")}; return { textoBtnEliminarMovimiento, R122_clavesRepetidas };`)(moneyLps);
 
 test("R122: borrar ingresos por fecha muestra el NOMBRE del cliente en cada botón", () => {
   const m = { tipo: "ingreso", fecha: "04/10/2026", monto: 150, plataforma: "⭐ Netflix Premium VIP", banco: "BAC Credomatic", clienteNombre: "Ever Figueroa" };
@@ -21,17 +21,17 @@ test("R122: borrar ingresos por fecha muestra el NOMBRE del cliente en cada bot�
   assert.match(F.textoBtnEliminarMovimiento({ tipo: "egreso", fecha: "04/10/2026", monto: 50, motivo: "Pago" }), /^04\/10\/2026 • 50\.00 Lps • Pago/, "egresos igual que antes");
 });
 
-test("R122/R124: el mismo cliente más de una vez el mismo día se marca ⚠️ (sin contar anulados/reversas)", () => {
+test("R122/R129: mismo cliente + mismo servicio + mismo monto el mismo día se marca ⚠️ (sin contar anulados/reversas)", () => {
   const a = { tipo: "ingreso", monto: 150, clienteNombre: "Ever Figueroa" }, b = { ...a }, c = { ...a, estadoFinanciero: "anulado" }, d = { tipo: "ingreso", monto: 80, clienteNombre: "Ever Figueroa" };
   const rep = F.R122_clavesRepetidas([a, b, c, d]);
-  assert.deepEqual([a, b, c, d].map(rep), [true, true, false, true], 'R124: mismo cliente el mismo día aunque cambie el monto');
+  assert.deepEqual([a, b, c, d].map(rep), [true, true, false, false], 'R129: solo mismo servicio y mismo monto');
   assert.match(F.textoBtnEliminarMovimiento(a, true), /^⚠️ L150 · Ever Figueroa/);
 });
 
 test("R122: la lista va ordenada por nombre con total vigente, y la confirmación dice cliente, banco y quién lo registró", () => {
   assert.match(h, /claveNombreR124\(a\)\.localeCompare\(claveNombreR124\(b\), "es"\)/); // R124: por nombre normalizado, después de poner los anulados al final
-  assert.match(h, /textoBtnEliminarMovimiento\(m, esRepetido\(m\)\), callback_data: `fin:del:pick:\$\{idCortoFinanzas\(m\.id\)\}`/);
-  assert.match(h, /vigente\$\{vigentes\.length === 1 \? "" : "s"\} · total/);
+  assert.match(h, /textoBtnEliminarMovimiento\(it\.ms\[0\], esRepetido\(it\.ms\[0\]\)\), callback_data: `fin:del:pick:\$\{idCortoFinanzas\(it\.ms\[0\]\.id\)\}`/);
+  assert.match(h, /servicio\$\{vigentes\.length === 1 \? "" : "s"\}\) · total/);
   const conf = new Function("finTipoLabel", "extraerFechaMovimiento", "moneyLps", "finConceptoLabel", "finExtraLabel", `${extraer(f5, "textoConfirmarEliminacionMovimiento")}; return textoConfirmarEliminacionMovimiento;`)(() => "Ingreso", (m) => m.fecha, moneyLps, (m) => m.plataforma, () => "");
   const txt = conf({ fecha: "04/10/2026", monto: 150, plataforma: "Netflix VIP", banco: "BAC Credomatic", clienteNombre: "Ever_Figueroa", registradoPor: "libni", origenCanal: "apk", createdAt: "2026-10-04T20:15:00.000Z" });
   assert.match(txt, /Cliente: EverFigueroa/); assert.match(txt, /Banco: BAC Credomatic/); assert.match(txt, /Registrado: Relojes · apk · 14:15 h/);
@@ -99,7 +99,7 @@ test("R123: en Telegram los anulados/reversas van al final; el Excel del bot los
 });
 
 // ---------- R124 · sincronía con la APK y repetidos reales ----------
-const F124 = new Function("moneyLps", `${["safeBtnLabelLocal", "nombreMovimientoFinanzas", "claveNombreR124", "estadoMovimientoFinanzas", "textoBtnEliminarMovimiento", "R122_montoCorto", "R122_clavesRepetidas"].map((n) => extraer(h, n)).join("\n")}; return { nombreMovimientoFinanzas, R122_clavesRepetidas, textoBtnEliminarMovimiento };`)(moneyLps);
+const F124 = new Function("moneyLps", `${["safeBtnLabelLocal", "nombreMovimientoFinanzas", "claveNombreR124", "estadoMovimientoFinanzas", "textoBtnEliminarMovimiento", "R122_montoCorto", "servicioClaveR129", "R122_clavesRepetidas"].map((n) => extraer(h, n)).join("\n")}; return { nombreMovimientoFinanzas, R122_clavesRepetidas, textoBtnEliminarMovimiento };`)(moneyLps);
 
 test("R124: el ingreso manual (cliente en 'detalle') cuenta como nombre; una fecha en el detalle no", () => {
   assert.equal(F124.nombreMovimientoFinanzas({ detalle: "Michell Torrez" }), "Michell Torrez");
@@ -107,9 +107,9 @@ test("R124: el ingreso manual (cliente en 'detalle') cuenta como nombre; una fec
   assert.equal(F124.nombreMovimientoFinanzas({ clienteNombre: "Ana", detalle: "otra cosa" }), "Ana");
 });
 
-test("R124: el mismo cliente dos veces el mismo día se marca ⚠️ aunque cambie el monto, las mayúsculas o las tildes", () => {
-  const manual = { tipo: "ingreso", monto: 260, detalle: "Mariana Garcia", plataforma: "Netflix, hbo, prime video" };
-  const apk = { tipo: "ingreso", monto: 130, clienteNombre: "MARIANA  García", plataforma: "Netflix Premium" };
+test("R124/R129: el repetido se reconoce aunque cambien las mayúsculas o las tildes (mismo servicio y monto)", () => {
+  const manual = { tipo: "ingreso", monto: 260, detalle: "Mariana Garcia", plataforma: "Netflix Premium" };
+  const apk = { tipo: "ingreso", monto: 260, clienteNombre: "MARIANA  García", plataforma: "Netflix  Premium" };
   const otro = { tipo: "ingreso", monto: 99, detalle: "Gerson David" };
   const anulado = { tipo: "ingreso", monto: 99, detalle: "Gerson David", estadoFinanciero: "anulado" };
   const rep = F124.R122_clavesRepetidas([manual, apk, otro, anulado]);
@@ -177,4 +177,30 @@ test("R128: 'Editar banco' ya no pide texto libre: bancos registrados; el ligado
   assert.match(h, /finLibro\.corregirMovimientoTg\(\{ movimientoId: p\.movimientoId, monto: p\.monto, bancoId: p\.bancoId, motivo: p\.motivo/);
   assert.match(h, /await ref\.set\(\{ monto: Number\(p\.monto\), bancoId: banco\.id, banco: banco\.nombre/);
   assert.match(h, /text: "✏️ Corregir monto o banco", callback_data: `fin:corr:ask:/);
+});
+
+
+// ---------- R129 · un cliente paga UNA vez (Juan de Dios: 80 + 80 de sus 2 perfiles = 160) ----------
+const F129 = new Function("moneyLps", `${["safeBtnLabelLocal", "nombreMovimientoFinanzas", "claveNombreR124", "estadoMovimientoFinanzas", "textoBtnEliminarMovimiento", "R122_montoCorto", "servicioClaveR129", "R122_clavesRepetidas", "clavePagoR129", "itemsListaR129", "textoBtnGrupoR129"].map((n) => extraer(h, n)).join("\n")}; return { R122_clavesRepetidas, itemsListaR129, textoBtnGrupoR129 };`)(moneyLps);
+test("R129: 2 perfiles del mismo cliente pagados el mismo día = UN pago de 160 y NO es 'repetido'", () => {
+  const juan = { id: "j1", tipo: "ingreso", monto: 80, clienteId: "cli-juan", clienteNombre: "Juan de Dios", compraId: "c-juan", plataforma: "Prime Video", bancoId: "bac", banco: "BAC Credomatic", createdAt: "2026-10-04T15:00:00Z" };
+  const martha = { ...juan, id: "j2", compraId: "c-martha", createdAt: "2026-10-04T19:30:00Z" };
+  const otro = { id: "o1", tipo: "ingreso", monto: 75, clienteNombre: "Yelson Toledo", plataforma: "Crunchyroll", bancoId: "bac" };
+  const rep = F129.R122_clavesRepetidas([juan, martha, otro]);
+  assert.deepEqual([juan, martha].map(rep), [false, false], "distinto servicio: no es repetido");
+  const items = F129.itemsListaR129([juan, martha, otro]);
+  assert.equal(items.length, 2); assert.equal(items[0].ms.length, 2, "registrados a horas distintas igual son un pago");
+  assert.match(F129.textoBtnGrupoR129(items[0].ms), /^L160 · Juan de Dios · 2 servicios · BAC Credomatic/);
+  const yel2 = { ...otro, id: "o2" };
+  assert.deepEqual([otro, yel2].map(F129.R122_clavesRepetidas([otro, yel2])), [true, true], "mismo servicio y monto sí se marca");
+  const anulado = { ...martha, estadoFinanciero: "anulado" };
+  assert.equal(F129.itemsListaR129([juan, anulado]).length, 2, "un anulado nunca se junta con el vigente");
+  assert.match(h, /if \(data\.startsWith\("fin:del:grp:"\)\)/);
+  assert.ok(Buffer.byteLength("fin:del:grp:i:04102026:29") <= 64);
+});
+test("R129: Excel y 'Ajustar fecha' juntan el pago por cliente + banco + día (sin ventana de 10 min ni usuario)", () => {
+  const x = fs.readFileSync(path.join(__dirname, "..", "index_10_reportes_excel.js"), "utf8");
+  assert.match(x, /const key = \[quien, String\(r\.bancoId \|\| m\.banco\)\.toLowerCase\(\), m\.fecha\]\.join\("\|"\);/);
+  assert.doesNotMatch(x, /<= 600000/);
+  assert.doesNotMatch(L, /Math\.abs\(t - x\.t\) <= 10 \* 60000/);
 });
