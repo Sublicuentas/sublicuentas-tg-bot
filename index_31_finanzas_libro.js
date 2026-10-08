@@ -248,9 +248,9 @@ async function movimientosAjustables() {
   const grupos = [];
   for (const m of lista) {
     const quien = String(m.clienteId || nombreMovimiento(m)).toLowerCase().trim();
-    const key = [R.movementKind(m), quien, m.bancoId || m.banco || "", m.registradoPor || m.cobradoPor || m.userName || "", R.movementYmd(m)].join("|");
+    const key = [R.movementKind(m), quien, m.bancoId || m.banco || "", R.movementYmd(m)].join("|"); // R129: mismo cliente + banco + día = 1 pago
     const t = Date.parse(m.createdAt || "") || 0;
-    const g = R.movementKind(m) === "ingreso" ? grupos.find((x) => x.key === key && t && Math.abs(t - x.t) <= 10 * 60000) : null;
+    const g = R.movementKind(m) === "ingreso" ? grupos.find((x) => x.key === key) : null;
     if (g) { g.items.push(m); g.monto = R.money(g.monto + R.money(m.monto)); }
     else grupos.push({ key, t, items: [m], monto: R.money(m.monto) });
   }

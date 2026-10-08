@@ -2241,13 +2241,31 @@ function textoBtnEliminarMovimiento(m = {}, repetido = false) {
   return safeBtnLabelLocal(partes.join(" · "), 60);
 }
 function R122_montoCorto(n) { const v = Number(n || 0); return `L${Number.isInteger(v) ? v : v.toFixed(2)}`; }
-// R124: el MISMO cliente más de una vez el mismo día (sin contar anulados/reversas) = posible voucher repetido.
-// Antes exigía el mismo monto y solo miraba clienteNombre, así que los ingresos manuales (nombre en "detalle") y los
-// registrados una vez a mano y otra con la renovación (montos o plataformas distintos) nunca salían marcados.
+// R129: "posible repetido" = mismo cliente + MISMO servicio (compraId; si no hay, la plataforma) + mismo monto el mismo día.
+// Antes bastaba con el mismo cliente, y un cliente que paga 2 perfiles juntos (Juan de Dios + su tercero Martha, 80 + 80)
+// salía marcado como repetido: así se anuló por error la mitad de un pago real.
+function servicioClaveR129(m = {}) { return String(m.compraId || "").trim() || String(m.plataforma || m.descripcion || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, ""); }
 function R122_clavesRepetidas(list = []) {
-  const cuenta = new Map();
-  for (const m of list) { const k = claveNombreR124(m); if (k && !estadoMovimientoFinanzas(m)) cuenta.set(k, (cuenta.get(k) || 0) + 1); }
-  return (m) => !estadoMovimientoFinanzas(m) && (cuenta.get(claveNombreR124(m)) || 0) > 1;
+  const k = (m) => `${claveNombreR124(m)}|${servicioClaveR129(m)}|${Number(m.monto || 0)}`, cuenta = new Map();
+  for (const m of list) if (claveNombreR124(m) && !estadoMovimientoFinanzas(m)) cuenta.set(k(m), (cuenta.get(k(m)) || 0) + 1);
+  return (m) => !estadoMovimientoFinanzas(m) && (cuenta.get(k(m)) || 0) > 1;
+}
+// R129: un cliente paga UNA vez. Los cobros vigentes del mismo cliente al mismo banco el mismo día son UN pago
+// (ej. Juan de Dios L160 = sus 2 perfiles), aunque se hayan registrado en momentos distintos. Igual que la APK/web.
+function clavePagoR129(m = {}) { const q = String(m.clienteId || "").trim() || claveNombreR124(m); return q ? `${q}|${String(m.bancoId || m.banco || "").toLowerCase()}` : ""; }
+function itemsListaR129(todos = []) {
+  const items = [], grupos = new Map();
+  for (const m of todos) {
+    const k = estadoMovimientoFinanzas(m) || String(m.tipo || "").toLowerCase() !== "ingreso" ? "" : clavePagoR129(m);
+    if (k && grupos.has(k)) { grupos.get(k).ms.push(m); continue; }
+    const it = { ms: [m] }; items.push(it); if (k) grupos.set(k, it);
+  }
+  return items;
+}
+function textoBtnGrupoR129(ms = []) {
+  const total = ms.reduce((a, m) => a + Number(m.monto || 0), 0), m = ms[0];
+  const banco = String(m.banco || "").trim();
+  return safeBtnLabelLocal([`${R122_montoCorto(total)}`, nombreMovimientoFinanzas(m) || "Sin nombre", `${ms.length} servicios`, banco].filter(Boolean).join(" · "), 60);
 }
 
 // R128 · Pasos finales de "Corregir monto o banco". Movimientos del centro financiero → corrección con reversa y motivo
@@ -2279,33 +2297,49 @@ async function ejecutarCorreccionR128(chatId, userId, p) {
 // R124 · Lista para borrar/anular por fecha: vigentes por nombre (los repetidos juntos y marcados ⚠️), anulados al final,
 // de 30 en 30 con "Ver más" (antes se cortaba en 40 y los demás no se podían ver) y un filtro "Solo posibles repetidos".
 const R124_POR_PAGINA = 30;
-async function panelEliminarPorFechaR124(chatId, userId, tipo, fecha, page = 0, soloRep = false) {
+async function leerListaFechaR129(userId, tipo, fecha) {
   const isSuper = await safeIsSuperAdminLocal(userId);
   const listFecha = await getMovimientosPorFecha(fecha, userId, isSuper, { todos: true }); // R125: aquí sí se ven los anulados (al final)
   const todos = (Array.isArray(listFecha) ? listFecha : []).filter((x) => String(x.tipo || "").toLowerCase() === tipo);
+  todos.sort((a, b) => (estadoMovimientoFinanzas(a) ? 1 : 0) - (estadoMovimientoFinanzas(b) ? 1 : 0) || claveNombreR124(a).localeCompare(claveNombreR124(b), "es") || String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
+  return todos;
+}
+async function panelEliminarPorFechaR124(chatId, userId, tipo, fecha, page = 0, soloRep = false) {
+  const todos = await leerListaFechaR129(userId, tipo, fecha);
   const otraFecha = [{ text: tipo === "egreso" ? "➖ Buscar otra fecha" : "➕ Buscar otra fecha", callback_data: tipo === "egreso" ? "fin:menu:eliminar:egreso" : "fin:menu:eliminar:ingreso" }];
   const pie = [otraFecha, [{ text: "⬅️ Volver eliminar", callback_data: "fin:menu:eliminar" }], [{ text: "🏠 Inicio", callback_data: "go:inicio" }]];
   if (!todos.length) return upsertPanel(chatId, `⚠️ No encontré *${tipo === "egreso" ? "egresos" : "ingresos"}* en la fecha *${escMD(fecha)}*.`, pie);
-  todos.sort((a, b) => (estadoMovimientoFinanzas(a) ? 1 : 0) - (estadoMovimientoFinanzas(b) ? 1 : 0) || claveNombreR124(a).localeCompare(claveNombreR124(b), "es") || String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
   const esRepetido = R122_clavesRepetidas(todos);
   const vigentes = todos.filter((m) => !estadoMovimientoFinanzas(m));
   const repetidos = todos.filter(esRepetido);
-  const clientesRep = new Set(repetidos.map(claveNombreR124)).size;
-  const lista = soloRep ? repetidos : todos;
-  const paginas = Math.max(1, Math.ceil(lista.length / R124_POR_PAGINA)), pg = Math.min(Math.max(0, Number(page) || 0), paginas - 1);
-  const desde = pg * R124_POR_PAGINA, trozo = lista.slice(desde, desde + R124_POR_PAGINA);
+  const items = soloRep ? repetidos.map((m) => ({ ms: [m] })) : itemsListaR129(todos);
+  const pagos = itemsListaR129(vigentes).length;
+  const paginas = Math.max(1, Math.ceil(items.length / R124_POR_PAGINA)), pg = Math.min(Math.max(0, Number(page) || 0), paginas - 1);
+  const desde = pg * R124_POR_PAGINA, trozo = items.slice(desde, desde + R124_POR_PAGINA);
   const dd = fecha.replace(/\//g, ""), modo = soloRep ? "r" : "t";
   // R111: Telegram rechaza TODO el teclado si un botón pasa de 64 bytes; los ids nuevos de Finanzas son largos.
-  const kb = trozo.map((m) => [{ text: textoBtnEliminarMovimiento(m, esRepetido(m)), callback_data: `fin:del:pick:${idCortoFinanzas(m.id)}` }]);
+  const kb = trozo.map((it, i) => it.ms.length > 1
+    ? [{ text: `${it.ms.some(esRepetido) ? "⚠️ " : ""}${textoBtnGrupoR129(it.ms)}`, callback_data: `fin:del:grp:${tipo[0]}:${dd}:${desde + i}` }]
+    : [{ text: textoBtnEliminarMovimiento(it.ms[0], esRepetido(it.ms[0])), callback_data: `fin:del:pick:${idCortoFinanzas(it.ms[0].id)}` }]);
   const nav = [];
   if (pg > 0) nav.push({ text: "⬅️ Anteriores", callback_data: `fin:del:pg:${tipo[0]}:${dd}:${pg - 1}:${modo}` });
-  if (pg < paginas - 1) nav.push({ text: `Ver más ➡️ (${desde + trozo.length + 1}–${Math.min(lista.length, desde + 2 * R124_POR_PAGINA)})`, callback_data: `fin:del:pg:${tipo[0]}:${dd}:${pg + 1}:${modo}` });
+  if (pg < paginas - 1) nav.push({ text: `Ver más ➡️ (${desde + trozo.length + 1}–${Math.min(items.length, desde + 2 * R124_POR_PAGINA)})`, callback_data: `fin:del:pg:${tipo[0]}:${dd}:${pg + 1}:${modo}` });
   if (nav.length) kb.push(nav);
   if (tipo === "ingreso" && repetidos.length) kb.push([soloRep ? { text: "📋 Ver todos", callback_data: `fin:del:pg:i:${dd}:0:t` } : { text: `🔎 Solo posibles repetidos (${repetidos.length})`, callback_data: `fin:del:pg:i:${dd}:0:r` }]);
   kb.push(...pie);
   const total = vigentes.reduce((a, m) => a + Number(m.monto || 0), 0);
-  const resumen = tipo === "egreso" ? "" : `\n${vigentes.length} vigente${vigentes.length === 1 ? "" : "s"} · total ${escMD(moneyLps(total))}${todos.length > vigentes.length ? `\n🚫 anulados y ↩️ reversas no suman (van al final)` : ""}${repetidos.length ? `\n⚠️ ${clientesRep} cliente${clientesRep === 1 ? "" : "s"} aparece${clientesRep === 1 ? "" : "n"} más de una vez (${repetidos.length} vouchers): revíselos` : ""}${paginas > 1 ? `\nPágina ${pg + 1} de ${paginas} · ${lista.length} en total` : ""}\n`;
-  return upsertPanel(chatId, `🗑️ *${tipo === "egreso" ? "EGRESOS" : "INGRESOS"} DEL ${escMD(fecha)}*${soloRep ? " · *posibles repetidos*" : ""}\n${resumen}\nSeleccione el movimiento:`, kb);
+  const resumen = tipo === "egreso" ? "" : `\n${pagos} pago${pagos === 1 ? "" : "s"} (${vigentes.length} servicio${vigentes.length === 1 ? "" : "s"}) · total ${escMD(moneyLps(total))}${todos.length > vigentes.length ? `\n🚫 anulados y ↩️ reversas no suman (van al final)` : ""}${repetidos.length ? `\n⚠️ = mismo cliente, mismo servicio y mismo monto (posible repetido)` : ""}${paginas > 1 ? `\nPágina ${pg + 1} de ${paginas}` : ""}\n`;
+  return upsertPanel(chatId, `🗑️ *${tipo === "egreso" ? "EGRESOS" : "INGRESOS"} DEL ${escMD(fecha)}*${soloRep ? " · *posibles repetidos*" : ""}\n${resumen}\nSeleccione el pago:`, kb);
+}
+// R129 · Detalle de un pago con varios servicios: total y cada parte (para corregir/anular solo la que esté mal).
+async function panelGrupoR129(chatId, userId, tipo, fecha, idx) {
+  const todos = await leerListaFechaR129(userId, tipo, fecha);
+  const it = itemsListaR129(todos)[Number(idx)];
+  const volver = [[{ text: "⬅️ Volver a la lista", callback_data: `fin:del:pg:${tipo[0]}:${fecha.replace(/\//g, "")}:0:t` }], [{ text: "🏠 Inicio", callback_data: "go:inicio" }]];
+  if (!it || it.ms.length < 2) return upsertPanel(chatId, "⚠️ La lista cambió. Vuelva a abrirla.", volver);
+  const m = it.ms[0], total = it.ms.reduce((a, x) => a + Number(x.monto || 0), 0);
+  const txt = `💵 *UN SOLO PAGO · ${escMD(nombreMovimientoFinanzas(m) || "Cliente")}*\n${escMD(fecha)} · ${escMD(String(m.banco || ""))}\nTotal: *${escMD(moneyLps(total))}* · ${it.ms.length} servicios\n\nEs UN pago del cliente. Toque una parte solo si esa parte está mal:`;
+  return upsertPanel(chatId, txt, [...it.ms.map((x) => [{ text: textoBtnEliminarMovimiento(x), callback_data: `fin:del:pick:${idCortoFinanzas(x.id)}` }]), ...volver]);
 }
 
 async function listarRevendedores(chatId) {
@@ -5143,6 +5177,12 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
         ]);
       }
 
+      if (data.startsWith("fin:del:grp:")) { // R129 · un pago con varios servicios
+        const [, , , t1, dd, idx] = data.split(":");
+        const fecha = /^\d{8}$/.test(dd || "") ? `${dd.slice(0, 2)}/${dd.slice(2, 4)}/${dd.slice(4)}` : "";
+        if (!fecha) return bot.sendMessage(chatId, "⚠️ La lista venció. Busque la fecha otra vez.");
+        return panelGrupoR129(chatId, userId, t1 === "e" ? "egreso" : "ingreso", fecha, Number(idx || 0));
+      }
       if (data.startsWith("fin:del:pg:")) { // R124 · páginas / solo repetidos
         const [, , , t1, dd, pg, modo] = data.split(":");
         const fecha = /^\d{8}$/.test(dd || "") ? `${dd.slice(0, 2)}/${dd.slice(2, 4)}/${dd.slice(4)}` : "";

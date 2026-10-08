@@ -678,14 +678,16 @@ function claveClienteR124(m = {}) {
   return n.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9ñ ]/g, " ").replace(/\s+/g, " ").trim();
 }
 function crearHojaRepetidosR124(wb, ingresos = [], subtitle = "") {
-  const cuenta = new Map(), k = (m) => `${m.fecha}|${claveClienteR124(m)}`;
+  // R129: repetido = mismo cliente + MISMO servicio (compraId o plataforma) + mismo monto el mismo día (2 perfiles distintos no lo son).
+  const serv = (m) => String(m.raw?.compraId || "").trim() || String(m.plataforma || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, "");
+  const cuenta = new Map(), k = (m) => `${m.fecha}|${claveClienteR124(m)}|${serv(m)}|${Number(m.monto || 0)}`;
   for (const m of ingresos) if (claveClienteR124(m)) cuenta.set(k(m), (cuenta.get(k(m)) || 0) + 1);
   const filas = ingresos.filter((m) => claveClienteR124(m) && cuenta.get(k(m)) > 1)
     .sort((a, b) => (a.fechaTs || 0) - (b.fechaTs || 0) || claveClienteR124(a).localeCompare(claveClienteR124(b)) || String(a.raw?.createdAt || "").localeCompare(String(b.raw?.createdAt || "")))
     .map((m) => [m.fecha, m.detalle || "", m.plataforma || "", Number(m.monto || 0), m.banco || "", m.userName || "", fechaHoraHN(m.raw?.createdAt).slice(11), cuenta.get(k(m))]);
-  const ws = simpleSheet(wb, "Revisar repetidos", "POSIBLES VOUCHERS REPETIDOS", `${subtitle} · mismo cliente más de una vez el mismo día · revíselos contra el banco`,
+  const ws = simpleSheet(wb, "Revisar repetidos", "POSIBLES VOUCHERS REPETIDOS", `${subtitle} · mismo cliente, mismo servicio y mismo monto el mismo día · revíselos contra el banco`,
     ["Fecha", "Cliente", "Plataforma", "Monto", "Banco", "Registrado por", "Hora", "Veces ese día"], [12, 26, 28, 13, 18, 22, 8, 12], filas, [4], [4]);
-  if (!filas.length) ws.addRow(["Sin clientes repetidos en este período."]);
+  if (!filas.length) ws.addRow(["Sin vouchers repetidos en este período."]);
   return ws;
 }
 
@@ -704,14 +706,15 @@ async function generarReporteExcelPorRango(fechaInicio, fechaFin) {
     const anulados = todosR123.filter((m) => esAnuladoR123(m) && ["ingreso", "egreso", "ajuste", "planilla"].includes(m.kind));
     const movimientos = todosR123.filter((m) => !esAnuladoR123(m) && !m.raw?.reversaDe).filter((m) => !["saldo_inicial", "venta", "transferencia"].includes(m.kind)); // R106: ventas y transferencias no son ingreso/egreso
     const ventasTotal = todosR123.filter((m) => m.kind === "venta" && !esAnuladoR123(m) && !m.raw?.reversaDe).reduce((s, m) => s + Number(m.monto || 0), 0);
-    // R114: un cliente paga UNA vez → los cobros del mismo cliente/banco/usuario/día registrados juntos (≤10 min) van en UNA fila.
+    // R114/R129: un cliente paga UNA vez → todos los cobros del mismo cliente al mismo banco el mismo día van en UNA fila
+    // (ej. Juan de Dios 80 + 80 de sus 2 perfiles = L160), aunque se hayan registrado en momentos distintos o por otro usuario.
     const ingresos = (() => {
       const lista = movimientos.filter((m) => m.tipo === "ingreso" && m.kind !== "ajuste").sort((a, b) => String(a.raw?.createdAt || "").localeCompare(String(b.raw?.createdAt || "")));
       const out = [];
       for (const m of lista) {
-        const r = m.raw || {}, t = Date.parse(r.createdAt || "") || 0, quien = String(r.clienteId || r.clienteNombre || "").toLowerCase();
-        const key = [quien, r.bancoId || m.banco, m.userName, m.fecha].join("|");
-        const g = quien && !r.reversaDe ? out.find((x) => x._key === key && t && Math.abs(t - x._t) <= 600000) : null;
+        const r = m.raw || {}, t = Date.parse(r.createdAt || "") || 0, quien = String(r.clienteId || r.clienteNombre || "").toLowerCase().trim();
+        const key = [quien, String(r.bancoId || m.banco).toLowerCase(), m.fecha].join("|");
+        const g = quien && !r.reversaDe ? out.find((x) => x._key === key) : null;
         if (g) { g.monto += Number(m.monto || 0); if (m.plataforma && !g.plataforma.includes(m.plataforma)) g.plataforma += ` + ${m.plataforma}`; }
         else out.push({ ...m, _key: key, _t: t });
       }
