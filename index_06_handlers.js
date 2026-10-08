@@ -5077,12 +5077,24 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
         ]);
       }
 
+      if (data.startsWith("fin:anul:ask:")) { // R122 · anular desde Telegram
+        const id = idLargoFinanzas(String(data.split(":")[3] || "").trim());
+        if (!id) return bot.sendMessage(chatId, "⚠️ La lista venció. Busque la fecha otra vez.");
+        if (!(await finLibro.esLibroUser(userId))) return bot.sendMessage(chatId, "⛔ Anular es exclusivo de Sublicuentas y Relojes.");
+        pending.set(String(chatId), { mode: "finAnularMotivo", movimientoId: id, opId: finLibro.newOpId() });
+        return bot.sendMessage(chatId, "✍️ Escriba el *motivo* de la anulación (ej. voucher repetido, pago registrado dos veces):", { parse_mode: "Markdown" });
+      }
       if (data.startsWith("fin:del:pick:")) {
         const id = idLargoFinanzas(String(data.split(":")[3] || "").trim());
         if (!id) return bot.sendMessage(chatId, "⚠️ La lista venció. Busque la fecha otra vez.");
         const m = await require("./index_05_finanzas_menus").getMovimientoFinanzaById(id);
         if (!m) return bot.sendMessage(chatId, "⚠️ Movimiento no encontrado.");
-        if (movimientoLigadoFinanzas(m)) return upsertPanel(chatId, `🔒 Este movimiento es parte del *centro financiero* (compra/renovación, abono, planilla o reversa).\n\nNo se borra: se *anula* para que bancos, ventas y pendientes cuadren y quede en auditoría.\n👉 APK o Web → Control financiero → *Movimientos* → *Anular*.`, [[{ text: "⬅️ Volver eliminar", callback_data: "fin:menu:eliminar" }], [{ text: "🏠 Inicio", callback_data: "go:inicio" }]]);
+        if (movimientoLigadoFinanzas(m)) { // R122: se anula aquí mismo (con motivo), igual que en la APK/web
+          const volverR122 = [[{ text: "⬅️ Buscar ingresos por fecha", callback_data: "fin:menu:eliminar:ingreso" }], [{ text: "🏠 Inicio", callback_data: "go:inicio" }]];
+          const bloqueo = finLibro.motivoBloqueoAnular(m);
+          if (bloqueo || !(await finLibro.esLibroUser(userId))) return upsertPanel(chatId, `${textoConfirmarEliminacionMovimiento(m).replace("🗑️ CONFIRMAR ELIMINACIÓN", "🔒 MOVIMIENTO DEL CENTRO FINANCIERO").replace("\n¿Desea eliminar este movimiento?", "")}\n⚠️ ${bloqueo || "Anular es exclusivo de Sublicuentas y Relojes."}`, volverR122);
+          return upsertPanel(chatId, `${textoConfirmarEliminacionMovimiento(m).replace("🗑️ CONFIRMAR ELIMINACIÓN", "🔒 MOVIMIENTO DEL CENTRO FINANCIERO").replace("\n¿Desea eliminar este movimiento?", "")}\nEste no se borra: se *anula*. Queda marcado 🚫 anulado, se crea su reversa (monto en negativo, con fecha de hoy) y bancos y pendientes cuadran. Queda en auditoría.`, [[{ text: "🚫 Anular este (pide motivo)", callback_data: `fin:anul:ask:${idCortoFinanzas(id)}` }], ...volverR122]);
+        }
         const tipo = String(m.tipo || "").toLowerCase() === "egreso" ? "egreso" : "ingreso";
         return upsertPanel(chatId, textoConfirmarEliminacionMovimiento(m), [
           [{ text: "✅ Sí, eliminar este", callback_data: `fin:del:ok:${idCortoFinanzas(id)}` }],
@@ -6823,6 +6835,14 @@ bot.on("message", async (msg) => {
 
       if (/^fl[A-Z]/.test(String(p?.mode || ""))) return finLibro.handleText(chatId, userId, t, p); // R104
 
+      if (p.mode === "finAnularMotivo") { // R122
+        if (String(t || "").trim().length < 4) return bot.sendMessage(chatId, "Escriba un motivo un poco más claro (mínimo 4 letras).");
+        try {
+          const r = await finLibro.anularMovimientoTg({ movimientoId: p.movimientoId, motivo: t, opId: p.opId, actor: await finLibro.actorDe(userId) });
+          pending.delete(String(chatId));
+          return upsertPanel(chatId, r.duplicado ? "ℹ️ Ese movimiento ya se había anulado." : `✅ *Anulado* ${escMD(moneyLps(r.monto))}${r.cliente ? ` · ${escMD(String(r.cliente))}` : ""}${r.banco ? ` · ${escMD(String(r.banco))}` : ""}\nSe creó su reversa y quedó en auditoría.`, [[{ text: "⬅️ Buscar ingresos por fecha", callback_data: "fin:menu:eliminar:ingreso" }], [{ text: "🏠 Inicio", callback_data: "go:inicio" }]]);
+        } catch (e) { pending.delete(String(chatId)); return bot.sendMessage(chatId, `⚠️ ${String(e?.message || e).slice(0, 220)}`); }
+      }
       if (p.mode === "finEliminarFechaAsk") {
         const fecha = parseFechaFlexible(t);
         if (!fecha) return bot.sendMessage(chatId, "⚠️ Fecha inválida. Use *dd/mm/yyyy*.\nEjemplo: *23/03/2026*", { parse_mode: "Markdown" });

@@ -466,6 +466,51 @@ async function carteraResumen() {
   return { rows, clientes: sum("cliente"), vendedores: sum("vendedor") };
 }
 
+// ===================== R122 · Anular movimiento desde Telegram =====================
+// Mismo proceso que la APK/web (/api/finanzas · anular_movimiento): NO se borra nada. El original queda
+// estadoFinanciero "anulado" y se crea su reversa `<id>_rev` con el monto en negativo (fecha de hoy). Si era un cobro
+// de una cuenta por cobrar, ese dinero vuelve al pendiente. Motivo obligatorio, auditado, y la marca en
+// finanzas_operaciones evita que un doble toque lo anule dos veces.
+function motivoBloqueoAnular(m = {}) {
+  if (m.estadoFinanciero) return `Ese movimiento ya está ${m.estadoFinanciero}.`;
+  if (m.reversaDe) return "No se puede anular una reversa.";
+  if (m.planillaPagoId) return "Es parte de un pago de planilla: anule el pago completo desde Planilla (APK o web).";
+  if (!["ingreso", "egreso", "ajuste"].includes(R.movementKind(m))) return "Este tipo de movimiento (venta, transferencia o saldo inicial) no se anula aquí.";
+  return "";
+}
+async function anularMovimientoTg({ movimientoId, motivo, opId, actor }) {
+  const mot = String(motivo || "").trim().slice(0, 200);
+  if (mot.length < 4) throw userErrR122("Escriba el motivo (obligatorio).");
+  const id = String(movimientoId || "").trim();
+  const ref = db.collection("finanzas_movimientos").doc(id || "x");
+  const marcaRef = db.collection("finanzas_operaciones").doc(opDocId("corr", actor.uid, opId));
+  return db.runTransaction(async (tx) => {
+    if ((await tx.get(marcaRef)).exists) return { duplicado: true };
+    const snap = await tx.get(ref);
+    if (!snap.exists) throw userErrR122("Ese movimiento no existe.");
+    const m = snap.data() || {};
+    const bloqueo = motivoBloqueoAnular(m); if (bloqueo) throw userErrR122(bloqueo);
+    const cxcRef = m.cuentaId ? db.collection(CXC).doc(m.cuentaId) : null;
+    const cs = cxcRef ? await tx.get(cxcRef) : null;
+    const now = new Date().toISOString();
+    const rev = db.collection("finanzas_movimientos").doc(`${id}_rev`);
+    const { createdAt, updatedAt, movimientoId: _mid, saldoAntes, saldoDespues, estadoFinanciero, reversaId, ...resto } = m;
+    tx.set(rev, { ...resto, registradoPor: actor.usuario, registradoPorId: actor.uid, rol: "telegram", origenCanal: "tg", movimientoId: rev.id, monto: -R.money(m.monto), reversaDe: id, motivo: `Reversa: ${mot}`, ...fechaCampos(hoyYmd()), createdAt: now, updatedAt: now });
+    tx.set(ref, { estadoFinanciero: "anulado", reversaId: rev.id, anuladoPor: actor.usuario, anuladoAt: now, motivoAnulacion: mot, updatedAt: now }, { merge: true });
+    if (cs?.exists && R.movementKind(m) === "ingreso") { // anular un cobro devuelve ese dinero al pendiente
+      const c = cs.data() || {}, delta = R.money(-R.money(m.monto));
+      const saldo = R.money(Math.max(0, R.money(c.saldoPendiente) - delta));
+      const deAbono = String(m.subtipo || "").startsWith("cobro_pendiente");
+      const posterior = R.money((c.montoRecibidoPosterior || 0) + (deAbono ? delta : 0)), inicial = R.money((c.montoRecibidoInicial || 0) + (deAbono ? 0 : delta));
+      tx.set(cxcRef, { saldoPendiente: saldo, montoRecibidoPosterior: posterior, montoRecibidoInicial: inicial, estado: saldo <= 0 ? "pagado" : (inicial + posterior > 0 ? "parcial" : "pendiente"), updatedAt: now }, { merge: true });
+    }
+    tx.set(marcaRef, { accion: "anular_movimiento", movimientoId: id, reversaId: rev.id, sustitutoId: "", por: actor.usuario, motivo: mot, origen: "tg", createdAt: now });
+    tx.set(db.collection("auditoria_eventos").doc(), { actorUsuario: actor.usuario, rol: "telegram", origen: "tg", modulo: "finanzas", accion: "anular_movimiento", targetType: "movimiento", targetId: id, movimientoId: id, clienteId: m.clienteId || "", compraId: m.compraId || "", cuentaId: m.cuentaId || "", operationId: opId, motivo: mot, monto: R.money(m.monto), before: { monto: R.money(m.monto), banco: m.banco || "", bancoId: m.bancoId || "" }, after: { estado: "anulado" }, detalle: `Anulado L${R.money(m.monto)} ${m.banco || ""} · ${m.clienteNombre || m.detalle || m.motivo || ""}`.trim(), bancos: [{ bancoId: m.bancoId || "", monto: -R.money(m.monto) }], resultado: "ok", tipo: "finanzas_anular_movimiento", createdAt: now });
+    return { duplicado: false, reversaId: rev.id, monto: R.money(m.monto), banco: m.banco || "", cliente: m.clienteNombre || m.detalle || "" };
+  });
+}
+const userErrR122 = (msg) => Object.assign(new Error(msg), { userError: true });
+
 // ===================== R121 · "Ya pagó por Socios" =====================
 // La compra de un socio YA dejó su venta + ingreso en el libro (server_api.js · compra_socio). Al armar la ficha de esa
 // cuenta NO se registra otro ingreso: se amarra a ese pago. Mismas reglas y campos que la web y la APK
@@ -838,4 +883,4 @@ async function handleText(chatId, userId, text, p) {
   return bot.sendMessage(chatId, "Use los botones del panel o toque ❌ Cancelar.");
 }
 
-module.exports = { unidadesSocio, pagoSocioDisponible, pagosSociosSinFicha, vincularFichaSocio, iniciarCuentaCompleta, iniciarPagoCompra, registrarOperacionPago, registrarAbonoTg, carteraResumen, registrarSaldoInicial, registrarAjuste, bancoDesdeBoton, movimientosSinBanco, configurar, esLibroUser, iniciarPagoRenovacion, handleCallback, handleText, menuLibro, estadoLibro, loadMethods, registrarCobroRenovacion, confirmarPagoPlanilla, usuarioCanonico, usuarioLabel, ajustarFechaMovimiento };
+module.exports = { motivoBloqueoAnular, anularMovimientoTg, newOpId, actorDe, unidadesSocio, pagoSocioDisponible, pagosSociosSinFicha, vincularFichaSocio, iniciarCuentaCompleta, iniciarPagoCompra, registrarOperacionPago, registrarAbonoTg, carteraResumen, registrarSaldoInicial, registrarAjuste, bancoDesdeBoton, movimientosSinBanco, configurar, esLibroUser, iniciarPagoRenovacion, handleCallback, handleText, menuLibro, estadoLibro, loadMethods, registrarCobroRenovacion, confirmarPagoPlanilla, usuarioCanonico, usuarioLabel, ajustarFechaMovimiento };
