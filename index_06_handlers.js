@@ -2208,29 +2208,38 @@ async function linkRevendedorByNombre(nombre = "", telegramId = "") {
     : { ok: false, msg: "⚠️ No se pudo vincular el vendedor." };
 }
 
-function textoBtnEliminarMovimiento(m = {}) {
+// R122 · Borrar ingresos por fecha: cada botón lleva el NOMBRE del cliente (antes solo plataforma y banco: con
+// varios vouchers iguales no se sabía cuál era). La fecha ya va en el título, por eso no se repite en el botón.
+function nombreMovimientoFinanzas(m = {}) {
+  return String(m.clienteNombre || m.cliente || m.nombrePerfil || m.nombre || m.deudorNombre || m.beneficiario || m.socioNombre || "").replace(/\s+/g, " ").trim();
+}
+function estadoMovimientoFinanzas(m = {}) {
+  if (m.reversaDe) return "↩️ reversa";
+  if (String(m.estadoFinanciero || "") === "anulado") return "🚫 anulado";
+  if (String(m.estadoFinanciero || "") === "corregido") return "✏️ corregido";
+  return "";
+}
+function textoBtnEliminarMovimiento(m = {}, repetido = false) {
   const tipo = String(m.tipo || "").toLowerCase();
-  const fecha = String(m.fecha || "-");
-  const monto = moneyLps(m.monto || 0);
-
-  const concepto =
-    tipo === "egreso"
-      ? String(m.motivo || m.descripcion || "Egreso").trim()
-      : String(m.plataforma || m.descripcion || "Ingreso").trim();
-
+  const monto = R122_montoCorto(m.monto);
   const banco = String(m.banco || "").trim();
-  const detalle = String(m.detalle || "").trim();
-
-  const partes = [`${fecha}`, `${monto}`, concepto];
-
-  if (tipo === "ingreso") {
-    if (detalle) partes.push(detalle);
-    if (banco) partes.push(banco);
-  } else {
-    if (detalle) partes.push(detalle);
+  if (tipo === "egreso") {
+    const partes = [String(m.fecha || "-"), moneyLps(m.monto || 0), String(m.motivo || m.descripcion || "Egreso").trim()];
+    if (String(m.detalle || "").trim()) partes.push(String(m.detalle).trim());
+    return safeBtnLabelLocal(partes.join(" • "), 60);
   }
-
-  return safeBtnLabelLocal(partes.join(" • "), 60);
+  const nombre = nombreMovimientoFinanzas(m) || String(m.detalle || "").trim() || "Sin nombre";
+  const plataforma = String(m.plataforma || m.descripcion || "").replace(/\s+/g, " ").trim();
+  const estado = estadoMovimientoFinanzas(m);
+  const partes = [`${repetido ? "⚠️ " : ""}${estado ? `${estado} ` : ""}${monto}`, nombre, plataforma, banco].filter(Boolean);
+  return safeBtnLabelLocal(partes.join(" · "), 60);
+}
+function R122_montoCorto(n) { const v = Number(n || 0); return `L${Number.isInteger(v) ? v : v.toFixed(2)}`; }
+// Mismo cliente + mismo monto el mismo día (sin contar anulados/reversas) = posible voucher repetido.
+function R122_clavesRepetidas(list = []) {
+  const cuenta = new Map(), key = (m) => `${nombreMovimientoFinanzas(m).toLowerCase()}|${Number(m.monto || 0)}`;
+  for (const m of list) if (!estadoMovimientoFinanzas(m) && nombreMovimientoFinanzas(m)) cuenta.set(key(m), (cuenta.get(key(m)) || 0) + 1);
+  return (m) => !estadoMovimientoFinanzas(m) && (cuenta.get(key(m)) || 0) > 1;
 }
 
 async function listarRevendedores(chatId) {
@@ -6829,12 +6838,19 @@ bot.on("message", async (msg) => {
             [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
           ]);
         }
+        // R122: ordenados por nombre (los vouchers del mismo cliente quedan juntos) y marcados si parecen repetidos.
+        list.sort((a, b) => nombreMovimientoFinanzas(a).localeCompare(nombreMovimientoFinanzas(b), "es") || String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
+        const esRepetido = R122_clavesRepetidas(list);
+        const vigentes = list.filter((m) => !estadoMovimientoFinanzas(m));
+        const totalVigente = vigentes.reduce((a, m) => a + Number(m.monto || 0), 0);
+        const nRepetidos = list.filter(esRepetido).length;
         // R111: Telegram rechaza TODO el teclado si un botón pasa de 64 bytes; los ids nuevos de Finanzas son largos.
-        const kb = list.slice(0, 40).map((m) => [{ text: textoBtnEliminarMovimiento(m), callback_data: `fin:del:pick:${idCortoFinanzas(m.id)}` }]);
+        const kb = list.slice(0, 40).map((m) => [{ text: textoBtnEliminarMovimiento(m, esRepetido(m)), callback_data: `fin:del:pick:${idCortoFinanzas(m.id)}` }]);
         kb.push([{ text: p.tipo === "egreso" ? "➖ Buscar otra fecha" : "➕ Buscar otra fecha", callback_data: p.tipo === "egreso" ? "fin:menu:eliminar:egreso" : "fin:menu:eliminar:ingreso" }]);
         kb.push([{ text: "⬅️ Volver eliminar", callback_data: "fin:menu:eliminar" }]);
         kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
-        return upsertPanel(chatId, `🗑️ *${p.tipo === "egreso" ? "EGRESOS" : "INGRESOS"} DEL ${escMD(fecha)}*\n\nSeleccione el movimiento que desea borrar:`, kb);
+        const resumenR122 = p.tipo === "egreso" ? "" : `\n${vigentes.length} vigente${vigentes.length === 1 ? "" : "s"} · total ${escMD(moneyLps(totalVigente))}${list.length > vigentes.length ? `\n🚫 anulados y ↩️ reversas no suman` : ""}${nRepetidos ? `\n⚠️ = mismo cliente y mismo monto (posible repetido)` : ""}${list.length > 40 ? `\nMostrando 40 de ${list.length}` : ""}\n`;
+        return upsertPanel(chatId, `🗑️ *${p.tipo === "egreso" ? "EGRESOS" : "INGRESOS"} DEL ${escMD(fecha)}*\n${resumenR122}\nSeleccione el movimiento que desea borrar:`, kb);
       }
 
       if (p.mode === "finIngresoMonto") {

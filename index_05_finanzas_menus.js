@@ -205,8 +205,19 @@ function textoConfirmarEliminacionMovimiento(m = {}) {
   const concepto = finConceptoLabel(m);
   const extra = finExtraLabel(m);
   let txt = "🗑️ CONFIRMAR ELIMINACIÓN\n\n";
-  txt += `Tipo: ${tipo}\nFecha: ${fecha}\nMonto: ${monto}\nConcepto: ${concepto}\n`;
+  // R122: nombre del cliente, quién lo registró, desde dónde y a qué hora → para saber cuál voucher es.
+  const limpio = (v) => String(v || "").replace(/[*_`\[\]]/g, "").trim(); // sin símbolos que rompan el formato de Telegram
+  const cliente = limpio(m.clienteNombre || m.cliente || m.nombrePerfil || m.nombre || m.deudorNombre || m.beneficiario || m.socioNombre);
+  const quienRaw = limpio(m.registradoPorNombre || m.registradoPor || m.usuario || m.cobradoPor);
+  const quien = /^(libni|daniela|libni daniela)/i.test(quienRaw) ? "Relojes" : quienRaw;
+  const origen = String(m.origenCanal || m.origen || "").trim();
+  let hora = ""; try { const d = new Date(m.createdAt?.toDate ? m.createdAt.toDate() : m.createdAt); if (!isNaN(d)) hora = new Date(d.getTime() - 6 * 3600000).toISOString().slice(11, 16); } catch (_) {}
+  txt += `Tipo: ${tipo}\nFecha: ${fecha}\nMonto: ${monto}\n`;
+  if (cliente) txt += `Cliente: ${cliente}\n`;
+  txt += `Concepto: ${concepto}\n`;
+  if (m.banco) txt += `Banco: ${m.banco}\n`;
   if (extra) txt += `Extra: ${extra}\n`;
+  if (quien || origen || hora) txt += `Registrado: ${[quien, origen, hora ? `${hora} h` : ""].filter(Boolean).join(" · ")}\n`;
   txt += "\n¿Desea eliminar este movimiento?";
   return txt;
 }
