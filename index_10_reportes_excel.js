@@ -137,13 +137,13 @@ function usuarioMovimiento(data = {}) {
   // Socios/revendedores: el usuario financiero visible es SIEMPRE el nombre del socio, no un slug ni “Socios”.
   if (["socios", "socio", "revendedor", "revendedores"].includes(origen)) {
     const socio = safeText(data.socioNombre || data.revendedorNombre || data.nombreSocio || data.registradoPorNombre || data.registradoPor || data.cobradoPor || "Socio");
-    return canal ? `${socio} · ${canal}` : socio;
+    return socio; // R126: solo el nombre (sin "· APK/Telegram/Socios")
   }
   const u = safeText(data.userName || data.registradoPorNombre || data.usuario || data.cobradoPor || data.registradoPor || data.admin || data.creadoPor || data.createdBy || "");
   if (!u) return "";
   const key = u.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
   const label = USUARIOS_LABEL[key] || (/^libni|daniela$/i.test(String(u).replace(/\s+/g, "")) ? "Relojes" : u); // R119: "Libni Daniela" = Relojes
-  return canal ? `${label} · ${canal}` : label;
+  return label; // R126: solo el usuario, sin canal
 }
 const SUBTIPO_LABEL = { cobro_renovacion: "Renovación", cobro_compra: "Compra nueva", cobro_pendiente_cliente: "Abono de cliente", cobro_pendiente_vendedor: "Entrega de vendedor", compra_socio: "Compra socio", renovacion_socio: "Renovación socio", cobro_cliente: "Cobro" };
 function detalleMovimiento(data = {}) {
@@ -155,12 +155,16 @@ function detalleMovimiento(data = {}) {
   return SUBTIPO_LABEL[String(data.subtipo || "")] || "";
 }
 let platLabel = null;
+// R126 · En el Excel van solo datos: sin ⭐/emojis en los nombres de plataforma.
+function sinAdornosR126(v = "") { return String(v || "").replace(/[\u2B50\u2605\u2606\u2728]|\uD83C[\uDF1F\uDF20]|\uFE0F/g, "").replace(/\s+/g, " ").replace(/^[\s·+\-]+|[\s·+\-]+$/g, "").trim(); }
+// R126 · Las barras visuales NO se salen de su celda: cuántos "█" caben según el ancho de la columna.
+function bloquesQueCaben(ws, col) { return Math.max(4, Math.floor(Number(ws.getColumn(col).width || 10) / 2.4)); }
 function plataformaLegible(v = "") {
   const t = safeText(v);
   if (!t) return "Sin plataforma";
   try { if (!platLabel) platLabel = require("./index_02_utils_roles").humanPlataforma; } catch (_) { platLabel = (x) => x; }
   // Solo traduce claves internas (vipnetflix, disneyp…); los nombres ya legibles se dejan igual.
-  return /^[a-z0-9_]+$/.test(t) ? (platLabel(t) || t) : t;
+  return sinAdornosR126(/^[a-z0-9_]+$/.test(t) ? (platLabel(t) || t) : t) || "Sin plataforma";
 }
 
 function extraerFechaMovimiento(data = {}) {
@@ -375,7 +379,7 @@ function createResumenSheet(wb, meta) {
     ["Utilidad", utilidad, utilidad >= 0 ? "Ganancia" : "Pérdida", utilidad, utilidad >= 0 ? COLORS.verde : COLORS.rojo],
   ];
   comparativa.forEach(([label, amount, desc, value, color], idx) => {
-    const r = ws.addRow(["", label, amount, "", desc, value, "", "█".repeat(Math.max(1, Math.round((Math.abs(Number(amount) || 0) / maxBase) * 26)))]);
+    const r = ws.addRow(["", label, amount, "", desc, value, "", "█".repeat(Math.max(1, Math.round((Math.abs(Number(amount) || 0) / maxBase) * bloquesQueCaben(ws, 8))))]);
     r.height = 22;
     [2, 3, 5, 6, 8].forEach((c) => setBorder(r.getCell(c)));
     r.getCell(2).font = { bold: true };
@@ -392,7 +396,7 @@ function createResumenSheet(wb, meta) {
     const b = bancos[i] || null;
     const r = ws.addRow([
       "",
-      p ? `${i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : `${i + 1}.`} ${p.plataforma}` : "—",
+      p ? `${i + 1}. ${p.plataforma}` : "—", // R126: sin medallas
       p ? p.ingresos : 0,
       "",
       b ? b.banco : "—",
@@ -444,8 +448,8 @@ function createDetalleSheet(wb, sheetName, title, subtitle, rows, tipo) {
   const lastDataRow = Math.max(firstDataRow, ws.rowCount);
   for (let rowNumber = firstDataRow; rowNumber <= ws.rowCount; rowNumber++) {
     const barCell = ws.getCell(`G${rowNumber}`);
-    barCell.value = rows.length ? { formula: formulaBar(`$C${rowNumber}`, `$C$${firstDataRow}:$C$${lastDataRow}`), result: "" } : "";
-    barCell.font = { bold: true, color: { argb: color } };
+    barCell.value = rows.length ? { formula: formulaBar(`$C${rowNumber}`, `$C$${firstDataRow}:$C$${lastDataRow}`, 1, bloquesQueCaben(ws, 7)), result: "" } : "";
+    barCell.font = { color: { argb: color } };
   }
 
   const totalRow = ws.addRow(["TOTAL", "", rows.length ? { formula: `SUM(C${firstDataRow}:C${lastDataRow})`, result: rows.reduce((s, x) => s + Number(x.monto || 0), 0) } : 0, "", `${rows.length} registros`, "", ""]);
@@ -482,8 +486,8 @@ function createBancosSheet(wb, bancos, subtitle) {
   for (let rowNumber = firstDataRow; rowNumber <= ws.rowCount; rowNumber++) {
     const netoVal = Number(ws.getCell(`D${rowNumber}`).value || 0);
     const barCell = ws.getCell(`F${rowNumber}`);
-    barCell.value = bancos.length ? { formula: `IF($D${rowNumber}=0,"",REPT("█",MAX(1,ROUND(ABS($D${rowNumber})/${maxNetoAbs}*24,0))))`, result: "" } : "";
-    barCell.font = { bold: true, color: { argb: netoVal >= 0 ? COLORS.verde : COLORS.rojo } };
+    barCell.value = bancos.length ? { formula: `IF($D${rowNumber}=0,"",REPT("█",MAX(1,ROUND(ABS($D${rowNumber})/${maxNetoAbs}*${bloquesQueCaben(ws, 6)},0))))`, result: "" } : "";
+    barCell.font = { color: { argb: netoVal >= 0 ? COLORS.verde : COLORS.rojo } };
   }
 
   const totalRow = ws.addRow([
@@ -519,7 +523,7 @@ function createGraficosSheet(wb, meta) {
     ["Egresos", egresosTotal, COLORS.rojo, "Dinero salido"],
     ["Utilidad", utilidad, utilidad >= 0 ? COLORS.verde : COLORS.rojo, utilidad >= 0 ? "Ganancia neta" : "Pérdida neta"],
   ].forEach(([label, amount, color, lectura], i) => {
-    const r = ws.addRow(["", label, amount, "█".repeat(Math.max(1, Math.round((Math.abs(Number(amount) || 0) / maxComp) * 30))), "", lectura, amount, utilidad >= 0 ? "✅ Controlado" : "⚠️ Revisar"]);
+    const r = ws.addRow(["", label, amount, "█".repeat(Math.max(1, Math.round((Math.abs(Number(amount) || 0) / maxComp) * bloquesQueCaben(ws, 4)))), "", lectura, amount, utilidad >= 0 ? "✅ Controlado" : "⚠️ Revisar"]);
     [2, 3, 4, 6, 7, 8].forEach((c) => setBorder(r.getCell(c)));
     r.getCell(2).font = { bold: true };
     r.getCell(3).numFmt = MONEY_FMT;
@@ -537,16 +541,16 @@ function createGraficosSheet(wb, meta) {
   for (let i = 0; i < topLimit; i++) {
     const p = topPlats[i];
     const b = bancos[i];
-    const medalla = i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : `${i + 1}.`;
+    const medalla = `${i + 1}.`; // R126: sin medallas/emojis
     const r = ws.addRow([
       "",
       p ? `${medalla} ${p.plataforma}` : "—",
       p ? p.ingresos : 0,
-      p ? "█".repeat(Math.max(1, Math.round((p.ingresos / maxPlat) * 26))) : "",
+      p ? "█".repeat(Math.max(1, Math.round((p.ingresos / maxPlat) * bloquesQueCaben(ws, 4)))) : "",
       "",
       b ? `${i + 1}. ${b.banco}` : "—",
       b ? b.neto : 0,
-      b ? "█".repeat(Math.max(1, Math.round((Math.abs(b.neto) / maxBanco) * 24))) : "",
+      b ? "█".repeat(Math.max(1, Math.round((Math.abs(b.neto) / maxBanco) * bloquesQueCaben(ws, 8)))) : "",
     ]);
     [2, 3, 4, 6, 7, 8].forEach((c) => setBorder(r.getCell(c)));
     r.getCell(3).numFmt = MONEY_FMT;
@@ -619,32 +623,32 @@ async function agregarHojasLibroR104(wb, { ini, fin, subtitle, ingresosTotal, eg
     const r = res.addRow(["", "Estado del cierre", "", "", estado]); [2, 5].forEach((c) => setBorder(r.getCell(c)));
   }
   simpleSheet(wb, "Planilla", "PLANILLA / COMISIONES", subtitle,
-    ["Fecha", "Ciclo", "Beneficiario", "Concepto", "Descripción", "Monto total", "Confirmó", "Origen", "Estado", "pagoPlanillaId"],
-    [12, 18, 22, 20, 26, 14, 14, 9, 12, 34],
-    pagos.map((p) => [p.fecha, p.cicloId, p.beneficiario, p.conceptoLabel || p.concepto, p.descripcion || "", Number(p.montoTotal || 0), p.registradoPor || "", p.origenCanal || "", p.estado, p.planillaPagoId || p.id]), [6], [6]);
+    ["Fecha", "Beneficiario", "Concepto", "Descripción", "Monto total", "Confirmó", "Estado"],
+    [12, 22, 20, 26, 14, 14, 12],
+    pagos.map((p) => [p.fecha, p.beneficiario, p.conceptoLabel || p.concepto, p.descripcion || "", Number(p.montoTotal || 0), usuarioMovimiento({ usuario: p.registradoPor }) || p.registradoPor || "", String(p.estado || "").toUpperCase()]), [5], [5]); // R126: sin columnas técnicas
   const dist = [];
-  for (const p of pagos) for (const a of p.asignaciones || []) dist.push([p.planillaPagoId || p.id, p.fecha, p.beneficiario, a.banco || a.bancoId, Number(a.monto || 0), Number(a.saldoAntes || 0), Number(a.saldoDespues || 0)]);
+  for (const p of pagos) for (const a of p.asignaciones || []) dist.push([p.fecha, p.beneficiario, a.banco || a.bancoId, Number(a.monto || 0), Number(a.saldoAntes || 0), Number(a.saldoDespues || 0)]);
   simpleSheet(wb, "Distribución Planilla", "DISTRIBUCIÓN DE PLANILLA POR BANCO", subtitle,
-    ["pagoPlanillaId", "Fecha", "Beneficiario", "Banco", "Monto tomado", "Saldo antes", "Saldo después"], [34, 12, 22, 20, 14, 14, 14], dist, [5, 6, 7], [5]);
+    ["Fecha", "Beneficiario", "Banco", "Monto tomado", "Saldo antes", "Saldo después"], [12, 22, 20, 14, 14, 14], dist, [4, 5, 6], [4]);
   // R108 · Socios: "Ingreso - Compra Socio" / "Ingreso - Renovación Socio" (mismo libro, sin libro aparte).
   let socios = [];
   try { socios = (await getMovimientosPorRango(ini, fin)).map((m) => m.raw || {}).filter((r) => String(r.tipo) === "ingreso" && ["compra_socio", "renovacion_socio"].includes(String(r.subtipo))); } catch (e) { logErr("R108 socios excel", e); }
   simpleSheet(wb, "Socios", "INGRESOS DE SOCIOS (COMPRAS Y RENOVACIONES)", subtitle,
-    ["Fecha", "Socio", "Tipo", "Cliente", "Servicio / producto", "Cantidad", "Precio unitario (snapshot)", "Descuento", "Total", "Banco", "operationId", "Pedido / compra", "Estado"],
-    [12, 18, 22, 20, 34, 10, 16, 12, 12, 16, 26, 26, 12],
+    ["Fecha", "Socio", "Tipo", "Cliente", "Servicio / producto", "Cantidad", "Precio unitario", "Descuento", "Total", "Banco", "Estado"],
+    [12, 18, 22, 20, 34, 10, 16, 12, 12, 16, 12],
     socios.map((r) => {
       const prod = Array.isArray(r.productosSocio) ? r.productosSocio : (Array.isArray(r.serviciosSocio) ? r.serviciosSocio.map((x) => ({ servicio: x.servicio, cantidad: 1, precioUnitario: x.precio })) : []);
-      return [r.fecha || "", r.socioNombre || r.socioNorm || "", r.subtipo === "compra_socio" ? "Ingreso - Compra Socio" : "Ingreso - Renovación Socio", r.clienteNombre || "", prod.map((x) => `${x.servicio}${x.cantidad > 1 ? ` x${x.cantidad}` : ""}`).join(" + ") || r.plataforma || "",
-        prod.reduce((a, x) => a + Number(x.cantidad || 1), 0), prod.map((x) => x.precioUnitario).filter((x) => x != null).join(" / "), Number(r.descuento || 0), Number(r.monto || 0), r.banco || "", r.operationId || "", r.pedidoId || r.compraId || "", r.estadoFinanciero ? String(r.estadoFinanciero).toUpperCase() : "CONFIRMADO"];
+      return [r.fecha || "", r.socioNombre || r.socioNorm || "", r.subtipo === "compra_socio" ? "Ingreso - Compra Socio" : "Ingreso - Renovación Socio", r.clienteNombre || "", sinAdornosR126(prod.map((x) => `${x.servicio}${x.cantidad > 1 ? ` x${x.cantidad}` : ""}`).join(" + ") || r.plataforma || ""),
+        prod.reduce((a, x) => a + Number(x.cantidad || 1), 0), prod.map((x) => x.precioUnitario).filter((x) => x != null).join(" / "), Number(r.descuento || 0), Number(r.monto || 0), r.banco || "", r.estadoFinanciero ? String(r.estadoFinanciero).toUpperCase() : "CONFIRMADO"];
     }), [8, 9], [9]);
   simpleSheet(wb, "Pendientes Cobro", "PENDIENTES DE COBRO (CLIENTES / VENDEDORES)", "Estado actual de la cartera · no es efectivo disponible",
-    ["Tipo deudor", "Deudor", "Origen", "Cliente", "Plataforma", "compraId", "Monto total", "Recibido inicial", "Abonos posteriores", "Saldo pendiente", "Estado", "Ciclo origen", "Creado"],
-    [12, 22, 12, 22, 16, 22, 13, 14, 15, 15, 11, 18, 22],
-    cuentas.map((c) => [c.deudorTipo === "vendedor" ? "Vendedor" : "Cliente", c.deudorNombre || "", c.tipoOrigen === "compra" ? "Compra" : "Renovación", c.clienteNombre || "", c.plataforma || "", c.compraId || "", Number(c.montoTotalOperacion || 0), Number(c.montoRecibidoInicial || 0), Number(c.montoRecibidoPosterior || 0), Number(c.saldoPendiente || 0), String(c.estado || "").toUpperCase(), c.cicloOrigen || "", c.createdAt || ""]), [7, 8, 9, 10], [10]);
+    ["Tipo deudor", "Deudor", "Origen", "Cliente", "Plataforma", "Monto total", "Recibido inicial", "Abonos posteriores", "Saldo pendiente", "Estado", "Creado"],
+    [12, 22, 12, 22, 22, 13, 14, 15, 15, 11, 17],
+    cuentas.map((c) => [c.deudorTipo === "vendedor" ? "Vendedor" : "Cliente", c.deudorNombre || "", c.tipoOrigen === "compra" ? "Compra" : "Renovación", c.clienteNombre || "", sinAdornosR126(c.plataforma || ""), Number(c.montoTotalOperacion || 0), Number(c.montoRecibidoInicial || 0), Number(c.montoRecibidoPosterior || 0), Number(c.saldoPendiente || 0), String(c.estado || "").toUpperCase(), fechaHoraHN(c.createdAt)]), [6, 7, 8, 9], [9]);
   simpleSheet(wb, "Cierres", "CIERRES DE CICLO", subtitle,
-    ["cicloId", "Inicio", "Fin", "Ingresos", "Egresos operativos", "Disponible antes planilla", "Planilla / comisiones", "Resultado final", "Saldo retenido", "Cerrado por", "Fecha cierre"],
-    [20, 12, 12, 14, 16, 18, 16, 14, 14, 14, 22],
-    ciclos.map((c) => [c.cicloId || c.id, c.fechaInicio, c.fechaFin, Number(c.ingresos || 0), Number(c.egresosOperativos || 0), Number(c.disponibleAntesPlanilla || 0), Number(c.planilla || 0), Number(c.resultado || 0), Number(c.saldoRetenido || 0), c.cerradoPor || "", c.cerradoAt || ""]), [4, 5, 6, 7, 8, 9]);
+    ["Inicio", "Fin", "Ingresos", "Egresos operativos", "Disponible antes planilla", "Planilla / comisiones", "Resultado final", "Saldo retenido", "Cerrado por", "Fecha cierre"],
+    [12, 12, 14, 16, 18, 16, 14, 14, 14, 17],
+    ciclos.map((c) => [c.fechaInicio, c.fechaFin, Number(c.ingresos || 0), Number(c.egresosOperativos || 0), Number(c.disponibleAntesPlanilla || 0), Number(c.planilla || 0), Number(c.resultado || 0), Number(c.saldoRetenido || 0), usuarioMovimiento({ usuario: c.cerradoPor }) || c.cerradoPor || "", fechaHoraHN(c.cerradoAt)]), [3, 4, 5, 6, 7, 8]);
   simpleSheet(wb, "Saldos Libro", "SALDOS REALES POR BANCO (LIBRO MAYOR · HOY)", libro ? `Ciclo abierto desde ${libro.libro.cicloInicio}` : "Sin libro mayor",
     ["Banco", "Base (inicial / último cierre)", "Desde", "Ingresos", "Egresos operativos", "Planilla / comisiones", "Ajustes", "Transferencias (neto)", "Saldo final", "Movimientos"],
     [22, 22, 12, 14, 16, 18, 12, 18, 14, 12],
@@ -759,6 +763,8 @@ async function generarReporteExcelPorRango(fechaInicio, fechaFin) {
     await agregarHojasLibroR104(wb, { ini, fin, subtitle, ingresosTotal, egresosTotal, planillaTotal, ventasTotal });
     createGraficosSheet(wb, { ini, fin, ingresosTotal, egresosTotal, utilidad, topPlats, bancos });
 
+    // R126: toda celda con barra se encoge para caber (por si Excel usa otra letra más ancha) y nunca invade la de al lado.
+    wb.eachSheet((ws) => ws.eachRow((row) => row.eachCell((c) => { const v = c.value; const t = typeof v === "string" ? v : (v && v.formula) || ""; if (String(t).includes("█")) c.alignment = { horizontal: "left", vertical: "middle", shrinkToFit: true }; })));
     // Vista y protección visual básica.
     wb.eachSheet((ws) => {
       ws.properties.defaultRowHeight = 18;

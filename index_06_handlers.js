@@ -2235,7 +2235,7 @@ function textoBtnEliminarMovimiento(m = {}, repetido = false) {
     return safeBtnLabelLocal(partes.join(" • "), 60);
   }
   const nombre = nombreMovimientoFinanzas(m) || String(m.detalle || "").trim() || "Sin nombre";
-  const plataforma = String(m.plataforma || m.descripcion || "").replace(/\s+/g, " ").trim();
+  const plataforma = String(m.plataforma || m.descripcion || "").replace(/[\u2B50\u2605\u2606\u2728]|\uD83C[\uDF1F\uDF20]|\uFE0F/g, "").replace(/\s+/g, " ").trim(); // R126: sin ⭐
   const estado = estadoMovimientoFinanzas(m);
   const partes = [`${repetido ? "⚠️ " : ""}${estado ? `${estado} ` : ""}${monto}`, nombre, plataforma, banco].filter(Boolean);
   return safeBtnLabelLocal(partes.join(" · "), 60);
