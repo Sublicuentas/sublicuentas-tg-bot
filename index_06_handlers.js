@@ -2211,8 +2211,14 @@ async function linkRevendedorByNombre(nombre = "", telegramId = "") {
 // R122 · Borrar ingresos por fecha: cada botón lleva el NOMBRE del cliente (antes solo plataforma y banco: con
 // varios vouchers iguales no se sabía cuál era). La fecha ya va en el título, por eso no se repite en el botón.
 function nombreMovimientoFinanzas(m = {}) {
-  return String(m.clienteNombre || m.cliente || m.nombrePerfil || m.nombre || m.deudorNombre || m.beneficiario || m.socioNombre || "").replace(/\s+/g, " ").trim();
+  const directo = String(m.clienteNombre || m.cliente || m.nombrePerfil || m.nombre || m.deudorNombre || m.beneficiario || m.socioNombre || "").replace(/\s+/g, " ").trim();
+  if (directo) return directo;
+  // R124: los ingresos manuales (bot/APK) guardan el cliente en "detalle"; si el detalle es solo una fecha, no es un nombre.
+  const det = String(m.detalle || "").replace(/\s+/g, " ").trim();
+  return /^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test(det) ? "" : det;
 }
+// R124: "María  García" = "maria garcia" (mayúsculas, tildes y espacios no cuentan) para encontrar el mismo cliente.
+function claveNombreR124(m = {}) { return nombreMovimientoFinanzas(m).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9ñ ]/g, " ").replace(/\s+/g, " ").trim(); }
 function estadoMovimientoFinanzas(m = {}) {
   if (m.reversaDe) return "↩️ reversa";
   if (String(m.estadoFinanciero || "") === "anulado") return "🚫 anulado";
@@ -2235,11 +2241,45 @@ function textoBtnEliminarMovimiento(m = {}, repetido = false) {
   return safeBtnLabelLocal(partes.join(" · "), 60);
 }
 function R122_montoCorto(n) { const v = Number(n || 0); return `L${Number.isInteger(v) ? v : v.toFixed(2)}`; }
-// Mismo cliente + mismo monto el mismo día (sin contar anulados/reversas) = posible voucher repetido.
+// R124: el MISMO cliente más de una vez el mismo día (sin contar anulados/reversas) = posible voucher repetido.
+// Antes exigía el mismo monto y solo miraba clienteNombre, así que los ingresos manuales (nombre en "detalle") y los
+// registrados una vez a mano y otra con la renovación (montos o plataformas distintos) nunca salían marcados.
 function R122_clavesRepetidas(list = []) {
-  const cuenta = new Map(), key = (m) => `${nombreMovimientoFinanzas(m).toLowerCase()}|${Number(m.monto || 0)}`;
-  for (const m of list) if (!estadoMovimientoFinanzas(m) && nombreMovimientoFinanzas(m)) cuenta.set(key(m), (cuenta.get(key(m)) || 0) + 1);
-  return (m) => !estadoMovimientoFinanzas(m) && (cuenta.get(key(m)) || 0) > 1;
+  const cuenta = new Map();
+  for (const m of list) { const k = claveNombreR124(m); if (k && !estadoMovimientoFinanzas(m)) cuenta.set(k, (cuenta.get(k) || 0) + 1); }
+  return (m) => !estadoMovimientoFinanzas(m) && (cuenta.get(claveNombreR124(m)) || 0) > 1;
+}
+
+// R124 · Lista para borrar/anular por fecha: vigentes por nombre (los repetidos juntos y marcados ⚠️), anulados al final,
+// de 30 en 30 con "Ver más" (antes se cortaba en 40 y los demás no se podían ver) y un filtro "Solo posibles repetidos".
+const R124_POR_PAGINA = 30;
+async function panelEliminarPorFechaR124(chatId, userId, tipo, fecha, page = 0, soloRep = false) {
+  const isSuper = await safeIsSuperAdminLocal(userId);
+  const listFecha = await getMovimientosPorFecha(fecha, userId, isSuper, { todos: true }); // R125: aquí sí se ven los anulados (al final)
+  const todos = (Array.isArray(listFecha) ? listFecha : []).filter((x) => String(x.tipo || "").toLowerCase() === tipo);
+  const otraFecha = [{ text: tipo === "egreso" ? "➖ Buscar otra fecha" : "➕ Buscar otra fecha", callback_data: tipo === "egreso" ? "fin:menu:eliminar:egreso" : "fin:menu:eliminar:ingreso" }];
+  const pie = [otraFecha, [{ text: "⬅️ Volver eliminar", callback_data: "fin:menu:eliminar" }], [{ text: "🏠 Inicio", callback_data: "go:inicio" }]];
+  if (!todos.length) return upsertPanel(chatId, `⚠️ No encontré *${tipo === "egreso" ? "egresos" : "ingresos"}* en la fecha *${escMD(fecha)}*.`, pie);
+  todos.sort((a, b) => (estadoMovimientoFinanzas(a) ? 1 : 0) - (estadoMovimientoFinanzas(b) ? 1 : 0) || claveNombreR124(a).localeCompare(claveNombreR124(b), "es") || String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
+  const esRepetido = R122_clavesRepetidas(todos);
+  const vigentes = todos.filter((m) => !estadoMovimientoFinanzas(m));
+  const repetidos = todos.filter(esRepetido);
+  const clientesRep = new Set(repetidos.map(claveNombreR124)).size;
+  const lista = soloRep ? repetidos : todos;
+  const paginas = Math.max(1, Math.ceil(lista.length / R124_POR_PAGINA)), pg = Math.min(Math.max(0, Number(page) || 0), paginas - 1);
+  const desde = pg * R124_POR_PAGINA, trozo = lista.slice(desde, desde + R124_POR_PAGINA);
+  const dd = fecha.replace(/\//g, ""), modo = soloRep ? "r" : "t";
+  // R111: Telegram rechaza TODO el teclado si un botón pasa de 64 bytes; los ids nuevos de Finanzas son largos.
+  const kb = trozo.map((m) => [{ text: textoBtnEliminarMovimiento(m, esRepetido(m)), callback_data: `fin:del:pick:${idCortoFinanzas(m.id)}` }]);
+  const nav = [];
+  if (pg > 0) nav.push({ text: "⬅️ Anteriores", callback_data: `fin:del:pg:${tipo[0]}:${dd}:${pg - 1}:${modo}` });
+  if (pg < paginas - 1) nav.push({ text: `Ver más ➡️ (${desde + trozo.length + 1}–${Math.min(lista.length, desde + 2 * R124_POR_PAGINA)})`, callback_data: `fin:del:pg:${tipo[0]}:${dd}:${pg + 1}:${modo}` });
+  if (nav.length) kb.push(nav);
+  if (tipo === "ingreso" && repetidos.length) kb.push([soloRep ? { text: "📋 Ver todos", callback_data: `fin:del:pg:i:${dd}:0:t` } : { text: `🔎 Solo posibles repetidos (${repetidos.length})`, callback_data: `fin:del:pg:i:${dd}:0:r` }]);
+  kb.push(...pie);
+  const total = vigentes.reduce((a, m) => a + Number(m.monto || 0), 0);
+  const resumen = tipo === "egreso" ? "" : `\n${vigentes.length} vigente${vigentes.length === 1 ? "" : "s"} · total ${escMD(moneyLps(total))}${todos.length > vigentes.length ? `\n🚫 anulados y ↩️ reversas no suman (van al final)` : ""}${repetidos.length ? `\n⚠️ ${clientesRep} cliente${clientesRep === 1 ? "" : "s"} aparece${clientesRep === 1 ? "" : "n"} más de una vez (${repetidos.length} vouchers): revíselos` : ""}${paginas > 1 ? `\nPágina ${pg + 1} de ${paginas} · ${lista.length} en total` : ""}\n`;
+  return upsertPanel(chatId, `🗑️ *${tipo === "egreso" ? "EGRESOS" : "INGRESOS"} DEL ${escMD(fecha)}*${soloRep ? " · *posibles repetidos*" : ""}\n${resumen}\nSeleccione el movimiento:`, kb);
 }
 
 async function listarRevendedores(chatId) {
@@ -5077,6 +5117,12 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
         ]);
       }
 
+      if (data.startsWith("fin:del:pg:")) { // R124 · páginas / solo repetidos
+        const [, , , t1, dd, pg, modo] = data.split(":");
+        const fecha = /^\d{8}$/.test(dd || "") ? `${dd.slice(0, 2)}/${dd.slice(2, 4)}/${dd.slice(4)}` : "";
+        if (!fecha) return bot.sendMessage(chatId, "⚠️ La lista venció. Busque la fecha otra vez.");
+        return panelEliminarPorFechaR124(chatId, userId, t1 === "e" ? "egreso" : "ingreso", fecha, Number(pg || 0), modo === "r");
+      }
       if (data.startsWith("fin:anul:ask:")) { // R122 · anular desde Telegram
         const id = idLargoFinanzas(String(data.split(":")[3] || "").trim());
         if (!id) return bot.sendMessage(chatId, "⚠️ La lista venció. Busque la fecha otra vez.");
@@ -6846,32 +6892,9 @@ bot.on("message", async (msg) => {
       if (p.mode === "finEliminarFechaAsk") {
         const fecha = parseFechaFlexible(t);
         if (!fecha) return bot.sendMessage(chatId, "⚠️ Fecha inválida. Use *dd/mm/yyyy*.\nEjemplo: *23/03/2026*", { parse_mode: "Markdown" });
-        const isSuper = await safeIsSuperAdminLocal(userId);
-        const listFecha = await getMovimientosPorFecha(fecha, userId, isSuper);
-        const list = (Array.isArray(listFecha) ? listFecha : []).filter((x) => String(x.tipo || "").toLowerCase() === String(p.tipo || "").toLowerCase());
         pending.delete(String(chatId));
-      forceNextPanelAtBottom(chatId);
-        if (!list.length) {
-          return upsertPanel(chatId, `⚠️ No encontré *${p.tipo === "egreso" ? "egresos" : "ingresos"}* en la fecha *${escMD(fecha)}*.`, [
-            [{ text: p.tipo === "egreso" ? "➖ Buscar otra fecha" : "➕ Buscar otra fecha", callback_data: p.tipo === "egreso" ? "fin:menu:eliminar:egreso" : "fin:menu:eliminar:ingreso" }],
-            [{ text: "⬅️ Volver eliminar", callback_data: "fin:menu:eliminar" }],
-            [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
-          ]);
-        }
-        // R122: ordenados por nombre (los vouchers del mismo cliente quedan juntos) y marcados si parecen repetidos.
-        // R123: los 🚫 anulados / ↩️ reversas van AL FINAL, separados de los vigentes.
-        list.sort((a, b) => (estadoMovimientoFinanzas(a) ? 1 : 0) - (estadoMovimientoFinanzas(b) ? 1 : 0) || nombreMovimientoFinanzas(a).localeCompare(nombreMovimientoFinanzas(b), "es") || String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
-        const esRepetido = R122_clavesRepetidas(list);
-        const vigentes = list.filter((m) => !estadoMovimientoFinanzas(m));
-        const totalVigente = vigentes.reduce((a, m) => a + Number(m.monto || 0), 0);
-        const nRepetidos = list.filter(esRepetido).length;
-        // R111: Telegram rechaza TODO el teclado si un botón pasa de 64 bytes; los ids nuevos de Finanzas son largos.
-        const kb = list.slice(0, 40).map((m) => [{ text: textoBtnEliminarMovimiento(m, esRepetido(m)), callback_data: `fin:del:pick:${idCortoFinanzas(m.id)}` }]);
-        kb.push([{ text: p.tipo === "egreso" ? "➖ Buscar otra fecha" : "➕ Buscar otra fecha", callback_data: p.tipo === "egreso" ? "fin:menu:eliminar:egreso" : "fin:menu:eliminar:ingreso" }]);
-        kb.push([{ text: "⬅️ Volver eliminar", callback_data: "fin:menu:eliminar" }]);
-        kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
-        const resumenR122 = p.tipo === "egreso" ? "" : `\n${vigentes.length} vigente${vigentes.length === 1 ? "" : "s"} · total ${escMD(moneyLps(totalVigente))}${list.length > vigentes.length ? `\n🚫 anulados y ↩️ reversas no suman` : ""}${nRepetidos ? `\n⚠️ = mismo cliente y mismo monto (posible repetido)` : ""}${list.length > 40 ? `\nMostrando 40 de ${list.length}` : ""}\n`;
-        return upsertPanel(chatId, `🗑️ *${p.tipo === "egreso" ? "EGRESOS" : "INGRESOS"} DEL ${escMD(fecha)}*\n${resumenR122}\nSeleccione el movimiento que desea borrar:`, kb);
+        forceNextPanelAtBottom(chatId);
+        return panelEliminarPorFechaR124(chatId, userId, p.tipo === "egreso" ? "egreso" : "ingreso", fecha, 0, false);
       }
 
       if (p.mode === "finIngresoMonto") {

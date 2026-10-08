@@ -105,9 +105,12 @@ function movementKind(m = {}) {
 }
 
 // Totales de un ciclo [inicio, fin] (fin opcional = sin límite).
+// R125 · Un movimiento ANULADO/CORREGIDO y su REVERSA no cuentan en ningún total (igual que api/_finanzas-libro.js).
+function anuladoOReversa(m = {}) { return !!m.reversaDe || ["anulado", "corregido"].includes(String(m.estadoFinanciero || "")); }
 function cycleTotals(movements = [], inicio = "", fin = "") {
   let ingresos = 0, egresosOperativos = 0, planilla = 0, ventas = 0, nIngresos = 0, nEgresos = 0, nPlanilla = 0;
   for (const m of movements) {
+    if (anuladoOReversa(m)) continue; // R125: anulados/corregidos y sus reversas no son dinero del período
     const f = movementYmd(m);
     if (!f || (inicio && f < inicio) || (fin && f > fin)) continue;
     const kind = movementKind(m), monto = money(m.monto);
@@ -139,6 +142,7 @@ function bankBalances(movements = [], libro = {}, methods = []) {
     });
   }
   for (const m of movements) {
+    if (anuladoOReversa(m)) continue; // R125: el anulado y su reversa se cancelan; no se cuentan ninguno de los dos
     const kind = movementKind(m);
     if (!["ingreso", "egreso", "planilla", "ajuste", "transferencia"].includes(kind)) continue;
     const id = movementBankId(m, methods);
@@ -197,4 +201,4 @@ function fmt(n) {
   return money(n).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 2 });
 }
 
-module.exports = { PLANILLA_CONCEPTOS, PLANILLA_SUBTIPOS, SIN_BANCO, norm, money, ymd, addDaysYmd, daysBetweenYmd, movementYmd, publicMethods, resolveBankId, movementBankId, movementKind, cycleTotals, bankBalances, validatePlanilla, estadoPago, fmt };
+module.exports = { anuladoOReversa, PLANILLA_CONCEPTOS, PLANILLA_SUBTIPOS, SIN_BANCO, norm, money, ymd, addDaysYmd, daysBetweenYmd, movementYmd, publicMethods, resolveBankId, movementBankId, movementKind, cycleTotals, bankBalances, validatePlanilla, estadoPago, fmt };

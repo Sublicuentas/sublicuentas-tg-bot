@@ -220,6 +220,7 @@ async function getMovimientosPorRango(fechaInicio, fechaFin) {
       for (const doc of docs) {
         const row = normalizeMovimiento(doc.id, doc.data() || {}, col);
         if (!row.fecha || row.fechaTs < iniMs || row.fechaTs > finMs) continue;
+        if (col === "finanzas" && row.fechaTs >= dmyToMillis("01/10/2026")) continue; // R124: desde el 01/10 solo cuenta finanzas_movimientos (igual que la APK/web)
         const key = String(doc.id || `${col}:${row.fecha}:${row.tipo}:${row.monto}:${row.banco}:${row.plataforma}`);
         if (!byId.has(key)) byId.set(key, row);
       }
@@ -665,6 +666,25 @@ function crearHojaAnuladosR123(wb, anulados = [], subtitle = "") {
   return ws;
 }
 
+// R124 · "Revisar repetidos": el mismo cliente más de una vez el MISMO día (vigentes). No borra ni resta nada: es
+// la lista para revisar contra el banco y anular el voucher que sobre (mismo criterio que la lista de Telegram).
+function claveClienteR124(m = {}) {
+  const r = m.raw || {}, det = String(r.detalle || "").trim();
+  const n = String(r.clienteNombre || r.cliente || r.nombrePerfil || r.deudorNombre || r.socioNombre || (/^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test(det) ? "" : det) || "");
+  return n.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9ñ ]/g, " ").replace(/\s+/g, " ").trim();
+}
+function crearHojaRepetidosR124(wb, ingresos = [], subtitle = "") {
+  const cuenta = new Map(), k = (m) => `${m.fecha}|${claveClienteR124(m)}`;
+  for (const m of ingresos) if (claveClienteR124(m)) cuenta.set(k(m), (cuenta.get(k(m)) || 0) + 1);
+  const filas = ingresos.filter((m) => claveClienteR124(m) && cuenta.get(k(m)) > 1)
+    .sort((a, b) => (a.fechaTs || 0) - (b.fechaTs || 0) || claveClienteR124(a).localeCompare(claveClienteR124(b)) || String(a.raw?.createdAt || "").localeCompare(String(b.raw?.createdAt || "")))
+    .map((m) => [m.fecha, m.detalle || "", m.plataforma || "", Number(m.monto || 0), m.banco || "", m.userName || "", fechaHoraHN(m.raw?.createdAt).slice(11), cuenta.get(k(m))]);
+  const ws = simpleSheet(wb, "Revisar repetidos", "POSIBLES VOUCHERS REPETIDOS", `${subtitle} · mismo cliente más de una vez el mismo día · revíselos contra el banco`,
+    ["Fecha", "Cliente", "Plataforma", "Monto", "Banco", "Registrado por", "Hora", "Veces ese día"], [12, 26, 28, 13, 18, 22, 8, 12], filas, [4], [4]);
+  if (!filas.length) ws.addRow(["Sin clientes repetidos en este período."]);
+  return ws;
+}
+
 async function generarReporteExcelPorRango(fechaInicio, fechaFin) {
   const ini = normalizeDMY(fechaInicio);
   const fin = normalizeDMY(fechaFin);
@@ -734,6 +754,7 @@ async function generarReporteExcelPorRango(fechaInicio, fechaFin) {
     createDetalleSheet(wb, "Ingresos", "DETALLE DE INGRESOS", subtitle, ingresos, "ingreso");
     createDetalleSheet(wb, "Egresos", "DETALLE DE EGRESOS", subtitle, egresos, "egreso");
     crearHojaAnuladosR123(wb, anulados, subtitle);
+    crearHojaRepetidosR124(wb, movimientos.filter((m) => m.tipo === "ingreso" && m.kind !== "ajuste"), subtitle);
     createBancosSheet(wb, bancos, subtitle);
     await agregarHojasLibroR104(wb, { ini, fin, subtitle, ingresosTotal, egresosTotal, planillaTotal, ventasTotal });
     createGraficosSheet(wb, { ini, fin, ingresosTotal, egresosTotal, utilidad, topPlats, bancos });

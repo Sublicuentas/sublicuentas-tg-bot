@@ -210,7 +210,7 @@ function textoConfirmarEliminacionMovimiento(m = {}) {
   const cliente = limpio(m.clienteNombre || m.cliente || m.nombrePerfil || m.nombre || m.deudorNombre || m.beneficiario || m.socioNombre);
   const quienRaw = limpio(m.registradoPorNombre || m.registradoPor || m.usuario || m.cobradoPor);
   const quien = /^(libni|daniela|libni daniela)/i.test(quienRaw) ? "Relojes" : quienRaw;
-  const origen = String(m.origenCanal || m.origen || "").trim();
+  const origen = String(m.origenCanal || m.origen || "").trim() || "sin canal (registro manual)";
   let hora = ""; try { const d = new Date(m.createdAt?.toDate ? m.createdAt.toDate() : m.createdAt); if (!isNaN(d)) hora = new Date(d.getTime() - 6 * 3600000).toISOString().slice(11, 16); } catch (_) {}
   txt += `Tipo: ${tipo}\nFecha: ${fecha}\nMonto: ${monto}\n`;
   if (cliente) txt += `Cliente: ${cliente}\n`;
@@ -218,6 +218,7 @@ function textoConfirmarEliminacionMovimiento(m = {}) {
   if (m.banco) txt += `Banco: ${m.banco}\n`;
   if (extra) txt += `Extra: ${extra}\n`;
   if (quien || origen || hora) txt += `Registrado: ${[quien, origen, hora ? `${hora} h` : ""].filter(Boolean).join(" · ")}\n`;
+  if (String(m._source || "") === "finanzas") txt += `Guardado en: colección vieja "finanzas"\n`; // R124
   txt += "\n¿Desea eliminar este movimiento?";
   return txt;
 }
@@ -310,7 +311,23 @@ function startEndDayTimestamps(dmy = "") { const dt = dmyToDate(dmy); if (!dt) r
 function startEndMonthTimestamps(monthKey = "") { const key = normalizeMonthKey(monthKey); const m = key.match(/^(\d{4})-(\d{2})$/); if (!m) return null; const yyyy = Number(m[1]), mm = Number(m[2]); return { iniTs: admin.firestore.Timestamp.fromDate(new Date(yyyy, mm-1, 1, 0, 0, 0, 0)), finTs: admin.firestore.Timestamp.fromDate(new Date(yyyy, mm, 0, 23, 59, 59, 999)) }; }
 function getMonthBoundsDMY(monthKey = "") { const key = normalizeMonthKey(monthKey); const m = key.match(/^(\d{4})-(\d{2})$/); if (!m) return null; const yyyy = Number(m[1]), mm = Number(m[2]), lastDay = new Date(yyyy, mm, 0).getDate(); return { ini: `01/${String(mm).padStart(2,"0")}/${yyyy}`, fin: `${String(lastDay).padStart(2,"0")}/${String(mm).padStart(2,"0")}/${yyyy}` }; }
 function monthsBetweenDMY(fechaInicio = "", fechaFin = "") { const ini = dmyToDate(fechaInicio), fin = dmyToDate(fechaFin); if (!ini || !fin) return []; let a = new Date(ini.getFullYear(), ini.getMonth(), 1), b = new Date(fin.getFullYear(), fin.getMonth(), 1); if (a.getTime() > b.getTime()) { const temp = a; a = b; b = temp; } const out = []; while (a.getTime() <= b.getTime()) { out.push(`${a.getFullYear()}-${String(a.getMonth()+1).padStart(2,"0")}`); a = new Date(a.getFullYear(), a.getMonth()+1, 1); } return out; }
-function addRowsDedup(map, rows = []) { for (const row of rows) { if (!row?.id) continue; if (!map.has(row.id)) map.set(row.id, row); } }
+// R124 · Desde el 01/10/2026 el libro vive SOLO en finanzas_movimientos (igual que la APK y la web). La colección vieja
+// "finanzas" se sigue leyendo para fechas anteriores, pero sus documentos con fecha del 01/10 en adelante eran copias
+// que se contaban DOBLE en el bot (la APK/web nunca los leían): por eso Telegram mostraba más vouchers que la APK.
+const INICIO_LIBRO_R124 = Date.UTC(2026, 9, 1);
+function fueraDelLibroR124(row = {}) {
+  if (String(row._source || "") !== "finanzas") return false;
+  const f = String(extraerFechaMovimiento(row) || row.fecha || "").match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  return !!f && Date.UTC(+f[3], +f[2] - 1, +f[1]) >= INICIO_LIBRO_R124;
+}
+// R125 · Qué cuenta como dinero del día en cierres y resúmenes (mismas reglas que la APK/web, lib_finanzas_reglas):
+// solo ingresos, egresos y planilla vigentes. Fuera: anulados/corregidos y sus reversas, ventas (valor acordado, no
+// efectivo), transferencias entre bancos, saldos iniciales y ajustes. Antes TODO lo que no era "egreso" sumaba como
+// entrada: por eso el cierre del 01/10 daba L270 de más.
+const RLR125 = require("./lib_finanzas_reglas");
+function cuentaEnCajaR125(m = {}) { return !RLR125.anuladoOReversa(m) && ["ingreso", "egreso", "planilla"].includes(RLR125.movementKind(m)); }
+function soloCajaR125(rows = [], opts = {}) { return opts && opts.todos ? rows : rows.filter(cuentaEnCajaR125); }
+function addRowsDedup(map, rows = []) { for (const row of rows) { if (!row?.id || fueraDelLibroR124(row)) continue; if (!map.has(row.id)) map.set(row.id, row); } }
 function mergeFinanceRows(base = {}, extra = {}) { const out = { ...(base || {}) }; for (const [k, v] of Object.entries(extra || {})) { if (out[k] == null || out[k] === "" || (typeof out[k] === "number" && out[k] === 0)) out[k] = v; } return out; }
 
 async function queryDocsByFieldEq(collectionName, field, value) { try { const snap = await db.collection(collectionName).where(field, "==", value).get(); return snap.docs.map((d) => normalizeFinanceDocRow(d.id, d.data() || {}, collectionName)); } catch (e) { logErr(`queryDocsByFieldEq:${collectionName}.${field}`, e); return []; } }
@@ -321,7 +338,7 @@ async function getAllFinanceRowsRecovered() {
   for (const col of FINANCE_COLLECTIONS_READ) {
     try { const snap = await db.collection(col).get(); snap.forEach((d) => { const row = normalizeFinanceDocRow(d.id, d.data() || {}, col); if (!byId.has(d.id)) byId.set(d.id, row); else byId.set(d.id, mergeFinanceRows(byId.get(d.id), row)); }); } catch (e) { logErr(`getAllFinanceRowsRecovered:${col}`, e); }
   }
-  return Array.from(byId.values()).map((r) => ({ ...r, fecha: extraerFechaMovimiento(r) || r.fecha || "" }));
+  return Array.from(byId.values()).filter((r) => !fueraDelLibroR124(r)).map((r) => ({ ...r, fecha: extraerFechaMovimiento(r) || r.fecha || "" })); // R124
 }
 
 async function scanFinanceDocsFallbackByDate(fechaDMY = "") {
@@ -544,7 +561,8 @@ async function getMovimientoFinanzaById(id) {
   return found ? { ...found.row, fecha: extraerFechaMovimiento(found.row) || found.row.fecha || "" } : null;
 }
 
-async function getMovimientosPorFecha(fechaDMY, _userId = null, _isSuper = false) {
+async function getMovimientosPorFecha(fechaDMY, _userId = null, _isSuper = false, opts = {}) { return soloCajaR125(await R125_getMovimientosPorFecha(fechaDMY, _userId, _isSuper), opts); }
+async function R125_getMovimientosPorFecha(fechaDMY, _userId = null, _isSuper = false) {
   const fecha = normalizeDMY(fechaDMY);
   if (!fecha) return [];
   const map = new Map();
@@ -564,7 +582,8 @@ async function getMovimientosPorFecha(fechaDMY, _userId = null, _isSuper = false
   return await scanFinanceDocsFallbackByDate(fecha);
 }
 
-async function getMovimientosPorMes(monthKey, _userId = null, _isSuper = false) {
+async function getMovimientosPorMes(monthKey, _userId = null, _isSuper = false, opts = {}) { return soloCajaR125(await R125_getMovimientosPorMes(monthKey, _userId, _isSuper), opts); }
+async function R125_getMovimientosPorMes(monthKey, _userId = null, _isSuper = false) {
   const key = normalizeMonthKey(monthKey);
   if (!key) return [];
   const map = new Map();
@@ -582,7 +601,8 @@ async function getMovimientosPorMes(monthKey, _userId = null, _isSuper = false) 
   return bounds ? await scanFinanceDocsFallbackByRange(bounds.ini, bounds.fin) : rows;
 }
 
-async function getMovimientosPorRango(fechaInicio, fechaFin, _userId = null, _isSuper = false) {
+async function getMovimientosPorRango(fechaInicio, fechaFin, _userId = null, _isSuper = false, opts = {}) { return soloCajaR125(await R125_getMovimientosPorRango(fechaInicio, fechaFin, _userId, _isSuper), opts); }
+async function R125_getMovimientosPorRango(fechaInicio, fechaFin, _userId = null, _isSuper = false) {
   const ini = normalizeDMY(fechaInicio), fin = normalizeDMY(fechaFin);
   if (!ini || !fin) return [];
   let iniMs = dmyToMillis(ini), finMs = dmyToMillis(fin);
@@ -1065,7 +1085,7 @@ bot.onText(/^\/reportes_excel_mes\s+(\d{2}\/\d{4})$/, async (msg, match) => {
   }
 });
 
-module.exports = {
+module.exports = { fueraDelLibroR124,
   menuPrincipal, menuVendedor, menuInventario, menuInventarioVideo, menuInventarioMusica,
   menuInventarioIptv, menuInventarioTvDigitalMarca, menuInventarioDisenoIA, menuClientes, menuRenovaciones, menuPagos,
   menuAlertas, menuFinRegistro, menuFinEliminarTipo, menuFinReportes,
