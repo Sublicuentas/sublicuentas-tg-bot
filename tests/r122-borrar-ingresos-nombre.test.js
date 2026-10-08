@@ -11,7 +11,7 @@ const F = new Function("moneyLps", `${["safeBtnLabelLocal", "nombreMovimientoFin
 test("R122: borrar ingresos por fecha muestra el NOMBRE del cliente en cada botón", () => {
   const m = { tipo: "ingreso", fecha: "04/10/2026", monto: 150, plataforma: "⭐ Netflix Premium VIP", banco: "BAC Credomatic", clienteNombre: "Ever Figueroa" };
   const t = F.textoBtnEliminarMovimiento(m);
-  assert.match(t, /^L150 · Ever Figueroa · ⭐ Netflix Premium VIP/);
+  assert.match(t, /^L150 · Ever Figueroa · Netflix Premium VIP/); // R126: sin ⭐
   assert.ok(Array.from(t).length <= 60);
   assert.match(F.textoBtnEliminarMovimiento({ tipo: "ingreso", monto: 80, detalle: "Mari Zavala", plataforma: "Prime Video" }), /^L80 · Mari Zavala · Prime Video/, "ingresos manuales: el detalle");
   assert.match(F.textoBtnEliminarMovimiento({ tipo: "ingreso", monto: 110, socioNombre: "Jimena" }), /Jimena/);

@@ -43,3 +43,19 @@ test("R125: cierres, resúmenes y API usan la lectura filtrada; la lista de borr
   const h = fs.readFileSync(path.join(__dirname, "..", "index_06_handlers.js"), "utf8");
   assert.match(h, /getMovimientosPorFecha\(fecha, userId, isSuper, \{ todos: true \}\)/);
 });
+
+test("R126: Excel limpio — usuario sin canal, plataformas sin ⭐/medallas, sin columnas técnicas y barras que caben en su celda", () => {
+  const x = fs.readFileSync(path.join(__dirname, "..", "index_10_reportes_excel.js"), "utf8");
+  const sinAd = new Function(`${extraer(x, "sinAdornosR126")}; return sinAdornosR126;`)();
+  assert.equal(sinAd("⭐ Netflix Premium VIP"), "Netflix Premium VIP");
+  assert.equal(sinAd("Disney Premium + ⭐ Netflix Premium VIP"), "Disney Premium + Netflix Premium VIP");
+  const usuario = new Function("safeText", "USUARIOS_LABEL", `${extraer(x, "usuarioMovimiento")}; return usuarioMovimiento;`)((v) => String(v || "").trim(), { sublicuentas: "Sublicuentas" });
+  assert.equal(usuario({ usuario: "sublicuentas", origenCanal: "apk" }), "Sublicuentas");
+  assert.equal(usuario({ usuario: "Libni Daniela", origenCanal: "tg" }), "Relojes");
+  assert.equal(usuario({ socioNombre: "Jimena", origenCanal: "socios" }), "Jimena");
+  assert.doesNotMatch(x, /🥇|"operationId", "Pedido \/ compra"|"pagoPlanillaId"|"cicloId", "Inicio"|"compraId", "Monto total"/);
+  const bloques = new Function(`${extraer(x, "bloquesQueCaben")}; return bloquesQueCaben;`)();
+  assert.equal(bloques({ getColumn: () => ({ width: 28 }) }, 7), 11, "columna de 28 → máx. 11 bloques (antes 24 y se salía)");
+  assert.match(x, /formulaBar\(`\$C\$\{rowNumber\}`, `\$C\$\$\{firstDataRow\}:\$C\$\$\{lastDataRow\}`, 1, bloquesQueCaben\(ws, 7\)\)/);
+  assert.match(x, /shrinkToFit: true/);
+});
