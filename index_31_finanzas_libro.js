@@ -453,7 +453,7 @@ async function menuLibro(chatId) {
     [{ text: "🏦 Saldos por banco", callback_data: "fl:bancos" }, { text: "📋 Pendientes de cobro", callback_data: "fl:cxc:menu" }],
     [{ text: "👥 Nuevo pago de planilla", callback_data: "fl:pl:new" }],
     [{ text: "🏷 Movimientos sin banco", callback_data: "fl:sb:list:0" }, { text: "🗓 Ajustar fecha de pago", callback_data: "fl:fd:list:0" }],
-    [{ text: "🧮 Cuadre Telegram vs APK", callback_data: "fl:cuadre" }],
+    [{ text: "📊 Estados financieros", callback_data: "fl:ef" }, { text: "🧮 Cuadre TG vs APK", callback_data: "fl:cuadre" }],
     [{ text: "🔄 Actualizar", callback_data: "fl:menu" }, { text: "🏠 Inicio", callback_data: "go:inicio" }],
   ]);
 }
@@ -774,6 +774,8 @@ async function handleCallback(chatId, userId, data) {
   const p = pending.get(String(chatId)) || {};
   try {
     if (data === "fl:menu") return menuLibro(chatId);
+    if (data === "fl:ef" || data.startsWith("fl:ef:")) return require("./index_32_estados_financieros").panelEstados(chatId, data.slice(6)); // R134
+    if (data.startsWith("fl:efx:")) return require("./index_32_estados_financieros").enviarExcelEstados(chatId, data.slice(7)); // R134
     if (data === "fl:cuadre") return cuadreTgApkR132(chatId);
     if (data === "fl:cuadre:fix") { const n = await repararFechasR132((await estadoLibro()).libro.cicloInicio, String(userId)); await bot.sendMessage(chatId, `✅ ${n} movimiento${n === 1 ? "" : "s"} con la fecha reparada.`); return cuadreTgApkR132(chatId); }
     if (data === "fl:bancos") return panelBancos(chatId);

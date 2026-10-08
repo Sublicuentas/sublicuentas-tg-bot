@@ -509,7 +509,7 @@ async function menuFinReportes(chatId) {
     [{ text: "🏦 Bancos por fecha", callback_data: "fin:menu:bancos_fecha" }, { text: "🏦 Bancos por rango", callback_data: "fin:menu:bancos_rango" }],
     [{ text: "🔍 Detalle por banco", callback_data: "fin:menu:detalle_banco" }, { text: "🏆 Top plataformas", callback_data: "fin:menu:top_plataformas" }],
     [{ text: "🎯 Top combos", callback_data: "fin:menu:top_combos" }, { text: "📤 Excel por rango", callback_data: "fin:menu:excel_rango" }],
-    [{ text: "🧾 Cierre por rango", callback_data: "fin:menu:cierre:rango" }, { text: "⬅️ Volver Finanzas", callback_data: "menu:pagos" }],
+    [{ text: "🧾 Cierre por rango", callback_data: "fin:menu:cierre:rango" }, { text: "📊 Estados financieros", callback_data: "fl:ef" }], // R134
     [{ text: "⬅️ Volver Finanzas", callback_data: "menu:pagos" }, { text: "🏠 Inicio", callback_data: "go:inicio" }],
   ]);
 }
