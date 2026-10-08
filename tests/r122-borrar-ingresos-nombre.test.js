@@ -6,7 +6,7 @@ const h = fs.readFileSync(path.join(__dirname, "..", "index_06_handlers.js"), "u
 const f5 = fs.readFileSync(path.join(__dirname, "..", "index_05_finanzas_menus.js"), "utf8");
 function extraer(src, nombre) { const i = src.indexOf(`function ${nombre}(`); assert.ok(i >= 0, nombre); let d = 0; const j = src.indexOf("{", src.indexOf(")", i)); for (let k = j; k < src.length; k++) { if (src[k] === "{") d++; else if (src[k] === "}") { d--; if (!d) return src.slice(src.lastIndexOf("\n", i) + 1, k + 1); } } }
 const moneyLps = (n) => `${Number(n || 0).toFixed(2)} Lps`;
-const F = new Function("moneyLps", `${["safeBtnLabelLocal", "nombreMovimientoFinanzas", "estadoMovimientoFinanzas", "textoBtnEliminarMovimiento", "R122_montoCorto", "R122_clavesRepetidas"].map((n) => extraer(h, n)).join("\n")}; return { textoBtnEliminarMovimiento, R122_clavesRepetidas };`)(moneyLps);
+const F = new Function("moneyLps", `${["safeBtnLabelLocal", "nombreMovimientoFinanzas", "claveNombreR124", "estadoMovimientoFinanzas", "textoBtnEliminarMovimiento", "R122_montoCorto", "R122_clavesRepetidas"].map((n) => extraer(h, n)).join("\n")}; return { textoBtnEliminarMovimiento, R122_clavesRepetidas };`)(moneyLps);
 
 test("R122: borrar ingresos por fecha muestra el NOMBRE del cliente en cada botón", () => {
   const m = { tipo: "ingreso", fecha: "04/10/2026", monto: 150, plataforma: "⭐ Netflix Premium VIP", banco: "BAC Credomatic", clienteNombre: "Ever Figueroa" };
@@ -21,15 +21,15 @@ test("R122: borrar ingresos por fecha muestra el NOMBRE del cliente en cada bot�
   assert.match(F.textoBtnEliminarMovimiento({ tipo: "egreso", fecha: "04/10/2026", monto: 50, motivo: "Pago" }), /^04\/10\/2026 • 50\.00 Lps • Pago/, "egresos igual que antes");
 });
 
-test("R122: mismo cliente + mismo monto el mismo día se marca ⚠️ (sin contar anulados/reversas)", () => {
+test("R122/R124: el mismo cliente más de una vez el mismo día se marca ⚠️ (sin contar anulados/reversas)", () => {
   const a = { tipo: "ingreso", monto: 150, clienteNombre: "Ever Figueroa" }, b = { ...a }, c = { ...a, estadoFinanciero: "anulado" }, d = { tipo: "ingreso", monto: 80, clienteNombre: "Ever Figueroa" };
   const rep = F.R122_clavesRepetidas([a, b, c, d]);
-  assert.deepEqual([a, b, c, d].map(rep), [true, true, false, false]);
+  assert.deepEqual([a, b, c, d].map(rep), [true, true, false, true], 'R124: mismo cliente el mismo día aunque cambie el monto');
   assert.match(F.textoBtnEliminarMovimiento(a, true), /^⚠️ L150 · Ever Figueroa/);
 });
 
 test("R122: la lista va ordenada por nombre con total vigente, y la confirmación dice cliente, banco y quién lo registró", () => {
-  assert.match(h, /nombreMovimientoFinanzas\(a\)\.localeCompare\(nombreMovimientoFinanzas\(b\), "es"\)/); // R123: después de poner los anulados al final
+  assert.match(h, /claveNombreR124\(a\)\.localeCompare\(claveNombreR124\(b\), "es"\)/); // R124: por nombre normalizado, después de poner los anulados al final
   assert.match(h, /textoBtnEliminarMovimiento\(m, esRepetido\(m\)\), callback_data: `fin:del:pick:\$\{idCortoFinanzas\(m\.id\)\}`/);
   assert.match(h, /vigente\$\{vigentes\.length === 1 \? "" : "s"\} · total/);
   const conf = new Function("finTipoLabel", "extraerFechaMovimiento", "moneyLps", "finConceptoLabel", "finExtraLabel", `${extraer(f5, "textoConfirmarEliminacionMovimiento")}; return textoConfirmarEliminacionMovimiento;`)(() => "Ingreso", (m) => m.fecha, moneyLps, (m) => m.plataforma, () => "");
@@ -91,9 +91,56 @@ test("R122: en 'borrar por fecha' los movimientos del centro financiero ofrecen 
 });
 
 test("R123: en Telegram los anulados/reversas van al final; el Excel del bot los pone en su hoja 'Anulados' y no los suma", () => {
-  assert.match(h, /list\.sort\(\(a, b\) => \(estadoMovimientoFinanzas\(a\) \? 1 : 0\) - \(estadoMovimientoFinanzas\(b\) \? 1 : 0\) \|\| nombreMovimientoFinanzas/);
+  assert.match(h, /todos\.sort\(\(a, b\) => \(estadoMovimientoFinanzas\(a\) \? 1 : 0\) - \(estadoMovimientoFinanzas\(b\) \? 1 : 0\) \|\| claveNombreR124/);
   const x = fs.readFileSync(path.join(__dirname, "..", "index_10_reportes_excel.js"), "utf8");
   assert.match(x, /const movimientos = todosR123\.filter\(\(m\) => !esAnuladoR123\(m\) && !m\.raw\?\.reversaDe\)/);
   assert.match(x, /simpleSheet\(wb, "Anulados", "MOVIMIENTOS ANULADOS \/ CORREGIDOS"/);
   assert.match(x, /createDetalleSheet\(wb, "Egresos"[^\n]*\n\s*crearHojaAnuladosR123\(wb, anulados, subtitle\);/);
+});
+
+// ---------- R124 · sincronía con la APK y repetidos reales ----------
+const F124 = new Function("moneyLps", `${["safeBtnLabelLocal", "nombreMovimientoFinanzas", "claveNombreR124", "estadoMovimientoFinanzas", "textoBtnEliminarMovimiento", "R122_montoCorto", "R122_clavesRepetidas"].map((n) => extraer(h, n)).join("\n")}; return { nombreMovimientoFinanzas, R122_clavesRepetidas, textoBtnEliminarMovimiento };`)(moneyLps);
+
+test("R124: el ingreso manual (cliente en 'detalle') cuenta como nombre; una fecha en el detalle no", () => {
+  assert.equal(F124.nombreMovimientoFinanzas({ detalle: "Michell Torrez" }), "Michell Torrez");
+  assert.equal(F124.nombreMovimientoFinanzas({ detalle: "01/10/2026" }), "");
+  assert.equal(F124.nombreMovimientoFinanzas({ clienteNombre: "Ana", detalle: "otra cosa" }), "Ana");
+});
+
+test("R124: el mismo cliente dos veces el mismo día se marca ⚠️ aunque cambie el monto, las mayúsculas o las tildes", () => {
+  const manual = { tipo: "ingreso", monto: 260, detalle: "Mariana Garcia", plataforma: "Netflix, hbo, prime video" };
+  const apk = { tipo: "ingreso", monto: 130, clienteNombre: "MARIANA  García", plataforma: "Netflix Premium" };
+  const otro = { tipo: "ingreso", monto: 99, detalle: "Gerson David" };
+  const anulado = { tipo: "ingreso", monto: 99, detalle: "Gerson David", estadoFinanciero: "anulado" };
+  const rep = F124.R122_clavesRepetidas([manual, apk, otro, anulado]);
+  assert.deepEqual([manual, apk, otro, anulado].map(rep), [true, true, false, false]);
+  assert.match(F124.textoBtnEliminarMovimiento(manual, true), /^⚠️ L260 · Mariana Garcia/);
+});
+
+test("R124: la lista tiene páginas (antes se cortaba en 40) y filtro de repetidos; botones caben en Telegram", () => {
+  assert.match(h, /async function panelEliminarPorFechaR124\(chatId, userId, tipo, fecha, page = 0, soloRep = false\)/);
+  assert.match(h, /return panelEliminarPorFechaR124\(chatId, userId, p\.tipo === "egreso" \? "egreso" : "ingreso", fecha, 0, false\);/);
+  assert.match(h, /if \(data\.startsWith\("fin:del:pg:"\)\)/);
+  assert.doesNotMatch(h, /list\.slice\(0, 40\)/);
+  for (const cb of ["fin:del:pg:i:01102026:12:r", "fin:del:pg:e:31122026:0:t"]) assert.ok(Buffer.byteLength(cb) <= 64);
+});
+
+test("R124: desde el 01/10/2026 la colección vieja 'finanzas' ya no se cuenta (igual que la APK/web); antes sí", () => {
+  const f5src = fs.readFileSync(path.join(__dirname, "..", "index_05_finanzas_menus.js"), "utf8");
+  const extraerFecha = new Function(`${extraer(f5src, "extraerFechaMovimiento")}; return extraerFechaMovimiento;`);
+  let fuera;
+  try { fuera = new Function("extraerFechaMovimiento", `const INICIO_LIBRO_R124 = Date.UTC(2026, 9, 1); ${extraer(f5src, "fueraDelLibroR124")}; return fueraDelLibroR124;`)((r) => r.fecha); } catch (e) { throw e; }
+  assert.equal(fuera({ _source: "finanzas", fecha: "01/10/2026" }), true);
+  assert.equal(fuera({ _source: "finanzas", fecha: "30/09/2026" }), false, "el histórico anterior sigue");
+  assert.equal(fuera({ _source: "finanzas_movimientos", fecha: "01/10/2026" }), false);
+  assert.match(f5src, /function addRowsDedup\(map, rows = \[\]\) \{ for \(const row of rows\) \{ if \(!row\?\.id \|\| fueraDelLibroR124\(row\)\) continue;/);
+  const x = fs.readFileSync(path.join(__dirname, "..", "index_10_reportes_excel.js"), "utf8");
+  assert.match(x, /if \(col === "finanzas" && row\.fechaTs >= dmyToMillis\("01\/10\/2026"\)\) continue;/);
+  void extraerFecha;
+});
+
+test("R124: el Excel del bot trae la hoja 'Revisar repetidos' (mismo cliente el mismo día, sin restar nada)", () => {
+  const x = fs.readFileSync(path.join(__dirname, "..", "index_10_reportes_excel.js"), "utf8");
+  assert.match(x, /crearHojaRepetidosR124\(wb, movimientos\.filter\(\(m\) => m\.tipo === "ingreso" && m\.kind !== "ajuste"\), subtitle\);/);
+  assert.match(x, /simpleSheet\(wb, "Revisar repetidos", "POSIBLES VOUCHERS REPETIDOS"/);
 });
