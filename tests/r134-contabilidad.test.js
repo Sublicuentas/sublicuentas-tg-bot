@@ -87,7 +87,7 @@ test("R135: recarga a Binance en Telegram = transferencia del banco + billetera 
   const bz = C.balanzaComprobacion(C.libroDiario(ms, {}, methods, "2026-10-01", "2026-10-31"));
   assert.ok(bz.cuadra); assert.equal(bz.cuentas.find((c) => c.cuenta === "1150-binance").saldo, 2820); assert.equal(bz.cuentas.find((c) => c.cuenta === "1190").saldo, 0);
   const x = fs.readFileSync(path.join(__dirname, "..", "index_10_reportes_excel.js"), "utf8");
-  assert.match(x, /\["saldo_inicial", "venta", "transferencia", "billetera", "compra", "inventario", "costo_venta"\]\.includes\(m\.kind\)/);
+  assert.match(x, /\["saldo_inicial", "venta", "transferencia", "billetera", "compra", "inventario", "costo_venta", "pago_cxp"\]\.includes\(m\.kind\)/);
 });
 
 test("R137: el bot costea las ventas solo (cada 10 min) con el mismo motor que la web", () => {
@@ -99,4 +99,16 @@ test("R137: el bot costea las ventas solo (cada 10 min) con el mismo motor que l
   assert.match(sa, /require\("\.\/index_31_finanzas_libro"\)\.iniciarCosteoAutomatico\(\)/);
   assert.equal(R.movementKind({ tipo: "costo_venta", monto: 50 }), "costo_venta");
   assert.equal(R.cycleTotals([{ tipo: "costo_venta", monto: 50, fecha: "08/10/2026" }], "2026-10-01", "").resultado, 0, "no toca cierres");
+});
+
+test("R138: compra a crédito y pago al proveedor — no son gasto; el pago baja el banco (flujo: compras); partida doble con Cuentas por pagar", () => {
+  const ms = [
+    mov("c1", { tipo: "compra", subtipo: "compra_credito", monto: 7500, banco: "Cuentas por pagar", fecha: "08/10/2026" }),
+    mov("p1", { tipo: "pago_cxp", subtipo: "pago_proveedor", monto: 3000, montoCxpHnl: 3000, bancoId: "bac", fecha: "09/10/2026" }),
+  ];
+  assert.equal(R.movementKind(ms[1]), "pago_cxp");
+  assert.equal(R.cycleTotals(ms, "2026-10-01", "").resultado, 0);
+  const bac = R.bankBalances(ms, libro, methods).bancos.find((b) => b.id === "bac"); assert.equal(bac.saldo, 1000 - 3000); assert.equal(bac.compras, 3000);
+  const bz = C.balanzaComprobacion(C.libroDiario(ms, {}, methods, "2026-10-01", "2026-10-31"));
+  assert.ok(bz.cuadra); assert.equal(bz.cuentas.find((c) => c.cuenta === "2100").saldo, 4500); assert.equal(bz.cuentas.find((c) => c.cuenta === "1300").saldo, 7500);
 });
