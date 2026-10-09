@@ -1854,4 +1854,4 @@ app.post("/rev/ask", revAuth, async (req, res) => {
 require("./index_12_admin_panel")(app);
 require("./index_13_gamificacion")(app);
 
-app.listen(PORT, () => { console.log("🌐 Panel API (revendedores) activa en puerto", PORT); r121RellenarNombresCompraSocio(); });
+app.listen(PORT, () => { console.log("🌐 Panel API (revendedores) activa en puerto", PORT); r121RellenarNombresCompraSocio(); try { require("./index_31_finanzas_libro").iniciarCosteoAutomatico(); } catch (e) { console.error("R137 costeo", e?.message || e); } }); // R137

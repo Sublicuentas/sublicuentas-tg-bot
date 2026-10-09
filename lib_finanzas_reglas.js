@@ -100,6 +100,7 @@ function movementKind(m = {}) {
   if (tipo === "billetera") return "billetera"; // R135 · Binance (USDT): no es ingreso ni egreso ni toca bancos HNL
   if (tipo === "compra") return "compra"; // R136 · compra de inventario: baja el banco, NO es gasto
   if (tipo === "inventario") return "inventario"; // R136 · ajuste de inventario (merma/vencido): no toca bancos
+  if (tipo === "costo venta") return "costo_venta"; // norm() cambia "_" por espacio // R137 · costo de la venta (sale del inventario): no toca bancos ni cierres
   if (tipo === "saldo inicial" || sub === "saldo_inicial") return "saldo_inicial";
   if (tipo === "ajuste saldo" || sub === "ajuste_saldo") return "ajuste";
   if (tipo === "ingreso" || tipo === "cobro") return "ingreso";

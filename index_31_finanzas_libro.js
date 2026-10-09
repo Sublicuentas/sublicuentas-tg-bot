@@ -438,6 +438,27 @@ async function cuadreTgApkR132(chatId) {
   return upsertPanel(chatId, txt.length > 3900 ? txt.slice(0, 3900) + "\n…" : txt, kb);
 }
 
+
+// R137 · COSTO DE VENTAS automático (mismo motor que la web: lib_finanzas_costeo.js). Corre cada 10 min en Render;
+// no hace nada hasta que en 🏢 Empresa se elija "desde qué fecha" se costea. Idempotente: una venta se costea una vez.
+let costeoCorriendo = false;
+async function correrCosteoBot(actor = "bot") {
+  if (costeoCorriendo) return { ocupado: true };
+  costeoCorriendo = true;
+  try {
+    const C = require("./lib_finanzas_costeo");
+    let normPlataformaKey = null; try { normPlataformaKey = require("./lib_catalogo_categorias").normPlataformaKey; } catch (_) {}
+    return await C.correrCosteo(db, { R, normPlataformaKey, hoy: hoyYmd(), actor, limite: 250,
+      leerMovimientos: async (desde) => (await movQuery(desde).get()).docs.map((d) => ({ id: d.id, ...(d.data() || {}) })) });
+  } catch (e) { logErr("R137 costeo", e); return { error: String(e?.message || e) }; }
+  finally { costeoCorriendo = false; }
+}
+function iniciarCosteoAutomatico() {
+  if (iniciarCosteoAutomatico.hecho) return; iniciarCosteoAutomatico.hecho = true;
+  setTimeout(() => correrCosteoBot(), 60 * 1000);
+  setInterval(() => correrCosteoBot(), 10 * 60 * 1000);
+}
+
 async function menuLibro(chatId) {
   const [{ libro, totales: t, saldos }, sinBanco, cart] = await Promise.all([estadoLibro(), movimientosSinBanco().catch(() => []), carteraResumen().catch(() => ({ clientes: 0, vendedores: 0 }))]);
   const bancos = saldos.bancos.filter((b) => b.activado);
@@ -1005,4 +1026,4 @@ async function handleText(chatId, userId, text, p) {
   return bot.sendMessage(chatId, "Use los botones del panel o toque ❌ Cancelar.");
 }
 
-module.exports = { cuadreTgApkR132, repararFechasR132, descuadresFechaR132, corregirMovimientoTg, motivoBloqueoAnular, anularMovimientoTg, newOpId, actorDe, unidadesSocio, pagoSocioDisponible, pagosSociosSinFicha, vincularFichaSocio, iniciarCuentaCompleta, iniciarPagoCompra, registrarOperacionPago, registrarAbonoTg, carteraResumen, registrarSaldoInicial, registrarAjuste, bancoDesdeBoton, movimientosSinBanco, configurar, esLibroUser, iniciarPagoRenovacion, handleCallback, handleText, menuLibro, estadoLibro, loadMethods, registrarCobroRenovacion, confirmarPagoPlanilla, usuarioCanonico, usuarioLabel, ajustarFechaMovimiento };
+module.exports = { correrCosteoBot, iniciarCosteoAutomatico, cuadreTgApkR132, repararFechasR132, descuadresFechaR132, corregirMovimientoTg, motivoBloqueoAnular, anularMovimientoTg, newOpId, actorDe, unidadesSocio, pagoSocioDisponible, pagosSociosSinFicha, vincularFichaSocio, iniciarCuentaCompleta, iniciarPagoCompra, registrarOperacionPago, registrarAbonoTg, carteraResumen, registrarSaldoInicial, registrarAjuste, bancoDesdeBoton, movimientosSinBanco, configurar, esLibroUser, iniciarPagoRenovacion, handleCallback, handleText, menuLibro, estadoLibro, loadMethods, registrarCobroRenovacion, confirmarPagoPlanilla, usuarioCanonico, usuarioLabel, ajustarFechaMovimiento };

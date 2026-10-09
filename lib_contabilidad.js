@@ -24,6 +24,8 @@ const CUENTAS_FIJAS = {
   "4190": { nombre: "Otros ingresos", tipo: "ingreso" },
   "5100": { nombre: "Gastos operativos", tipo: "gasto" },
   "5150": { nombre: "Mermas y vencimientos de inventario", tipo: "gasto" },
+  "5160": { nombre: "Cupos sin vender (cuentas madre, paneles, gift cards)", tipo: "gasto" },
+  "5000": { nombre: "Costo de ventas", tipo: "gasto" },
   "5210": { nombre: "Planilla · Pago de planilla", tipo: "gasto" },
   "5220": { nombre: "Planilla · Comisiones de vendedores", tipo: "gasto" },
   "5230": { nombre: "Planilla · Bonificaciones", tipo: "gasto" },
@@ -82,9 +84,15 @@ function asientoDe(m = {}, methods = [], clasificar = null) {
     return { ...base, monto: a, lineas };
   }
   else if (kind === "inventario") { // R136 · merma/vencido (monto +) o sobrante (monto −) del inventario
-    const a = Math.abs(monto), inv = cuentaFija("1300"), merma = cuentaFija("5150");
+    const a = Math.abs(monto), inv = cuentaFija("1300"), merma = cuentaFija(m.subtipo === "cupos_sin_vender" ? "5160" : "5150"); // R137
     lineas = monto > 0 ? [linea(merma, a, 0), linea(inv, 0, a)] : [linea(inv, a, 0), linea(merma, 0, a)];
     base.descripcion = String(m.motivo || "Ajuste de inventario").slice(0, 80); base.banco = "Inventario";
+    return { ...base, monto: a, lineas };
+  }
+  else if (kind === "costo_venta") { // R137 · costo de la venta: sale del inventario y va a Costo de ventas
+    const a = Math.abs(monto), cv = cuentaFija("5000"), inv = cuentaFija("1300");
+    lineas = monto > 0 ? [linea(cv, a, 0), linea(inv, 0, a)] : [linea(inv, a, 0), linea(cv, 0, a)];
+    base.descripcion = String(m.motivo || "Costo de venta").slice(0, 80); base.referencia = String(m.clienteNombre || base.referencia || "").slice(0, 80); base.banco = "Inventario";
     return { ...base, monto: a, lineas };
   }
   else if (kind === "transferencia") { const a = Math.abs(monto); lineas = m.direccion === "salida" ? [linea(cuentaFija("1190"), a, 0), linea(banco, 0, a)] : [linea(banco, a, 0), linea(cuentaFija("1190"), 0, a)]; base.descripcion = `Transferencia ${m.direccion === "salida" ? "enviada" : "recibida"}`; }
