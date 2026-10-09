@@ -55,7 +55,7 @@ test("R106 Excel: hoja Pendientes Cobro, ventas generadas y reversas restan", ()
   const x = fs.readFileSync(path.join(__dirname, "..", "index_10_reportes_excel.js"), "utf8");
   assert.ok(x.includes('"Pendientes Cobro"'));
   assert.match(x, /"Ventas generadas"/);
-  assert.match(x, /!\["saldo_inicial", "venta", "transferencia", "billetera"\]\.includes\(m\.kind\)/);
+  assert.match(x, /!\["saldo_inicial", "venta", "transferencia", "billetera", "compra", "inventario"\]\.includes\(m\.kind\)/);
   assert.match(x, /const monto = data\.reversaDe \? -montoBase : montoBase;/);
 });
 

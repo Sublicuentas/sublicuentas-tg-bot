@@ -87,5 +87,5 @@ test("R135: recarga a Binance en Telegram = transferencia del banco + billetera 
   const bz = C.balanzaComprobacion(C.libroDiario(ms, {}, methods, "2026-10-01", "2026-10-31"));
   assert.ok(bz.cuadra); assert.equal(bz.cuentas.find((c) => c.cuenta === "1150-binance").saldo, 2820); assert.equal(bz.cuentas.find((c) => c.cuenta === "1190").saldo, 0);
   const x = fs.readFileSync(path.join(__dirname, "..", "index_10_reportes_excel.js"), "utf8");
-  assert.match(x, /\["saldo_inicial", "venta", "transferencia", "billetera"\]\.includes\(m\.kind\)/);
+  assert.match(x, /\["saldo_inicial", "venta", "transferencia", "billetera", "compra", "inventario"\]\.includes\(m\.kind\)/);
 });
