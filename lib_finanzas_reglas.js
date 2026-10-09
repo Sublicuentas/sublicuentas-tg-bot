@@ -97,6 +97,7 @@ function movementKind(m = {}) {
   if ((m.estado === "anulado" || m.anulado === true) && !m.estadoFinanciero) return "ignorar"; // anulaciones antiguas sin reversa
   if (tipo === "venta") return "venta";
   if (tipo === "transferencia") return "transferencia";
+  if (tipo === "billetera") return "billetera"; // R135 · Binance (USDT): no es ingreso ni egreso ni toca bancos HNL
   if (tipo === "saldo inicial" || sub === "saldo_inicial") return "saldo_inicial";
   if (tipo === "ajuste saldo" || sub === "ajuste_saldo") return "ajuste";
   if (tipo === "ingreso" || tipo === "cobro") return "ingreso";

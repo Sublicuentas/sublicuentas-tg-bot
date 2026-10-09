@@ -10,6 +10,7 @@ const { money, movementKind, movementYmd, movementBankId, anuladoOReversa, bankB
 //  · Transferencias pasan por 1190 "Transferencias en tránsito": salida y entrada se cancelan.
 // ============================================================================================================
 const CUENTAS_FIJAS = {
+  "1150-binance": { nombre: "Binance (USDT, valor en Lempiras)", tipo: "activo" },
   "1190": { nombre: "Transferencias en tránsito", tipo: "activo" },
   "1199": { nombre: "Bancos por identificar", tipo: "activo" },
   "3100": { nombre: "Capital / saldos de apertura", tipo: "patrimonio" },
@@ -63,6 +64,14 @@ function asientoDe(m = {}, methods = [], clasificar = null) {
   else if (kind === "egreso") { lineas = [linea(cuentaFija("5100"), monto, 0), linea(banco, 0, monto)]; base.descripcion = `Gasto · ${conceptoGasto(m)}`; }
   else if (kind === "planilla") { const c = cuentaFija(CUENTA_PLANILLA[m.subtipo] || "5290"); lineas = [linea(c, monto, 0), linea(banco, 0, monto)]; base.descripcion = `Planilla · ${String(m.beneficiario || m.concepto || "").slice(0, 50)}`; }
   else if (kind === "ajuste") { const a = Math.abs(monto); lineas = monto > 0 ? [linea(banco, a, 0), linea(cuentaFija("3900"), 0, a)] : [linea(cuentaFija("3900"), a, 0), linea(banco, 0, a)]; base.descripcion = `Ajuste de saldo · ${String(m.motivo || "").slice(0, 50)}`; }
+  else if (kind === "billetera") { // R135 · Binance: la recarga sale de 1190 (el banco ya la mandó ahí); el ajuste va contra 3900
+    const a = Math.abs(monto), bin = cuentaFija("1150-binance"), contra = m.subtipo === "ajuste" ? cuentaFija("3900") : cuentaFija("1190");
+    const entra = m.subtipo === "ajuste" ? monto > 0 : m.direccion !== "salida";
+    lineas = entra ? [linea(bin, a, 0), linea(contra, 0, a)] : [linea(contra, a, 0), linea(bin, 0, a)];
+    base.descripcion = m.subtipo === "ajuste" ? `Ajuste Binance · ${String(m.motivo || "").slice(0, 50)}` : `Binance ${m.direccion === "salida" ? "salida" : "recarga"} · ${Number(m.montoUsdt || 0)} USDT a ${Number(m.tasa || 0)}`;
+    base.banco = "Binance"; base.monto = a;
+    return { ...base, lineas }; // el monto con signo del ajuste ya está resuelto arriba
+  }
   else if (kind === "transferencia") { const a = Math.abs(monto); lineas = m.direccion === "salida" ? [linea(cuentaFija("1190"), a, 0), linea(banco, 0, a)] : [linea(banco, a, 0), linea(cuentaFija("1190"), 0, a)]; base.descripcion = `Transferencia ${m.direccion === "salida" ? "enviada" : "recibida"}`; }
   else return null;
   if (monto < 0 && kind !== "ajuste") lineas = lineas.map((l) => ({ ...l, debe: Math.abs(l.haber), haber: Math.abs(l.debe) })); // monto negativo: el asiento va al revés
