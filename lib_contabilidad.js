@@ -14,6 +14,7 @@ const CUENTAS_FIJAS = {
   "1190": { nombre: "Transferencias en tránsito", tipo: "activo" },
   "1300": { nombre: "Inventario de productos digitales", tipo: "activo" },
   "1199": { nombre: "Bancos por identificar", tipo: "activo" },
+  "2100": { nombre: "Cuentas por pagar a proveedores", tipo: "pasivo" },
   "3100": { nombre: "Capital / saldos de apertura", tipo: "patrimonio" },
   "3900": { nombre: "Ajustes de saldo", tipo: "patrimonio" },
   "4110": { nombre: "Ventas · Perfiles de streaming", tipo: "ingreso" },
@@ -26,6 +27,7 @@ const CUENTAS_FIJAS = {
   "5150": { nombre: "Mermas y vencimientos de inventario", tipo: "gasto" },
   "5160": { nombre: "Cupos sin vender (cuentas madre, paneles, gift cards)", tipo: "gasto" },
   "5000": { nombre: "Costo de ventas", tipo: "gasto" },
+  "5900": { nombre: "Diferencial cambiario", tipo: "gasto" },
   "5210": { nombre: "Planilla · Pago de planilla", tipo: "gasto" },
   "5220": { nombre: "Planilla · Comisiones de vendedores", tipo: "gasto" },
   "5230": { nombre: "Planilla · Bonificaciones", tipo: "gasto" },
@@ -68,6 +70,13 @@ function asientoDe(m = {}, methods = [], clasificar = null) {
   else if (kind === "egreso") { lineas = [linea(cuentaFija("5100"), monto, 0), linea(banco, 0, monto)]; base.descripcion = `Gasto · ${conceptoGasto(m)}`; }
   else if (kind === "planilla") { const c = cuentaFija(CUENTA_PLANILLA[m.subtipo] || "5290"); lineas = [linea(c, monto, 0), linea(banco, 0, monto)]; base.descripcion = `Planilla · ${String(m.beneficiario || m.concepto || "").slice(0, 50)}`; }
   else if (kind === "ajuste") { const a = Math.abs(monto); lineas = monto > 0 ? [linea(banco, a, 0), linea(cuentaFija("3900"), 0, a)] : [linea(cuentaFija("3900"), a, 0), linea(banco, 0, a)]; base.descripcion = `Ajuste de saldo · ${String(m.motivo || "").slice(0, 50)}`; }
+  else if (kind === "pago_cxp" || (kind === "billetera" && m.subtipo === "pago_cxp")) { // R138 · pago de cuenta por pagar
+    const pagado = Math.abs(monto), saldado = Math.abs(Number(m.montoCxpHnl ?? monto)), dif = money(pagado - saldado);
+    const sale = kind === "billetera" ? cuentaFija("1150-binance") : banco;
+    lineas = [linea(cuentaFija("2100"), saldado, 0), ...(dif ? [dif > 0 ? linea(cuentaFija("5900"), dif, 0) : linea(cuentaFija("5900"), 0, -dif)] : []), linea(sale, 0, pagado)];
+    base.descripcion = `Pago a proveedor · ${String(m.proveedor || m.motivo || "").slice(0, 60)}`; if (kind === "billetera") base.banco = "Binance";
+    return { ...base, monto: pagado, lineas };
+  }
   else if (kind === "billetera") { // R135 · Binance: la recarga sale de 1190 (el banco ya la mandó ahí); el ajuste va contra 3900
     const a = Math.abs(monto), bin = cuentaFija("1150-binance"), contra = m.subtipo === "ajuste" ? cuentaFija("3900") : m.subtipo === "pago_proveedor" ? cuentaFija("1300") : cuentaFija("1190"); // R136: pagar proveedor con USDT = inventario
     const entra = m.subtipo === "ajuste" ? monto > 0 : m.direccion !== "salida";
@@ -78,9 +87,10 @@ function asientoDe(m = {}, methods = [], clasificar = null) {
   }
   else if (kind === "compra") { // R136 · compra de inventario: NO es gasto. Banco → Inventario (o Capital si es inventario inicial)
     const a = Math.abs(monto), inv = cuentaFija("1300");
-    lineas = m.subtipo === "inventario_inicial" ? [linea(inv, a, 0), linea(cuentaFija("3100"), 0, a)] : [linea(inv, a, 0), linea(banco, 0, a)];
+    lineas = m.subtipo === "inventario_inicial" ? [linea(inv, a, 0), linea(cuentaFija("3100"), 0, a)] : m.subtipo === "compra_credito" ? [linea(inv, a, 0), linea(cuentaFija("2100"), 0, a)] : [linea(inv, a, 0), linea(banco, 0, a)]; // R138: a crédito = por pagar
     base.descripcion = `${m.subtipo === "inventario_inicial" ? "Inventario inicial" : "Compra de inventario"} · ${String(m.motivo || "").replace(/^Compra · /, "").slice(0, 60)}`;
     if (m.subtipo === "inventario_inicial") base.banco = "Inventario inicial";
+    if (m.subtipo === "compra_credito") { base.banco = "Por pagar"; base.descripcion = base.descripcion.replace("Compra de inventario", "Compra a crédito"); }
     return { ...base, monto: a, lineas };
   }
   else if (kind === "inventario") { // R136 · merma/vencido (monto +) o sobrante (monto −) del inventario
