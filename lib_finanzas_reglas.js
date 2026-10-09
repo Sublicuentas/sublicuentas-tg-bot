@@ -100,6 +100,7 @@ function movementKind(m = {}) {
   if (tipo === "billetera") return "billetera"; // R135 · Binance (USDT): no es ingreso ni egreso ni toca bancos HNL
   if (tipo === "compra") return "compra"; // R136 · compra de inventario: baja el banco, NO es gasto
   if (tipo === "inventario") return "inventario"; // R136 · ajuste de inventario (merma/vencido): no toca bancos
+  if (tipo === "retiro") return "retiro"; // R139 · retiro de propietarios: baja el banco, NO es gasto ni toca la utilidad
   if (tipo === "pago cxp") return "pago_cxp"; // R138 · pago a proveedor de una compra a crédito: baja el banco, no es gasto
   if (tipo === "costo venta") return "costo_venta"; // norm() cambia "_" por espacio // R137 · costo de la venta (sale del inventario): no toca bancos ni cierres
   if (tipo === "saldo inicial" || sub === "saldo_inicial") return "saldo_inicial";
@@ -149,7 +150,7 @@ function bankBalances(movements = [], libro = {}, methods = []) {
   for (const m of movements) {
     if (anuladoOReversa(m)) continue; // R125: el anulado y su reversa se cancelan; no se cuentan ninguno de los dos
     const kind = movementKind(m);
-    if (!["ingreso", "egreso", "planilla", "ajuste", "transferencia", "compra", "pago_cxp"].includes(kind)) continue;
+    if (!["ingreso", "egreso", "planilla", "ajuste", "transferencia", "compra", "pago_cxp", "retiro"].includes(kind)) continue;
     const id = movementBankId(m, methods);
     const row = out.get(id);
     if (!row || !row.activado) continue;
@@ -160,6 +161,7 @@ function bankBalances(movements = [], libro = {}, methods = []) {
     else if (kind === "egreso") { row.egresosOperativos += monto; row.saldo -= monto; }
     else if (kind === "planilla") { row.planilla += monto; row.saldo -= monto; }
     else if (kind === "ajuste") { row.ajustes += monto; row.saldo += monto; } // ajuste con signo
+    else if (kind === "retiro") { row.retiros = money((row.retiros || 0) + monto); row.saldo -= monto; } // R139
     else if (kind === "pago_cxp") { row.compras = money((row.compras || 0) + monto); row.saldo -= monto; } // R138: pagar al proveedor = salida por compras (en flujo de caja)
     else if (kind === "compra") { row.compras = money((row.compras || 0) + monto); row.saldo -= monto; } // R136: sale del banco, entra al inventario
     else if (kind === "transferencia") { const d = m.direccion === "salida" ? -monto : monto; row.transferencias = money((row.transferencias || 0) + d); row.saldo += d; }

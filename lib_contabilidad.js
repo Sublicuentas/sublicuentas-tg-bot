@@ -16,6 +16,7 @@ const CUENTAS_FIJAS = {
   "1199": { nombre: "Bancos por identificar", tipo: "activo" },
   "2100": { nombre: "Cuentas por pagar a proveedores", tipo: "pasivo" },
   "3100": { nombre: "Capital / saldos de apertura", tipo: "patrimonio" },
+  "3200": { nombre: "Retiros de propietarios", tipo: "patrimonio" },
   "3900": { nombre: "Ajustes de saldo", tipo: "patrimonio" },
   "4110": { nombre: "Ventas · Perfiles de streaming", tipo: "ingreso" },
   "4120": { nombre: "Ventas · TV Digital", tipo: "ingreso" },
@@ -70,6 +71,10 @@ function asientoDe(m = {}, methods = [], clasificar = null) {
   else if (kind === "egreso") { lineas = [linea(cuentaFija("5100"), monto, 0), linea(banco, 0, monto)]; base.descripcion = `Gasto · ${conceptoGasto(m)}`; }
   else if (kind === "planilla") { const c = cuentaFija(CUENTA_PLANILLA[m.subtipo] || "5290"); lineas = [linea(c, monto, 0), linea(banco, 0, monto)]; base.descripcion = `Planilla · ${String(m.beneficiario || m.concepto || "").slice(0, 50)}`; }
   else if (kind === "ajuste") { const a = Math.abs(monto); lineas = monto > 0 ? [linea(banco, a, 0), linea(cuentaFija("3900"), 0, a)] : [linea(cuentaFija("3900"), a, 0), linea(banco, 0, a)]; base.descripcion = `Ajuste de saldo · ${String(m.motivo || "").slice(0, 50)}`; }
+  else if (kind === "retiro") { // R139 · distribución a los dueños: baja el banco y el patrimonio; no es gasto
+    const a = Math.abs(monto); lineas = [linea(cuentaFija("3200"), a, 0), linea(banco, 0, a)];
+    base.descripcion = `Retiro de propietario · ${String(m.beneficiario || m.motivo || "").slice(0, 60)}`; return { ...base, monto: a, lineas };
+  }
   else if (kind === "pago_cxp" || (kind === "billetera" && m.subtipo === "pago_cxp")) { // R138 · pago de cuenta por pagar
     const pagado = Math.abs(monto), saldado = Math.abs(Number(m.montoCxpHnl ?? monto)), dif = money(pagado - saldado);
     const sale = kind === "billetera" ? cuentaFija("1150-binance") : banco;
@@ -178,17 +183,17 @@ function flujoCaja(movimientos = [], libro = {}, methods = [], desde, hasta) {
     const r = {
       id: bf.id, nombre: bf.nombre, saldoInicial: money(bi.saldo),
       cobros: money(bf.ingresos - bi.ingresos), gastos: money(bf.egresosOperativos - bi.egresosOperativos), planilla: money(bf.planilla - bi.planilla),
-      compras: money((bf.compras || 0) - (bi.compras || 0)),
+      compras: money((bf.compras || 0) - (bi.compras || 0)), retiros: money((bf.retiros || 0) - (bi.retiros || 0)),
       transferencias: money((bf.transferencias || 0) - (bi.transferencias || 0)), ajustes: money(bf.ajustes - bi.ajustes + aperturaPeriodo), saldoFinal: money(bf.saldo),
     };
-    r.cuadra = Math.abs(money(r.saldoInicial + r.cobros - r.gastos - r.planilla - r.compras + r.transferencias + r.ajustes) - r.saldoFinal) < 0.005;
+    r.cuadra = Math.abs(money(r.saldoInicial + r.cobros - r.gastos - r.planilla - r.compras - r.retiros + r.transferencias + r.ajustes) - r.saldoFinal) < 0.005;
     return r;
-  }).filter((r) => r.saldoInicial || r.cobros || r.gastos || r.planilla || r.compras || r.transferencias || r.ajustes || r.saldoFinal);
+  }).filter((r) => r.saldoInicial || r.cobros || r.gastos || r.planilla || r.compras || r.retiros || r.transferencias || r.ajustes || r.saldoFinal);
   const sum = (k) => money(bancos.reduce((s, r) => s + r[k], 0));
   const sinBanco = movimientos.filter((m) => { const f = movementYmd(m); return f && f >= desde && f <= hasta && !anuladoOReversa(m) && ["ingreso", "egreso", "planilla"].includes(movementKind(m)) && !methods.some((x) => x.id === movementBankId(m, methods)); });
   const netoSinBanco = money(sinBanco.reduce((s, m) => s + (movementKind(m) === "ingreso" ? 1 : -1) * money(m.monto), 0));
   return {
-    bancos, saldoInicial: sum("saldoInicial"), cobros: sum("cobros"), gastos: sum("gastos"), planilla: sum("planilla"), compras: sum("compras"), transferencias: sum("transferencias"), ajustes: sum("ajustes"), saldoFinal: sum("saldoFinal"),
+    bancos, saldoInicial: sum("saldoInicial"), cobros: sum("cobros"), gastos: sum("gastos"), planilla: sum("planilla"), compras: sum("compras"), retiros: sum("retiros"), transferencias: sum("transferencias"), ajustes: sum("ajustes"), saldoFinal: sum("saldoFinal"),
     flujoOperativo: money(sum("cobros") - sum("gastos") - sum("planilla")), cuadra: bancos.every((r) => r.cuadra), sinBanco: { n: sinBanco.length, neto: netoSinBanco },
   };
 }

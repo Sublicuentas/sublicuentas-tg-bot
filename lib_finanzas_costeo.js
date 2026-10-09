@@ -96,7 +96,7 @@ function planCostoVenta(venta, { productos = [], variantes = [], lotes = [], nor
   return { lineas, costoHnl, estado, costoNuevoHnl: m2(lineas.reduce((s, l) => s + (l.costoAgregadoHnl || 0), 0)) };
 }
 // ¿Esta venta cuenta? Devuelve las ventas a costear desde la fecha, sin duplicar con los cobros.
-function ventasACostear(movs = [], desde, R) {
+function ventasACostear(movs = [], desde, R, opts = {}) {
   const porId = new Map(movs.map((m) => [m.id, m]));
   const out = [];
   for (const m of movs) {
@@ -110,7 +110,12 @@ function ventasACostear(movs = [], desde, R) {
       // Ingreso manual = venta sin ficha. Se salta lo que ya tiene su "venta" (cobros de compra/renovación/socios),
       // los abonos de pendientes y los sustitutos de una corrección (el costo se quedó en el original).
       const id = String(m.id);
-      if (/_cobro($|_)/.test(id) || m.operacionId || m.cuentaId || m.sustituyeA || /^cobro_pendiente/.test(String(m.subtipo || ""))) continue;
+      if (/_cobro($|_)/.test(id) || m.operacionId || m.cuentaId || /^cobro_pendiente/.test(String(m.subtipo || ""))) continue;
+      if (opts.paraIngresos) { // R140 · para Resultados: cuenta el ingreso vigente (el sustituto de una corrección sí, el original corregido no), con o sin servicio
+        if (m.estadoFinanciero === "corregido") continue;
+        out.push({ ...m, fecha: f, origenVenta: "ingreso", anulada: m.estadoFinanciero === "anulado" }); continue;
+      }
+      if (m.sustituyeA) continue; // el costo se quedó con el original
       if (!limpio(m.plataforma)) continue; // sin servicio no hay qué descontar
       out.push({ ...m, fecha: f, origenVenta: "ingreso", anulada: m.estadoFinanciero === "anulado" });
     }
@@ -133,10 +138,20 @@ async function correrCosteo(db, deps) {
   const cfgSnap = await cfgRef.get();
   const cfg = cfgSnap.exists ? cfgSnap.data() || {} : {};
   if (!cfg.desde || cfg.activo === false) return { activo: false, motivo: "Costeo apagado: elija desde qué fecha empieza." };
+  const osSnap = await db.collection("finanzas_config").doc("finance_os").get(); // R139: pausa general de Finance OS
+  if (osSnap.exists && (osSnap.data() || {}).activo === false) return { activo: false, motivo: "Finance OS en pausa." };
   const todos = async (c) => (await db.collection(c).get()).docs.map((x) => ({ id: x.id, ...(x.data() || {}) }));
   const [productos, variantes, consumosArr, movs] = await Promise.all([todos("fin_productos"), todos("fin_variantes"), todos("fin_consumos"), leerMovimientos(cfg.desde)]);
   const consumos = new Map(consumosArr.map((c) => [c.id, c]));
-  const ventas = ventasACostear(movs, cfg.desde, R);
+  const ventas0 = ventasACostear(movs, cfg.desde, R);
+  // R140 · Primero las ventas nuevas y las anuladas; los reintentos (pendientes/sin producto) al final y solo si algo cambió.
+  const lotesFoto = await todos("fin_lotes");
+  const puedeCambiar = (v, prev) => {
+    const copia = lotesFoto.map((l) => ({ ...l }));
+    const plan = planCostoVenta(v, { productos, variantes, lotes: copia, normPlataformaKey, lineasPrevias: prev.lineas || null });
+    return plan.costoNuevoHnl > 0 || plan.estado !== prev.estado || plan.lineas.some((l, i) => !!l.sinProducto !== !!((prev.lineas || [])[i] || {}).sinProducto);
+  };
+  const ventas = [...ventas0.filter((v) => !consumos.has(v.id) || v.anulada), ...ventas0.filter((v) => consumos.has(v.id) && !v.anulada)];
   const stats = { costeadas: 0, completadas: 0, revertidas: 0, pendientes: 0, sinProducto: 0, vencimientos: 0, costoHnl: 0 };
   let hechas = 0;
   const ahora = new Date().toISOString();
@@ -145,7 +160,18 @@ async function correrCosteo(db, deps) {
     if (hechas >= limite) break;
     const prev = consumos.get(v.id);
     const necesitaRevertir = v.anulada && prev && prev.estado !== "revertido";
-    const necesitaCostear = !v.anulada && (!prev || ["pendiente", "sin_producto"].includes(prev.estado));
+    let necesitaCostear = !v.anulada && (!prev || ["pendiente", "sin_producto"].includes(prev.estado));
+    if (necesitaCostear && prev && !puedeCambiar(v, prev)) necesitaCostear = false; // nada nuevo: no gasta turno
+    // R140 · Si cambiaron la fecha de la venta después de costearla, el costo se mueve con ella (mismo mes).
+    if (!v.anulada && prev && prev.estado !== "revertido" && prev.fecha && prev.fecha !== v.fecha) {
+      await db.runTransaction(async (tx) => {
+        const ms = await Promise.all((prev.movimientos || []).map((mid) => tx.get(db.collection("finanzas_movimientos").doc(mid))));
+        const f = movBase(v.fecha);
+        ms.forEach((x, k) => { if (x.exists) tx.set(db.collection("finanzas_movimientos").doc(prev.movimientos[k]), { fecha: f.fecha, fechaPago: f.fechaPago, mesKey: f.mesKey, monthKey: f.monthKey, fechaTS: f.fechaTS, updatedAt: ahora }, { merge: true }); });
+        tx.set(db.collection("fin_consumos").doc(v.id), { fecha: v.fecha, mesKey: v.fecha.slice(0, 7), actualizadoAt: ahora }, { merge: true });
+      });
+      stats.movidas = (stats.movidas || 0) + 1;
+    }
     if (!necesitaRevertir && !necesitaCostear) continue;
     hechas++;
     const r = await db.runTransaction(async (tx) => {
@@ -158,7 +184,14 @@ async function correrCosteo(db, deps) {
         const lSnaps = await Promise.all(ids.map((id) => tx.get(db.collection("fin_lotes").doc(id))));
         const mSnaps = await Promise.all((actual.movimientos || []).map((mid) => tx.get(db.collection("finanzas_movimientos").doc(mid))));
         const devolver = {}; (actual.lineas || []).forEach((l) => (l.consumos || []).forEach((c) => { devolver[c.loteId] = m6((devolver[c.loteId] || 0) + c.cantidad); }));
-        lSnaps.forEach((s, i) => { if (!s.exists) return; const l = s.data(); tx.set(db.collection("fin_lotes").doc(ids[i]), { disponible: m6(l.disponible + devolver[ids[i]]), consumido: m6((l.consumido || 0) - devolver[ids[i]]), estado: l.estado === "vencido" ? "vencido" : "activo", updatedAt: ahora }, { merge: true }); });
+        lSnaps.forEach((s, i) => {
+          if (!s.exists) return; const l = s.data(), u = devolver[ids[i]];
+          if (l.estado === "vencido") { // R140 · el lote ya venció: lo devuelto se da de baja de una vez (no queda inventario fantasma)
+            tx.set(db.collection("fin_lotes").doc(ids[i]), { consumido: m6((l.consumido || 0) - u), vencidoSinUsar: m6((l.vencidoSinUsar || 0) + u), updatedAt: ahora }, { merge: true });
+            const vid = `venc_${ids[i]}_r_${String(v.id).slice(-24)}`;
+            tx.set(db.collection("finanzas_movimientos").doc(vid), { ...movBase(hoy), movimientoId: vid, tipo: "inventario", subtipo: CUENTA_MADRE_LIKE.includes(l.modelo) ? "cupos_sin_vender" : "vencido", loteId: ids[i], productoId: l.productoId, cantidad: -u, monto: m2(u * (l.costoUnitarioHnl || 0)), banco: "Inventario", motivo: `Devuelto de venta anulada a lote vencido · ${l.producto}` });
+          } else tx.set(db.collection("fin_lotes").doc(ids[i]), { disponible: m6(l.disponible + u), consumido: m6((l.consumido || 0) - u), estado: "activo", updatedAt: ahora }, { merge: true });
+        });
         for (let k = 0; k < mSnaps.length; k++) {
           const mSnap = mSnaps[k], mid = actual.movimientos[k]; if (!mSnap.exists) continue;
           const mm = mSnap.data();
@@ -193,7 +226,8 @@ async function correrCosteo(db, deps) {
     const mid = `venc_${vto.loteId}`;
     const ok = await db.runTransaction(async (tx) => {
       const lRef = db.collection("fin_lotes").doc(vto.loteId); const s = await tx.get(lRef);
-      if (!s.exists) return false; const l = s.data();
+      const ya = await tx.get(db.collection("finanzas_movimientos").doc(mid));
+      if (!s.exists || ya.exists) return false; const l = s.data();
       if (l.estado === "vencido" || !(m6(l.disponible) > 0)) return false;
       const monto = m2(m6(l.disponible) * (l.costoUnitarioHnl || 0));
       tx.set(lRef, { disponible: 0, vencidoSinUsar: m6(l.disponible), estado: "vencido", updatedAt: ahora }, { merge: true });

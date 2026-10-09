@@ -474,6 +474,7 @@ async function menuLibro(chatId) {
     [{ text: "🏦 Saldos por banco", callback_data: "fl:bancos" }, { text: "📋 Pendientes de cobro", callback_data: "fl:cxc:menu" }],
     [{ text: "👥 Nuevo pago de planilla", callback_data: "fl:pl:new" }],
     [{ text: "🏷 Movimientos sin banco", callback_data: "fl:sb:list:0" }, { text: "🗓 Ajustar fecha de pago", callback_data: "fl:fd:list:0" }],
+    [{ text: "🏢 Empresa (tablero, Binance, inventario)", callback_data: "fl:emp" }],
     [{ text: "📊 Estados financieros", callback_data: "fl:ef" }, { text: "🧮 Cuadre TG vs APK", callback_data: "fl:cuadre" }],
     [{ text: "🔄 Actualizar", callback_data: "fl:menu" }, { text: "🏠 Inicio", callback_data: "go:inicio" }],
   ]);
@@ -794,6 +795,7 @@ async function handleCallback(chatId, userId, data) {
   if (!(await esLibroUser(userId))) return bot.sendMessage(chatId, "⛔ Finanzas (ciclo y planilla) es exclusivo de Sublicuentas y Relojes.");
   const p = pending.get(String(chatId)) || {};
   try {
+    if (data === "fl:emp" || data.startsWith("fl:emp:")) return require("./index_33_empresa_tg").callback(chatId, userId, data); // R140 · 🏢 Empresa en Telegram
     if (data === "fl:menu") return menuLibro(chatId);
     if (data === "fl:ef" || data.startsWith("fl:ef:")) return require("./index_32_estados_financieros").panelEstados(chatId, data.slice(6)); // R134
     if (data.startsWith("fl:efx:")) return require("./index_32_estados_financieros").enviarExcelEstados(chatId, data.slice(7)); // R134
@@ -931,6 +933,7 @@ async function handleText(chatId, userId, text, p) {
   const t = String(text || "").trim();
   const num = Number(t.replace(/[^0-9.\-]/g, ""));
   try {
+    if (/^flEmp/.test(String(p.mode || ""))) return require("./index_33_empresa_tg").texto(chatId, userId, t, p); // R140
     if (p.mode === "flFechaManual") {
       const ymd = dmyAYmd(t);
       if (!ymd) return bot.sendMessage(chatId, "Escriba la fecha como dd/mm/yyyy. Ejemplo: 03/10/2026");
@@ -1026,4 +1029,4 @@ async function handleText(chatId, userId, text, p) {
   return bot.sendMessage(chatId, "Use los botones del panel o toque ❌ Cancelar.");
 }
 
-module.exports = { correrCosteoBot, iniciarCosteoAutomatico, cuadreTgApkR132, repararFechasR132, descuadresFechaR132, corregirMovimientoTg, motivoBloqueoAnular, anularMovimientoTg, newOpId, actorDe, unidadesSocio, pagoSocioDisponible, pagosSociosSinFicha, vincularFichaSocio, iniciarCuentaCompleta, iniciarPagoCompra, registrarOperacionPago, registrarAbonoTg, carteraResumen, registrarSaldoInicial, registrarAjuste, bancoDesdeBoton, movimientosSinBanco, configurar, esLibroUser, iniciarPagoRenovacion, handleCallback, handleText, menuLibro, estadoLibro, loadMethods, registrarCobroRenovacion, confirmarPagoPlanilla, usuarioCanonico, usuarioLabel, ajustarFechaMovimiento };
+module.exports = { leerMovimientosDesde: async (desde) => (await movQuery(desde).get()).docs.map((d) => ({ id: d.id, ...(d.data() || {}) })), fechaCampos, correrCosteoBot, iniciarCosteoAutomatico, cuadreTgApkR132, repararFechasR132, descuadresFechaR132, corregirMovimientoTg, motivoBloqueoAnular, anularMovimientoTg, newOpId, actorDe, unidadesSocio, pagoSocioDisponible, pagosSociosSinFicha, vincularFichaSocio, iniciarCuentaCompleta, iniciarPagoCompra, registrarOperacionPago, registrarAbonoTg, carteraResumen, registrarSaldoInicial, registrarAjuste, bancoDesdeBoton, movimientosSinBanco, configurar, esLibroUser, iniciarPagoRenovacion, handleCallback, handleText, menuLibro, estadoLibro, loadMethods, registrarCobroRenovacion, confirmarPagoPlanilla, usuarioCanonico, usuarioLabel, ajustarFechaMovimiento };
