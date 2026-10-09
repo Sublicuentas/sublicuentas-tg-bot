@@ -2046,13 +2046,7 @@ async function resolverBusquedaAdmin(chatId, query = "") {
     }
 
     if (hits.length > 1) {
-      const kb = hits.map((x) => [
-        {
-          text: `📌 ${String(x.plataforma).toUpperCase()}`,
-          callback_data: `inv:open:${normalizarPlataforma(x.plataforma)}:${encodeURIComponent(q)}`,
-        },
-      ]);
-      kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
+      const kb = require("./index_34_anomalias_tg").tecladoCoincidencias(hits, q); // R141: duplicados → panel para unir/borrar
 
       return bot.sendMessage(chatId, `🔎 *Coincidencias de inventario*\n\nAcceso: ${escMD(q)}\nSeleccione plataforma:`, {
         parse_mode: "Markdown",
@@ -2108,13 +2102,7 @@ async function resolverBusquedaAdmin(chatId, query = "") {
     }
 
     if (invHits.length > 1) {
-      const kb = invHits.map((x) => [
-        {
-          text: `📌 ${String(x.plataforma).toUpperCase()}`,
-          callback_data: `inv:open:${normalizarPlataforma(x.plataforma)}:${encodeURIComponent(q)}`,
-        },
-      ]);
-      kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
+      const kb = require("./index_34_anomalias_tg").tecladoCoincidencias(invHits, q); // R141
       return bot.sendMessage(chatId, `🔎 *Coincidencias de inventario*\n\nAcceso: ${escMD(q)}\nSeleccione plataforma:`, {
         parse_mode: "Markdown",
         reply_markup: { inline_keyboard: kb },
@@ -3032,6 +3020,7 @@ bot.onText(/\/sincronizar_todo/i, async (msg) => {
   const avisosDuplicados = [];
   const avisosCapacidad = [];
   const avisosOtraPlataforma = [];
+  const anomalias = { otra: [], sin: [], dup: [], cap: [] }; // R141: detalle con clientes para corregir desde botones
 
   try {
     const [snapInv, snapClientes] = await Promise.all([
@@ -3083,7 +3072,7 @@ bot.onText(/\/sincronizar_todo/i, async (msg) => {
           const nombre = String(perfil.nombre || titular || "Sin Nombre").trim();
           const pin = String(perfil.pin || s.pin || s.pinPerfil || "").trim();
           const key = `${plat}__${syncIdentKeyLocal(acceso)}`;
-          const row = { nombre, pin, telefono, clienteId: docCli.id, compraId, perfilId, plat, acceso };
+          const row = { nombre, pin, telefono, clienteId: docCli.id, compraId, perfilId, plat, acceso, servicioIndex };
           const arr = esperadosPorKey.get(key) || [];
 
           // Evitar duplicar el mismo perfil si una ficha vieja repite datos.
@@ -3103,10 +3092,14 @@ bot.onText(/\/sincronizar_todo/i, async (msg) => {
       cuentasSinInventario++;
       const e = esperados[0] || {};
       const otras = Array.from(plataformasPorAcceso.get(syncIdentKeyLocal(e.acceso || "")) || []).filter((p) => p !== e.plat);
+      const quienes = esperados.map((x) => x.nombre).filter(Boolean).slice(0, 3).join(", ");
+      const clientesR141 = esperados.map((x) => ({ clienteId: x.clienteId, nombre: x.nombre, telefono: x.telefono, compraId: x.compraId, servicioIndex: x.servicioIndex }));
       if (otras.length) {
-        avisosOtraPlataforma.push(`${humanPlataforma(e.plat)} · ${e.acceso} → ese mismo acceso existe en ${otras.map(humanPlataforma).join(", ")}`);
+        avisosOtraPlataforma.push(`${humanPlataforma(e.plat)} · ${e.acceso} (${quienes}) → ese mismo acceso existe en ${otras.map(humanPlataforma).join(", ")}`);
+        anomalias.otra.push({ plat: e.plat, acceso: e.acceso, otras, clientes: clientesR141 });
       } else {
-        avisosSinCuenta.push(`${humanPlataforma(e.plat)} · ${e.acceso}`);
+        avisosSinCuenta.push(`${humanPlataforma(e.plat)} · ${e.acceso} (${quienes})`);
+        anomalias.sin.push({ plat: e.plat, acceso: e.acceso, clientes: clientesR141 });
       }
     }
 
@@ -3122,6 +3115,7 @@ bot.onText(/\/sincronizar_todo/i, async (msg) => {
         cuentasDuplicadas++;
         const d0 = docs[0] || {};
         avisosDuplicados.push(`${humanPlataforma(d0.plat)} · ${d0.acceso} (${docs.length} documentos)`);
+        anomalias.dup.push({ plat: d0.plat, acceso: d0.acceso, docIds: docs.map((x) => x.id) });
         continue;
       }
 
@@ -3199,7 +3193,8 @@ bot.onText(/\/sincronizar_todo/i, async (msg) => {
       const capacidad = Number(data.capacidad || data.total || getTotalPorPlataformaLocal(inv.plat) || 1);
       if (capacidad > 0 && salida.length > capacidad) {
         conflictosCapacidad++;
-        avisosCapacidad.push(`${humanPlataforma(inv.plat)} · ${inv.acceso}: ${salida.length}/${capacidad}`);
+        avisosCapacidad.push(`${humanPlataforma(inv.plat)} · ${inv.acceso}: ${salida.length}/${capacidad} (${salida.map((x) => x.nombre).filter(Boolean).slice(0, 4).join(", ")})`);
+        anomalias.cap.push({ plat: inv.plat, acceso: inv.acceso, docId: inv.id, ocupados: salida.length, capacidad, nombres: salida.map((x) => x.nombre || "Sin nombre") });
         continue; // No tocar una cuenta si la reconciliación excede su capacidad.
       }
 
@@ -3252,7 +3247,10 @@ bot.onText(/\/sincronizar_todo/i, async (msg) => {
     agregarMuestra("📏 Capacidad excedida (no se modificó):", avisosCapacidad);
 
     lineas.push("", "🛡️ Regla nueva: nunca se sincroniza por correo solo. Deben coincidir plataforma + correo/usuario exactos y el servicio debe estar vigente.");
-    return bot.sendMessage(chatId, lineas.join("\n"));
+    const A = require("./index_34_anomalias_tg"); // R141: revisar y corregir cada anomalía con botones
+    A.guardar(chatId, anomalias);
+    const texto = lineas.join("\n");
+    return bot.sendMessage(chatId, texto.length > 3900 ? `${texto.slice(0, 3900)}\n…` : texto, { reply_markup: { inline_keyboard: A.tecladoResumen(anomalias) } });
   } catch (error) {
     logErr("sincronizar_todo", error);
     return bot.sendMessage(chatId, "⚠️ Ocurrió un error al sincronizar. Revise los logs del servidor.");
@@ -4976,6 +4974,7 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
       if (data === "menu:inventario:designai") return menuInventarioDisenoIA(chatId);
       if (data === "menu:clientes") return menuClientes(chatId);
       if (data === "menu:pagos") return menuPagos(chatId);
+      if (data.startsWith("anom:")) return require("./index_34_anomalias_tg").callback(chatId, userId, data, q); // R141 · anomalías de /sincronizar_todo
       if (data.startsWith("fl:")) return finLibro.handleCallback(chatId, userId, data); // R104 · ciclo, planilla y pago real al renovar
       if (data === "menu:alertas") return menuAlertas(chatId);
       if (data === "menu:renovaciones") return menuRenovaciones(chatId, userId);
