@@ -98,6 +98,8 @@ function movementKind(m = {}) {
   if (tipo === "venta") return "venta";
   if (tipo === "transferencia") return "transferencia";
   if (tipo === "billetera") return "billetera"; // R135 · Binance (USDT): no es ingreso ni egreso ni toca bancos HNL
+  if (tipo === "compra") return "compra"; // R136 · compra de inventario: baja el banco, NO es gasto
+  if (tipo === "inventario") return "inventario"; // R136 · ajuste de inventario (merma/vencido): no toca bancos
   if (tipo === "saldo inicial" || sub === "saldo_inicial") return "saldo_inicial";
   if (tipo === "ajuste saldo" || sub === "ajuste_saldo") return "ajuste";
   if (tipo === "ingreso" || tipo === "cobro") return "ingreso";
@@ -145,7 +147,7 @@ function bankBalances(movements = [], libro = {}, methods = []) {
   for (const m of movements) {
     if (anuladoOReversa(m)) continue; // R125: el anulado y su reversa se cancelan; no se cuentan ninguno de los dos
     const kind = movementKind(m);
-    if (!["ingreso", "egreso", "planilla", "ajuste", "transferencia"].includes(kind)) continue;
+    if (!["ingreso", "egreso", "planilla", "ajuste", "transferencia", "compra"].includes(kind)) continue;
     const id = movementBankId(m, methods);
     const row = out.get(id);
     if (!row || !row.activado) continue;
@@ -156,6 +158,7 @@ function bankBalances(movements = [], libro = {}, methods = []) {
     else if (kind === "egreso") { row.egresosOperativos += monto; row.saldo -= monto; }
     else if (kind === "planilla") { row.planilla += monto; row.saldo -= monto; }
     else if (kind === "ajuste") { row.ajustes += monto; row.saldo += monto; } // ajuste con signo
+    else if (kind === "compra") { row.compras = money((row.compras || 0) + monto); row.saldo -= monto; } // R136: sale del banco, entra al inventario
     else if (kind === "transferencia") { const d = m.direccion === "salida" ? -monto : monto; row.transferencias = money((row.transferencias || 0) + d); row.saldo += d; }
     row.movimientos++;
   }

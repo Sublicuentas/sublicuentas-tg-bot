@@ -734,7 +734,7 @@ async function generarReporteExcelPorRango(fechaInicio, fechaFin) {
     // R123: los movimientos ANULADOS/CORREGIDOS y sus reversas no se mezclan con los vigentes: van en su propia hoja
     // "Anulados" y no suman en Ingresos, Egresos ni el Resumen (así el día muestra solo lo que de verdad entró/salió).
     const anulados = todosR123.filter((m) => esAnuladoR123(m) && ["ingreso", "egreso", "ajuste", "planilla"].includes(m.kind));
-    const movimientos = todosR123.filter((m) => !esAnuladoR123(m) && !m.raw?.reversaDe).filter((m) => !["saldo_inicial", "venta", "transferencia", "billetera"].includes(m.kind)); // R135: Binance no es ingreso // R106: ventas y transferencias no son ingreso/egreso
+    const movimientos = todosR123.filter((m) => !esAnuladoR123(m) && !m.raw?.reversaDe).filter((m) => !["saldo_inicial", "venta", "transferencia", "billetera", "compra", "inventario"].includes(m.kind)); // R135/R136: Binance, compras e inventario no son ingreso ni gasto // R106: ventas y transferencias no son ingreso/egreso
     const ventasTotal = todosR123.filter((m) => m.kind === "venta" && !esAnuladoR123(m) && !m.raw?.reversaDe).reduce((s, m) => s + Number(m.monto || 0), 0);
     // R114/R129: un cliente paga UNA vez → todos los cobros del mismo cliente al mismo banco el mismo día van en UNA fila
     // (ej. Juan de Dios 80 + 80 de sus 2 perfiles = L160), aunque se hayan registrado en momentos distintos o por otro usuario.

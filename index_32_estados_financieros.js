@@ -34,7 +34,7 @@ function textoEstados(ef) {
     `👥 Planilla y comisiones: −${lps(r.planilla.total)}`,
     `= *Utilidad neta: ${lps(r.utilidadNeta)}* · margen ${r.margenNeto}%`, "",
     "*FLUJO DE CAJA (bancos)*",
-    `Saldo inicial: ${lps(f.saldoInicial)}`, `+ Cobros: ${lps(f.cobros)}`, `− Gastos: ${lps(f.gastos)}`, `− Planilla: ${lps(f.planilla)}`,
+    `Saldo inicial: ${lps(f.saldoInicial)}`, `+ Cobros: ${lps(f.cobros)}`, `− Gastos: ${lps(f.gastos)}`, `− Planilla: ${lps(f.planilla)}`, ...(f.compras ? [`− Compras de inventario: ${lps(f.compras)} (no es gasto)`] : []),
     ...(f.ajustes ? [`± Ajustes / aperturas: ${lps(f.ajustes)}`] : []),
     `= Saldo final: *${lps(f.saldoFinal)}* ${f.cuadra ? "✅ cuadra con los bancos" : "⚠️ revisar"}`,
     `Flujo operativo del mes: ${lps(f.flujoOperativo)}`,
@@ -105,16 +105,16 @@ async function excelEstados(ef) {
   er.pageSetup = { orientation: "portrait", fitToPage: true, fitToWidth: 1, fitToHeight: 0 };
 
   // 2) Flujo de caja
-  const fc = wb.addWorksheet("Flujo de caja"); fc.columns = [{ width: 22 }, { width: 15 }, { width: 15 }, { width: 15 }, { width: 15 }, { width: 16 }, { width: 16 }, { width: 15 }, { width: 10 }];
-  titulo(fc, "FLUJO DE CAJA POR BANCO", `${sub} · saldo inicial + entradas − salidas = saldo final`, 9);
-  const h = encabezado(fc, ["Banco", "Saldo inicial", "Cobros", "Gastos", "Planilla", "Transferencias", "Ajustes / apertura", "Saldo final", "Cuadra"]);
-  f.bancos.forEach((b, i) => fila(fc, [b.nombre, b.saldoInicial, b.cobros, -b.gastos, -b.planilla, b.transferencias, b.ajustes, b.saldoFinal, b.cuadra ? "✔" : "✖"], { money: [2, 3, 4, 5, 6, 7, 8], fondo: i % 2 ? X.zebra : "" }));
+  const fc = wb.addWorksheet("Flujo de caja"); fc.columns = [{ width: 22 }, { width: 15 }, { width: 15 }, { width: 15 }, { width: 15 }, { width: 16 }, { width: 16 }, { width: 16 }, { width: 15 }, { width: 10 }];
+  titulo(fc, "FLUJO DE CAJA POR BANCO", `${sub} · saldo inicial + entradas − salidas = saldo final`, 10);
+  const h = encabezado(fc, ["Banco", "Saldo inicial", "Cobros", "Gastos", "Planilla", "Compras inventario", "Transferencias", "Ajustes / apertura", "Saldo final", "Cuadra"]);
+  f.bancos.forEach((b, i) => fila(fc, [b.nombre, b.saldoInicial, b.cobros, -b.gastos, -b.planilla, -(b.compras || 0), b.transferencias, b.ajustes, b.saldoFinal, b.cuadra ? "✔" : "✖"], { money: [2, 3, 4, 5, 6, 7, 8, 9], fondo: i % 2 ? X.zebra : "" }));
   const first = h + 1, last = fc.rowCount, t = fc.addRow(["TOTAL"]);
-  ["B", "C", "D", "E", "F", "G", "H"].forEach((L, k) => { const key = ["saldoInicial", "cobros", "gastos", "planilla", "transferencias", "ajustes", "saldoFinal"][k]; const v = ["gastos", "planilla"].includes(key) ? -f[key] : f[key]; t.getCell(k + 2).value = f.bancos.length ? { formula: `SUM(${L}${first}:${L}${last})`, result: v } : v; t.getCell(k + 2).numFmt = MONEY_TOTAL; });
-  t.getCell(9).value = f.cuadra ? "✔" : "✖";
+  ["B", "C", "D", "E", "F", "G", "H", "I"].forEach((L, k) => { const key = ["saldoInicial", "cobros", "gastos", "planilla", "compras", "transferencias", "ajustes", "saldoFinal"][k]; const v = ["gastos", "planilla", "compras"].includes(key) ? -(f[key] || 0) : f[key]; t.getCell(k + 2).value = f.bancos.length ? { formula: `SUM(${L}${first}:${L}${last})`, result: v } : v; t.getCell(k + 2).numFmt = MONEY_TOTAL; });
+  t.getCell(10).value = f.cuadra ? "✔" : "✖";
   t.eachCell({ includeEmpty: true }, (c) => { pinta(c, X.verde); c.font = { bold: true, color: { argb: X.blanco } }; c.border = BORDE; });
   fc.addRow([]);
-  const nota = (txt, v, fondo = "") => { const rr = fila(fc, [txt, "", "", "", "", "", "", v, ""], { money: [8], bold: true, fondo }); fc.mergeCells(rr.number, 1, rr.number, 7); };
+  const nota = (txt, v, fondo = "") => { const rr = fila(fc, [txt, "", "", "", "", "", "", "", v, ""], { money: [9], bold: true, fondo }); fc.mergeCells(rr.number, 1, rr.number, 8); };
   nota("Flujo operativo del mes (cobros − gastos − planilla)", f.flujoOperativo);
   if (f.sinBanco.n) nota(`Cobros/gastos SIN banco (no entran a ningún banco): ${f.sinBanco.n}`, f.sinBanco.neto, X.rojoClaro);
   fc.views = [{ state: "frozen", ySplit: h }];
