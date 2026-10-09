@@ -5892,6 +5892,10 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
       if (data.startsWith("ccsel:")) { // R118: cuenta completa → correo → clave → precio → pago
         const [, mode, plat, cId] = data.split(":");
         let clientId = cId || (mode === "wiz" ? (wizard.get(String(chatId)) || {}).clientId : null);
+        if (!clientId && mode === "wiz") { // R142: cliente nuevo → se crea ahora con nombre, teléfono y vendedor del asistente
+          const st = wizard.get(String(chatId));
+          if (st && st.nombre) { try { clientId = await require("./index_03_clientes_crm").asegurarClienteWizard(st); } catch (e) { return bot.sendMessage(chatId, `⚠️ ${String(e?.message || e).slice(0, 160)}`); } }
+        }
         if (!clientId) return bot.sendMessage(chatId, "⚠️ No encontré el cliente. Abra la ficha y vuelva a intentar.");
         if (mode === "wiz") wizard.delete(String(chatId));
         return finLibro.iniciarCuentaCompleta(chatId, userId, { clientId: String(clientId), plat });

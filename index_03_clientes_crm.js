@@ -2914,7 +2914,29 @@ bot.onText(/^\/clientes_excel$/, async (msg) => {
   }
 });
 
+// R142 · El asistente de cliente nuevo crea el cliente al guardar el primer servicio. La CUENTA COMPLETA sigue otro
+// camino (correo → clave → precio → meses) y necesitaba el cliente antes: lo creamos aquí con los mismos datos y reglas
+// (si ya existe uno con el mismo nombre + teléfono, se usa ese; no se duplica).
+async function asegurarClienteWizard(st = {}) {
+  if (st.clientId) return st.clientId;
+  if (!String(st.nombre || "").trim()) throw new Error("Falta el nombre del cliente.");
+  const existente = await clienteExactoNombreTelefono(st.nombre, st.telefono);
+  if (existente) return existente.id;
+  const ref = db.collection(CLIENTES_COLLECTION).doc();
+  await ref.set({
+    nombrePerfil: st.nombre, nombre_norm: normTxt(st.nombre),
+    telefono: normalizarTelefonoCliente(st.telefono), telefono_norm: normalizarTelefonoCliente(st.telefono),
+    vendedor: canonicalVendedor(st.vendedor), vendedor_norm: normVendedor(st.vendedor),
+    vendedores: [canonicalVendedor(st.vendedor)], vendedores_norm: [normVendedor(st.vendedor)],
+    clienteCompartido: false, servicios: [],
+    createdAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+  try { await registrarEventoHistorial(ref.id, { tipo: "cliente_creado", descripcion: `Cliente creado por vendedor: ${st.vendedor}` }); } catch (_) {}
+  return ref.id;
+}
+
 module.exports = {
+  asegurarClienteWizard, // R142
   // 🐛 FIX (ago-2026): iconPlataforma() se usaba en index_06_handlers.js
   // (botones "Mis renovaciones de hoy" / "en 3 días" y el aviso diario de
   // las 7 AM) pero nunca estuvo exportada aquí — cada vez que se llamaba
