@@ -52,7 +52,7 @@ test("R121: las compras de socios ya guardadas se completan una sola vez (nombre
   const antes = lecturas;
   assert.equal(await rellenar(), 0);
   assert.equal(lecturas - antes, 1, "la segunda vez solo lee la marca");
-  assert.match(src, /app\.listen\(PORT, \(\) => \{ console\.log\(.*\); r121RellenarNombresCompraSocio\(\); \}\);/);
+  assert.match(src, /app\.listen\(PORT, \(\) => \{ console\.log\(.*\); r121RellenarNombresCompraSocio\(\);/);
 });
 
 // ---------- "Ya pagó por Socios" en el bot (index_31_finanzas_libro.js) ----------

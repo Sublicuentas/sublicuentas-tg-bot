@@ -87,5 +87,16 @@ test("R135: recarga a Binance en Telegram = transferencia del banco + billetera 
   const bz = C.balanzaComprobacion(C.libroDiario(ms, {}, methods, "2026-10-01", "2026-10-31"));
   assert.ok(bz.cuadra); assert.equal(bz.cuentas.find((c) => c.cuenta === "1150-binance").saldo, 2820); assert.equal(bz.cuentas.find((c) => c.cuenta === "1190").saldo, 0);
   const x = fs.readFileSync(path.join(__dirname, "..", "index_10_reportes_excel.js"), "utf8");
-  assert.match(x, /\["saldo_inicial", "venta", "transferencia", "billetera", "compra", "inventario"\]\.includes\(m\.kind\)/);
+  assert.match(x, /\["saldo_inicial", "venta", "transferencia", "billetera", "compra", "inventario", "costo_venta"\]\.includes\(m\.kind\)/);
+});
+
+test("R137: el bot costea las ventas solo (cada 10 min) con el mismo motor que la web", () => {
+  const C2 = require("../lib_finanzas_costeo");
+  assert.equal(typeof C2.correrCosteo, "function");
+  const l = fs.readFileSync(path.join(__dirname, "..", "index_31_finanzas_libro.js"), "utf8");
+  assert.match(l, /setInterval\(\(\) => correrCosteoBot\(\), 10 \* 60 \* 1000\)/);
+  const sa = fs.readFileSync(path.join(__dirname, "..", "server_api.js"), "utf8");
+  assert.match(sa, /require\("\.\/index_31_finanzas_libro"\)\.iniciarCosteoAutomatico\(\)/);
+  assert.equal(R.movementKind({ tipo: "costo_venta", monto: 50 }), "costo_venta");
+  assert.equal(R.cycleTotals([{ tipo: "costo_venta", monto: 50, fecha: "08/10/2026" }], "2026-10-01", "").resultado, 0, "no toca cierres");
 });
