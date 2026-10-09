@@ -75,3 +75,17 @@ test("R134: Telegram tiene 📊 Estados financieros (panel + Excel de 4 hojas) e
   assert.match(l, /startsWith\("fl:efx:"\)\) return require\("\.\/index_32_estados_financieros"\)\.enviarExcelEstados/);
   for (const h of ["Estado de resultados", "Flujo de caja", "Libro diario", "Balanza"]) assert.match(e, new RegExp(`addWorksheet\\("${h}"\\)`));
 });
+
+test("R135: recarga a Binance en Telegram = transferencia del banco + billetera USDT; no es ingreso ni gasto; balanza cuadra", () => {
+  const ms = [
+    mov("r1", { tipo: "transferencia", subtipo: "recarga_binance", direccion: "salida", monto: 2820, bancoId: "bac", fecha: "08/10/2026", montoUsdt: 100 }),
+    mov("r1_usdt", { tipo: "billetera", subtipo: "recarga", direccion: "entrada", billeteraId: "binance", moneda: "USDT", montoUsdt: 100, monto: 2820, tasa: 28.2, fecha: "08/10/2026" }),
+  ];
+  assert.equal(R.movementKind(ms[1]), "billetera");
+  const t = R.cycleTotals(ms, "2026-10-01", ""); assert.equal(t.ingresos, 0); assert.equal(t.egresosOperativos, 0);
+  assert.equal(R.bankBalances(ms, libro, methods).bancos.find((b) => b.id === "bac").saldo, 1000 - 2820);
+  const bz = C.balanzaComprobacion(C.libroDiario(ms, {}, methods, "2026-10-01", "2026-10-31"));
+  assert.ok(bz.cuadra); assert.equal(bz.cuentas.find((c) => c.cuenta === "1150-binance").saldo, 2820); assert.equal(bz.cuentas.find((c) => c.cuenta === "1190").saldo, 0);
+  const x = fs.readFileSync(path.join(__dirname, "..", "index_10_reportes_excel.js"), "utf8");
+  assert.match(x, /\["saldo_inicial", "venta", "transferencia", "billetera"\]\.includes\(m\.kind\)/);
+});
