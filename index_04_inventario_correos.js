@@ -426,6 +426,32 @@ async function buscarCuentaInventarioPorMoveToken(token = "") {
   }
 }
 
+async function actualizarCapacidadCuenta(docId, valor) {
+  const text = String(valor == null ? "" : valor).trim();
+  const capacidad = Number(text);
+  if (!/^[1-9]\d*$/.test(text) || !Number.isSafeInteger(capacidad)) {
+    throw new Error("Escriba la cantidad TOTAL de perfiles como número entero, por ejemplo: 7.");
+  }
+  if (!String(docId || "").trim()) throw new Error("Abra nuevamente la cuenta.");
+  const ref = db.collection("inventario").doc(String(docId));
+  return db.runTransaction(async tx => {
+    const snap = await tx.get(ref);
+    if (!snap.exists) throw new Error("La cuenta ya no existe. Abra nuevamente Inventario.");
+    const data = snap.data() || {};
+    const ocupados = getClientesArray(data).length;
+    if (capacidad < ocupados) throw new Error(`La cuenta tiene ${ocupados} clientes asociados. La capacidad no puede ser menor que ${ocupados}.`);
+    const disponibles = capacidad - ocupados;
+    const estadoActual = String(data.estado || "").trim().toLowerCase();
+    const patch = {capacidad, ocupados, disponibles, disp:disponibles, updatedAt:admin.firestore.FieldValue.serverTimestamp()};
+    // Cambiar cupos no debe reactivar una cuenta suspendida o bloqueada.
+    if (!estadoActual || ["activa", "llena"].includes(estadoActual)) patch.estado = disponibles ? "activa" : "llena";
+    if (data.total != null) patch.total = capacidad;
+    tx.set(ref, patch, {merge:true});
+    return {docId:String(docId), plataforma:normalizarPlataforma(data.plataforma || ""), ident:getStoredIdent(data),
+      anterior:getCapacidadCorreo(data, data.plataforma), capacidad, ocupados, disponibles};
+  });
+}
+
 async function moverCuentaInventarioPlataforma(docId = "", nuevaPlataforma = "") {
   const id = String(docId || "").trim();
   const nueva = normalizarPlataforma(nuevaPlataforma);
@@ -748,6 +774,7 @@ async function mostrarPanelCorreo(chatId, plataforma = "", acceso = "") {
   }
 
   const moveToken = getInventoryMoveToken(found.id);
+  kb.push([{ text: "✏️ Cambiar cantidad de perfiles", callback_data: `mail_edit_capacidad|${moveToken}` }]);
   kb.push([{ text: "🔄 Cambiar plataforma de esta cuenta", callback_data: `mail_move_platform|${moveToken}` }]);
   kb.push([{ text: "🗑️ Borrar cuenta", callback_data: `mail_delete|${plat}|${encodeURIComponent(ident)}` }]);
 
@@ -797,6 +824,7 @@ async function mostrarMenuClientesCorreo(chatId, plataforma = "", acceso = "") {
         : [
             { text: "👥 Ver clientes", callback_data: `mail_ver_clientes|${plat}|${encodeURIComponent(ident)}` },
           ],
+      [{ text: "✏️ Cambiar cantidad de perfiles", callback_data: `mail_edit_capacidad|${getInventoryMoveToken(found.id)}` }],
       [
         { text: "⬅️ Cuenta", callback_data: `mail_panel|${plat}|${encodeURIComponent(ident)}` },
         { text: "🏠 Inicio", callback_data: "go:inicio" },
@@ -966,4 +994,5 @@ module.exports = {
   getInventoryMoveToken,
   buscarCuentaInventarioPorMoveToken,
   moverCuentaInventarioPlataforma,
+  actualizarCapacidadCuenta,
 };

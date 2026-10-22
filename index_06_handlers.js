@@ -195,6 +195,7 @@ const {
   getInventoryMoveToken,
   buscarCuentaInventarioPorMoveToken,
   moverCuentaInventarioPlataforma,
+  actualizarCapacidadCuenta,
 } = require("./index_04_inventario_correos");
 
 const {
@@ -1880,6 +1881,7 @@ const PENDING_TEXT_INPUT_MODES_LOCAL = new Set([
   "mailAddClienteNombre",
   "mailAddClientePin",
   "mailEditClaveCorreo",
+  "mailEditCapacidad",
   "mailEditCorreoCuenta",
   "mailEditPin",
   "revAddNombre",
@@ -5795,6 +5797,22 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
         return bot.sendMessage(chatId, `🔐 *Editar PIN*\n\n👤 *Cliente:* ${escMD(cliente.nombre || "Sin nombre")}\n🔑 *PIN actual:* ${escMD(cliente.pin || "----")}\n\nEscriba el nuevo PIN de 4 dígitos:`, { parse_mode: "Markdown" });
       }
 
+      if (data.startsWith("mail_edit_capacidad_cancel|")) {
+        pending.delete(String(chatId));
+        const found = await buscarCuentaInventarioPorMoveToken(data.split("|")[1]);
+        if (!found) return bot.sendMessage(chatId, "La cuenta ya no existe. Abra Inventario.");
+        return mostrarPanelCorreo(chatId, found.data.plataforma, found.data.correo || found.data.usuario || found.data.ident || "");
+      }
+
+      if (data.startsWith("mail_edit_capacidad|")) {
+        const token = data.split("|")[1];
+        const found = await buscarCuentaInventarioPorMoveToken(token);
+        if (!found) return bot.sendMessage(chatId, "La cuenta ya no existe. Abra Inventario.");
+        pending.set(String(chatId), {mode:"mailEditCapacidad", docId:found.id, userId:String(userId)});
+        return upsertPanel(chatId, `✏️ *Cambiar cantidad de perfiles*\n\nCuenta: ${escMD(found.data.correo || found.data.usuario || found.data.ident || "")}\nCapacidad actual: ${getCapacidadCorreo(found.data, found.data.plataforma)}\n\nEscriba la nueva cantidad TOTAL. Para pasar de 6 a 7, escriba *7*.`,
+          [[{text:"❌ Cancelar", callback_data:`mail_edit_capacidad_cancel|${token}`}]]);
+      }
+
       if (data.startsWith("mail_edit_clave|")) {
         const [, plataforma, accesoEnc] = data.split("|");
         const acceso = decodeURIComponent(accesoEnc || "");
@@ -7571,6 +7589,20 @@ bot.on("message", async (msg) => {
         await bot.sendMessage(chatId, `✅ Cuenta *${escMD(correoNorm)}* creada con ${qty} perfiles.`, { parse_mode: "Markdown" });
         pending.set(String(chatId), { mode: "invSubmenuCtx", plat: p.plat, correo: correoNorm });
         return enviarSubmenuInventario(chatId, p.plat, correoNorm);
+      }
+
+      if (p.mode === "mailEditCapacidad") {
+        if (String(p.userId) !== String(userId)) return bot.sendMessage(chatId, "Esta edición la inició otro usuario. Abra la cuenta desde su menú.");
+        if (!(await requirePermissionLocal(chatId, userId, "inventario.write"))) return;
+        let result;
+        try { result = await actualizarCapacidadCuenta(p.docId, t); }
+        catch (e) { return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo cambiar la capacidad."}`); }
+        pending.delete(String(chatId));
+        forceNextPanelAtBottom(chatId);
+        cacheInvalidatePrefix?.("inventario:");
+        await registrarActividadTelegramLocal(userId,chatId,'editar_cuenta_inventario',{inventarioId:result.docId,plataforma:humanPlataforma(result.plataforma),cuenta:result.ident,campo:'capacidad',cambio:`${result.anterior} → ${result.capacidad}`},`Cambió la capacidad de ${result.ident}: ${result.anterior} → ${result.capacidad}.`,'Bodega');
+        await bot.sendMessage(chatId, `✅ Capacidad actualizada: ${result.anterior} → ${result.capacidad} perfiles.\n👥 Ocupados: ${result.ocupados}/${result.capacidad}\n✅ Disponibles: ${result.disponibles}`);
+        return mostrarMenuClientesCorreo(chatId, result.plataforma, result.ident);
       }
 
       if (p.mode === "invSumarQty") {
