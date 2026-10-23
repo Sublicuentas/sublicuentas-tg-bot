@@ -16,7 +16,7 @@ const TIPOS_VENTA = Object.freeze({ perfil: "perfil", cuenta_completa: "cuenta_c
 const PLATAFORMA_CATEGORIA = Object.freeze({
   netflix: "perfiles", vipnetflix: "perfiles", disneyp: "perfiles", disneys: "perfiles", hbomax: "perfiles", primevideo: "perfiles",
   crunchyroll: "perfiles", paramount: "perfiles", vix: "perfiles", appletv: "perfiles", universal: "perfiles",
-  stellatv: "tv_digital", oleada: "tv_digital", latintv: "tv_digital", liontv: "tv_digital", evoutouch: "tv_digital", iptv: "tv_digital", tvdigital: "tv_digital",
+  stellatv: "tv_digital", oleada: "tv_digital", latintv: "tv_digital", liontv: "tv_digital", evoutouch: "tv_digital", icomplay: "tv_digital", iptv: "tv_digital", tvdigital: "tv_digital",
   spotify: "musica", youtube: "musica", deezer: "musica",
   canva: "software", gemini: "software", chatgpt: "software", duolingo: "software", office: "software", office2021: "software", m365: "software",
   adobeexpress: "software", windows10: "software", windows11: "software", eset: "software",
@@ -57,6 +57,7 @@ function normPlataformaKey(v = "") {
   if (/latintv/.test(t)) return "latintv";
   if (/liontv/.test(t)) return "liontv";
   if (/nanotech|evoutouch/.test(t)) return "evoutouch";
+  if (/icomplay/.test(t)) return "icomplay";
   if (/iptv|tvdigital/.test(t)) return "iptv";
   return t;
 }

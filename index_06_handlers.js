@@ -317,6 +317,7 @@ function esPlataformaUsuarioLocal(plataforma = "") {
     "latintv1", "latintv2", "latintv3", "latintv4",
     "liontv1", "liontv2", "liontv3", "liontv5",
     "evoutouch1", "evoutouch2", "evoutouch3",
+    "icomplay1", "icomplay3", "icomplay5", "icomplay7",
     "iptv1", "iptv3", "iptv4",
   ].includes(p);
 }
@@ -532,6 +533,7 @@ function cmAutoFamily(platform = "") {
   if (/^latintv[1234]$/.test(p) || p === "latintv") return "latintv";
   if (/^liontv[1235]$/.test(p) || p === "liontv") return "liontv";
   if (/^evoutouch[1-4]?$/.test(p) || /^nanotech[1-3]?$/.test(p)) return "evoutouch";
+  if (/^icomplay(max)?[1357]?$/.test(p)) return "icomplay";
   if (/^iptv[134]$/.test(p) || p === "iptv") return "iptv";
   return p;
 }
@@ -568,6 +570,7 @@ function cmAutoPlatformsForSheet(name = "") {
   if (n.includes("latin tv") || n.includes("latintv")) return ["latintv"];
   if (n.includes("lion tv") || n.includes("liontv")) return ["liontv"];
   if (n.includes("evoutouch") || n.includes("evou touch")) return ["evoutouch"];
+  if (n.includes("icomplay")) return ["icomplay"];
   if (n.includes("iptv")) return ["iptv"];
   return [];
 }
@@ -630,7 +633,7 @@ async function cmAutoRemoveClientOnce({ plataforma = "", acceso = "", cliente = 
   const targetAccount = normalizeIdentByPlatformLocal(plataforma, acceso);
   const targetName = cmAutoPerson(cliente?.nombre || "");
   const targetPin = cmAutoNorm(cliente?.pin || "");
-  const targetPhone = String(cliente?.telefono || cliente?.celular || "").replace(/\D/g, "").slice(-8);
+  const targetPhone = normalizarTelefonoCliente(cliente?.telefono || cliente?.celular || "");
   const targetFamily = cmAutoFamily(plataforma);
   const candidates = [];
 
@@ -655,7 +658,7 @@ async function cmAutoRemoveClientOnce({ plataforma = "", acceso = "", cliente = 
       if (currentFamily && targetFamily && currentFamily !== targetFamily) continue;
       const rowName = h.name ? cmAutoPerson(cmAutoCellText(row.getCell(h.name).value)) : "";
       const rowPin = h.pin ? cmAutoNorm(cmAutoCellText(row.getCell(h.pin).value)) : "";
-      const rowPhone = h.phone ? String(cmAutoCellText(row.getCell(h.phone).value)).replace(/\D/g, "").slice(-8) : "";
+      const rowPhone = h.phone ? normalizarTelefonoCliente(cmAutoCellText(row.getCell(h.phone).value)) : "";
       const nameMatch = !!targetName && !!rowName && rowName === targetName;
       const pinMatch = !!targetPin && !!rowPin && rowPin === targetPin;
       const phoneMatch = !!targetPhone && !!rowPhone && rowPhone === targetPhone;
@@ -784,6 +787,16 @@ function docIdInventarioLocal(ident = "", plataforma = "") {
   return `${p}__${i}`;
 }
 
+// Oct-2026 · accountId inmutable. El ID calculado solo sirve para CREAR cuentas nuevas en el bot;
+// para encontrar una cuenta existente se usa el resolvedor (ID → ID calculado → plataforma+correo),
+// así se encuentran también las creadas desde la Web (ID aleatorio) o con el correo cambiado.
+const invCanon = require("./lib_inventario_canonico");
+async function cuentaInvLocal(plataforma = "", acceso = "", docId = "") {
+  const plat = normalizarPlataforma(plataforma);
+  const ident = normalizeIdentByPlatformLocal(plat, acceso);
+  return invCanon.resolverCuentaInventario(db, { docId, plataforma: plat, acceso: ident, docIdCalculado: docIdInventarioLocal(ident, plat) });
+}
+
 function dmyToKeyLocal(dmy = "") {
   const s = String(dmy || "").trim();
   const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
@@ -815,6 +828,15 @@ function servicioVigenteParaSyncLocal(servicio = {}) {
   if (!fechaKey) return estado === "activo" || estado === "vigente";
 
   return fechaKey >= dmyToKeyLocal(hoyDMY());
+}
+
+// Oct-2026 · Regla ÚNICA (igual que Sublichat HQ y la APK): un perfil ocupa su cupo mientras su
+// servicio exista en la ficha, aunque la fecha ya haya pasado. El cupo se libera con "No renovó"
+// o al eliminar el servicio. Antes /sincronizar_todo quitaba vencidos y la Web/APK los volvía a
+// poner: los cupos cambiaban según quién sincronizó por última vez.
+function servicioOcupaBodegaLocal(servicio = {}) {
+  const estado = normEstadoSyncLocal(servicio.estado || servicio.status || "");
+  return !["cancelado", "inactivo", "eliminado", "no renovo", "no renovo."].includes(estado);
 }
 
 function getIdentServicioSyncLocal(servicio = {}) {
@@ -1196,7 +1218,7 @@ function humanPlatLabelSyncLocal(key = "") {
     liontv2: "LionTV (2 dispositivos)",
     liontv3: "LionTV (3 dispositivos)",
     liontv5: "LionTV (5 dispositivos)",
-    evoutouch1: "Nanotech (1 dispositivo)", evoutouch2: "Nanotech (2 dispositivos)", evoutouch3: "Nanotech (3 dispositivos)", evoutouch4: "Nanotech (1 dispositivo)",
+    evoutouch1: "Nanotech (1 dispositivo)", evoutouch2: "Nanotech (2 dispositivos)", evoutouch3: "Nanotech (3 dispositivos)", evoutouch4: "Nanotech (1 dispositivo)", icomplay1: "ICOMPLAY MAX (1)", icomplay3: "ICOMPLAY MAX (3)", icomplay5: "ICOMPLAY MAX (5)", icomplay7: "ICOMPLAY MAX (7)",
     iptv1: "IPTV anterior (1)",
     iptv3: "IPTV anterior (3)",
     iptv4: "IPTV anterior (4)",
@@ -1240,7 +1262,7 @@ function getTotalPorPlataformaLocal(plat = "") {
     liontv2: 2,
     liontv3: 3,
     liontv5: 5,
-    evoutouch1: 1, evoutouch2: 2, evoutouch3: 3, evoutouch4: 1,
+    evoutouch1: 1, evoutouch2: 2, evoutouch3: 3, evoutouch4: 1, icomplay1: 1, icomplay3: 3, icomplay5: 5, icomplay7: 7,
     iptv1: 1,
     iptv3: 3,
     iptv4: 4,
@@ -3005,7 +3027,7 @@ bot.onText(/\/sincronizar_todo/i, async (msg) => {
 
   await bot.sendMessage(
     chatId,
-    "🔄 *Auditando y sincronizando inventario con el CRM...*\n\nSolo se cruzarán perfiles VIGENTES por *plataforma + correo/usuario exactos*. No se mezclan plataformas aunque usen el mismo correo.",
+    "🔄 *Auditando y sincronizando inventario con el CRM...*\n\nSe cruzan los perfiles de las fichas por *accountId* y, si no tienen, por *plataforma + correo/usuario exactos* (misma regla que Sublichat Web y la APK). No se mezclan plataformas aunque usen el mismo correo.",
     { parse_mode: "Markdown" }
   );
 
@@ -3032,6 +3054,7 @@ bot.onText(/\/sincronizar_todo/i, async (msg) => {
 
     // 1) Indexar inventario por la identidad REAL: plataforma + acceso.
     const invPorKey = new Map();
+    const keyPorAccountId = new Map();
     const plataformasPorAcceso = new Map();
     snapInv.forEach((d) => {
       const data = d.data() || {};
@@ -3041,6 +3064,7 @@ bot.onText(/\/sincronizar_todo/i, async (msg) => {
       const key = `${plat}__${syncIdentKeyLocal(acceso)}`;
       if (!invPorKey.has(key)) invPorKey.set(key, []);
       invPorKey.get(key).push({ id: d.id, ref: d.ref, data, plat, acceso });
+      keyPorAccountId.set(d.id, { key, plat });
 
       const accesoGlobal = syncIdentKeyLocal(acceso);
       const set = plataformasPorAcceso.get(accesoGlobal) || new Set();
@@ -3058,7 +3082,7 @@ bot.onText(/\/sincronizar_todo/i, async (msg) => {
 
       for (let servicioIndex = 0; servicioIndex < servicios.length; servicioIndex++) {
         const s = servicios[servicioIndex] || {};
-        if (!s.plataforma || !servicioVigenteParaSyncLocal(s)) continue;
+        if (!s.plataforma || !servicioOcupaBodegaLocal(s)) continue;
         const plat = normalizarPlataforma(s.plataforma || "");
         if (!plat) continue;
         const perfiles = perfilesServicioLocal(s, titular);
@@ -3073,7 +3097,10 @@ bot.onText(/\/sincronizar_todo/i, async (msg) => {
           const perfilId = String(perfil.perfilId || `legacy_perfil_${docCli.id}_${servicioIndex}_${perfilIndex}`);
           const nombre = String(perfil.nombre || titular || "Sin Nombre").trim();
           const pin = String(perfil.pin || s.pin || s.pinPerfil || "").trim();
-          const key = `${plat}__${syncIdentKeyLocal(acceso)}`;
+          // accountId primero: un perfil enlazado sigue en su cuenta aunque el correo haya cambiado.
+          const porId = keyPorAccountId.get(String(perfil.inventarioId || ""));
+          const keyCorreo = `${plat}__${syncIdentKeyLocal(acceso)}`;
+          const key = porId && porId.plat === plat && !invPorKey.has(keyCorreo) ? porId.key : keyCorreo;
           const row = { nombre, pin, telefono, clienteId: docCli.id, compraId, perfilId, plat, acceso, servicioIndex };
           const arr = esperadosPorKey.get(key) || [];
 
@@ -3197,7 +3224,8 @@ bot.onText(/\/sincronizar_todo/i, async (msg) => {
         conflictosCapacidad++;
         avisosCapacidad.push(`${humanPlataforma(inv.plat)} · ${inv.acceso}: ${salida.length}/${capacidad} (${salida.map((x) => x.nombre).filter(Boolean).slice(0, 4).join(", ")})`);
         anomalias.cap.push({ plat: inv.plat, acceso: inv.acceso, docId: inv.id, ocupados: salida.length, capacidad, nombres: salida.map((x) => x.nombre || "Sin nombre") });
-        continue; // No tocar una cuenta si la reconciliación excede su capacidad.
+        // Oct-2026: la sobreasignación se REGISTRA (queda visible con 0 libres y marcada) en vez de dejar
+        // la cuenta mostrando menos clientes de los reales. Se sigue reportando para corregirla.
       }
 
       const normalizados = salida.map((x, i) => ({ ...x, slot: i + 1 }));
@@ -3211,11 +3239,13 @@ bot.onText(/\/sincronizar_todo/i, async (msg) => {
 
       if (cambios || metadataCambio) {
         await inv.ref.set({
+          accountId: inv.id,
           clientes: normalizados,
           ocupados,
           disponibles,
           disp: disponibles,
           capacidad,
+          sobreasignada: ocupados > capacidad,
           estado,
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         }, { merge: true });
@@ -4605,9 +4635,9 @@ bot.onText(/\/addcorreo\s+(\S+)\s+(\S+)(?:\s+(\d+))?/i, async (msg, match) => {
 
   const idInv = docIdInventarioLocal(acceso, plat);
   const ref = db.collection("inventario").doc(idInv);
-  const doc = await ref.get();
+  const existente = await cuentaInvLocal(plat, acceso);
 
-  if (doc.exists) return bot.sendMessage(chatId, `⚠️ *Esta cuenta ya existe* en el inventario para *${escMD(plat)}*.`, { parse_mode: "Markdown" });
+  if (existente) return bot.sendMessage(chatId, `⚠️ *Esta cuenta ya existe* en el inventario para *${escMD(plat)}*.`, { parse_mode: "Markdown" });
 
   let capacidad = Number(capacidadRaw);
   if (!capacidadRaw || isNaN(capacidad) || capacidad <= 0) {
@@ -4615,6 +4645,7 @@ bot.onText(/\/addcorreo\s+(\S+)\s+(\S+)(?:\s+(\d+))?/i, async (msg, match) => {
   }
 
   await ref.set({
+    accountId: ref.id,
     plataforma: plat,
     correo: acceso,
     capacidad,
@@ -5437,9 +5468,9 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
       if (data.startsWith("inv:menu:borrarok:")) {
         const [, , , plat, accesoEnc] = data.split(":");
         const acceso = decodeURIComponent(accesoEnc || "");
-        const ref = db.collection("inventario").doc(docIdInventarioLocal(acceso, plat));
-        const doc = await ref.get();
-        if (!doc.exists) return bot.sendMessage(chatId, "⚠️ No existe esa cuenta en inventario.");
+        const encontrada = await cuentaInvLocal(plat, acceso);
+        if (!encontrada) return bot.sendMessage(chatId, "⚠️ No existe esa cuenta en inventario.");
+        const ref = encontrada.ref;
         const trash = await integrity.trashDocument({
           ref, kind: "inventario_cuenta",
           actor: { userId: String(userId || ""), name: q.from?.first_name || q.from?.username || "", source: "Telegram" },
@@ -5951,6 +5982,7 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
           lion: "🦁 LION TV",
           latin: "📡 LATIN TV",
           evoutouch: "📺 NANOTECH",
+          icomplay: "▶️ ICOMPLAY MAX",
         };
         const brandDuraciones = {
           stella: "1, 3 y 7 meses (6 + 1 gratis)",
@@ -5958,6 +5990,7 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
           lion: "1, 3, 5 y 12 meses (10 + 2 gratis)",
           latin: "1, 4, 8 y 12 meses (3 + 1 gratis = 4)",
           evoutouch: "1, 3, 6 y 12 meses",
+          icomplay: "1, 3, 6 y 12 meses · 1, 3, 5 o 7 pantallas · Max Player incluido",
         };
         const addContextActions = (keyboard = []) => {
           const kb = Array.isArray(keyboard) ? keyboard.slice() : [];
@@ -7458,11 +7491,13 @@ bot.on("message", async (msg) => {
         if (!t) return bot.sendMessage(chatId, "⚠️ Escriba la nueva clave.");
         pending.delete(String(chatId));
       forceNextPanelAtBottom(chatId);
-        const found = await buscarCorreoInventarioPorPlatCorreo(p.plataforma, p.correo);
+        const found = await cuentaInvLocal(p.plataforma, p.correo, p.docId || "");
         if (!found) return bot.sendMessage(chatId, "❌ La cuenta no existe.");
-        await found.ref.set({ clave: t, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
-        await registrarActividadTelegramLocal(userId,chatId,'editar_clave_cuenta_bodega',{inventarioId:found.ref.id,plataforma:humanPlataforma(p.plataforma),cuenta:p.correo,campo:'clave',cambio:'clave actualizada'},`Actualizó la clave de una cuenta de Bodega · ${humanPlataforma(p.plataforma)} · cuenta ${p.correo}.`,'Bodega');
-        await bot.sendMessage(chatId, "✅ Clave de la cuenta actualizada.");
+        // Oct-2026: la clave nueva llega también a las fichas enlazadas (antes solo cambiaba Bodega).
+        const sync = await invCanon.editarCuentaCanonica(db, admin, { cuenta: found, nuevaClave: t, sincronizarFichas: sincronizarCuentaEnComprasTx });
+        cacheInvalidatePrefix?.("inventario:");
+        await registrarActividadTelegramLocal(userId,chatId,'editar_clave_cuenta_bodega',{inventarioId:found.ref.id,plataforma:humanPlataforma(p.plataforma),cuenta:p.correo,campo:'clave',cambio:`clave actualizada · ${sync.perfilesActualizados||0} perfil(es) sincronizados`},`Actualizó la clave de una cuenta de Bodega · ${humanPlataforma(p.plataforma)} · cuenta ${p.correo}${sync.perfilesActualizados?` · sincronizó ${sync.perfilesActualizados} perfil(es)`:''}.`,'Bodega');
+        await bot.sendMessage(chatId, `✅ Clave de la cuenta actualizada${sync.perfilesActualizados?` y replicada en ${sync.perfilesActualizados} perfil(es) de clientes`:""}.`);
         return mostrarPanelCorreo(chatId, p.plataforma, p.correo);
       }
 
@@ -7474,29 +7509,23 @@ bot.on("message", async (msg) => {
         pending.delete(String(chatId));
       forceNextPanelAtBottom(chatId);
 
-        const found = await buscarCorreoInventarioPorPlatCorreo(p.plataforma, p.correo);
+        const found = await cuentaInvLocal(p.plataforma, p.correo, p.docId || "");
         if (!found) return bot.sendMessage(chatId, "❌ La cuenta no existe.");
 
         const nuevoCorreo = normalizeIdentByPlatformLocal(p.plataforma, t);
-        const nuevaRef = db.collection("inventario").doc(docIdInventarioLocal(nuevoCorreo, p.plataforma));
-        const nuevaDoc = await nuevaRef.get();
-
-        if (nuevaDoc.exists && nuevaRef.id !== found.ref.id) {
+        const otra = await cuentaInvLocal(p.plataforma, nuevoCorreo);
+        if (otra && otra.ref.id !== found.ref.id) {
           return bot.sendMessage(chatId, `⚠️ Ya existe una cuenta con ese ${identLabel.toLowerCase()} en esta plataforma.`);
         }
 
-        const dataCuenta = { ...(found.data || {}) };
-        dataCuenta.correo = nuevoCorreo;
-        dataCuenta.ident = nuevoCorreo;
-        dataCuenta.updatedAt = admin.firestore.FieldValue.serverTimestamp();
+        // Oct-2026: el correo cambia EN EL MISMO documento (el accountId no cambia) y se replica a las
+        // fichas enlazadas. Antes se creaba un documento nuevo, se borraba el viejo y las fichas
+        // quedaban con el correo anterior (cuenta paralela / vínculos perdidos).
+        const sync = await invCanon.editarCuentaCanonica(db, admin, { cuenta: found, nuevoCorreo, sincronizarFichas: sincronizarCuentaEnComprasTx });
+        cacheInvalidatePrefix?.("inventario:");
+        await registrarActividadTelegramLocal(userId,chatId,'editar_cuenta_bodega',{inventarioId:found.ref.id,plataforma:humanPlataforma(p.plataforma),cuenta:nuevoCorreo,campo:identLabel,cambio:`${p.correo} → ${nuevoCorreo} · ${sync.perfilesActualizados||0} perfil(es) sincronizados`},`Actualizó ${identLabel.toLowerCase()} de una cuenta de Bodega · ${humanPlataforma(p.plataforma)} · ${p.correo} → ${nuevoCorreo}.`,'Bodega');
 
-        await nuevaRef.set(dataCuenta, { merge: true });
-        if (nuevaRef.id !== found.ref.id) {
-          await found.ref.delete();
-        }
-        await registrarActividadTelegramLocal(userId,chatId,'editar_cuenta_bodega',{inventarioId:nuevaRef.id,plataforma:humanPlataforma(p.plataforma),cuenta:nuevoCorreo,campo:identLabel,cambio:`${p.correo} → ${nuevoCorreo}`},`Actualizó ${identLabel.toLowerCase()} de una cuenta de Bodega · ${humanPlataforma(p.plataforma)} · ${p.correo} → ${nuevoCorreo}.`,'Bodega');
-
-        await bot.sendMessage(chatId, `✅ ${identLabel} de la cuenta actualizado.`);
+        await bot.sendMessage(chatId, `✅ ${identLabel} de la cuenta actualizado${sync.perfilesActualizados?` y replicado en ${sync.perfilesActualizados} perfil(es) de clientes`:""}.`);
         return mostrarPanelCorreo(chatId, p.plataforma, nuevoCorreo);
       }
 
@@ -7564,9 +7593,8 @@ bot.on("message", async (msg) => {
           return bot.sendMessage(chatId, `⚠️ ${identLabel} inválido. Escriba un ${identLabel.toLowerCase()} válido.`);
         }
         const correoNorm = normalizeIdentByPlatformLocal(p.plat, t);
-        const ref = db.collection("inventario").doc(docIdInventarioLocal(correoNorm, p.plat));
-        const doc = await ref.get();
-        if (doc.exists) return bot.sendMessage(chatId, `⚠️ Ya existe una cuenta con ese ${identLabel.toLowerCase()} para *${String(p.plat).toUpperCase()}*.`, { parse_mode: "Markdown" });
+        const yaExiste = await cuentaInvLocal(p.plat, correoNorm);
+        if (yaExiste) return bot.sendMessage(chatId, `⚠️ Ya existe una cuenta con ese ${identLabel.toLowerCase()} para *${String(p.plat).toUpperCase()}*.`, { parse_mode: "Markdown" });
         pending.set(String(chatId), { mode: "invNewClave", plat: p.plat, correo: correoNorm });
         return bot.sendMessage(chatId, `➕ *NUEVA CUENTA*\n📌 ${String(p.plat).toUpperCase()}\n${identIcon(p.plat)} ${escMD(correoNorm)}\n\nEscriba la *clave*:`, { parse_mode: "Markdown" });
       }
@@ -7584,7 +7612,8 @@ bot.on("message", async (msg) => {
         forceNextPanelAtBottom(chatId);
         const correoNorm = normalizeIdentByPlatformLocal(p.plat, p.correo);
         const ref = db.collection("inventario").doc(docIdInventarioLocal(correoNorm, p.plat));
-        await ref.set({ plataforma: p.plat, correo: correoNorm, ident: correoNorm, clave: p.clave, capacidad: qty, ocupados: 0, disponibles: qty, disp: qty, estado: "activa", clientes: [], createdAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+        if (await cuentaInvLocal(p.plat, correoNorm)) return bot.sendMessage(chatId, "⚠️ Esa cuenta ya existe en inventario.");
+        await ref.set({ accountId: ref.id, plataforma: p.plat, correo: correoNorm, ident: correoNorm, clave: p.clave, capacidad: qty, ocupados: 0, disponibles: qty, disp: qty, estado: "activa", clientes: [], createdAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp() });
         await registrarActividadTelegramLocal(userId,chatId,'crear_cuenta_inventario',{inventarioId:ref.id,plataforma:humanPlataforma(p.plat),cuenta:correoNorm,campo:'cuenta de Bodega',cambio:`capacidad ${qty}`},`Creó la cuenta ${correoNorm} de ${humanPlataforma(p.plat)} en Bodega · capacidad ${qty}.`,'Bodega');
         await bot.sendMessage(chatId, `✅ Cuenta *${escMD(correoNorm)}* creada con ${qty} perfiles.`, { parse_mode: "Markdown" });
         pending.set(String(chatId), { mode: "invSubmenuCtx", plat: p.plat, correo: correoNorm });
@@ -7612,9 +7641,10 @@ bot.on("message", async (msg) => {
       forceNextPanelAtBottom(chatId);
         const acceso = normalizeIdentByPlatformLocal(p.plat, p.correo);
         const plat = normalizarPlataforma(p.plat);
-        const ref = db.collection("inventario").doc(docIdInventarioLocal(acceso, plat));
-        const doc = await ref.get();
-        if (!doc.exists) return bot.sendMessage(chatId, "⚠️ Esa cuenta no existe en inventario.");
+        const encontrada = await cuentaInvLocal(plat, acceso);
+        if (!encontrada) return bot.sendMessage(chatId, "⚠️ Esa cuenta no existe en inventario.");
+        const ref = encontrada.ref;
+        const doc = { exists: true, id: ref.id, data: () => encontrada.data };
         const d = doc.data() || {};
         const capacidad = Number(d.capacidad || d.total || getCapacidadCorreo(d, plat) || 0);
         const clientes = Array.isArray(d.clientes) ? d.clientes : [];
@@ -7634,9 +7664,10 @@ bot.on("message", async (msg) => {
       forceNextPanelAtBottom(chatId);
         const acceso = normalizeIdentByPlatformLocal(p.plat, p.correo);
         const plat = normalizarPlataforma(p.plat);
-        const ref = db.collection("inventario").doc(docIdInventarioLocal(acceso, plat));
-        const doc = await ref.get();
-        if (!doc.exists) return bot.sendMessage(chatId, "⚠️ Esa cuenta no existe en inventario.");
+        const encontrada = await cuentaInvLocal(plat, acceso);
+        if (!encontrada) return bot.sendMessage(chatId, "⚠️ Esa cuenta no existe en inventario.");
+        const ref = encontrada.ref;
+        const doc = { exists: true, id: ref.id, data: () => encontrada.data };
         const d = doc.data() || {};
         const clientes = Array.isArray(d.clientes) ? d.clientes : [];
         const ocupados = clientes.length;
@@ -7657,11 +7688,11 @@ bot.on("message", async (msg) => {
       forceNextPanelAtBottom(chatId);
         const acceso = normalizeIdentByPlatformLocal(p.plat, p.correo);
         const plat = normalizarPlataforma(p.plat);
-        const ref = db.collection("inventario").doc(docIdInventarioLocal(acceso, plat));
-        const doc = await ref.get();
-        if (!doc.exists) return bot.sendMessage(chatId, "⚠️ Esa cuenta no existe en inventario.");
-        await ref.set({ clave: t, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
-        const sync = await sincronizarCuentaEnComprasTx({ plataforma: plat, correo: acceso, nuevaClave: t, asignaciones: Array.isArray((doc.data() || {}).clientes) ? (doc.data() || {}).clientes : [] });
+        const encontrada = await cuentaInvLocal(plat, acceso);
+        if (!encontrada) return bot.sendMessage(chatId, "⚠️ Esa cuenta no existe en inventario.");
+        const ref = encontrada.ref;
+        const doc = { exists: true, id: ref.id, data: () => encontrada.data };
+        const sync = await invCanon.editarCuentaCanonica(db, admin, { cuenta: encontrada, nuevaClave: t, sincronizarFichas: sincronizarCuentaEnComprasTx });
         await registrarActividadTelegramLocal(userId,chatId,'editar_cuenta_inventario',{inventarioId:ref.id,plataforma:humanPlataforma(plat),cuenta:acceso,campo:'clave',cambio:`clave actualizada · ${sync.perfilesActualizados||0} perfil(es) sincronizados`},`Actualizó la clave de ${acceso} · ${humanPlataforma(plat)}${sync.perfilesActualizados?` · sincronizó ${sync.perfilesActualizados} perfil(es)`:''}.`,'Bodega');
         if (sync.perfilesActualizados) await bot.sendMessage(chatId, `✅ Clave actualizada también en ${sync.perfilesActualizados} perfil(es) del CRM.`);
         pending.set(String(chatId), { mode: "invSubmenuCtx", plat, correo: acceso });
@@ -8174,11 +8205,12 @@ const VENDEDORES_PILOTO_RECORDATORIOS = new Set(["relojes", "sublicuentas"]);
 const CODIGO_PAIS_TEL_WA = "504";
 
 function telefonoWhatsApp(telefono = "") {
-  const digits = onlyDigits(telefono);
+  let digits = onlyDigits(telefono);
+  if (digits.startsWith("00")) digits = digits.slice(2);
   if (!digits) return "";
-  if (digits.startsWith(CODIGO_PAIS_TEL_WA)) return digits;
   if (digits.length === 8) return CODIGO_PAIS_TEL_WA + digits; // número local hondureño típico
-  return digits;
+  // Otros países (o Honduras ya con 504) vienen con su código completo.
+  return digits.length >= 10 && digits.length <= 15 ? digits : "";
 }
 
 // Variedad "combinatoria": no hay un único texto fijo, se arma combinando

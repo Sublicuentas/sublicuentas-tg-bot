@@ -22,6 +22,7 @@ const core = require("./index_01_core");
 const utils = require("./index_02_utils_roles");
 const accessControl = require("./index_23_access_control");
 const integrity = require("./index_26_integrity_guard");
+const invCanon = require("./lib_inventario_canonico"); // Oct-2026 · accountId + cupos reales
 const { registrarEventoSorteosSeguro } = require("./index_14_sorteos");
 const {
   normVendedor,
@@ -77,6 +78,7 @@ const IPTV_USUARIO_KEYS_LOCAL = new Set([
   "latintv1", "latintv2", "latintv3", "latintv4",
   "liontv1", "liontv2", "liontv3", "liontv5",
   "evoutouch1", "evoutouch2", "evoutouch3",
+  "icomplay1", "icomplay3", "icomplay5", "icomplay7",
   // Compatibilidad de solo lectura/edición con registros anteriores.
   "iptv1", "iptv3", "iptv4",
 ]);
@@ -87,6 +89,7 @@ const TV_DIGITAL_BRANDS_LOCAL = {
   lion: { label: "Lion TV", icon: "🦁", keys: ["liontv1", "liontv2", "liontv3", "liontv5"] },
   latin: { label: "Latin TV", icon: "📡", keys: ["latintv1", "latintv2", "latintv3", "latintv4"] },
   evoutouch: { label: "Nanotech", icon: "📺", keys: ["evoutouch1","evoutouch2","evoutouch3"] },
+  icomplay: { label: "ICOMPLAY MAX", icon: "▶️", keys: ["icomplay1","icomplay3","icomplay5","icomplay7"] },
 };
 const TV_DIGITAL_KEYS_LOCAL = new Set(Object.values(TV_DIGITAL_BRANDS_LOCAL).flatMap((marca) => marca.keys));
 // Claves que solo existen para LEER registros viejos. Nunca se ofrecen como botón:
@@ -97,6 +100,7 @@ const TV_DIGITAL_URLS_LOCAL = {
   latintv2: "http://enlatv.com",
   liontv: "http://liontv.es:80",
   evoutouch: "http://smarterstv99.dyndns.tv:25461/",
+  icomplay: "http://latinostream.xyz:80",
 };
 
 // Planes reales de duración. El número guardado representa la vigencia TOTAL
@@ -107,6 +111,7 @@ const TV_DIGITAL_MESES_VALIDOS_LOCAL = Object.freeze({
   stellatv: [1, 3, 7],         // 6 + 1 gratis = 7
   oleadatv: [1, 3, 7, 14],     // 6 + 1 = 7 / 12 + 2 = 14
   evoutouch: [1, 3, 6, 12],    // Nanotech: 1, 3, 6 y 12 meses (sin meses gratis)
+  icomplay: [1, 3, 6, 12],     // ICOMPLAY MAX: 1, 3, 6 y 12 meses
 });
 
 function familiaTvDigitalMesesLocal(plataforma = "") {
@@ -116,6 +121,7 @@ function familiaTvDigitalMesesLocal(plataforma = "") {
   if (p.startsWith("stellatv")) return "stellatv";
   if (p.startsWith("oleadatv")) return "oleadatv";
   if (p.startsWith("evoutouch")) return "evoutouch";
+  if (p.startsWith("icomplay")) return "icomplay";
   return "";
 }
 
@@ -165,11 +171,37 @@ function normalizarMesesLegacyTvDigitalLocal(plataforma = "", meses = 1) {
   };
   return bonus[familia]?.[n] || n;
 }
+// Oct-2026 · URLs editables desde Sublichat Web (Bodega → URLs TV Digital): documento
+// configuracion_tv_digital/urls. Se escucha en vivo (1 documento) y también las URLs propias
+// de cuenta (inventario.url). Los valores de arriba quedan solo como respaldo.
+const TV_URLS_CUENTA_LOCAL = new Map();
+function urlTvValidaLocal(u = "") { const s = String(u || "").trim(); return /^https?:\/\/[^\s<>"'`]+$/i.test(s) && s.length <= 300 ? s : ""; }
+(function escucharUrlsTvLocal() {
+  try {
+    db.collection("configuracion_tv_digital").doc("urls").onSnapshot((snap) => {
+      const prov = (snap.exists ? (snap.data() || {}).proveedores : null) || {};
+      for (const [k, v] of Object.entries(prov)) { const u = urlTvValidaLocal(v && v.url); if (u) TV_DIGITAL_URLS_LOCAL[k] = u; }
+    }, (e) => logErr("urls_tv_digital", e));
+    const refrescarCuentas = async () => {
+      try {
+        const snap = await db.collection(INVENTARIO_COLLECTION).where("url", ">", "").get();
+        TV_URLS_CUENTA_LOCAL.clear();
+        snap.forEach((d) => { const u = urlTvValidaLocal((d.data() || {}).url); if (u) TV_URLS_CUENTA_LOCAL.set(d.id, u); });
+      } catch (_) {}
+    };
+    refrescarCuentas();
+    const t = setInterval(refrescarCuentas, 5 * 60 * 1000); t.unref?.();
+  } catch (e) { logErr("urls_tv_digital_init", e); }
+})();
 function tvDigitalUrlLocal(servicio = {}) {
   const p = normalizarPlataforma(servicio.plataforma || "");
+  const perfiles = Array.isArray(servicio.perfiles) ? servicio.perfiles : [];
+  const propia = TV_URLS_CUENTA_LOCAL.get(String((perfiles[0] && perfiles[0].inventarioId) || servicio.inventarioId || ""));
+  if (propia) return propia;
   if (p.startsWith("latintv")) return String(servicio.iptvProveedor || "") === "latintv2" ? TV_DIGITAL_URLS_LOCAL.latintv2 : TV_DIGITAL_URLS_LOCAL.latintv;
   if (p.startsWith("liontv")) return TV_DIGITAL_URLS_LOCAL.liontv;
   if (p.startsWith("evoutouch")) return TV_DIGITAL_URLS_LOCAL.evoutouch;
+  if (p.startsWith("icomplay")) return TV_DIGITAL_URLS_LOCAL.icomplay;
   return "";
 }
 
@@ -191,6 +223,7 @@ function humanPlataforma(key = "") {
     oleadatv1:"Oleada TV (1 dispositivo)", oleadatv3:"Oleada TV (3 dispositivos)",
     latintv1:"LatinTV (1 dispositivo)", latintv2:"LatinTV (2 dispositivos)", latintv3:"LatinTV (3 dispositivos)", latintv4:"LatinTV (4 dispositivos)",
     liontv1:"LionTV (1 dispositivo)", liontv2:"LionTV (2 dispositivos)", liontv3:"LionTV (3 dispositivos)", liontv5:"LionTV (5 dispositivos)", evoutouch1:"Nanotech (1 dispositivo)", evoutouch2:"Nanotech (2 dispositivos)", evoutouch3:"Nanotech (3 dispositivos)", evoutouch4:"Nanotech (1 dispositivo)",
+    icomplay1:"ICOMPLAY MAX (1 pantalla)", icomplay3:"ICOMPLAY MAX (3 pantallas)", icomplay5:"ICOMPLAY MAX (5 pantallas)", icomplay7:"ICOMPLAY MAX (7 pantallas)",
     iptv1:"IPTV anterior (1)", iptv3:"IPTV anterior (3)", iptv4:"IPTV anterior (4)",
   };
   return map[k] || String(key || "");
@@ -276,6 +309,7 @@ function perfilesServicioLocal(servicio = {}, titular = "") {
       : nombreGuardado;
     return {
       perfilId: String(p?.perfilId || p?.id || ""),
+      inventarioId: String(p?.inventarioId || (lista.length === 1 ? servicio.inventarioId : "") || ""),
       nombre,
       perfil: String(p?.perfil || p?.nombrePerfil || p?.nombre || nombre).trim(),
       correo: String(p?.correo ?? servicio.correo ?? "").trim(),
@@ -422,7 +456,7 @@ function docIdInventarioLocal(ident = "", plataforma = "") {
 
 function getTotalPorPlataformaLocal(plat = "") {
   const p = normalizarPlataforma(plat);
-  const map = { netflix:5, vipnetflix:1, disneyp:6, disneys:3, hbomax:5, primevideo:5, paramount:5, crunchyroll:5, vix:4, appletv:4, universal:4, spotify:1, youtube:1, deezer:1, stellatv1:1, stellatv2:2, stellatv3:3, oleadatv1:1, oleadatv3:3, latintv1:1, latintv2:2, latintv3:3, latintv4:4, liontv1:1, liontv2:2, liontv3:3, liontv5:5, evoutouch1:1, evoutouch2:2, evoutouch3:3, evoutouch4:1, iptv1:1, iptv3:3, iptv4:4, canva:1, gemini:1, chatgpt:1, duolingo:1, office:1, office2021:1 };
+  const map = { netflix:5, vipnetflix:1, disneyp:6, disneys:3, hbomax:5, primevideo:5, paramount:5, crunchyroll:5, vix:4, appletv:4, universal:4, spotify:1, youtube:1, deezer:1, stellatv1:1, stellatv2:2, stellatv3:3, oleadatv1:1, oleadatv3:3, latintv1:1, latintv2:2, latintv3:3, latintv4:4, liontv1:1, liontv2:2, liontv3:3, liontv5:5, evoutouch1:1, evoutouch2:2, evoutouch3:3, evoutouch4:1, icomplay1:1, icomplay3:3, icomplay5:5, icomplay7:7, iptv1:1, iptv3:3, iptv4:4, canva:1, gemini:1, chatgpt:1, duolingo:1, office:1, office2021:1 };
   return map[p] || 1;
 }
 
@@ -588,7 +622,7 @@ function kbTvDigitalPlanesWiz(mode = "wiz", brand = "", clientId = null, idx = n
   // que un registro viejo (p. ej. evoutouch4) nunca vuelva a crear un segundo botón.
   const vistos = new Set();
   const planes = marca.keys.map((key) => {
-    const m = String(key || "").match(/([1-5])$/);
+    const m = String(key || "").match(/([1-7])$/);
     const cantidad = m ? Number(m[1]) : Number(PLATAFORMAS?.[key]?.capacidadDefault || 1);
     return { key, cantidad };
   }).filter(({ key, cantidad }) => {
@@ -657,23 +691,20 @@ function kbPlataformasWiz(prefix = "wiz:plat", clientId = null, idx = null, cate
 // ===============================
 // INVENTARIO SYNC HELPERS
 // ===============================
-async function getInventarioDoc(plataforma = "", acceso = "") {
+async function getInventarioDoc(plataforma = "", acceso = "", inventarioId = "") {
   const plat = normalizarPlataforma(plataforma);
   const ident = normalizeIdentByPlatformLocal(plat, acceso);
-  const docId = docIdInventarioLocal(ident, plat);
-  const ref = db.collection(INVENTARIO_COLLECTION).doc(docId);
-  const doc = await ref.get();
-  if (doc.exists) return { ref, data: doc.data() || {} };
-
-  const snap = await db.collection(INVENTARIO_COLLECTION).where("plataforma", "==", plat).where("correo", "==", ident).limit(1).get();
-  if (!snap.empty) { const d = snap.docs[0]; return { ref: d.ref, data: d.data() || {} }; }
-  return null;
+  // accountId primero (sobrevive a cambios de correo); luego el ID calculado y por último plataforma+correo.
+  const porId = inventarioId ? await invCanon.resolverCuentaInventario(db, { docId: inventarioId }, INVENTARIO_COLLECTION) : null;
+  if (porId && invCanon.familiaPlataforma(porId.data.plataforma) === invCanon.familiaPlataforma(plat)
+      && (!ident || invCanon.normAcceso(invCanon.identCuenta(porId.data)) === invCanon.normAcceso(ident))) return porId;
+  return invCanon.resolverCuentaInventario(db, { plataforma: plat, acceso: ident, docIdCalculado: docIdInventarioLocal(ident, plat) }, INVENTARIO_COLLECTION);
 }
 
-async function syncServicioEnInventario({ clienteNombre = "", pagadoPor = "", plataforma = "", correo = "", clave = "", pin = "", clienteId = "", compraId = "", perfilId = "" }) {
+async function syncServicioEnInventario({ clienteNombre = "", pagadoPor = "", plataforma = "", correo = "", clave = "", pin = "", clienteId = "", compraId = "", perfilId = "", inventarioId = "" }) {
   const plat = normalizarPlataforma(plataforma);
   const acceso = normalizeIdentByPlatformLocal(plat, correo);
-  const found = await getInventarioDoc(plat, acceso);
+  const found = await getInventarioDoc(plat, acceso, inventarioId);
   if (!found) return { ok: false, reason: "not_found" };
   const { ref } = found;
   return db.runTransaction(async (tx) => {
@@ -731,15 +762,18 @@ async function syncServicioEnInventario({ clienteNombre = "", pagadoPor = "", pl
       }
       const claveNorm = String(clave || "").trim();
       if (claveNorm && requiereClaveLocal(plat) && (!data.clave || String(data.clave || "").toLowerCase() === "sin clave")) patch.clave = claveNorm;
+      if (data.accountId !== ref.id) patch.accountId = ref.id;
       if (Object.keys(patch).length) {
         patch.updatedAt = admin.firestore.FieldValue.serverTimestamp();
         tx.set(ref, patch, { merge: true });
       }
-      return { ok: true, synced: true, added: false };
+      return { ok: true, synced: true, added: false, accountId: ref.id };
     }
 
     const capacidad = Number(data.capacidad || data.total || getTotalPorPlataformaLocal(plat) || 1);
-    if (clientes.length >= capacidad) return { ok: false, reason: "full" };
+    // Oct-2026: si la ficha dice que el perfil está aquí, Bodega lo refleja aunque esté llena
+    // (queda sobreasignada y visible). Antes no se registraba y la cuenta mostraba menos clientes.
+    const llenaAntes = clientes.length >= capacidad;
     clientes.push({
       nombre: String(clienteNombre || "").trim(), pin: pinNorm, slot: clientes.length + 1,
       ...(pagadoPor && normTxt(pagadoPor) !== normTxt(clienteNombre) ? { pagadoPor: String(pagadoPor).trim() } : {}),
@@ -750,18 +784,18 @@ async function syncServicioEnInventario({ clienteNombre = "", pagadoPor = "", pl
     clientes = clientes.map((x, i) => ({ ...x, slot: i + 1 }));
     const ocupados = clientes.length;
     const disponibles = Math.max(0, capacidad - ocupados);
-    const patch = { clientes, ocupados, disponibles, disp: disponibles, capacidad, estado: disponibles === 0 ? "llena" : "activa", updatedAt: admin.firestore.FieldValue.serverTimestamp() };
+    const patch = { clientes, ocupados, disponibles, disp: disponibles, capacidad, accountId: ref.id, sobreasignada: ocupados > capacidad, estado: disponibles === 0 ? "llena" : "activa", updatedAt: admin.firestore.FieldValue.serverTimestamp() };
     const claveNorm = String(clave || "").trim();
     if (claveNorm && requiereClaveLocal(plat) && (!data.clave || String(data.clave || "").toLowerCase() === "sin clave")) patch.clave = claveNorm;
     tx.set(ref, patch, { merge: true });
-    return { ok: true, synced: true, added: true, ocupados, disponibles, capacidad };
+    return { ok: true, synced: true, added: true, ocupados, disponibles, capacidad, accountId: ref.id, ...(llenaAntes ? { sobreasignada: true, warning: `La cuenta ${acceso} ya estaba llena: quedó sobreasignada (${ocupados}/${capacidad}).` } : {}) };
   });
 }
 
-async function removeServicioDeInventario({ clienteNombre = "", plataforma = "", correo = "", pin = "", clienteId = "", compraId = "", perfilId = "" }) {
+async function removeServicioDeInventario({ clienteNombre = "", plataforma = "", correo = "", pin = "", clienteId = "", compraId = "", perfilId = "", inventarioId = "" }) {
   const plat = normalizarPlataforma(plataforma);
   const acceso = normalizeIdentByPlatformLocal(plat, correo);
-  const found = await getInventarioDoc(plat, acceso);
+  const found = await getInventarioDoc(plat, acceso, inventarioId);
   if (!found) return { ok: false, reason: "not_found" };
 
   const { ref } = found;
@@ -779,7 +813,7 @@ async function removeServicioDeInventario({ clienteNombre = "", plataforma = "",
     if (idx === -1 && pinFiltro) {
       idx = clientes.findIndex((x) => normTxt(x?.nombre || "") === normTxt(clienteNombre) && String(x?.pin || "") === pinFiltro);
     }
-    if (idx === -1) idx = clientes.findIndex((x) => normTxt(x?.nombre || "") === normTxt(clienteNombre));
+    if (idx === -1) idx = clientes.findIndex((x) => (!String(perfilId || "").trim() || !String(x?.perfilId || "").trim()) && (!String(clienteId || "").trim() || !String(x?.clienteId || "").trim() || String(x.clienteId) === String(clienteId).trim()) && normTxt(x?.nombre || "") === normTxt(clienteNombre));
     if (idx === -1 && !String(perfilId || "").trim() && String(compraId || "").trim()) {
       const compraKey = String(compraId).trim();
       const clienteKey = String(clienteId || "").trim();
@@ -796,8 +830,8 @@ async function removeServicioDeInventario({ clienteNombre = "", plataforma = "",
     const capacidad = Number(data.capacidad || data.total || getTotalPorPlataformaLocal(plat) || 1);
     const ocupados = clientes.length;
     const disponibles = Math.max(0, capacidad - ocupados);
-    tx.set(ref, { clientes, ocupados, disponibles, disp: disponibles, capacidad, estado: disponibles === 0 ? "llena" : "activa", updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
-    return { ok: true, removed: true };
+    tx.set(ref, { clientes, ocupados, disponibles, disp: disponibles, capacidad, accountId: ref.id, sobreasignada: ocupados > capacidad, estado: disponibles === 0 ? "llena" : "activa", updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+    return { ok: true, removed: true, accountId: ref.id };
   });
 }
 
@@ -815,8 +849,14 @@ function normalizarCompraLocal(servicio = {}, titular = "", anterior = {}) {
     const correoTop = index === 0 && servicio.correo != null ? servicio.correo : undefined;
     const claveTop = index === 0 && servicio.clave != null ? servicio.clave : undefined;
     const pinTop = index === 0 && (servicio.pin != null || servicio.pinPerfil != null) ? (servicio.pinPerfil ?? servicio.pin) : undefined;
+    const correoFinal = requiereCorreoLocal(plat)
+      ? normalizeIdentByPlatformLocal(plat, raw.correo ?? correoTop ?? previo.correo ?? servicio.correo ?? anterior.correo ?? "")
+      : "";
+    // accountId: se conserva mientras el perfil siga en el mismo correo/usuario.
+    const invId = String(raw.inventarioId || previo.inventarioId || "").trim();
     return {
       perfilId: String(raw.perfilId || raw.id || previo.perfilId || recordIdLocal("perfil")),
+      ...(invId && (!previo.correo || normalizeIdentByPlatformLocal(plat, previo.correo) === correoFinal) ? { inventarioId: invId } : {}),
       nombre,
       perfil: String(raw.perfil || raw.nombrePerfil || raw.nombre || previo.perfil || nombre).trim(),
       correo: requiereCorreoLocal(plat)
@@ -855,6 +895,12 @@ function normalizarCompraLocal(servicio = {}, titular = "", anterior = {}) {
     compraFinal.iptvProveedor = "evoutouch";
     compraFinal.iptvPantallas = mDisp ? Number(mDisp[1]) : 1;
   }
+  // ICOMPLAY MAX: mismos campos que Sublichat HQ (proveedor + pantallas).
+  if (plat.startsWith("icomplay")) {
+    const mDisp = plat.match(/([1357])$/);
+    compraFinal.iptvProveedor = "icomplay";
+    compraFinal.iptvPantallas = mDisp ? Number(mDisp[1]) : 1;
+  }
   return compraFinal;
 }
 
@@ -872,7 +918,8 @@ function validarCompraLocal(compra = {}) {
   });
 }
 
-async function sincronizarCompraInventarioLocal(anterior, nuevo, titular = "") {
+async function sincronizarCompraInventarioLocal(anterior, nuevo, titular = "", opciones = {}) {
+  const clienteId = String(opciones?.clienteId || "").trim();
   const platAntes = normalizarPlataforma(anterior?.plataforma || nuevo?.plataforma || "");
   const platNuevo = normalizarPlataforma(nuevo?.plataforma || anterior?.plataforma || "");
   const antes = anterior && requiereCorreoLocal(platAntes) ? perfilesServicioLocal(anterior, titular) : [];
@@ -885,30 +932,31 @@ async function sincronizarCompraInventarioLocal(anterior, nuevo, titular = "") {
   try {
     for (const p of antes) {
       if (!nuevas.has(key(p, platAntes))) {
-        const result = await removeServicioDeInventario({ clienteNombre: p.nombre || titular, plataforma: platAntes, correo: p.correo, pin: p.pin, compraId: anterior?.compraId || "", perfilId: p.perfilId || "" });
+        const result = await removeServicioDeInventario({ clienteNombre: p.nombre || titular, plataforma: platAntes, correo: p.correo, pin: p.pin, compraId: anterior?.compraId || "", perfilId: p.perfilId || "", clienteId, inventarioId: p.inventarioId || "" });
         if (result?.removed) removidos.push(p);
       }
     }
+    const advertencias = [];
     for (const p of despues) {
-      const result = await syncServicioEnInventario({ clienteNombre: p.nombre || titular, pagadoPor: titular, plataforma: platNuevo, correo: p.correo, clave: p.clave, pin: p.pin, compraId: nuevo?.compraId || "", perfilId: p.perfilId || "" });
-      if (result?.reason === "full") throw new Error(`La cuenta de ${p.nombre || "ese perfil"} ya está llena.`);
+      const result = await syncServicioEnInventario({ clienteNombre: p.nombre || titular, pagadoPor: titular, plataforma: platNuevo, correo: p.correo, clave: p.clave, pin: p.pin, compraId: nuevo?.compraId || "", perfilId: p.perfilId || "", clienteId, inventarioId: p.inventarioId || "" });
       if (result?.added) agregados.push(p);
+      if (result?.warning) advertencias.push(result.warning);
     }
-    return { ok: true, perfiles: despues.length, agregados: agregados.length, removidos: removidos.length };
+    return { ok: true, perfiles: despues.length, agregados: agregados.length, removidos: removidos.length, ...(advertencias.length ? { warning: advertencias.join(" ") } : {}) };
   } catch (error) {
     for (const p of agregados) {
-      try { await removeServicioDeInventario({ clienteNombre: p.nombre || titular, plataforma: platNuevo, correo: p.correo, pin: p.pin, compraId: nuevo?.compraId || "", perfilId: p.perfilId || "" }); } catch (_) {}
+      try { await removeServicioDeInventario({ clienteNombre: p.nombre || titular, plataforma: platNuevo, correo: p.correo, pin: p.pin, compraId: nuevo?.compraId || "", perfilId: p.perfilId || "", clienteId }); } catch (_) {}
     }
     for (const p of removidos) {
-      try { await syncServicioEnInventario({ clienteNombre: p.nombre || titular, pagadoPor: titular, plataforma: platAntes, correo: p.correo, clave: p.clave, pin: p.pin, compraId: anterior?.compraId || "", perfilId: p.perfilId || "" }); } catch (_) {}
+      try { await syncServicioEnInventario({ clienteNombre: p.nombre || titular, pagadoPor: titular, plataforma: platAntes, correo: p.correo, clave: p.clave, pin: p.pin, compraId: anterior?.compraId || "", perfilId: p.perfilId || "", clienteId }); } catch (_) {}
     }
     throw error;
   }
 }
 
-async function sincronizarCompraInventarioSeguroLocal(anterior, nuevo, titular = "") {
+async function sincronizarCompraInventarioSeguroLocal(anterior, nuevo, titular = "", opciones = {}) {
   try {
-    return await sincronizarCompraInventarioLocal(anterior, nuevo, titular);
+    return await sincronizarCompraInventarioLocal(anterior, nuevo, titular, opciones);
   } catch (error) {
     logErr("sincronizarCompraInventarioSeguroLocal", error);
     return { ok: false, warning: String(error?.message || "No se pudo sincronizar inventario.") };
@@ -1107,7 +1155,7 @@ async function clienteDuplicado(nombre = "", telefono = "", excludeId = null) {
 async function clienteExactoNombreTelefono(nombre = "", telefono = "") {
   const nombreNorm = normTxt(nombre);
   const telefonoNorm = normalizarTelefonoCliente(telefono);
-  if (!nombreNorm || telefonoNorm.length !== 8) return null;
+  if (!nombreNorm || telefonoNorm.length < 8 || telefonoNorm.length > 15) return null; // 8 = Honduras; más = otro país
   const rows = (await getClientesBusquedaSnapshot()).filter((x) =>
     normTxt(x.nombrePerfil || x.nombre || "") === nombreNorm
     && normalizarTelefonoCliente(x.telefono_norm || x.telefono || "") === telefonoNorm
@@ -1698,7 +1746,7 @@ async function addServicioTx(clientId, servicio = {}) {
   const plat = compra.plataforma;
   const precio = Number(compra.precio || 0);
   const fechaRenovacion = String(compra.fechaRenovacion || "");
-  const sync = await sincronizarCompraInventarioSeguroLocal(null, compra, resultado.nombreTitular || "");
+  const sync = await sincronizarCompraInventarioSeguroLocal(null, compra, resultado.nombreTitular || "", { clienteId: clientId });
 
   cacheInvalidatePrefix(`clientes:doc:${id}`);
   cacheInvalidatePrefix("renovaciones:");
@@ -1764,7 +1812,7 @@ async function patchServicio(clientId, idx, patch = {}, compraId = "") {
     perfiles: perfilesServicioLocal(servicio, resultado.nombreTitular || "").map((p) => ({ nombre: normTxt(p.nombre), correo: p.correo, clave: p.clave, pin: p.pin }))
   });
   const sync = firma(actual) !== firma(siguiente)
-    ? await sincronizarCompraInventarioSeguroLocal(actual, siguiente, resultado.nombreTitular || "")
+    ? await sincronizarCompraInventarioSeguroLocal(actual, siguiente, resultado.nombreTitular || "", { clienteId: clientId })
     : { ok: true, omitido: true };
 
   cacheInvalidatePrefix(`clientes:doc:${id}`);
@@ -1828,7 +1876,7 @@ async function addPerfilTx(clientId, idx, perfil = {}, compraId = "") {
     servicios[actualIdx] = siguiente;
     return { servicios, actual, siguiente, actualIdx, nombreTitular: cliente.nombrePerfil || "" };
   });
-  const sync = await sincronizarCompraInventarioSeguroLocal(resultado.actual, resultado.siguiente, resultado.nombreTitular || "");
+  const sync = await sincronizarCompraInventarioSeguroLocal(resultado.actual, resultado.siguiente, resultado.nombreTitular || "", { clienteId: clientId });
   cacheInvalidatePrefix(`clientes:doc:${id}`);
   cacheInvalidatePrefix("renovaciones:");
   await registrarEventoHistorial(id, {
@@ -1856,7 +1904,7 @@ async function patchPerfilTx(clientId, idx, perfilIndex, patch = {}, compraId = 
     servicios[actualIdx] = siguiente;
     return { servicios, actual, siguiente, actualIdx, actualPerfilIndex, nombreTitular: cliente.nombrePerfil || "" };
   });
-  const sync = await sincronizarCompraInventarioSeguroLocal(resultado.actual, resultado.siguiente, resultado.nombreTitular || "");
+  const sync = await sincronizarCompraInventarioSeguroLocal(resultado.actual, resultado.siguiente, resultado.nombreTitular || "", { clienteId: clientId });
   cacheInvalidatePrefix(`clientes:doc:${id}`);
   cacheInvalidatePrefix("renovaciones:");
   await registrarEventoHistorial(id, {
@@ -1883,7 +1931,7 @@ async function eliminarPerfilTx(clientId, idx, perfilIndex, compraId = "", perfi
     servicios[actualIdx] = siguiente;
     return { servicios, actual, siguiente, eliminado, actualIdx, actualPerfilIndex, nombreTitular: cliente.nombrePerfil || "" };
   });
-  const sync = await sincronizarCompraInventarioSeguroLocal(resultado.actual, resultado.siguiente, resultado.nombreTitular || "");
+  const sync = await sincronizarCompraInventarioSeguroLocal(resultado.actual, resultado.siguiente, resultado.nombreTitular || "", { clienteId: clientId });
   cacheInvalidatePrefix(`clientes:doc:${id}`);
   cacheInvalidatePrefix("renovaciones:");
   await registrarEventoHistorial(id, {
@@ -1893,70 +1941,91 @@ async function eliminarPerfilTx(clientId, idx, perfilIndex, compraId = "", perfi
   return { ok: true, servicio: resultado.siguiente, servicioIndex: resultado.actualIdx, perfilIndex: resultado.actualPerfilIndex, eliminado: resultado.eliminado, sync };
 }
 
-async function sincronizarCuentaEnComprasTx({ plataforma = "", correo = "", nuevaClave, nuevoCorreo, asignaciones = [] } = {}) {
+async function sincronizarCuentaEnComprasTx({ plataforma = "", correo = "", nuevaClave, nuevoCorreo, asignaciones = [], inventarioId = "" } = {}) {
   const plat = normalizarPlataforma(plataforma);
   const acceso = normalizeIdentByPlatformLocal(plat, correo);
+  const accountId = String(inventarioId || "").trim();
+  const familia = invCanon.familiaPlataforma(plat);
   const referencias = (Array.isArray(asignaciones) ? asignaciones : []).map((item) => ({
     clientId: String(item?.clienteId || item?.clientId || "").trim(),
     compraId: String(item?.compraId || "").trim(),
     perfilId: String(item?.perfilId || "").trim(),
   })).filter((item) => item.clientId || item.compraId || item.perfilId);
-  const snap = await db.collection(CLIENTES_COLLECTION).get();
-  let perfilesActualizados = 0, documentosActualizados = 0;
-  for (const doc of snap.docs) {
-    const resultado = await db.runTransaction(async (tx) => {
-      const actualDoc = await tx.get(doc.ref);
-      if (!actualDoc.exists) return { changed: false, perfilesActualizados: 0 };
-      const data = actualDoc.data() || {};
-      if (String(data.consolidadoEn || "").trim()) return { changed: false, perfilesActualizados: 0 };
-      const servicios = Array.isArray(data.servicios) ? data.servicios : [];
-      const refsCliente = referencias.filter((item) => !item.clientId || item.clientId === doc.id);
-      let changed = false;
-      let perfilesCambiados = 0;
-      const next = servicios.map((servicio) => {
-        if (normalizarPlataforma(servicio?.plataforma || "") !== plat) return servicio;
-        const perfiles = Array.isArray(servicio?.perfiles) && servicio.perfiles.length ? servicio.perfiles : null;
-        const compraId = String(servicio?.compraId || "").trim();
-        const enlaceServicio = refsCliente.some((item) =>
-          (item.compraId && compraId && item.compraId === compraId) ||
-          (item.perfilId && Array.isArray(perfiles) && perfiles.some((perfil) => String(perfil?.perfilId || perfil?.id || "").trim() === item.perfilId))
-        );
-        if (!perfiles) {
-          if (!enlaceServicio && normalizeIdentByPlatformLocal(plat, servicio?.correo || "") !== acceso) return servicio;
-          const copy = { ...servicio };
-          if (nuevoCorreo != null) copy.correo = normalizeIdentByPlatformLocal(plat, nuevoCorreo);
-          if (nuevaClave != null) copy.clave = String(nuevaClave || "").trim();
-          perfilesCambiados++;
-          changed = true;
-          return copy;
-        }
-        let localChanged = false;
-        const nextProfiles = perfiles.map((perfil) => {
-          const perfilId = String(perfil?.perfilId || perfil?.id || "").trim();
-          const enlacePerfil = enlaceServicio || refsCliente.some((item) => item.perfilId && perfilId && item.perfilId === perfilId);
-          if (!enlacePerfil && normalizeIdentByPlatformLocal(plat, perfil?.correo || servicio?.correo || "") !== acceso) return perfil;
-          const copy = { ...(perfil || {}) };
-          if (nuevoCorreo != null) copy.correo = normalizeIdentByPlatformLocal(plat, nuevoCorreo);
-          if (nuevaClave != null) copy.clave = String(nuevaClave || "").trim();
-          perfilesCambiados++;
-          localChanged = true;
-          return copy;
-        });
-        if (!localChanged) return servicio;
+  // Transformación pura: se usa primero para filtrar (sin transacción) y luego dentro de la transacción.
+  const transformar = (data, docId) => {
+    if (String(data.consolidadoEn || "").trim()) return { changed: false, perfilesActualizados: 0 };
+    const servicios = Array.isArray(data.servicios) ? data.servicios : [];
+    const refsCliente = referencias.filter((item) => !item.clientId || item.clientId === docId);
+    let changed = false;
+    let perfilesCambiados = 0;
+    const aplica = (obj) => {
+      const copy = { ...(obj || {}) };
+      if (nuevoCorreo != null) copy.correo = normalizeIdentByPlatformLocal(plat, nuevoCorreo);
+      if (nuevaClave != null) copy.clave = String(nuevaClave || "").trim();
+      if (accountId) copy.inventarioId = accountId;
+      return copy;
+    };
+    const next = servicios.map((servicio) => {
+      // Misma familia (Disney Premium / sin ESPN comparten cuenta) y no solo la misma clave exacta.
+      if (invCanon.familiaPlataforma(normalizarPlataforma(servicio?.plataforma || "")) !== familia) return servicio;
+      const perfiles = Array.isArray(servicio?.perfiles) && servicio.perfiles.length ? servicio.perfiles : null;
+      const compraId = String(servicio?.compraId || "").trim();
+      const enlaceServicio = refsCliente.some((item) =>
+        (item.compraId && compraId && item.compraId === compraId) ||
+        (item.perfilId && Array.isArray(perfiles) && perfiles.some((perfil) => String(perfil?.perfilId || perfil?.id || "").trim() === item.perfilId))
+      );
+      if (!perfiles) {
+        const porId = accountId && String(servicio?.inventarioId || "") === accountId;
+        if (!porId && !enlaceServicio && normalizeIdentByPlatformLocal(plat, servicio?.correo || "") !== acceso) return servicio;
+        const copy = aplica(servicio);
+        if (JSON.stringify(copy) === JSON.stringify(servicio)) return servicio;
+        perfilesCambiados++;
         changed = true;
-        const copy = { ...servicio, perfiles: nextProfiles };
-        const principal = nextProfiles[0] || {};
-        copy.correo = principal.correo || copy.correo || "";
-        copy.clave = principal.clave != null ? principal.clave : copy.clave || "";
+        return copy;
+      }
+      let localChanged = false;
+      const nextProfiles = perfiles.map((perfil) => {
+        const perfilId = String(perfil?.perfilId || perfil?.id || "").trim();
+        const porId = accountId && String(perfil?.inventarioId || "") === accountId;
+        const enlacePerfil = porId || refsCliente.some((item) => item.perfilId && perfilId && item.perfilId === perfilId)
+          // compraId solo enlaza perfiles sin correo propio distinto (una compra puede tener varias cuentas).
+          || (enlaceServicio && !String(perfil?.correo || "").trim());
+        if (!enlacePerfil && normalizeIdentByPlatformLocal(plat, perfil?.correo || servicio?.correo || "") !== acceso) return perfil;
+        const copy = aplica(perfil);
+        if (JSON.stringify(copy) === JSON.stringify(perfil)) return perfil;
+        perfilesCambiados++;
+        localChanged = true;
         return copy;
       });
-      if (changed) {
-        tx.set(doc.ref, {
-          servicios: next,
+      if (!localChanged) return servicio;
+      changed = true;
+      const copy = { ...servicio, perfiles: nextProfiles };
+      const principal = nextProfiles[0] || {};
+      copy.correo = principal.correo || copy.correo || "";
+      copy.clave = principal.clave != null ? principal.clave : copy.clave || "";
+      if (principal.inventarioId) copy.inventarioId = principal.inventarioId;
+      return copy;
+    });
+    return { changed, perfilesActualizados: perfilesCambiados, servicios: next };
+  };
+  const snap = await require("./index_30_espejo_firestore").getColeccion(CLIENTES_COLLECTION).catch(() => db.collection(CLIENTES_COLLECTION).get());
+  let perfilesActualizados = 0, documentosActualizados = 0;
+  for (const doc of snap.docs) {
+    // Filtro barato: antes se abría una transacción por CADA cliente de la cartera.
+    if (!transformar(doc.data() || {}, doc.id).changed) continue;
+    const ref = doc.ref || db.collection(CLIENTES_COLLECTION).doc(doc.id);
+    const resultado = await db.runTransaction(async (tx) => {
+      const actualDoc = await tx.get(ref);
+      if (!actualDoc.exists) return { changed: false, perfilesActualizados: 0 };
+      const r = transformar(actualDoc.data() || {}, doc.id);
+      if (r.changed) {
+        tx.set(ref, {
+          servicios: r.servicios,
+          dataVersion: admin.firestore.FieldValue.increment(1),
           updatedAt: admin.firestore.FieldValue.serverTimestamp()
         }, { merge: true });
       }
-      return { changed, perfilesActualizados: perfilesCambiados };
+      return r;
     });
     perfilesActualizados += Number(resultado.perfilesActualizados || 0);
     if (resultado.changed) {
@@ -2021,7 +2090,7 @@ async function eliminarServicioTx(clientId, idx, compraId = "", options = {}) {
   if (resultado.duplicate) {
     return { ok: true, duplicate: true, eliminado, servicioIndex: resultado.actualIdx, nombreCliente: resultado.nombreTitular || "", sync: { ok: true, omitido: true }, papeleraId: resultado.papeleraId };
   }
-  const sync = await sincronizarCompraInventarioSeguroLocal(eliminado, null, resultado.nombreTitular || "");
+  const sync = await sincronizarCompraInventarioSeguroLocal(eliminado, null, resultado.nombreTitular || "", { clienteId: clientId });
   cacheInvalidatePrefix(`clientes:doc:${id}`);
   cacheInvalidatePrefix("renovaciones:");
 
@@ -2312,7 +2381,7 @@ async function eliminarServiciosTx(clientId, referencias = [], options = {}) {
   });
   if (resultado.duplicate) return { ok: true, duplicate: true, eliminados: resultado.eliminados, servicios: resultado.servicios, sync: [], papeleraId: resultado.papeleraId };
   const sync = [];
-  for (const servicio of resultado.eliminados) sync.push(await sincronizarCompraInventarioSeguroLocal(servicio, null, resultado.nombreTitular || ""));
+  for (const servicio of resultado.eliminados) sync.push(await sincronizarCompraInventarioSeguroLocal(servicio, null, resultado.nombreTitular || "", { clienteId: clientId }));
   cacheInvalidatePrefix(`clientes:doc:${id}`);
   cacheInvalidatePrefix("renovaciones:");
   await registrarEventoHistorial(id, {
@@ -2353,7 +2422,7 @@ async function eliminarClienteConPapelera(clientId, options = {}) {
     return { ok: true, duplicate: true, cliente: { id, ...(trashed.snapshot || cliente) }, papeleraId: trashed.trashId, sync: [] };
   }
   const sync = [];
-  for (const servicio of servicios) sync.push(await sincronizarCompraInventarioSeguroLocal(servicio, null, cliente.nombrePerfil || cliente.nombre || ""));
+  for (const servicio of servicios) sync.push(await sincronizarCompraInventarioSeguroLocal(servicio, null, cliente.nombrePerfil || cliente.nombre || "", { clienteId: clientId }));
   cacheInvalidatePrefix(`clientes:doc:${id}`);
   cacheInvalidatePrefix("renovaciones:");
   return { ok: true, duplicate: false, cliente, papeleraId: trashed.trashId, sync };
@@ -2367,7 +2436,7 @@ async function restaurarClienteDesdePapelera(papeleraId, actor = {}) {
   const id = String(restored.source?.id || entry.source?.id || "");
   const servicios = heredarVendedorServicios(Array.isArray(cliente.servicios) ? cliente.servicios : [], cliente);
   const sync = [];
-  for (const servicio of servicios) sync.push(await sincronizarCompraInventarioSeguroLocal(null, servicio, cliente.nombrePerfil || cliente.nombre || ""));
+  for (const servicio of servicios) sync.push(await sincronizarCompraInventarioSeguroLocal(null, servicio, cliente.nombrePerfil || cliente.nombre || "", { clienteId: id }));
   cacheInvalidatePrefix(`clientes:doc:${id}`);
   cacheInvalidatePrefix("renovaciones:");
   if (!restored.duplicate) await registrarEventoHistorial(id, { tipo: "cliente_restaurado", papeleraId, descripcion: "Cliente restaurado desde Papelera de Integridad" });
@@ -2407,7 +2476,7 @@ async function restaurarServiciosDesdePapelera(papeleraId, actor = {}) {
   });
   if (result.duplicate) return { ok: true, duplicate: true, clienteId: result.clienteId, restaurados: 0, sync: [] };
   const sync = [];
-  for (const item of restoredEntries) sync.push(await sincronizarCompraInventarioSeguroLocal(null, item.servicio, result.cliente?.nombrePerfil || result.cliente?.nombre || ""));
+  for (const item of restoredEntries) sync.push(await sincronizarCompraInventarioSeguroLocal(null, item.servicio, result.cliente?.nombrePerfil || result.cliente?.nombre || "", { clienteId: result.clienteId }));
   cacheInvalidatePrefix(`clientes:doc:${result.clienteId}`);
   cacheInvalidatePrefix("renovaciones:");
   await registrarEventoHistorial(result.clienteId, { tipo: "servicios_restaurados", papeleraId, descripcion: `Se restauraron ${restoredEntries.length} servicio(s) desde Papelera` });

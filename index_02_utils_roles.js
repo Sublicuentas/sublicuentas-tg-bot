@@ -85,6 +85,8 @@ function onlyDigits(v = "") {
 
 function normalizarTelefonoCliente(v = "") {
   let digits = onlyDigits(v);
+  if (digits.startsWith("00")) digits = digits.slice(2); // 00 52… = +52…
+  // Otros países se guardan completos con su código (+52, +1, +34…).
   // Honduras usa 8 dígitos. El prefijo internacional +504 no forma parte de
   // la identidad del cliente: +504 8777-7777 === 87777777.
   if (digits.length === 11 && digits.startsWith("504")) digits = digits.slice(3);
@@ -118,6 +120,7 @@ function humanPlataformaFallback(key = "") {
     oleadatv3: "OleadaTV (3)", latintv1: "LatinTV (1)", latintv2: "LatinTV (2)",
     latintv3: "LatinTV (3)", latintv4: "LatinTV (4)", liontv1: "LionTV (1)",
     liontv2: "LionTV (2)", liontv3: "LionTV (3)", liontv5: "LionTV (5)", evoutouch1: "Nanotech (1 dispositivo)", evoutouch2: "Nanotech (2 dispositivos)", evoutouch3: "Nanotech (3 dispositivos)", evoutouch4: "Nanotech (1 dispositivo)",
+    icomplay1: "ICOMPLAY MAX (1)", icomplay3: "ICOMPLAY MAX (3)", icomplay5: "ICOMPLAY MAX (5)", icomplay7: "ICOMPLAY MAX (7)",
     iptv1: "IPTV anterior (1)", iptv3: "IPTV anterior (3)",
     iptv4: "IPTV anterior (4)", canva: "Canva", gemini: "Gemini Pro", chatgpt: "ChatGPT",
     duolingo: "Duolingo", office: "Microsoft 365", office2021: "Office 2021",
@@ -153,6 +156,8 @@ function normalizarPlataforma(v = "") {
     "lion tv 3": "liontv3", "liontv 3": "liontv3", "liontv3": "liontv3",
     "lion tv 5": "liontv5", "liontv 5": "liontv5", "liontv5": "liontv5",
     "nanotech": "evoutouch1", "nanotech 1": "evoutouch1", "nanotech 2": "evoutouch2", "nanotech 3": "evoutouch3", "evoutouch": "evoutouch1", "evou touch": "evoutouch1", "evoutouch 1": "evoutouch1", "evoutouch 2": "evoutouch2", "evoutouch 3": "evoutouch3", "evoutouch 4": "evoutouch1", "evou touch 4": "evoutouch1",
+    "icomplay": "icomplay1", "icomplay max": "icomplay1", "icomplay 1": "icomplay1", "icomplay 3": "icomplay3", "icomplay 5": "icomplay5", "icomplay 7": "icomplay7",
+    "icomplay max 1": "icomplay1", "icomplay max 3": "icomplay3", "icomplay max 5": "icomplay5", "icomplay max 7": "icomplay7",
     "iptv": "iptv1",
     "iptv 1": "iptv1", "iptv 3": "iptv3", "iptv 4": "iptv4",
     "canva": "canva", "gemini": "gemini", "chatgpt": "chatgpt", "chat gpt": "chatgpt", "duolingo": "duolingo",
@@ -171,6 +176,7 @@ function normalizarPlataforma(v = "") {
     oleadatv3: "oleadatv3", oleada3: "oleadatv3",
     latintv1: "latintv1", latintv2: "latintv2", latintv3: "latintv3", latintv4: "latintv4",
     liontv1: "liontv1", liontv2: "liontv2", liontv3: "liontv3", liontv5: "liontv5", nanotech: "evoutouch1", nanotech1: "evoutouch1", nanotech2: "evoutouch2", nanotech3: "evoutouch3", evoutouch: "evoutouch1", evoutouch1: "evoutouch1", evoutouch2: "evoutouch2", evoutouch3: "evoutouch3", evoutouch4: "evoutouch1",
+    icomplay: "icomplay1", icomplay1: "icomplay1", icomplay3: "icomplay3", icomplay5: "icomplay5", icomplay7: "icomplay7", icomplaymax: "icomplay1",
     iptv1: "iptv1", iptv3: "iptv3", iptv4: "iptv4", universal: "universal", duolingo: "duolingo", office: "office", office2021: "office2021", microsoft365: "office", office365: "office", m365: "office",
   };
 

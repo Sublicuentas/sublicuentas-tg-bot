@@ -857,7 +857,7 @@ module.exports = function mountAdminPanel(app) {
     }
     if (req.body?.telefono !== undefined) {
       const telefono = normalizarTelefonoCliente(req.body.telefono);
-      if (telefono && telefono.length !== 8) return fail(res, 400, "telefono_invalido");
+      if (telefono && (telefono.length < 8 || telefono.length > 15)) return fail(res, 400, "telefono_invalido"); // internacionales con código de país
       patch.telefono = telefono;
       patch.telefono_norm = telefono;
     }

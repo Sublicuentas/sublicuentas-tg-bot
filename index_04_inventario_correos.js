@@ -76,7 +76,7 @@ function humanPlatSafe(key = "") {
     liontv2: "LionTV (2 dispositivos)",
     liontv3: "LionTV (3 dispositivos)",
     liontv5: "LionTV (5 dispositivos)",
-    evoutouch1: "Nanotech (1 dispositivo)", evoutouch2: "Nanotech (2 dispositivos)", evoutouch3: "Nanotech (3 dispositivos)", evoutouch4: "Nanotech (1 dispositivo)",
+    evoutouch1: "Nanotech (1 dispositivo)", evoutouch2: "Nanotech (2 dispositivos)", evoutouch3: "Nanotech (3 dispositivos)", evoutouch4: "Nanotech (1 dispositivo)", icomplay1: "ICOMPLAY MAX (1)", icomplay3: "ICOMPLAY MAX (3)", icomplay5: "ICOMPLAY MAX (5)", icomplay7: "ICOMPLAY MAX (7)",
     iptv1: "IPTV anterior (1)",
     iptv3: "IPTV anterior (3)",
     iptv4: "IPTV anterior (4)",
@@ -96,6 +96,7 @@ function isUserPlatform(plataforma = "") {
     "latintv1", "latintv2", "latintv3", "latintv4",
     "liontv1", "liontv2", "liontv3", "liontv5",
     "evoutouch1", "evoutouch2", "evoutouch3",
+    "icomplay1", "icomplay3", "icomplay5", "icomplay7",
     "iptv1", "iptv3", "iptv4",
   ].includes(p);
 }
@@ -205,7 +206,7 @@ function getCapacidadCorreo(data = {}, plataforma = "") {
     liontv2: 2,
     liontv3: 3,
     liontv5: 5,
-    evoutouch1: 1, evoutouch2: 2, evoutouch3: 3, evoutouch4: 1,
+    evoutouch1: 1, evoutouch2: 2, evoutouch3: 3, evoutouch4: 1, icomplay1: 1, icomplay3: 3, icomplay5: 5, icomplay7: 7,
     iptv1: 1,
     iptv3: 3,
     iptv4: 4,
@@ -224,15 +225,16 @@ function getClientesArray(data = {}) {
   return Array.isArray(data.clientes) ? data.clientes : [];
 }
 
+// Oct-2026 · Los cupos salen de los clientes realmente asignados (clientes[]).
+// Los contadores guardados (ocupados/disponibles/disp) podían quedar viejos y mostrar
+// una cuenta llena con menos clientes de los reales; ya no mandan si existe la lista.
 function getOcupados(data = {}) {
+  if (Array.isArray(data.clientes)) return data.clientes.length;
   const n = Number(data.ocupados);
-  if (Number.isFinite(n) && n >= 0) return n;
-  return getClientesArray(data).length;
+  return Number.isFinite(n) && n >= 0 ? n : 0;
 }
 
 function getDisponibles(data = {}, plataforma = "") {
-  const n = Number(data.disponibles ?? data.disp);
-  if (Number.isFinite(n) && n >= 0) return n;
   const capacidad = getCapacidadCorreo(data, plataforma);
   const ocupados = getOcupados(data);
   return Math.max(0, capacidad - ocupados);
@@ -492,16 +494,8 @@ async function moverCuentaInventarioPlataforma(docId = "", nuevaPlataforma = "")
   const ocupados = clientes.length;
   const disponibles = Math.max(0, capacidad - ocupados);
 
-  const nuevaId = docIdInventario(ident, nueva);
-  const dstRef = db.collection("inventario").doc(nuevaId);
-  const dstSnap = await dstRef.get();
-  if (dstSnap.exists && dstSnap.id !== srcSnap.id) {
-    throw new Error(`Ya existe un documento de ${humanPlatSafe(nueva)} para esa cuenta. No se movió nada.`);
-  }
-
   const ahora = admin.firestore.FieldValue.serverTimestamp();
   const destino = {
-    ...src,
     plataforma: nueva,
     capacidad,
     ocupados,
@@ -509,24 +503,19 @@ async function moverCuentaInventarioPlataforma(docId = "", nuevaPlataforma = "")
     disp: disponibles,
     estado: disponibles <= 0 ? "llena" : "activa",
     movedFromPlatform: anterior,
-    movedFromDocId: srcSnap.id,
+    accountId: srcSnap.id,
     updatedAt: ahora,
   };
 
-  // La identidad física del inventario también cambia de docId para que todos
-  // los flujos que usan plataforma+correo encuentren la misma cuenta.
+  // Oct-2026: la cuenta cambia de plataforma EN SU MISMO documento. Antes se creaba un documento
+  // nuevo y se borraba el viejo: el accountId cambiaba y las fichas enlazadas perdían el vínculo.
   await db.runTransaction(async (tx) => {
     const srcNow = await tx.get(srcRef);
     if (!srcNow.exists) throw new Error("La cuenta desapareció durante el cambio.");
-    const dstNow = await tx.get(dstRef);
-    if (dstNow.exists && dstRef.id !== srcRef.id) {
-      throw new Error(`Ya existe ${humanPlatSafe(nueva)} con ese acceso.`);
-    }
-    tx.set(dstRef, destino, { merge: false });
-    if (dstRef.id !== srcRef.id) tx.delete(srcRef);
+    tx.set(srcRef, destino, { merge: true });
   });
 
-  return { ok: true, anterior, nueva, ident, docId: dstRef.id, data: destino, capacidad, ocupados, disponibles };
+  return { ok: true, anterior, nueva, ident, docId: srcSnap.id, data: { ...src, ...destino }, capacidad, ocupados, disponibles };
 }
 
 // ===============================
@@ -555,10 +544,14 @@ async function getInventarioRowsByPlataforma(plataforma = "") {
     }
   }
 
+  // Cuenta más vacía primero: menor % de ocupación; empate → más libres; llenas al final.
   rows.sort((a, b) => {
-    const da = getDisponibles(a, plat);
-    const dbb = getDisponibles(b, plat);
-    if (dbb !== da) return dbb - da;
+    const ca = Math.max(1, getCapacidadCorreo(a, plat)), cb = Math.max(1, getCapacidadCorreo(b, plat));
+    const la = getDisponibles(a, plat), lb = getDisponibles(b, plat);
+    if ((la > 0) !== (lb > 0)) return la > 0 ? -1 : 1;
+    const pa = getOcupados(a) / ca, pb = getOcupados(b) / cb;
+    if (pa !== pb) return pa - pb;
+    if (lb !== la) return lb - la;
     return getStoredIdent(a).localeCompare(getStoredIdent(b), "es", { sensitivity: "base" });
   });
 
@@ -636,7 +629,9 @@ async function enviarInventarioPlataformaEstado(chatId, plataforma = "", filtro 
     slice.forEach((r, idx) => {
       const ident = getStoredIdent(r);
       const { capacidad, ocupados, disponibles } = formatCuentaResumen(r, plat);
-      txt += `*${start + idx + 1}.* ${filtroNorm === "llenas" ? "[X]" : "[OK]"} ${getIdentIcon(plat)} ${escMD(ident)}\n`;
+      const recomendada = filtroNorm === "disponibles" && safePage === 0 && idx === 0 && capacidad > 1;
+      const sobre = ocupados > capacidad ? " ⚠️ SOBREASIGNADA" : "";
+      txt += `*${start + idx + 1}.* ${filtroNorm === "llenas" ? "[X]" : "[OK]"} ${getIdentIcon(plat)} ${escMD(ident)}${recomendada ? " ⭐ *MÁS VACÍA*" : ""}${sobre}\n`;
       txt += `   Perfiles: ${ocupados}/${capacidad} • OK ${disponibles}\n`;
       if (requiresClavePlatform(plat) && r.clave) txt += `   Clave: ${escMD(String(r.clave))}\n`;
       const pin = getPinFromAny(r);

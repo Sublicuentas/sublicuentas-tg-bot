@@ -142,6 +142,11 @@ const PLATAFORMAS = {
   evoutouch1:   { key: "evoutouch1",   nombre: "Nanotech (1 dispositivo)", categoria: "iptv", acceso: "usuario_clave", capacidadDefault: 1, requiereCorreo: false, requiereClave: true, requierePin: false, permiteUsuario: true },
   evoutouch2:   { key: "evoutouch2",   nombre: "Nanotech (2 dispositivos)", categoria: "iptv", acceso: "usuario_clave", capacidadDefault: 2, requiereCorreo: false, requiereClave: true, requierePin: false, permiteUsuario: true },
   evoutouch3:   { key: "evoutouch3",   nombre: "Nanotech (3 dispositivos)", categoria: "iptv", acceso: "usuario_clave", capacidadDefault: 3, requiereCorreo: false, requiereClave: true, requierePin: false, permiteUsuario: true },
+  // ICOMPLAY MAX (oct-2026) · IPTV con Max Player incluido; 1/3/5/7 pantallas; 1, 3, 6 y 12 meses.
+  icomplay1:    { key: "icomplay1",    nombre: "ICOMPLAY MAX (1 pantalla)", categoria: "iptv", acceso: "usuario_clave", capacidadDefault: 1, requiereCorreo: false, requiereClave: true, requierePin: false, permiteUsuario: true },
+  icomplay3:    { key: "icomplay3",    nombre: "ICOMPLAY MAX (3 pantallas)", categoria: "iptv", acceso: "usuario_clave", capacidadDefault: 3, requiereCorreo: false, requiereClave: true, requierePin: false, permiteUsuario: true },
+  icomplay5:    { key: "icomplay5",    nombre: "ICOMPLAY MAX (5 pantallas)", categoria: "iptv", acceso: "usuario_clave", capacidadDefault: 5, requiereCorreo: false, requiereClave: true, requierePin: false, permiteUsuario: true },
+  icomplay7:    { key: "icomplay7",    nombre: "ICOMPLAY MAX (7 pantallas)", categoria: "iptv", acceso: "usuario_clave", capacidadDefault: 7, requiereCorreo: false, requiereClave: true, requierePin: false, permiteUsuario: true },
   // Alias legado: ventas antiguas evoutouch4 se leen como Nanotech 1 hasta que se editen.
   evoutouch4:   { key: "evoutouch4",   nombre: "Nanotech (1 dispositivo)", categoria: "iptv", acceso: "usuario_clave", capacidadDefault: 1, requiereCorreo: false, requiereClave: true, requierePin: false, permiteUsuario: true },
   // Compatibilidad con fichas antiguas sin marca. Ya no se ofrecen para altas nuevas.

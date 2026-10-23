@@ -165,7 +165,7 @@ function revCanonInventory(v) {
     chatgpt:"chatgpt", duolingo:"duolingo", office365:"office", microsoft365:"office", office:"office",
     office2021:"office2021", esetnod32:"nod32", nod32:"nod32", stellatv:"stellatv", stella:"stellatv",
     oleadatv:"oleada", oleada:"oleada", latintv:"latintv", liontv:"liontv", iptv:"iptv",
-    nanotech:"evoutouch", evoutouch:"evoutouch"
+    nanotech:"evoutouch", evoutouch:"evoutouch", icomplay:"icomplay", icomplaymax:"icomplay"
   };
   if (aliases[key]) return aliases[key];
   const stella = key.match(/^stella(?:tv)?([123])/); if (stella) return `stellatv${stella[1]}`;
@@ -173,6 +173,7 @@ function revCanonInventory(v) {
   const latin = key.match(/^latintv([1234])/); if (latin) return `latintv${latin[1]}`;
   const lion = key.match(/^liontv([1235])/); if (lion) return `liontv${lion[1]}`;
   const nano = key.match(/^(?:nanotech|evoutouch)([1234])$/); if (nano) return `evoutouch${nano[1] === "4" ? "1" : nano[1]}`;
+  const icom = key.match(/^icomplay(?:max)?([1357])$/); if (icom) return `icomplay${icom[1]}`;
   return key;
 }
 function revCatalogInventoryKeys(item = {}) {
@@ -187,8 +188,9 @@ function revCatalogInventoryKeys(item = {}) {
   if (raw.includes("latin") && qty) keys.push(`latintv${qty}`);
   if (raw.includes("lion") && qty) keys.push(`liontv${qty}`);
   if ((raw.includes("nanotech") || raw.includes("evoutouch")) && qty) keys.push(`evoutouch${qty}`);
+  if (raw.includes("icomplay") && qty) keys.push(`icomplay${qty}`);
   if (base) keys.push(base);
-  if (base && /^(stellatv|oleadatv|latintv|liontv|evoutouch)\d$/.test(base)) keys.push(base.replace(/\d$/, ""));
+  if (base && /^(stellatv|oleadatv|latintv|liontv|evoutouch|icomplay)\d$/.test(base)) keys.push(base.replace(/\d$/, ""));
   return [...new Set(keys.filter(Boolean))];
 }
 
