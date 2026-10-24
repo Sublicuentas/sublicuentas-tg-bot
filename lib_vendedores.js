@@ -48,6 +48,9 @@ function telClave(v) {
 function telValido(v) { const d = telClave(v); return d.length >= 8 && d.length <= 15 ? d : ""; }
 function limpiarNombre(v) { return String(v == null ? "" : v).replace(/\s+/g, " ").trim().slice(0, 60); }
 
+// Accesos del sistema: aunque su cuenta del Panel de Socios esté desactivada, siguen siendo vendedores.
+const ACCESOS_FIJOS = new Set(["sublicuentas", "relojes", "geisell"]);
+
 let cache = { at: 0, data: null };
 function limpiarCache() { cache = { at: 0, data: null }; }
 
@@ -79,8 +82,9 @@ function armarRegistro(docsVendedores = [], docsSocios = []) {
       telefono: tel || (previo && previo.telefono) || "",
       tipo: previo && previo.tipo === "equipo" ? "equipo" : "socio",
       socioId: id, origen: "socio",
-      // Desactivar al socio solo le quita el acceso al Panel; si es del equipo sigue vendiendo.
-      activo: d.activo === false ? !!(previo && previo.tipo === "equipo") : true,
+      // Vendedor desactivado (Revendedores → Desactivar acceso) = desaparece de todas las listas de Web, APK y Bot.
+      // Sus fichas no se tocan y su número se sigue resolviendo. Excepción: Sublicuentas, Relojes y Geisell.
+      activo: d.activo === false ? ACCESOS_FIJOS.has(c) : true,
     });
     [d.nombre, d.usuario, id].forEach((a) => { const k = claveVendedor(a); if (k && k !== c) alias.set(k, c); });
   });
@@ -102,10 +106,9 @@ function armarRegistro(docsVendedores = [], docsSocios = []) {
       updatedAt: d.updatedAt || "", updatedBy: d.updatedBy || "",
     });
   });
-  const lista = orden.map((c) => porClave.get(c)).filter((v) => v && !v.eliminado && v.activo !== false);
-  const equipo = lista.filter((v) => v.tipo === "equipo");
-  const socios = lista.filter((v) => v.tipo !== "equipo").sort((a, b) => a.nombre.localeCompare(b.nombre, "es"));
-  const ordenados = equipo.concat(socios);
+  // Orden alfabético (igual que el filtro de Renovación): Sublicuentas → Sublicuentas 1 → Sublicuentas 2.
+  const ordenados = orden.map((c) => porClave.get(c)).filter((v) => v && !v.eliminado && v.activo !== false)
+    .sort((a, b) => a.nombre.localeCompare(b.nombre, "es", { numeric: true, sensitivity: "base" }));
   const telefonos = {};
   ordenados.forEach((v) => { if (v.telefono) telefonos[v.clave] = v.telefono; });
   return {

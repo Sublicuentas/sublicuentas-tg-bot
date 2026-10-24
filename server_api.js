@@ -1367,10 +1367,11 @@ app.post("/rev/compra", revAuth, async (req, res) => {
     const ids = await getDestinoChatIds(destino.key);
     await Promise.all(ids.map((id) => sendTelegramImageSmart(id, imagenObj, cap)));
 
-    // Fase 2 · push a Sublicuentas y Relojes: pedido nuevo (plata esperando entrega). Sin datos de entrega.
+    // Fase 2 · push SOLO al vendedor que eligió el socio (Sublicuentas o Relojes): pedido nuevo, plata esperando entrega.
+    // Sin datos de entrega en el aviso.
     const resumenPush = productos.map((p) => `${p.servicioBase || p.servicio}${(p.cantidad || 1) > 1 ? ` ×${p.cantidad}` : ""}`).join(", ");
     await require("./lib_push").avisar(db, admin, {
-      usuarios: ["sublicuentas", "relojes"],
+      usuarios: [destino.key],
       titulo: `🛒 Pedido de ${cleanTg(socio, 40)}`,
       cuerpo: `${resumenPush}${totalCombo ? ` · L${totalCombo}` : ""}`,
       data: { tipo: "pedido", ir: "inicio", id: ref.id },
