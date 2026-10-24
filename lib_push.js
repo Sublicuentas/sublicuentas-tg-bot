@@ -38,7 +38,8 @@ function dataSegura(data = {}) {
 }
 
 // grupo = a quién va dirigido en tickets/avisos (sublicuentas · relojes · geisell · el usuario).
-async function registrarToken(db, { token, usuario, role = "", grupo = "", appBuild = "", plataforma = "android" } = {}) {
+// cobros = recibir el aviso de cobros 7 AM / 7 PM (el mismo interruptor "Recordatorios de cobro" de la APK).
+async function registrarToken(db, { token, usuario, role = "", grupo = "", appBuild = "", plataforma = "android", cobros = true } = {}) {
   const t = tokenValido(token);
   if (!t) throw new Error("Token push inválido.");
   const u = usuarioClave(usuario);
@@ -48,10 +49,28 @@ async function registrarToken(db, { token, usuario, role = "", grupo = "", appBu
   const snap = await ref.get();
   await ref.set({
     token: t, usuario: u, role: String(role || "").toLowerCase().slice(0, 40), grupo: usuarioClave(grupo || u), plataforma: String(plataforma || "android").slice(0, 20),
-    appBuild: String(appBuild || "").slice(0, 20), activo: true, updatedAt: ahora,
+    appBuild: String(appBuild || "").slice(0, 20), activo: true, cobros: cobros !== false, updatedAt: ahora,
     ...(snap.exists ? {} : { createdAt: ahora }),
   }, { merge: true });
   return { ok: true, id: ref.id };
+}
+
+async function preferenciasToken(db, { token, usuario = "", cobros } = {}) {
+  const t = tokenValido(token);
+  if (!t) throw new Error("Token push inválido.");
+  const ref = db.collection(COL).doc(idToken(t));
+  const snap = await ref.get();
+  if (!snap.exists || (snap.data() || {}).usuario !== usuarioClave(usuario)) return { ok: false };
+  await ref.set({ cobros: cobros !== false, updatedAt: new Date().toISOString() }, { merge: true });
+  return { ok: true };
+}
+
+// Grupos (sublicuentas · relojes · geisell · vendedor) con al menos un teléfono que quiere el aviso de cobros.
+async function gruposConCobros(db) {
+  const snap = await db.collection(COL).get();
+  const set = new Set();
+  snap.forEach((d) => { const x = d.data() || {}; if (x.activo !== false && x.token && x.cobros !== false && x.grupo) set.add(x.grupo); });
+  return [...set];
 }
 
 async function bajaToken(db, { token, usuario = "" } = {}) {
@@ -65,7 +84,7 @@ async function bajaToken(db, { token, usuario = "" } = {}) {
 }
 
 // destinatarios: { usuarios: ['sublicuentas','relojes'] } o { todos: true }; excluir: usuario que hizo el cambio.
-async function enviarPush(db, admin, { usuarios = null, todos = false, excluir = "", titulo, cuerpo = "", data = {} } = {}) {
+async function enviarPush(db, admin, { usuarios = null, todos = false, excluir = "", titulo, cuerpo = "", data = {}, soloCobros = false } = {}) {
   const title = textoSeguro(titulo || "Sublichat", 80);
   const body = textoSeguro(cuerpo, 180);
   const extra = dataSegura(data);
@@ -77,6 +96,7 @@ async function enviarPush(db, admin, { usuarios = null, todos = false, excluir =
   snap.forEach((d) => {
     const x = d.data() || {};
     if (x.activo === false || !x.token) return;
+    if (soloCobros && x.cobros === false) return;
     if (excl && x.usuario === excl) return;
     if (excl && x.grupo === excl) return;
     if (!todos && !lista.includes(x.usuario) && !lista.includes(x.grupo) && !lista.includes(x.role)) return;
@@ -115,4 +135,4 @@ async function avisar(db, admin, opciones) {
   }
 }
 
-module.exports = { COL, CANAL, idToken, usuarioClave, tokenValido, textoSeguro, dataSegura, registrarToken, bajaToken, enviarPush, avisar };
+module.exports = { COL, CANAL, idToken, usuarioClave, tokenValido, textoSeguro, dataSegura, registrarToken, preferenciasToken, gruposConCobros, bajaToken, enviarPush, avisar };

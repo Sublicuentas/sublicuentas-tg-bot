@@ -66,7 +66,18 @@ keepAliveRecurrente.unref?.();
   }, 15_000);
   consolidacionArranque.unref?.();
 
+  // Fase 2 · aviso push de cobros (7 AM hoy · 7 PM mañana), solo a teléfonos con push activo.
+  const pushCobros = require("./index_35_push_cobros");
+  const horaLocal = () => { const { getLocalParts } = require("./lib_hardening"); const { TZ } = require("./index_01_core"); return Number(getLocalParts(new Date(), TZ).hour); };
   startDurableScheduler([
+    {
+      id: "push_cobros_7am", type: "daily", hour: 7, minute: 0,
+      run: ({ scheduledDateDMY }) => pushCobros.enviarPushCobros({ db, admin, tipo: "hoy", scheduledDateDMY, horaLimite: 12, horaActual: horaLocal() }),
+    },
+    {
+      id: "push_cobros_7pm", type: "daily", hour: 19, minute: 0,
+      run: ({ scheduledDateDMY }) => pushCobros.enviarPushCobros({ db, admin, tipo: "manana", scheduledDateDMY, horaLimite: 23, horaActual: horaLocal() }),
+    },
     {
       id: "auto_txt_7am",
       type: "daily",

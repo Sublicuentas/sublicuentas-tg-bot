@@ -1234,6 +1234,9 @@ app.post("/rev/compra", revAuth, async (req, res) => {
     const bancoR108 = hayComisionR108 ? null : await r108Banco(b.bancoId);
     if (!hayComisionR108 && !bancoR108) return res.status(400).json({ error: "falta_banco", detail: "Elija el banco donde se hizo el pago." });
     if (!hayComisionR108 && !requestRef) return res.status(400).json({ error: "falta_operation_id", detail: "Actualice el panel." });
+    // Oct-2026 · Web Socios: el banco también se pide en compras por comisión. Se guarda (y sale en Telegram),
+    // pero esas compras siguen fuera del registro automático de ingresos, igual que antes.
+    const bancoComision = hayComisionR108 && b.bancoId ? await r108Banco(b.bancoId) : null;
     const servicio = productos.length > 1
       ? `Combo ${productos.length} plataformas`
       : productos[0].servicio;
@@ -1271,7 +1274,7 @@ app.post("/rev/compra", revAuth, async (req, res) => {
       dispositivo: productos[0].dispositivo || "",
       marcaTv: productos[0].marcaTv || "",
       comentario,
-      monto, montoAutomatico: !hayComisionR108, ...(bancoR108 ? { bancoId: bancoR108.id, banco: bancoR108.nombre } : {}), // R108
+      monto, montoAutomatico: !hayComisionR108, ...(bancoR108 ? { bancoId: bancoR108.id, banco: bancoR108.nombre } : bancoComision ? { bancoId: bancoComision.id, banco: bancoComision.nombre } : {}), // R108
       destino: destino.key,
       destinoLabel: destino.label,
       socio,
@@ -1354,6 +1357,7 @@ app.post("/rev/compra", revAuth, async (req, res) => {
       productos.length > 1
         ? `💰 Subtotal: L${subtotalCatalogo}\n🏷️ Descuento combo: L${descuentoCombo}\n✅ Total sugerido: L${totalCombo}\n💵 Monto pagado: ${monto ? `L${monto}` : "—"}`
         : `💵 Monto pagado: ${monto ? `L${monto}` : "—"}${productos[0].precioCatalogo !== null ? ` | Catálogo: L${productos[0].precioCatalogo}` : ""}`,
+      doc.banco ? `🏦 Banco: ${cleanTg(doc.banco, 40)}` : "",
       comentario ? `📝 Nota: ${cleanTg(comentario, 220)}` : "",
       (imagenUrl || imagenObj.buffer) ? `📎 Comprobante adjunto` : `⚠️ Sin comprobante`,
       `🆔 Ref: ${ref.id.slice(-6)}`,
@@ -1362,6 +1366,15 @@ app.post("/rev/compra", revAuth, async (req, res) => {
 
     const ids = await getDestinoChatIds(destino.key);
     await Promise.all(ids.map((id) => sendTelegramImageSmart(id, imagenObj, cap)));
+
+    // Fase 2 · push a Sublicuentas y Relojes: pedido nuevo (plata esperando entrega). Sin datos de entrega.
+    const resumenPush = productos.map((p) => `${p.servicioBase || p.servicio}${(p.cantidad || 1) > 1 ? ` ×${p.cantidad}` : ""}`).join(", ");
+    await require("./lib_push").avisar(db, admin, {
+      usuarios: ["sublicuentas", "relojes"],
+      titulo: `🛒 Pedido de ${cleanTg(socio, 40)}`,
+      cuerpo: `${resumenPush}${totalCombo ? ` · L${totalCombo}` : ""}`,
+      data: { tipo: "pedido", ir: "inicio", id: ref.id },
+    });
 
     res.json({ ok: true, id: ref.id, imagenUrl, destino: destino.key, destinoLabel: destino.label, totalCombo, descuentoCombo, estado: "pendiente" });
   } catch (e) {
