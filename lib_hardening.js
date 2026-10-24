@@ -144,7 +144,7 @@ function callbackPermission(callbackData = '') {
   if (/^(vend:|ren:mis:|txt:mis$|rec:)/.test(data)) return 'self-service';
   if (data.startsWith('tk:reply:')) return 'tickets.reply';
 
-  if (data === 'menu:revendedores' || data.startsWith('rev:')) return 'equipo.manage';
+  if (data === 'menu:revendedores' || data.startsWith('rev:') || data.startsWith('vreg:')) return 'equipo.manage'; // vreg: editar/eliminar vendedores (Oct-2026)
   if (data === 'menu:dashboard' || data === 'menu:alertas' || data.startsWith('alert:') || data.startsWith('alertas:')) return 'reportes.read';
 
   if (data === 'menu:pagos') return 'finanzas.read';

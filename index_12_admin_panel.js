@@ -129,7 +129,7 @@ function hasPremiumIcons(icons) {
 function formatMoney(v) {
   const n = Number(v);
   if (!Number.isFinite(n)) return "";
-  return `L ${n.toLocaleString("es-HN", { maximumFractionDigits: 0 })}`;
+  return `L${n.toLocaleString("es-HN", { maximumFractionDigits: 0 })}`;
 }
 
 function formatPromoDate(v) {
@@ -394,7 +394,7 @@ module.exports = function mountAdminPanel(app) {
     await ref.set({estado:"publicada",enviados,fallidos,encolados,sinTelegram,fallbackTexto,fallbackEmoji,premiumEmojis:premiumEnabled,erroresTelegram,sentAt:admin.firestore.FieldValue.serverTimestamp(),updatedAt:admin.firestore.FieldValue.serverTimestamp()},{merge:true});
     let avisoGuardado=true;
     try{
-      await db.collection("avisos").add({texto:`${p.titulo}\n${p.plataforma} · L ${Number(p.precioPromo)||0}\n${p.texto||""}`.trim(),autor:"Sublicuentas",tipo:"promocion_socios",promocionId:ref.id,imagenUrl:p.imagenUrl||"",destinatarios:p.destinatarios||[],activo:true,createdAt:admin.firestore.FieldValue.serverTimestamp()});
+      await db.collection("avisos").add({texto:`${p.titulo}\n${p.plataforma} · L${Number(p.precioPromo)||0}\n${p.texto||""}`.trim(),autor:"Sublicuentas",tipo:"promocion_socios",promocionId:ref.id,imagenUrl:p.imagenUrl||"",destinatarios:p.destinatarios||[],activo:true,createdAt:admin.firestore.FieldValue.serverTimestamp()});
     }catch(e){avisoGuardado=false;console.error("promo aviso fail",ref.id,e.message)}
     ok(res,{id:ref.id,enviados,fallidos,encolados,sinTelegram,fallbackTexto,fallbackEmoji,premiumEmojis:premiumEnabled,erroresTelegram,avisoGuardado});
   }));
@@ -650,7 +650,7 @@ module.exports = function mountAdminPanel(app) {
     const telefono = String(req.body?.telefono || "").trim().replace(/[^0-9]/g, "");
     if (!nombre) return fail(res, 400, "falta_nombre");
     if (telegramId && telegramId.length < 5) return fail(res, 400, "telegramId_invalido");
-    if (telefono && telefono.length < 8) return fail(res, 400, "telefono_invalido");
+    if (telefono && (telefono.length < 8 || telefono.length > 15)) return fail(res, 400, "telefono_invalido"); // 8 = Honduras; 9–15 con código de país
     if (!telegramId && !telefono) return fail(res, 400, "falta_telefono_o_telegram");
 
     const docId = normNombre(nombre) || String(Date.now());
@@ -668,6 +668,8 @@ module.exports = function mountAdminPanel(app) {
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 
+    // Oct-2026 · registro único de vendedores (lib_vendedores.js): aparece en Web, APK y Bot.
+    await require("./lib_vendedores").anotarCambioSocio(db, { despues: { nombre, nombre_norm: docId, telefono } });
     // El PIN solo se devuelve UNA vez, igual que en /addvendedor del bot.
     ok(res, { docId, nombre, nombre_norm: docId, telegramId, telefono, pin });
   }));
@@ -693,7 +695,7 @@ module.exports = function mountAdminPanel(app) {
     }
     if (req.body?.telefono !== undefined) {
       const tel = String(req.body.telefono).trim().replace(/[^0-9]/g, "");
-      if (tel && tel.length < 8) return fail(res, 400, "telefono_invalido");
+      if (tel && (tel.length < 8 || tel.length > 15)) return fail(res, 400, "telefono_invalido"); // 8 = Honduras; 9–15 con código de país
       patch.telefono = tel;
     }
     if (req.body?.activo !== undefined) patch.activo = !!req.body.activo;
@@ -713,6 +715,11 @@ module.exports = function mountAdminPanel(app) {
 
     await ref.update(patch);
     const actualizado = await ref.get();
+    // Oct-2026 · nombre o número nuevos llegan a Web, APK, Bot y portal (el número viejo queda como anterior).
+    if (patch.nombre !== undefined || patch.telefono !== undefined) {
+      const antes = snap.data() || {};
+      await require("./lib_vendedores").anotarCambioSocio(db, { antes, despues: { nombre_norm: antes.nombre_norm || ref.id, ...(patch.nombre !== undefined ? { nombre: patch.nombre } : {}), ...(patch.telefono !== undefined ? { telefono: patch.telefono } : {}) } });
+    }
     ok(res, { id: ref.id, ...actualizado.data() });
   }));
 
@@ -777,6 +784,7 @@ module.exports = function mountAdminPanel(app) {
     if (!snap.exists) return fail(res, 404, "no_existe");
     const d = snap.data() || {};
     await ref.delete();
+    await require("./lib_vendedores").anotarCambioSocio(db, { antes: { ...d, nombre_norm: d.nombre_norm || ref.id } }); // Oct-2026 · deja de salir en Web/APK/Bot
     // Igual que /delvendedor en el bot: no reasigna ni borra sus clientes,
     // solo el registro del vendedor. Sus clientes quedan con un
     // vendedor_norm que ya no existe hasta que los reasignes.

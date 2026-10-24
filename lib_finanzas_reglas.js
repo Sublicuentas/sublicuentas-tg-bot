@@ -188,14 +188,14 @@ function validatePlanilla({ montoTotal, asignaciones = [], bancos = [], disponib
     if (!banco.activado) { errors.push(`${banco.nombre} no tiene saldo inicial registrado.`); continue; }
     if (seen.has(banco.id)) { errors.push(`${banco.nombre} está repetido.`); continue; }
     seen.add(banco.id);
-    if (monto > banco.saldo + 0.001) errors.push(`Saldo insuficiente en ${banco.nombre}: tiene Lps. ${fmt(banco.saldo)} y se asignaron Lps. ${fmt(monto)}.`);
+    if (monto > banco.saldo + 0.001) errors.push(`Saldo insuficiente en ${banco.nombre}: tiene L${fmt(banco.saldo)} y se asignaron L${fmt(monto)}.`);
     clean.push({ bancoId: banco.id, banco: banco.nombre, monto, saldoAntes: banco.saldo, saldoDespues: money(banco.saldo - monto) });
   }
   const asignado = money(clean.reduce((s, a) => s + a.monto, 0));
   const diff = money(total - asignado);
-  if (total > 0 && diff > 0) errors.push(`Faltan Lps. ${fmt(diff)} por asignar.`);
-  if (total > 0 && diff < 0) errors.push(`Ha asignado Lps. ${fmt(-diff)} de más.`);
-  if (total > 0 && Number.isFinite(Number(disponibleCiclo)) && total > money(disponibleCiclo) + 0.001) errors.push(`El pago (Lps. ${fmt(total)}) supera el disponible del ciclo (Lps. ${fmt(disponibleCiclo)}).`);
+  if (total > 0 && diff > 0) errors.push(`Faltan L${fmt(diff)} por asignar.`);
+  if (total > 0 && diff < 0) errors.push(`Ha asignado L${fmt(-diff)} de más.`);
+  if (total > 0 && Number.isFinite(Number(disponibleCiclo)) && total > money(disponibleCiclo) + 0.001) errors.push(`El pago (L${fmt(total)}) supera el disponible del ciclo (L${fmt(disponibleCiclo)}).`);
   return { ok: errors.length === 0, errors, asignaciones: clean, asignado, faltante: diff };
 }
 

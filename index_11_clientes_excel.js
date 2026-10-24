@@ -1,7 +1,7 @@
 /* ✅ SUBLICUENTAS — EXCEL CLIENTES NIVEL SAIYAJIN
    Reporte profesional para CRM / Clientes:
    - 6 hojas: Resumen, Clientes Vigentes, Recuperar Clientes, Clientes Top, Pagos y Servicios, Vendedores
-   - KPI cards, barras visuales, filtros, freeze panes, fórmulas y formato Lps 1,234.56
+   - KPI cards, barras visuales, filtros, freeze panes, fórmulas y formato L1,234.56
    - Compatible con ExcelJS y Firestore del bot
 */
 
@@ -36,7 +36,7 @@ const BORDER = {
   right: { style: "thin", color: { argb: "FFD1D5DB" } },
 };
 
-const MONEY_FMT = '"Lps " #,##0.00';
+const MONEY_FMT = '"L"#,##0.00';
 const DATE_FMT = "dd/mm/yyyy";
 
 function normTxt(v = "") {
@@ -394,7 +394,7 @@ function datosRecuperacionCliente(c) {
     if (vendedor) vendedores.add(vendedor);
 
     const partes = [plataforma];
-    if (precio > 0) partes.push(`Lps ${precio.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
+    if (precio > 0) partes.push(`L${precio.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
     if (vendedor) partes.push(vendedor);
     if (fecha) partes.push(`venció ${dateToDMY(fecha)}`);
     detalles.push(partes.filter(Boolean).join(" — "));

@@ -396,14 +396,14 @@ async function handleEmpresa(db, accion, body, identity, authUser, res, d) {
       const est = bSnap.exists ? { ...estadoBilleteraVacio(), ...bSnap.data() } : estadoBilleteraVacio();
       const rec = aplicarRecarga(est, { hnl: body.hnl, usdt: body.usdt });
       const b = saldos.bancos.find((x) => x.id === banco.id);
-      if (b && rec.hnl > b.saldo + 0.001 && !body.forzar) throw errUsuario(`Saldo insuficiente en ${banco.nombre} según el libro (Lps. ${b.saldo}). Si el banco sí lo tiene, revise movimientos pendientes.`);
+      if (b && rec.hnl > b.saldo + 0.001 && !body.forzar) throw errUsuario(`Saldo insuficiente en ${banco.nombre} según el libro (L${b.saldo}). Si el banco sí lo tiene, revise movimientos pendientes.`);
       const comun = { ...d.baseMov(identity, authUser, body), operationId: String(body.operationId), transferenciaId: refOut.id, referencia: txt(body.referencia, 80), nota: txt(body.nota, 160), ...d.canonicalFinanceDate(fecha, hoy) };
       // Lado banco: TRANSFERENCIA de salida (no es gasto). Cierres, cuadre y saldos la tratan como hoy.
       tx.set(refOut, { ...comun, movimientoId: refOut.id, tipo: "transferencia", subtipo: "recarga_binance", direccion: "salida", monto: rec.hnl, bancoId: banco.id, banco: banco.nombre, contraparteId: BINANCE_ID, montoUsdt: rec.usdt, tasa: rec.tasa });
       // Lado Binance: movimiento de BILLETERA en USDT con su valor contable en Lempiras.
       tx.set(refIn, { ...comun, movimientoId: refIn.id, tipo: "billetera", subtipo: "recarga", direccion: "entrada", billeteraId: BINANCE_ID, moneda: "USDT", montoUsdt: rec.usdt, monto: rec.hnl, tasa: rec.tasa, contraparteId: banco.id, banco: "Binance", saldoUsdtAntes: est.saldo, saldoUsdtDespues: rec.estado.saldo, costoPromedioDespues: rec.estado.costoPromedio });
       tx.set(billeteraRef, { ...rec.estado, updatedAt: ahora });
-      audit(tx, { accion: "recarga_binance", targetType: "billetera", targetId: BINANCE_ID, movimientoId: refOut.id, operationId: String(body.operationId), monto: rec.hnl, detalle: `${banco.nombre} −Lps. ${rec.hnl} → Binance +${rec.usdt} USDT · tasa ${rec.tasa}`, before: { saldoUsdt: est.saldo, valorHnl: est.valorHnl }, after: { saldoUsdt: rec.estado.saldo, valorHnl: rec.estado.valorHnl, costoPromedio: rec.estado.costoPromedio } });
+      audit(tx, { accion: "recarga_binance", targetType: "billetera", targetId: BINANCE_ID, movimientoId: refOut.id, operationId: String(body.operationId), monto: rec.hnl, detalle: `${banco.nombre} −L${rec.hnl} → Binance +${rec.usdt} USDT · tasa ${rec.tasa}`, before: { saldoUsdt: est.saldo, valorHnl: est.valorHnl }, after: { saldoUsdt: rec.estado.saldo, valorHnl: rec.estado.valorHnl, costoPromedio: rec.estado.costoPromedio } });
       return { duplicado: false, tasa: rec.tasa, billetera: rec.estado, movimientoId: refOut.id };
     });
     return reply(r);
@@ -451,7 +451,7 @@ async function handleEmpresa(db, accion, body, identity, authUser, res, d) {
       if (banco) {
         const { saldos } = await d.estadoLibro(db, tx);
         const b = saldos.bancos.find((x) => x.id === banco.id);
-        if (b && k.costoTotalHnl > b.saldo + 0.001 && !c.forzar) throw errUsuario(`Saldo insuficiente en ${banco.nombre} según el libro (Lps. ${b.saldo}).`);
+        if (b && k.costoTotalHnl > b.saldo + 0.001 && !c.forzar) throw errUsuario(`Saldo insuficiente en ${banco.nombre} según el libro (L${b.saldo}).`);
       }
       const dur = Math.max(0, Math.round(Number(c.duracionDias ?? producto.duracionDias) || 0));
       // La vigencia automática solo aplica a lo que de verdad vence como lote (cuenta madre, gift card, panel). Créditos,
@@ -490,7 +490,7 @@ async function handleEmpresa(db, accion, body, identity, authUser, res, d) {
         tx.set(movRef, { ...comun, tipo: "compra", subtipo: "inventario_inicial", direccion: "entrada", monto: k.costoTotalHnl, banco: "Inventario inicial", moneda: k.moneda, montoMoneda: k.costoTotalMoneda, tasa: k.tasa });
         tx.set(loteRef, { movimientoId: movRef.id }, { merge: true });
       }
-      audit(tx, { accion: pagoTipo === "inicial" ? "inventario_inicial" : "compra_inventario", targetType: "lote", targetId: loteRef.id, movimientoId: movRef.id, operationId: String(body.operationId), monto: k.costoTotalHnl, detalle: `${detalle} · ${k.costoTotalMoneda} ${k.moneda} = Lps. ${k.costoTotalHnl} (Lps. ${k.costoUnitarioHnl} c/u) · pagado: ${lote.cuentaPagoNombre}` });
+      audit(tx, { accion: pagoTipo === "inicial" ? "inventario_inicial" : "compra_inventario", targetType: "lote", targetId: loteRef.id, movimientoId: movRef.id, operationId: String(body.operationId), monto: k.costoTotalHnl, detalle: `${detalle} · ${k.costoTotalMoneda} ${k.moneda} = L${k.costoTotalHnl} (L${k.costoUnitarioHnl} c/u) · pagado: ${lote.cuentaPagoNombre}` });
       return { duplicado: false, loteId: loteRef.id, costoTotalHnl: k.costoTotalHnl, costoUnitarioHnl: unitHnl, unidades, tasa: k.tasa, billetera: k.salidaBinance ? k.salidaBinance.estado : undefined };
     });
     return reply(r);
@@ -514,7 +514,7 @@ async function handleEmpresa(db, accion, body, identity, authUser, res, d) {
       const montoHnl = r2(-delta * (l.costoUnitarioHnl || 0)); // positivo = pérdida (merma/vencido)
       tx.set(lRef, { disponible: nuevo, ajustado: r6((l.ajustado || 0) + delta), estado: nuevo > 0 ? "activo" : "agotado", updatedAt: ahora }, { merge: true });
       tx.set(movRef, { ...d.baseMov(identity, authUser, body), movimientoId: movRef.id, operationId: String(body.operationId), tipo: "inventario", subtipo: delta < 0 ? "merma" : "sobrante", loteId: lRef.id, productoId: l.productoId, cantidad: delta, monto: montoHnl, motivo: `Ajuste inventario · ${l.producto} · ${motivo}`, banco: "Inventario", ...d.canonicalFinanceDate(hoy, hoy) });
-      audit(tx, { accion: "ajuste_inventario", targetType: "lote", targetId: lRef.id, movimientoId: movRef.id, motivo, monto: montoHnl, before: { disponible: l.disponible }, after: { disponible: nuevo }, detalle: `${l.producto}: ${l.disponible} → ${nuevo} (${delta > 0 ? "+" : ""}${delta}) · Lps. ${montoHnl}` });
+      audit(tx, { accion: "ajuste_inventario", targetType: "lote", targetId: lRef.id, movimientoId: movRef.id, motivo, monto: montoHnl, before: { disponible: l.disponible }, after: { disponible: nuevo }, detalle: `${l.producto}: ${l.disponible} → ${nuevo} (${delta > 0 ? "+" : ""}${delta}) · L${montoHnl}` });
       return { duplicado: false, delta, montoHnl };
     });
     return reply(r);
@@ -560,7 +560,7 @@ async function handleEmpresa(db, accion, body, identity, authUser, res, d) {
       if (pago === "binance") { if (cx.moneda !== "USDT") throw errUsuario("Con Binance solo se pagan deudas en USDT."); salida = aplicarSalida(billetera, monto); pagadoHnl = salida.costoHnl; }
       else if (cx.moneda === "HNL") pagadoHnl = r2(monto);
       else { pagadoHnl = r2(body.montoHnl); if (!(pagadoHnl > 0)) throw errUsuario(`Escriba cuántos Lempiras salieron del banco por esos ${monto} ${cx.moneda}.`); }
-      if (banco) { const { saldos } = await d.estadoLibro(db, tx); const b = saldos.bancos.find((x) => x.id === banco.id); if (b && pagadoHnl > b.saldo + 0.001 && !body.forzar) throw errUsuario(`Saldo insuficiente en ${banco.nombre} según el libro (Lps. ${b.saldo}).`); }
+      if (banco) { const { saldos } = await d.estadoLibro(db, tx); const b = saldos.bancos.find((x) => x.id === banco.id); if (b && pagadoHnl > b.saldo + 0.001 && !body.forzar) throw errUsuario(`Saldo insuficiente en ${banco.nombre} según el libro (L${b.saldo}).`); }
       const liquida = monto >= r6(cx.saldo) - 1e-6;
       const saldadoHnl = liquida ? r2(cx.saldoHnl) : r2((monto / r6(cx.saldo)) * r2(cx.saldoHnl)); // parte de la deuda (en Lempiras de libro) que se cancela
       const diferencialHnl = r2(pagadoHnl - saldadoHnl); // + pérdida / − ganancia por tipo de cambio
@@ -569,7 +569,7 @@ async function handleEmpresa(db, accion, body, identity, authUser, res, d) {
       else tx.set(movRef, { ...comun, tipo: "pago_cxp", subtipo: "pago_proveedor", direccion: "salida", monto: pagadoHnl, bancoId: banco.id, banco: banco.nombre, moneda: cx.moneda, montoMoneda: monto });
       const saldo = r6(cx.saldo - monto), saldoHnl = r2(cx.saldoHnl - saldadoHnl);
       tx.set(cRef, { saldo: liquida ? 0 : saldo, saldoHnl: liquida ? 0 : saldoHnl, estado: liquida ? "pagado" : "parcial", pagos: [...(cx.pagos || []), { movimientoId: movRef.id, monto, moneda: cx.moneda, pagadoHnl, saldadoHnl, diferencialHnl, con: pago === "binance" ? "Binance" : banco.nombre, fecha, por: actor }], updatedAt: ahora }, { merge: true });
-      audit(tx, { accion: "pago_cuenta_por_pagar", targetType: "cuenta_por_pagar", targetId: cRef.id, movimientoId: movRef.id, operationId: String(body.operationId), monto: pagadoHnl, before: { saldo: cx.saldo }, after: { saldo: liquida ? 0 : saldo }, detalle: `${cx.proveedor}: ${monto} ${cx.moneda} con ${pago === "binance" ? "Binance" : banco.nombre} (Lps. ${pagadoHnl}${diferencialHnl ? ` · diferencial ${diferencialHnl}` : ""})` });
+      audit(tx, { accion: "pago_cuenta_por_pagar", targetType: "cuenta_por_pagar", targetId: cRef.id, movimientoId: movRef.id, operationId: String(body.operationId), monto: pagadoHnl, before: { saldo: cx.saldo }, after: { saldo: liquida ? 0 : saldo }, detalle: `${cx.proveedor}: ${monto} ${cx.moneda} con ${pago === "binance" ? "Binance" : banco.nombre} (L${pagadoHnl}${diferencialHnl ? ` · diferencial ${diferencialHnl}` : ""})` });
       return { duplicado: false, saldo: liquida ? 0 : saldo, estado: liquida ? "pagado" : "parcial", pagadoHnl, diferencialHnl };
     });
     return reply(r);
@@ -597,9 +597,9 @@ async function handleEmpresa(db, accion, body, identity, authUser, res, d) {
       if ((await tx.get(ref)).exists) return { duplicado: true };
       const { saldos } = await d.estadoLibro(db, tx);
       const b = saldos.bancos.find((x) => x.id === banco.id);
-      if (b && monto > b.saldo + 0.001 && !body.forzar) throw errUsuario(`Saldo insuficiente en ${banco.nombre} según el libro (Lps. ${b.saldo}).`);
+      if (b && monto > b.saldo + 0.001 && !body.forzar) throw errUsuario(`Saldo insuficiente en ${banco.nombre} según el libro (L${b.saldo}).`);
       tx.set(ref, { ...d.baseMov(identity, authUser, body), movimientoId: ref.id, operationId: String(body.operationId), tipo: "retiro", subtipo: "retiro_propietario", direccion: "salida", monto, bancoId: banco.id, banco: banco.nombre, beneficiario, motivo: motivo || "Retiro de utilidades", ...d.canonicalFinanceDate(fecha, hoy) });
-      audit(tx, { accion: "retiro_propietario", targetType: "retiro", targetId: ref.id, movimientoId: ref.id, operationId: String(body.operationId), monto, motivo, detalle: `Retiro ${beneficiario} · ${banco.nombre} · Lps. ${monto}` });
+      audit(tx, { accion: "retiro_propietario", targetType: "retiro", targetId: ref.id, movimientoId: ref.id, operationId: String(body.operationId), monto, motivo, detalle: `Retiro ${beneficiario} · ${banco.nombre} · L${monto}` });
       return { duplicado: false, movimientoId: ref.id };
     });
     return reply(r);

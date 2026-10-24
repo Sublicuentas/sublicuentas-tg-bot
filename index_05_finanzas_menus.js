@@ -193,7 +193,7 @@ function textoMovimientoParaEliminar(m = {}) {
   const monto = Number(m.monto || 0).toFixed(2);
   const concepto = finConceptoLabel(m);
   const extra = finExtraLabel(m);
-  let txt = `${fecha} • ${monto} Lps • ${concepto}`;
+  let txt = `${fecha} • L${monto} • ${concepto}`;
   if (extra) txt += ` • ${extra}`;
   if (txt.length > 60) txt = `${txt.slice(0, 57)}...`;
   return txt;
@@ -201,7 +201,7 @@ function textoMovimientoParaEliminar(m = {}) {
 function textoConfirmarEliminacionMovimiento(m = {}) {
   const tipo = finTipoLabel(m.tipo);
   const fecha = String(extraerFechaMovimiento(m) || m.fecha || "-");
-  const monto = typeof moneyLps === "function" ? moneyLps(m.monto || 0) : `${Number(m.monto || 0).toFixed(2)} Lps`;
+  const monto = typeof moneyLps === "function" ? moneyLps(m.monto || 0) : `L${Number(m.monto || 0).toFixed(2)}`;
   const concepto = finConceptoLabel(m);
   const extra = finExtraLabel(m);
   let txt = "🗑️ CONFIRMAR ELIMINACIÓN\n\n";
@@ -715,7 +715,7 @@ async function generarDashboard(chatId) {
     const varEmoji = varIngresos >= 0 ? "📈" : "📉";
     const labelActual = monthLabelFromKeyLocal(mesActualKey);
     const labelAnterior = monthLabelFromKeyLocal(mesAnteriorKey);
-    const fmt = (n) => `${Number(n || 0).toFixed(2)} Lps`;
+    const fmt = (n) => `L${Number(n || 0).toFixed(2)}`;
     let txt = ` *DASHBOARD EJECUTIVO*\n📅 ${escMD(hoy)}\n\n`;
     txt += `💰 *FINANZAS — ${escMD(labelActual)}*\n`;
     txt += `Ingresos: ${escMD(fmt(resMesActual.ingresos))}\n`;
@@ -969,7 +969,7 @@ async function exportarFinanzasRangoExcel(chatId, fechaInicio, fechaFin, _userId
 ` +
           `✅ 5 hojas: Resumen, Ingresos, Egresos, Bancos y Gráficos
 ` +
-          `✅ Filtros, fórmulas, barras visuales y formato Lps`,
+          `✅ Filtros, fórmulas, barras visuales y formato L`,
         parse_mode: "Markdown",
       },
       {

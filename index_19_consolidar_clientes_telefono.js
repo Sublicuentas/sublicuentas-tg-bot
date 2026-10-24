@@ -125,8 +125,8 @@ function gruposDuplicados(docs = []) {
     const nombre = normalizarNombre(data.nombrePerfil || data.nombre || data.nombre_norm || "");
     const telefono = normalizarTelefonoCliente(data.telefono_norm || data.telefono || data.whatsapp || "");
     // Criterio intencionalmente estricto para no unir homónimos o teléfonos
-    // incompletos: mismo nombre normalizado y número hondureño de 8 dígitos.
-    if (!nombre || telefono.length !== 8) continue;
+    // incompletos: mismo nombre normalizado y teléfono completo (8 dígitos Honduras u 9–15 con código de país).
+    if (!nombre || telefono.length < 8 || telefono.length > 15) continue;
     const key = `${nombre}|${telefono}`;
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push({ id: doc.id, ref: doc.ref, data });
@@ -223,7 +223,7 @@ async function consolidarClientesDuplicadosPorTelefono({ db, admin } = {}) {
   if (groups.length) {
     await backupRoot.set({
       migrationId: MIGRATION_ID,
-      criterio: "mismo nombre normalizado + mismo telefono hondureno de 8 digitos",
+      criterio: "mismo nombre normalizado + mismo telefono (Honduras 8 digitos o internacional con codigo)",
       ultimaEjecucionAt: admin.firestore.FieldValue.serverTimestamp(),
       gruposDetectados: groups.length,
     }, { merge: true });

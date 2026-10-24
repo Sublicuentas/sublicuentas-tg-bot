@@ -13,7 +13,7 @@ const R = require("./lib_finanzas_reglas");
 const E = require("./lib_finanzas_empresa");
 const L = () => require("./index_31_finanzas_libro");
 
-const lps = (n) => `L ${R.fmt(n)}`;
+const lps = (n) => `L${R.fmt(n)}`;
 const hoyYmd = () => R.ymd(new Date(Date.now() - 6 * 3600000));
 const esc = (v) => String(v ?? "").replace(/[*_`\[\]]/g, "");
 const dmy = (v) => { const [y, m, d] = String(v || "").split("-"); return d ? `${d}/${m}/${y}` : "—"; };
@@ -74,7 +74,7 @@ async function panelBinance(chatId, userId) {
   if (!e.ok) return bot.sendMessage(chatId, `⚠️ ${e.error}`);
   const b = e.billetera || {};
   const movs = (e.movimientosBinance || []).slice(0, 6).map((m) => `• ${dmy(m.fechaPago)} ${m.subtipo === "recarga" ? "Recarga" : m.subtipo === "ajuste" ? "Ajuste" : "Pago"} ${Number(m.montoUsdt) > 0 && m.direccion !== "salida" ? "+" : "−"}${Math.abs(Number(m.montoUsdt || 0))} USDT (${lps(m.monto)})`);
-  return upsertPanel(chatId, [`💱 *BINANCE*`, "", `Saldo: *${b.saldo || 0} USDT*`, `Valor en libros: ${lps(b.valorHnl)}`, `Costo promedio: ${b.costoPromedio ? `L ${Number(b.costoPromedio).toFixed(4)}` : "—"} · última tasa ${b.ultimaTasa ? `L ${Number(b.ultimaTasa).toFixed(4)}` : "—"}`, "", ...(movs.length ? movs : ["Sin movimientos todavía."]), "", "Recargar Binance no es gasto: el banco baja y Binance sube."].join("\n"),
+  return upsertPanel(chatId, [`💱 *BINANCE*`, "", `Saldo: *${b.saldo || 0} USDT*`, `Valor en libros: ${lps(b.valorHnl)}`, `Costo promedio: ${b.costoPromedio ? `L${Number(b.costoPromedio).toFixed(4)}` : "—"} · última tasa ${b.ultimaTasa ? `L${Number(b.ultimaTasa).toFixed(4)}` : "—"}`, "", ...(movs.length ? movs : ["Sin movimientos todavía."]), "", "Recargar Binance no es gasto: el banco baja y Binance sube."].join("\n"),
     [[{ text: "＋ Recargar desde banco", callback_data: "fl:emp:rec" }], volver]);
 }
 async function panelInventario(chatId, userId) {
@@ -123,7 +123,7 @@ async function callback(chatId, userId, data) {
         ? await emp(userId, "fin_binance_recargar", { bancoId: p.bancoId, hnl: p.hnl, usdt: p.usdt, operationId: p.op })
         : await emp(userId, "fin_retiro_registrar", { bancoId: p.bancoId, monto: p.monto, beneficiario: p.beneficiario, motivo: "Retiro desde Telegram", operationId: p.op });
       if (!r.ok) return bot.sendMessage(chatId, `⚠️ ${r.error}`);
-      await bot.sendMessage(chatId, r.duplicado ? "ℹ️ Ya estaba registrado." : p.mode === "flEmpRecOk" ? `✅ Binance +${p.usdt} USDT · tasa L ${r.tasa}` : `✅ Retiro de ${lps(p.monto)} registrado.`);
+      await bot.sendMessage(chatId, r.duplicado ? "ℹ️ Ya estaba registrado." : p.mode === "flEmpRecOk" ? `✅ Binance +${p.usdt} USDT · tasa L${r.tasa}` : `✅ Retiro de ${lps(p.monto)} registrado.`);
       return p.mode === "flEmpRecOk" ? panelBinance(chatId, userId) : tablero(chatId, userId);
     }
   } catch (e) { logErr("R140 empresa tg", e); return bot.sendMessage(chatId, `⚠️ ${String(e?.message || e).slice(0, 200)}`); }
@@ -136,7 +136,7 @@ async function texto(chatId, userId, t, p) {
   if (p.mode === "flEmpRecUsdt") {
     if (!(n > 0)) return bot.sendMessage(chatId, "Escriba los USDT, ej. 100");
     pending.set(String(chatId), { ...p, mode: "flEmpRecOk", usdt: n });
-    return upsertPanel(chatId, `💱 *Confirmar recarga*\n\n${esc(p.banco)}: −${lps(p.hnl)}\nBinance: +${n} USDT\nTasa efectiva: L ${(p.hnl / n).toFixed(4)}\n\nNo es gasto.`, [[{ text: "✅ Registrar", callback_data: "fl:emp:rok" }], [{ text: "❌ Cancelar", callback_data: "fl:emp" }]]);
+    return upsertPanel(chatId, `💱 *Confirmar recarga*\n\n${esc(p.banco)}: −${lps(p.hnl)}\nBinance: +${n} USDT\nTasa efectiva: L${(p.hnl / n).toFixed(4)}\n\nNo es gasto.`, [[{ text: "✅ Registrar", callback_data: "fl:emp:rok" }], [{ text: "❌ Cancelar", callback_data: "fl:emp" }]]);
   }
   if (p.mode === "flEmpRetMonto") { if (!(n > 0)) return bot.sendMessage(chatId, "Escriba el monto, ej. 1500"); pending.set(String(chatId), { ...p, mode: "flEmpRetQuien", monto: n }); return bot.sendMessage(chatId, "3) ¿Para quién es el retiro? (nombre del dueño/socio)"); }
   if (p.mode === "flEmpRetQuien") {

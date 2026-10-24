@@ -11,7 +11,7 @@ const R = require("./lib_finanzas_reglas");
 const C = require("./lib_contabilidad");
 let clasificar = null; try { clasificar = require("./lib_catalogo_categorias").clasificarServicio; } catch (_) {}
 
-const lps = (n) => `Lps. ${R.fmt(n)}`;
+const lps = (n) => `L${R.fmt(n)}`;
 const hoyYmd = () => R.ymd(new Date(Date.now() - 6 * 3600000));
 const dmy = (v) => { const [y, m, d] = String(v || "").split("-"); return d ? `${d}/${m}/${y}` : String(v || ""); };
 const esc = (v) => String(v ?? "").replace(/[*_`\[\]]/g, "");
@@ -59,8 +59,8 @@ async function panelEstados(chatId, mes) {
 
 // ---------------------------------------------------------------- Excel (mismo estilo que el reporte del bot)
 const X = { rojo: "FFE2231A", negro: "FF0A0A1A", blanco: "FFFFFFFF", zebra: "FFF4F6F8", verde: "FF16A34A", verdeClaro: "FFE6F4EA", rojoClaro: "FFFCE8E6", gris: "FFE7E9EF" };
-const MONEY = '"Lps " #,##0.00;[Red]-"Lps " #,##0.00';
-const MONEY_TOTAL = '"Lps " #,##0.00;-"Lps " #,##0.00'; // en filas de color: sin rojo (no se leería)
+const MONEY = '"L"#,##0.00;[Red]-"L"#,##0.00';
+const MONEY_TOTAL = '"L"#,##0.00;-"L"#,##0.00'; // en filas de color: sin rojo (no se leería)
 const BORDE = { top: { style: "thin", color: { argb: X.gris } }, left: { style: "thin", color: { argb: X.gris } }, bottom: { style: "thin", color: { argb: X.gris } }, right: { style: "thin", color: { argb: X.gris } } };
 const pinta = (c, argb) => { c.fill = { type: "pattern", pattern: "solid", fgColor: { argb } }; };
 function titulo(ws, t, sub, cols) {

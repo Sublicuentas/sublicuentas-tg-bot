@@ -5,7 +5,7 @@
    - Barras visuales compatibles con ExcelJS (sin chart API inestable)
    - Fórmulas SUM / IF / REPT para totales y visuales dinámicos
    - Filtros automáticos, encabezados congelados, filas alternas
-   - Formato moneda: Lps 1,234.56
+   - Formato moneda: L1,234.56
 */
 
 const {
@@ -38,7 +38,7 @@ const COLORS = {
   naranja: "FFF97316",
 };
 
-const MONEY_FMT = '"Lps " #,##0.00';
+const MONEY_FMT = '"L"#,##0.00';
 const INT_FMT = '#,##0';
 const PCT_FMT = '0.00%';
 

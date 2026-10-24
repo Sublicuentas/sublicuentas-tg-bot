@@ -125,14 +125,14 @@ function alertas({ mes, actual, anterior, rent, inventario = [], lotes = [], cxc
     const r = rent.productos.find((x) => x.nombre === p.nombre);
     const cupos = movimientos.filter((m) => R.movementKind(m) === "inventario" && m.subtipo === "cupos_sin_vender" && m.productoId === p.id && mesDe(R.movementYmd(m)) === mes && !R.anuladoOReversa(m)).reduce((s, m) => s + Number(m.monto || 0), 0);
     const neto = r2x((r ? r.utilidadBrutaHnl : 0) - cupos);
-    if ((r || cupos) && neto <= 0) a("alta", `${p.nombre}: la cuenta madre no deja ganancia este mes (${neto < 0 ? "pérdida" : "cero"}: L ${Math.abs(neto)}).`);
+    if ((r || cupos) && neto <= 0) a("alta", `${p.nombre}: la cuenta madre no deja ganancia este mes (${neto < 0 ? "pérdida" : "cero"}: L${Math.abs(neto)}).`);
   }
   for (const l of lotes.filter((l) => ["cuenta_madre", "panel", "gift_card"].includes(l.modelo) && l.estado !== "vencido" && l.vigenciaHasta && Number(l.cantidad) > 0)) {
     const ocup = pctx(Number(l.consumido || 0), Number(l.cantidad)); const dias = Math.round((Date.parse(`${l.vigenciaHasta}T12:00:00Z`) - Date.parse(`${hoy}T12:00:00Z`)) / 86400000);
     if (dias >= 0 && dias <= 10 && ocup < 50) a("media", `${l.producto}: solo ${ocup}% de los perfiles vendidos y vence en ${dias} días.`);
   }
-  const vencCxp = cxp.filter((c) => c.estado !== "pagado" && c.vence && c.vence < hoy); if (vencCxp.length) a("alta", `${vencCxp.length} deuda(s) con proveedores vencida(s): L ${r2x(vencCxp.reduce((s, c) => s + Number(c.saldoHnl || 0), 0))}.`);
-  const viejas = cxc.filter((c) => ["pendiente", "parcial"].includes(c.estado) && c.createdAt && (Date.parse(`${hoy}T12:00:00Z`) - Date.parse(c.createdAt)) / 86400000 > 30); if (viejas.length) a("media", `${viejas.length} cuenta(s) por cobrar con más de 30 días: L ${r2x(viejas.reduce((s, c) => s + Number(c.saldoPendiente || 0), 0))}.`);
+  const vencCxp = cxp.filter((c) => c.estado !== "pagado" && c.vence && c.vence < hoy); if (vencCxp.length) a("alta", `${vencCxp.length} deuda(s) con proveedores vencida(s): L${r2x(vencCxp.reduce((s, c) => s + Number(c.saldoHnl || 0), 0))}.`);
+  const viejas = cxc.filter((c) => ["pendiente", "parcial"].includes(c.estado) && c.createdAt && (Date.parse(`${hoy}T12:00:00Z`) - Date.parse(c.createdAt)) / 86400000 > 30); if (viejas.length) a("media", `${viejas.length} cuenta(s) por cobrar con más de 30 días: L${r2x(viejas.reduce((s, c) => s + Number(c.saldoPendiente || 0), 0))}.`);
   if (costeo.pendientes) a("media", `${costeo.pendientes} venta(s) sin costo completo (falta inventario o catálogo).`);
   return out.sort((x, y) => (x.nivel === y.nivel ? 0 : x.nivel === "alta" ? -1 : 1));
 }

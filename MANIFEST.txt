@@ -1,0 +1,37 @@
+SUBLICUENTAS-TG-BOT (Render · rama main) — 23-oct-2026 · Correcciones + Fase 2 (push)
+Subir cada archivo a la MISMA ruta en el repo Sublicuentas/sublicuentas-tg-bot. Reemplaza el actual.
+No incluye secretos. No requiere variables nuevas en Render.
+
+NUEVOS
+  lib_vendedores.js       Registro único de vendedores/socios (copia exacta de api/_vendedores.js de la Web)
+  lib_push.js             Envío push (copia exacta de api/_push.js de la Web)
+  tests/r151-vendedores-renovar.test.js
+
+VENDEDORES
+  index_06_handlers.js    👤 Revendedores ahora muestra equipo + socios con ✏️ Editar y 🗑️ Eliminar;
+                          ➕ Agregar pide WhatsApp (Honduras 8 dígitos u otro país con +código) y
+                          ID de Telegram (0 = vendedor del equipo, sin acceso al Panel)
+  index_12_admin_panel.js Crear/editar/eliminar socio desde la Web también actualiza el registro;
+                          teléfonos de 8 a 15 dígitos
+  lib_hardening.js        Botones vreg: requieren permiso equipo.manage
+
+RENOVAR / YA PAGÓ
+  index_03_clientes_crm.js  +31 días, 1, 2, 3, 6, 12 meses y 📅 Personalizado (uno y "Todos");
+                            vigente → desde el vencimiento · vencido → desde hoy
+  index_06_handlers.js      Botones nuevos cli:ren:dur / cli:ren:alldur (los viejos siguen funcionando)
+
+TELÉFONOS INTERNACIONALES
+  index_19_consolidar_clientes_telefono.js   Unir duplicados acepta números de otros países
+  index_02_utils_roles.js                    Lee montos escritos como L300
+
+MONEDA L300
+  index_02_utils_roles.js, index_03_clientes_crm.js, index_05_finanzas_menus.js, index_06_handlers.js,
+  index_08_api.js, index_10_reportes_excel.js, index_11_clientes_excel.js, index_12_admin_panel.js,
+  index_31_finanzas_libro.js, index_32_estados_financieros.js, index_33_empresa_tg.js,
+  lib_finanzas_empresa.js, lib_finanzas_reglas.js, lib_finanzas_reportes.js, server_api.js
+
+PUSH (Fase 2)
+  lib_inventario_canonico.js   Cambio de correo/clave desde el bot → push al equipo (sin datos de la cuenta)
+
+PRUEBAS ACTUALIZADAS
+  tests/r104-finanzas-libro.test.js, tests/r132-cuadre.test.js, tests/r140-empresa-telegram.test.js

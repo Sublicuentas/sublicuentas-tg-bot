@@ -131,6 +131,13 @@ async function editarCuentaCanonica(db, admin, { cuenta, nuevoCorreo, nuevaClave
     }
     tx.set(cuenta.ref, p, { merge: true });
   });
+  // Fase 2 · aviso push al equipo: la ficha cambió (sin correo ni clave en el aviso).
+  if (nuevoCorreo != null || nuevaClave != null) {
+    const cambioCorreo = nuevoCorreo != null && normAcceso(nuevoCorreo) !== normAcceso(correoAnterior);
+    const queCambio = cambioCorreo && nuevaClave != null ? "Cambió correo y clave" : cambioCorreo ? "Cambió el correo" : "Cambió la clave";
+    await require("./lib_push").avisar(db, admin, { todos: true, titulo: `🔑 Cuenta ${plataforma.toUpperCase()} actualizada`,
+      cuerpo: `${queCambio} · ${Number(sync.perfilesActualizados || 0)} ficha(s) ya actualizadas.`, data: { tipo: "cuenta", ir: "clientes" } });
+  }
   return { accountId: cuenta.ref.id, correoAnterior, ...sync };
 }
 

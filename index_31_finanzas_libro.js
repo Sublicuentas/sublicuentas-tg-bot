@@ -13,7 +13,7 @@ const accessControl = require("./index_23_access_control");
 const R = require("./lib_finanzas_reglas");
 
 const LIBRO = () => db.collection("finanzas_config").doc("libro_mayor");
-const lps = (n) => `Lps. ${R.fmt(n)}`;
+const lps = (n) => `L${R.fmt(n)}`;
 const hoyYmd = () => R.ymd(new Date(Date.now() - 6 * 3600000));
 const ymdToDmy = (v) => { const [y, m, d] = String(v).split("-"); return `${d}/${m}/${y}`; };
 let cfg = { ejecutarRenovacion: null };

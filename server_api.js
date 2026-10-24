@@ -1057,7 +1057,7 @@ app.post("/rev/renovacion", revAuth, async (req, res) => {
       `🙍 Cliente: ${cleanTg(doc.cliente || "—", 120)}`,
       `📦 Servicios: ${doc.servicios.map(x=>x.servicio||('Servicio '+(x.servicioIndex+1))).join(', ')}`,
       doc.renovado ? `📅 Nueva fecha: ${cleanTg(doc.nuevaFecha || "—", 30)} · ${doc.renovadosCantidad} renovado(s)` : "",
-      `💵 Total (automático): Lps. ${doc.monto} · 🏦 ${cleanTg(doc.banco, 40)}`,
+      `💵 Total (automático): L${doc.monto} · 🏦 ${cleanTg(doc.banco, 40)}`,
       doc.quien ? `🔁 Renovó: ${cleanTg(doc.quien, 80)}` : "",
       com ? `📝 Nota: ${cleanTg(com, 260)}` : "",
       (imagenUrl || imagenObj.buffer) ? `📎 Comprobante adjunto` : `⚠️ Sin comprobante`,
@@ -1321,7 +1321,7 @@ app.post("/rev/compra", revAuth, async (req, res) => {
     }
 
     const productoLineas = productos.flatMap((p, i) => {
-      const precio = p.precioCatalogo === null ? "Por comisión" : `Lps. ${p.precioCatalogo}`;
+      const precio = p.precioCatalogo === null ? "Por comisión" : `L${p.precioCatalogo}`;
       const datos = [];
       if (p.perfil) datos.push(`Perfil: ${p.perfil}`);
       if (p.dispositivo) datos.push(`Dispositivo: ${p.dispositivo}`);
@@ -1352,8 +1352,8 @@ app.post("/rev/compra", revAuth, async (req, res) => {
       ...productoLineas,
       ``,
       productos.length > 1
-        ? `💰 Subtotal: Lps. ${subtotalCatalogo}\n🏷️ Descuento combo: Lps. ${descuentoCombo}\n✅ Total sugerido: Lps. ${totalCombo}\n💵 Monto pagado: ${monto ? `Lps. ${monto}` : "—"}`
-        : `💵 Monto pagado: ${monto ? `Lps. ${monto}` : "—"}${productos[0].precioCatalogo !== null ? ` | Catálogo: Lps. ${productos[0].precioCatalogo}` : ""}`,
+        ? `💰 Subtotal: L${subtotalCatalogo}\n🏷️ Descuento combo: L${descuentoCombo}\n✅ Total sugerido: L${totalCombo}\n💵 Monto pagado: ${monto ? `L${monto}` : "—"}`
+        : `💵 Monto pagado: ${monto ? `L${monto}` : "—"}${productos[0].precioCatalogo !== null ? ` | Catálogo: L${productos[0].precioCatalogo}` : ""}`,
       comentario ? `📝 Nota: ${cleanTg(comentario, 220)}` : "",
       (imagenUrl || imagenObj.buffer) ? `📎 Comprobante adjunto` : `⚠️ Sin comprobante`,
       `🆔 Ref: ${ref.id.slice(-6)}`,

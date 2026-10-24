@@ -203,7 +203,7 @@ function moneyNumber(v = 0) {
 }
 
 function moneyLps(v = 0) {
-  return `${moneyNumber(v).toFixed(2)} Lps`;
+  return `L${moneyNumber(v).toFixed(2)}`;
 }
 
 // ===============================
@@ -313,7 +313,7 @@ function parseMontoNumber(v = "") {
   if (typeof v === "number") return Number.isFinite(v) ? v : NaN;
   let s = String(v || "").trim();
   if (!s) return NaN;
-  s = s.replace(/Lps\.?/gi, "").replace(/,/g, "").trim();
+  s = s.replace(/^L(?:ps)?\.?\s*/i, "").replace(/Lps\.?/gi, "").replace(/,/g, "").trim(); // acepta "L300", "L 300", "Lps. 300"
   const n = Number(s);
   return Number.isFinite(n) ? n : NaN;
 }

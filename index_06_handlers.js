@@ -71,10 +71,10 @@ finLibro.configurar({
       if (idx < 0) idx = Number(a.idx);
       if (!servicios[idx]) throw new Error("Esa compra cambió o ya no existe. Abra nuevamente la ficha.");
       fechaAnterior = servicios[idx]?.fechaRenovacion || ""; plataforma = servicios[idx]?.plataforma || "";
-      const r = await renovarServicioTx(a.clientId, idx, { dias: a.dias || 0, fechaExacta: a.fechaExacta || "", compraId: a.compraId || "", pagoExtra });
+      const r = await renovarServicioTx(a.clientId, idx, { dias: a.dias || 0, meses: a.meses || 0, fechaExacta: a.fechaExacta || "", compraId: a.compraId || "", pagoExtra });
       fechaNueva = r?.fechaNueva || r?.servicio?.fechaRenovacion || ""; pagoOperacion = r?.pagoOperacion || null;
     } else {
-      const rt = await renovarTodosServiciosTx(a.clientId, a.fechaExacta ? { fechaExacta: a.fechaExacta, pagoExtra } : { dias: a.dias || 30, pagoExtra }); pagoOperacion = rt?.pagoOperacion || null;
+      const rt = await renovarTodosServiciosTx(a.clientId, a.fechaExacta ? { fechaExacta: a.fechaExacta, pagoExtra } : a.meses ? { meses: a.meses, pagoExtra } : { dias: a.dias || 31, pagoExtra }); pagoOperacion = rt?.pagoOperacion || null;
       plataforma = servicios.map((s) => s?.plataforma).filter(Boolean).join(", "); fechaNueva = a.fechaExacta || "";
     }
     try { await registrarActividadTelegramLocal(userId, chatId, a.tipo === "uno" ? "renovar_servicio" : "renovar_todos", { clienteId: a.clientId, cliente: c?.nombrePerfil || c?.nombre || "", telefono: c?.telefono || "", campo: "renovación", cambio: `${ajuste ? `ajuste sin pago (${motivo})` : "con pago real"} · ${fechaNueva || a.etiqueta || ""}` }, `Renovó ${a.etiqueta || "servicio"}${c?.nombrePerfil ? ` de ${c.nombrePerfil}` : ""}`); } catch (e) { logErr("R104 actividad renovar", e); }
@@ -161,6 +161,7 @@ const {
   eliminarServicioTx,
   renovarServicioTx,
   renovarTodosServiciosTx,
+  duracionDesdeCodigoLocal,
   eliminarServiciosTx,
   eliminarClienteConPapelera,
   restaurarClienteDesdePapelera,
@@ -704,6 +705,8 @@ function cmAutoRemoveClient(payload) {
 // cuenta en la colección `revendedores` del Panel de Socios. La validación
 // anterior consultaba solo esa colección y rechazaba nombres reales como
 // Abner, Yami, Jimena, Heber, Manuel, Elizabeth o Lucy.
+const vendedoresReg = require("./lib_vendedores"); // Oct-2026 · registro único de vendedores/socios
+// Respaldo solo si el registro no se puede leer.
 const VENDEDORES_OPERATIVOS_LOCAL = new Map([
   ["sublicuentas", { nombre: "Sublicuentas", telefono: "89464277" }],
   ["relojes", { nombre: "Relojes", telefono: "32126332" }],
@@ -772,6 +775,13 @@ async function resolverVendedorRegistradoLocal(value = "") {
   const entrada = canonicalVendedor(value);
   const key = vendedorNormCanonicoLocal(entrada);
   if (!key) return null;
+  // Oct-2026 · registro único (lib_vendedores.js): lo guardado desde Web o Bot manda sobre la lista fija.
+  try {
+    const reg = await vendedoresReg.leerRegistro(db);
+    const v = vendedoresReg.buscar(reg, entrada);
+    if (v) return { nombre: v.nombre, telefono: v.telefono || "", nombre_norm: v.clave, source: "registro" };
+    if (reg.eliminados.includes(key)) return null; // eliminado: no se vuelve a aceptar
+  } catch (e) { logErr("resolverVendedorRegistradoLocal registro", e); }
   const operativo = VENDEDORES_OPERATIVOS_LOCAL.get(key);
   if (operativo) return { ...operativo, nombre_norm: vendedorNormCanonicoLocal(operativo.nombre), source: "sublichat" };
   const descubiertos = await cargarVendedoresDescubiertosLocal();
@@ -1552,7 +1562,7 @@ function formatearBloqueRenovaciones(rows = [], titulo = "") {
     txt += `Plataforma: ${x.plataforma || "-"}\n`;
     if (requiereCorreoLocal(x.plataforma || "")) txt += `${getIdentLabelLocal(x.plataforma || "")}: ${x.correo || "-"}\n`;
     if (requierePinLocal(x.plataforma || "")) txt += `PIN: ${x.pin || "-"}\n`;
-    txt += `Precio: ${Number(x.precio || 0).toFixed(2)} Lps\n`;
+    txt += `Precio: L${Number(x.precio || 0).toFixed(2)}\n`;
     txt += `Fecha: ${x.fechaRenovacion || "-"}\n`;
     txt += `\n`;
   });
@@ -1648,7 +1658,7 @@ async function enviarResumenVendedorPro(chatId, vendedorNombre = "") {
   txt += `📅 *Renovaciones hoy:* ${renovacionesHoy}\n`;
   txt += `⏳ *Renovaciones en 3 días:* ${renovacionesMas3}\n`;
   txt += `🔴 *Vencidas:* ${vencidas}\n`;
-  txt += `💵 *Total mensual estimado:* ${escMD(Number(totalMensual || 0).toFixed(2))} Lps`;
+  txt += `💵 *Total mensual estimado:* L${escMD(Number(totalMensual || 0).toFixed(2))}`;
 
   return upsertPanel(chatId, txt, [[{ text: "🏠 Inicio", callback_data: "go:inicio" }]]);
 }
@@ -1746,7 +1756,7 @@ async function enviarResumenCRMLocal(chatId) {
   txt += `📱 *Con teléfono:* ${conTelefono}\n`;
   txt += `🟢 *Vigentes:* ${vigentes}\n`;
   txt += `🔴 *No vigentes:* ${noVigentes}\n`;
-  txt += `💰 *Total mensual estimado:* ${escMD(Number(totalMensual || 0).toFixed(2))} Lps`;
+  txt += `💰 *Total mensual estimado:* L${escMD(Number(totalMensual || 0).toFixed(2))}`;
 
   return upsertPanel(chatId, txt, [[{ text: "🏠 Inicio", callback_data: "go:inicio" }]]);
 }
@@ -2462,29 +2472,33 @@ async function listarRevendedores(chatId) {
   return bot.sendMessage(chatId, t, { parse_mode: "Markdown" });
 }
 
-// ✅ GESTIÓN REVENDEDORES POR BOTONES
+// ✅ GESTIÓN VENDEDORES Y SOCIOS POR BOTONES (Oct-2026 · registro único: lo mismo que ve la Web y la APK)
+const VREG_LISTA_CHAT = new Map(); // chatId → claves en el orden mostrado (para botones cortos)
 async function menuGestionRevendedores(chatId) {
-  const snap = await db.collection("revendedores").get();
-  const all = snap.docs.map(d => ({ id: d.id, ...(d.data() || {}) }));
-  all.sort((a, b) => String(a.nombre || "").localeCompare(String(b.nombre || ""), "es", { sensitivity: "base" }));
-
-  let txt = "👤 *GESTIÓN REVENDEDORES*\n\n";
-  if (!all.length) {
-    txt += "_No hay revendedores registrados._";
-  } else {
-    all.forEach((x, i) => {
-      txt += `*${i + 1}.* ${escMD(x.nombre || x.id)} — ${x.activo ? "✅" : "⛔"}`;
-      txt += x.telegramId ? ` | 🆔 ${escMD(String(x.telegramId))}` : " | sin ID";
-      txt += "\n";
-    });
-  }
-  const kb = [];
-  all.forEach(x => {
-    kb.push([{ text: `🗑️ Eliminar ${(x.nombre || x.id).slice(0, 20)}`, callback_data: `rev:del:ask:${x.id}` }]);
+  const reg = await vendedoresReg.leerRegistro(db, { fresco: true });
+  const lista = reg.lista;
+  VREG_LISTA_CHAT.set(String(chatId), lista.map((v) => v.clave));
+  let txt = "👤 *VENDEDORES Y SOCIOS*\n_Se reflejan en Web, APK, Bot, cobros, renovación y fichas._\n\n";
+  if (!lista.length) txt += "_No hay vendedores registrados._";
+  lista.forEach((v, i) => {
+    txt += `*${i + 1}.* ${escMD(v.nombre)} — ${v.tipo === "socio" ? "🤝 socio" : "🧑‍💼 equipo"} · 📱 ${escMD(v.telefono || "sin número")}\n`;
   });
-  kb.push([{ text: "➕ Agregar revendedor", callback_data: "rev:add:start" }]);
+  const kb = [];
+  lista.forEach((v, i) => {
+    const corto = v.nombre.slice(0, 16);
+    kb.push([
+      { text: `✏️ ${corto}`, callback_data: `vreg:e:${i}` },
+      { text: `🗑️ ${corto}`, callback_data: v.socioId ? `rev:del:ask:${v.socioId}` : `vreg:d:${i}` },
+    ]);
+  });
+  kb.push([{ text: "➕ Agregar vendedor o socio", callback_data: "rev:add:start" }]);
   kb.push([{ text: "🏠 Inicio", callback_data: "go:inicio" }]);
   return upsertPanel(chatId, txt, kb);
+}
+async function vregDesdeIndice(chatId, n) {
+  const clave = (VREG_LISTA_CHAT.get(String(chatId)) || [])[Number(n)];
+  if (!clave) return null;
+  return vendedoresReg.buscar(await vendedoresReg.leerRegistro(db, { fresco: true }), clave);
 }
 
 function humanPlatAlertLocal(key = "") {
@@ -2760,7 +2774,7 @@ async function enviarTxtAlertasDiaLocal(chatId) {
       txt += `${i + 1}) ${x.nombrePerfil}\nTeléfono: ${x.telefono}\nVendedor: ${x.vendedor}\n`;
       txt += `Plataforma: ${humanPlatAlertLocal(x.plataforma)}\n`;
       txt += `${getIdentLabelLocal(x.plataforma) === "Usuario" ? "Usuario" : "Correo"}: ${x.correo}\n`;
-      txt += `Fecha: ${x.fechaRenovacion}\nAtraso: ${x.atrasoDias} día(s)\nMonto: ${Number(x.precio || 0).toFixed(2)} Lps\n\n`;
+      txt += `Fecha: ${x.fechaRenovacion}\nAtraso: ${x.atrasoDias} día(s)\nMonto: L${Number(x.precio || 0).toFixed(2)}\n\n`;
     });
   }
 
@@ -2774,7 +2788,7 @@ async function enviarTxtAlertasDiaLocal(chatId) {
       txt += `${i + 1}) ${x.nombrePerfil}\nTeléfono: ${x.telefono}\nVendedor: ${x.vendedor}\n`;
       txt += `Plataforma: ${humanPlatAlertLocal(x.plataforma)}\n`;
       txt += `${getIdentLabelLocal(x.plataforma) === "Usuario" ? "Usuario" : "Correo"}: ${x.correo}\n`;
-      txt += `Fecha: ${x.fechaRenovacion}\nMonto: ${Number(x.precio || 0).toFixed(2)} Lps\n\n`;
+      txt += `Fecha: ${x.fechaRenovacion}\nMonto: L${Number(x.precio || 0).toFixed(2)}\n\n`;
     });
   }
 
@@ -2788,7 +2802,7 @@ async function enviarTxtAlertasDiaLocal(chatId) {
       txt += `${i + 1}) ${x.nombrePerfil}\nTeléfono: ${x.telefono}\nVendedor: ${x.vendedor}\n`;
       txt += `Plataforma: ${humanPlatAlertLocal(x.plataforma)}\n`;
       txt += `${getIdentLabelLocal(x.plataforma) === "Usuario" ? "Usuario" : "Correo"}: ${x.correo}\n`;
-      txt += `Fecha: ${x.fechaRenovacion}\nMonto: ${Number(x.precio || 0).toFixed(2)} Lps\n\n`;
+      txt += `Fecha: ${x.fechaRenovacion}\nMonto: L${Number(x.precio || 0).toFixed(2)}\n\n`;
     });
   }
 
@@ -3591,7 +3605,7 @@ function renderAuditoriaClienteLocal(cliente = {}, eventos = []) {
     txt += `\n${i + 1}) ${humanPlataforma(sv?.plataforma || "")}\n`;
     txt += `   compraId: ${sv?.compraId || "⚠️ SIN compraId"}\n`;
     txt += `   correo/usuario: ${sv?.correo || perfiles?.[0]?.correo || "-"}\n`;
-    txt += `   renovación: ${sv?.fechaRenovacion || "-"} | precio: ${Number(sv?.precio || 0).toFixed(2)} Lps\n`;
+    txt += `   renovación: ${sv?.fechaRenovacion || "-"} | precio: L${Number(sv?.precio || 0).toFixed(2)}\n`;
     txt += `   creado: ${fechaAuditoriaLocal(sv?.createdAt || sv?.fechaCreacion)} | actualizado: ${fechaAuditoriaLocal(sv?.updatedAt || sv?.fechaActualizacion)}\n`;
     txt += `   perfiles (${perfiles.length}):\n`;
     perfiles.forEach((p, pi) => {
@@ -4034,7 +4048,7 @@ bot.onText(/^\/aviso\s+(.+)/is, async (msg, match) => {
   if (!(await requirePermissionLocal(chatId, userId, "avisos.write"))) return;
 
   const texto = String(match[1] || "").trim();
-  if (!texto) return bot.sendMessage(chatId, "⚠️ Escriba el texto del aviso.\n\nEj: `/aviso Netflix subió a Lps. 110`", { parse_mode: "Markdown" });
+  if (!texto) return bot.sendMessage(chatId, "⚠️ Escriba el texto del aviso.\n\nEj: `/aviso Netflix subió a L110`", { parse_mode: "Markdown" });
 
   try {
     const autor = msg.from?.first_name || "Admin";
@@ -4264,8 +4278,8 @@ async function runPromoEmojiCommandLocal(msg, command) {
       `${promoEmojiTagLocal(icons.plataforma,"🎯")} <b>Plataforma:</b> Sublicuentas`,
       "",
       `<b>${promoEmojiTagLocal(icons.datos,"💎")} Datos de la oferta</b>`,
-      `• ${promoEmojiTagLocal(icons.normal,"🧾")} <b>Precio normal:</b> L 100`,
-      `• ${promoEmojiTagLocal(icons.socio,"💰")} <b>Precio socio:</b> L 50`,
+      `• ${promoEmojiTagLocal(icons.normal,"🧾")} <b>Precio normal:</b> L100`,
+      `• ${promoEmojiTagLocal(icons.socio,"💰")} <b>Precio socio:</b> L50`,
       `• ${promoEmojiTagLocal(icons.cupos,"📦")} <b>Cupos:</b> 5`,
       `• ${promoEmojiTagLocal(icons.vigencia,"⏳")} <b>Vigencia:</b> septiembre`,
       "",
@@ -5162,7 +5176,7 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
 
       if (data === "fin:menu:ingreso") {
         pending.set(String(chatId), { mode: "finIngresoMonto" });
-        return upsertPanel(chatId, "➕ *REGISTRAR INGRESO*\n\n💰 Escriba el monto del ingreso en Lps:", [
+        return upsertPanel(chatId, "➕ *REGISTRAR INGRESO*\n\n💰 Escriba el monto del ingreso en lempiras (L):", [
           [{ text: "⬅️ Volver Finanzas", callback_data: "fin:menu:registro" }],
           [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
         ]);
@@ -5170,7 +5184,7 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
 
       if (data === "fin:menu:egreso") {
         pending.set(String(chatId), { mode: "finEgresoMonto" });
-        return upsertPanel(chatId, "➖ *REGISTRAR EGRESO*\n\n💸 Escriba el monto del gasto en Lps:", [
+        return upsertPanel(chatId, "➖ *REGISTRAR EGRESO*\n\n💸 Escriba el monto del gasto en lempiras (L):", [
           [{ text: "⬅️ Volver Finanzas", callback_data: "fin:menu:registro" }],
           [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
         ]);
@@ -6036,7 +6050,7 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
         if (st.servStep === 2) return bot.sendMessage(chatId, `(Servicio 2/6) ${getIdentLabelLocal(plat)} de la cuenta:`);
         if (st.servStep === 3) return bot.sendMessage(chatId, "(Servicio 3/6) Clave de la cuenta:");
         if (st.servStep === 4) return bot.sendMessage(chatId, "(Servicio 4/6) PIN del perfil:");
-        return bot.sendMessage(chatId, "(Servicio 5/6) Precio (solo número, Lps):");
+        return bot.sendMessage(chatId, "(Servicio 5/6) Precio (solo número, en lempiras):");
       }
 
       if (data.startsWith("wiz:addmore:")) {
@@ -6411,7 +6425,32 @@ Revise que el correo exista en inventario con esa plataforma o coloque la clave 
         return menuRenovacionServicio(chatId, clientId, compraSel);
       }
 
-      // ✅ RENOVAR +30 DÍAS
+      // ✅ Oct-2026 · RENOVAR POR DURACIÓN (+31 días, 1, 2, 3, 6, 12 meses) — igual que Web y APK.
+      // Vigente → desde el vencimiento; vencido → desde hoy (sumarDuracionRenovacionLocal).
+      if (data.startsWith("cli:ren:dur:")) {
+        const raw = data.slice("cli:ren:dur:".length);
+        const code = raw.slice(0, raw.indexOf(":"));
+        const rest = raw.slice(raw.indexOf(":") + 1);
+        const lastColon = rest.lastIndexOf(":");
+        const clientId = rest.slice(0, lastColon);
+        const compraSel = rest.slice(lastColon + 1);
+        const dur = duracionDesdeCodigoLocal(code);
+        if (!dur) return bot.sendMessage(chatId, "⚠️ Opción no válida. Abra de nuevo la renovación.");
+        const actual = await getCliente(clientId);
+        const servicios = Array.isArray(actual?.servicios) ? actual.servicios : [];
+        const idx = resolverIndiceCompraSelectorLocal(servicios, compraSel);
+        if (idx < 0) return bot.sendMessage(chatId, "⚠️ Esa compra cambió o ya no existe. Abra nuevamente la ficha.");
+        const compraId = String(servicios[idx]?.compraId || "");
+        const opciones = dur.meses ? { meses: dur.meses } : { dias: dur.dias };
+        if (await finLibro.esLibroUser(userId)) return finLibro.iniciarPagoRenovacion(chatId, userId, { tipo: "uno", clientId, idx, compraId, ...opciones, etiqueta: `${servicios[idx]?.plataforma || "servicio"} ${dur.etiqueta}` });
+        const renovado = await renovarServicioTx(clientId, idx, { ...opciones, compraId });
+        const aud=await actividadClienteServicioLocal(clientId,idx,compraId);
+        await registrarActividadTelegramLocal(userId,chatId,'renovar_servicio',{...aud,campo:'renovación',cambio:`nueva fecha ${renovado.fechaNueva}`},`Renovó ${aud.plataforma||'servicio'}${aud.cliente?` de ${aud.cliente}`:''} ${dur.etiqueta} · nueva fecha ${renovado.fechaNueva}.`);
+        await bot.sendMessage(chatId, `✅ Renovado ${dur.etiqueta}\nNueva fecha: *${escMD(renovado.fechaNueva)}*`, { parse_mode: "Markdown" });
+        return enviarFichaCliente(chatId, clientId);
+      }
+
+      // ✅ RENOVAR +30 DÍAS (botones viejos que sigan en el chat)
       if (data.startsWith("cli:ren:auto:")) {
         const raw = data.slice("cli:ren:auto:".length);
         const lastColon = raw.lastIndexOf(":");
@@ -6576,6 +6615,29 @@ Revise que el correo exista en inventario con esa plataforma o coloque la clave 
           "• `+90` — suma 90 días desde hoy a todos",
           [[{ text: "⬅️ Cancelar", callback_data: `cli:ren:list:${clientId}` }]]
         );
+      }
+
+      // ✅ Oct-2026 · RENOVAR TODOS POR DURACIÓN
+      if (data.startsWith("cli:ren:alldur:ask:") || data.startsWith("cli:ren:alldur:ok:")) {
+        const ok = data.startsWith("cli:ren:alldur:ok:");
+        const raw = data.slice((ok ? "cli:ren:alldur:ok:" : "cli:ren:alldur:ask:").length);
+        const code = raw.slice(0, raw.indexOf(":"));
+        const clientId = raw.slice(raw.indexOf(":") + 1);
+        const dur = duracionDesdeCodigoLocal(code);
+        if (!dur) return bot.sendMessage(chatId, "⚠️ Opción no válida. Abra de nuevo la renovación.");
+        if (!ok) {
+          return upsertPanel(chatId, `⏫ *Renovar TODOS ${escMD(dur.etiqueta)}*\n\nVigentes: desde su vencimiento · vencidos: desde hoy.\n¿Desea renovar todos los servicios de este cliente?`, [
+            [{ text: "✅ Confirmar", callback_data: `cli:ren:alldur:ok:${code}:${clientId}` }],
+            [{ text: "⬅️ Cancelar", callback_data: `cli:ren:list:${clientId}` }],
+          ]);
+        }
+        const opciones = dur.meses ? { meses: dur.meses } : { dias: dur.dias };
+        if (await finLibro.esLibroUser(userId)) return finLibro.iniciarPagoRenovacion(chatId, userId, { tipo: "todos", clientId, ...opciones, etiqueta: `todos los servicios ${dur.etiqueta}` });
+        const cAudit=await getCliente(clientId);
+        await renovarTodosServiciosTx(clientId, opciones);
+        await registrarActividadTelegramLocal(userId,chatId,'renovar_todos',{clienteId:clientId,cliente:cAudit?.nombrePerfil||cAudit?.nombre||'Cliente',telefono:cAudit?.telefono||'',campo:'todos los servicios',cambio:dur.etiqueta},`Renovó todos los servicios de ${cAudit?.nombrePerfil||cAudit?.nombre||'Cliente'} ${dur.etiqueta}.`);
+        await bot.sendMessage(chatId, `✅ Todos los servicios renovados ${dur.etiqueta}.`);
+        return enviarFichaCliente(chatId, clientId);
       }
 
       if (data.startsWith("cli:ren:all:ask:")) {
@@ -6751,10 +6813,10 @@ Revise que el correo exista en inventario con esa plataforma o coloque la clave 
       );
       let total = 0; list.forEach(x => { total += Number(x.precio || 0); });
       let txt = `📅 *RENOVACIONES HOY — ${escMD(fecha)}*\n`;
-      txt += `👤 *${escMD(vend.nombre)}* · 👥 *${list.length}* · 💰 *${escMD(total.toFixed(2))} Lps*\n\n`;
+      txt += `👤 *${escMD(vend.nombre)}* · 👥 *${list.length}* · 💰 *L${escMD(total.toFixed(2))}*\n\n`;
       list.forEach((x, i) => {
         txt += `*${i + 1}.* ${iconPlataforma(x.plataforma || "")} ${escMD(x.nombrePerfil || "Sin nombre")}\n`;
-        txt += `   📱 ${escMD(x.telefono || "-")} · 💰 ${escMD(Number(x.precio || 0).toFixed(2))} Lps\n`;
+        txt += `   📱 ${escMD(x.telefono || "-")} · 💰 L${escMD(Number(x.precio || 0).toFixed(2))}\n`;
       });
       const kb = list.slice(0, 20).map((x, i) => [{
         text: `${i + 1}) ${(x.nombrePerfil || "Sin nombre").slice(0, 22)} • ${humanPlataforma(x.plataforma || "")}`,
@@ -6774,10 +6836,10 @@ Revise que el correo exista en inventario con esa plataforma o coloque la clave 
       );
       let total = 0; list.forEach(x => { total += Number(x.precio || 0); });
       let txt = `⏳ *RENOVACIONES EN 3 DÍAS — ${escMD(fecha)}*\n`;
-      txt += `👤 *${escMD(vend.nombre)}* · 👥 *${list.length}* · 💰 *${escMD(total.toFixed(2))} Lps*\n\n`;
+      txt += `👤 *${escMD(vend.nombre)}* · 👥 *${list.length}* · 💰 *L${escMD(total.toFixed(2))}*\n\n`;
       list.forEach((x, i) => {
         txt += `*${i + 1}.* ${iconPlataforma(x.plataforma || "")} ${escMD(x.nombrePerfil || "Sin nombre")}\n`;
-        txt += `   📱 ${escMD(x.telefono || "-")} · 💰 ${escMD(Number(x.precio || 0).toFixed(2))} Lps\n`;
+        txt += `   📱 ${escMD(x.telefono || "-")} · 💰 L${escMD(Number(x.precio || 0).toFixed(2))}\n`;
       });
       const kb = list.slice(0, 20).map((x, i) => [{
         text: `${i + 1}) ${(x.nombrePerfil || "Sin nombre").slice(0, 22)} • ${humanPlataforma(x.plataforma || "")}`,
@@ -6820,10 +6882,37 @@ Revise que el correo exista en inventario con esa plataforma o coloque la clave 
       return enviarFichaClienteVendedor(chatId, clientId, "vend:buscar", vend.nombre);
     }
 
+    if (data.startsWith("vreg:e:")) {
+      const v = await vregDesdeIndice(chatId, data.slice("vreg:e:".length));
+      if (!v) return menuGestionRevendedores(chatId);
+      pending.set(String(chatId), { mode: "vregEditNombre", nombreAnterior: v.nombre, telefonoAnterior: v.telefono || "" });
+      return upsertPanel(chatId,
+        `✏️ *EDITAR ${escMD(v.nombre)}*\n📱 Actual: ${escMD(v.telefono || "sin número")}\n\nEscriba el *nombre* (o un punto \`.\` para dejarlo igual):`,
+        [[{ text: "❌ Cancelar", callback_data: "menu:revendedores" }]]);
+    }
+    if (data.startsWith("vreg:d:")) {
+      const n = data.slice("vreg:d:".length);
+      const v = await vregDesdeIndice(chatId, n);
+      if (!v) return menuGestionRevendedores(chatId);
+      return upsertPanel(chatId, `🗑️ *ELIMINAR ${escMD(v.nombre)}*\n\nDeja de salir en Web, APK y Bot. Sus clientes NO se borran.\n¿Confirma?`, [
+        [{ text: "✅ Sí, eliminar", callback_data: `vreg:dok:${n}` }],
+        [{ text: "❌ Cancelar", callback_data: "menu:revendedores" }],
+      ]);
+    }
+    if (data.startsWith("vreg:dok:")) {
+      const v = await vregDesdeIndice(chatId, data.slice("vreg:dok:".length));
+      if (!v) return menuGestionRevendedores(chatId);
+      await vendedoresReg.eliminarVendedor(db, { nombre: v.nombre, usuario: String(userId || "") });
+      vendedoresDescubiertosCache = { expiresAt: 0, items: new Map() };
+      await registrarActividadTelegramLocal(userId,chatId,'eliminar_vendedor',{vendedor:v.nombre,campo:'vendedor',cambio:'eliminado'},`Eliminó al vendedor ${v.nombre}.`,'Equipo');
+      await bot.sendMessage(chatId, `✅ ${v.nombre} eliminado de las listas.`);
+      return menuGestionRevendedores(chatId);
+    }
+
     if (data === "rev:add:start") {
       pending.set(String(chatId), { mode: "revAddNombre" });
       return upsertPanel(chatId,
-        "➕ *AGREGAR REVENDEDOR*\n\nEscriba el *nombre* del revendedor:",
+        "➕ *AGREGAR VENDEDOR O SOCIO*\n\nEscriba el *nombre* (ej. Sublicuentas 1):",
         [[{ text: "❌ Cancelar", callback_data: "menu:revendedores" }]]
       );
     }
@@ -6852,6 +6941,7 @@ Revise que el correo exista en inventario con esa plataforma o coloque la clave 
         metadata: { revendedorId: docId },
       });
       const nombre = trash?.snapshot?.nombre || docId;
+      await vendedoresReg.anotarCambioSocio(db, { antes: { ...(trash?.snapshot || {}), nombre_norm: trash?.snapshot?.nombre_norm || docId } }).catch(() => null);
       invalidarCacheRevendedores();
       forceNextPanelAtBottom(chatId);
       await bot.sendMessage(chatId, `✅ Revendedor *${escMD(nombre)}* movido a Papelera de Integridad.\nRespaldo: \`${escMD(trash.trashId)}\``, { parse_mode: "Markdown" });
@@ -6896,7 +6986,7 @@ Revise que el correo exista en inventario con esa plataforma o coloque la clave 
         txt += `\n*${escMD(grupo.cat || "Catálogo")}*\n`;
         for (const it of grupo.items || []) {
           const nombre = it.s ? `${it.n} · ${it.s}` : it.n;
-          const precio = it.p == null ? "Por comisión" : `Lps. ${Number(it.p)}`;
+          const precio = it.p == null ? "Por comisión" : `L${Number(it.p)}`;
           txt += `• ${escMD(nombre)}: *${escMD(precio)}*\n`;
         }
       }
@@ -7372,7 +7462,7 @@ bot.on("message", async (msg) => {
         const finRef = db.collection(FINANZAS_COLLECTION).doc(String(p.id));
         const finPrev = (await finRef.get()).data() || {};
         await finRef.set({ monto: Number(monto), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
-        await registrarActividadTelegramLocal(userId,chatId,'editar_movimiento_finanzas',{id:String(p.id),campo:'monto',cambio:`L ${Number(finPrev.monto||0).toFixed(2)} → L ${Number(monto).toFixed(2)}`,cliente:finPrev.cliente||finPrev.nombreCliente||'',plataforma:finPrev.plataforma||'',motivo:finPrev.motivo||''},`Actualizó el monto de un movimiento: L ${Number(finPrev.monto||0).toFixed(2)} → L ${Number(monto).toFixed(2)}${finPrev.cliente||finPrev.nombreCliente?` · ${finPrev.cliente||finPrev.nombreCliente}`:''}.`,'Finanzas');
+        await registrarActividadTelegramLocal(userId,chatId,'editar_movimiento_finanzas',{id:String(p.id),campo:'monto',cambio:`L${Number(finPrev.monto||0).toFixed(2)} → L${Number(monto).toFixed(2)}`,cliente:finPrev.cliente||finPrev.nombreCliente||'',plataforma:finPrev.plataforma||'',motivo:finPrev.motivo||''},`Actualizó el monto de un movimiento: L${Number(finPrev.monto||0).toFixed(2)} → L${Number(monto).toFixed(2)}${finPrev.cliente||finPrev.nombreCliente?` · ${finPrev.cliente||finPrev.nombreCliente}`:''}.`,'Finanzas');
         return bot.sendMessage(chatId, "✅ Monto actualizado correctamente.");
       }
 
@@ -7561,26 +7651,71 @@ bot.on("message", async (msg) => {
 
       if (p.mode === "revAddNombre") {
         if (!t) return bot.sendMessage(chatId, "⚠️ Escriba el nombre.");
-        pending.set(String(chatId), { mode: "revAddTelegramId", nombre: t.trim() });
+        pending.set(String(chatId), { mode: "revAddTelefono", nombre: t.trim() });
         return upsertPanel(chatId,
-          `➕ *AGREGAR REVENDEDOR*\n👤 *${escMD(t.trim())}*\n\nEscriba el *ID de Telegram* (número):`,
+          `➕ *AGREGAR*\n👤 *${escMD(t.trim())}*\n\nEscriba el *WhatsApp*:\n• Honduras: 8 dígitos (2255-4675)\n• Otro país: con su código (+52 55 1234 5678)\n• \`0\` si no tiene`,
           [[{ text: "❌ Cancelar", callback_data: "menu:revendedores" }]]
         );
+      }
+
+      if (p.mode === "revAddTelefono") {
+        const tel = t.trim() === "0" ? "" : vendedoresReg.telValido(t);
+        if (t.trim() !== "0" && !tel) return bot.sendMessage(chatId, "⚠️ Número inválido. Honduras: 8 dígitos. Otro país: con su código (+52…). O escriba 0.");
+        pending.set(String(chatId), { mode: "revAddTelegramId", nombre: p.nombre, telefono: tel });
+        return upsertPanel(chatId,
+          `➕ *AGREGAR*\n👤 *${escMD(p.nombre)}* · 📱 ${escMD(tel || "sin número")}\n\n¿Es *socio* con acceso al bot? Escriba su *ID de Telegram*.\nSi es *vendedor del equipo* escriba \`0\`.`,
+          [[{ text: "❌ Cancelar", callback_data: "menu:revendedores" }]]
+        );
+      }
+
+      if (p.mode === "vregEditNombre") {
+        const nombre = t.trim() === "." ? p.nombreAnterior : t.trim();
+        if (!nombre) return bot.sendMessage(chatId, "⚠️ Escriba el nombre o un punto.");
+        pending.set(String(chatId), { ...p, mode: "vregEditTelefono", nombre });
+        return upsertPanel(chatId, `✏️ *${escMD(nombre)}*\n\nEscriba el *WhatsApp* nuevo (Honduras 8 dígitos; otro país con +código), un punto \`.\` para dejarlo igual (${escMD(p.telefonoAnterior || "sin número")}) o \`0\` para quitarlo:`,
+          [[{ text: "❌ Cancelar", callback_data: "menu:revendedores" }]]);
+      }
+
+      if (p.mode === "vregEditTelefono") {
+        const raw = t.trim();
+        const telefono = raw === "." ? p.telefonoAnterior : raw === "0" ? "" : raw;
+        if (raw !== "." && raw !== "0" && !vendedoresReg.telValido(raw)) return bot.sendMessage(chatId, "⚠️ Número inválido. Honduras: 8 dígitos. Otro país: con su código (+52…).");
+        pending.delete(String(chatId));
+        try {
+          const v = await vendedoresReg.guardarVendedor(db, { nombre: p.nombre, telefono, nombreAnterior: p.nombreAnterior, usuario: String(userId || "") });
+          vendedoresDescubiertosCache = { expiresAt: 0, items: new Map() };
+          invalidarCacheRevendedores();
+          await registrarActividadTelegramLocal(userId,chatId,'editar_vendedor',{vendedor:v?.nombre||p.nombre,campo:'vendedor',cambio:`${p.nombreAnterior} ${p.telefonoAnterior||'-'} → ${v?.nombre||p.nombre} ${v?.telefono||'-'}`},`Editó al vendedor ${p.nombreAnterior}.`,'Equipo');
+          await bot.sendMessage(chatId, `✅ Guardado: ${v?.nombre || p.nombre} · ${v?.telefono || "sin número"}\nSe actualiza en Web, APK, Bot y fichas.`);
+        } catch (e) { await bot.sendMessage(chatId, `⚠️ ${e.message}`); }
+        return menuGestionRevendedores(chatId);
       }
 
       // ✅ AGREGAR REVENDEDOR — paso 2: ID Telegram
       if (p.mode === "revAddTelegramId") {
         const telegramId = t.trim().replace(/[^0-9]/g, "");
-        if (!telegramId || telegramId.length < 5) return bot.sendMessage(chatId, "⚠️ ID inválido. Debe ser un número (ej: 123456789).");
+        if (t.trim() === "0") {
+          // Vendedor del equipo (sin acceso al Panel de Socios): solo registro único.
+          pending.delete(String(chatId));
+          try {
+            const v = await vendedoresReg.guardarVendedor(db, { nombre: p.nombre, telefono: p.telefono || "", usuario: String(userId || ""), tipo: "equipo" });
+            vendedoresDescubiertosCache = { expiresAt: 0, items: new Map() };
+            await registrarActividadTelegramLocal(userId,chatId,'agregar_vendedor',{vendedor:v?.nombre||p.nombre,campo:'vendedor',cambio:'vendedor agregado'},`Agregó al vendedor ${v?.nombre||p.nombre}.`,'Equipo');
+            await bot.sendMessage(chatId, `✅ ${v?.nombre || p.nombre} agregado · ${v?.telefono || "sin número"}\nYa aparece en Web, APK, Bot, cobros y renovación.`);
+          } catch (e) { await bot.sendMessage(chatId, `⚠️ ${e.message}`); }
+          return menuGestionRevendedores(chatId);
+        }
+        if (!telegramId || telegramId.length < 5) return bot.sendMessage(chatId, "⚠️ ID inválido. Debe ser un número (ej: 123456789) o 0 si es del equipo.");
         pending.delete(String(chatId));
         forceNextPanelAtBottom(chatId);
         const nombre = p.nombre || "Sin nombre";
         const docId = nombre.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").trim().replace(/\s+/g, " ");
         await db.collection("revendedores").doc(docId).set({
-          nombre, nombre_norm: docId, telegramId: String(telegramId), activo: true,
+          nombre, nombre_norm: docId, telegramId: String(telegramId), activo: true, ...(p.telefono ? { telefono: p.telefono } : {}),
           autoLastSent: "", createdAt: admin.firestore.FieldValue.serverTimestamp(),
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         }, { merge: true });
+        await vendedoresReg.anotarCambioSocio(db, { despues: { nombre, nombre_norm: docId, telefono: p.telefono || "" } }).catch(() => null);
         invalidarCacheRevendedores();
         await registrarActividadTelegramLocal(userId,chatId,'agregar_vendedor',{vendedor:nombre,campo:'usuario Telegram',cambio:'vendedor agregado'},`Agregó al vendedor ${nombre} al bot de Telegram.`,'Equipo');
         await bot.sendMessage(chatId, `✅ Revendedor *${escMD(nombre)}* agregado.\n🆔 ${escMD(telegramId)}`, { parse_mode: "Markdown" });
@@ -7911,7 +8046,7 @@ bot.on("message", async (msg) => {
         const normalizedMail = normalizeIdentByPlatformLocal(p.plat, t);
         if (esSoloCorreoLocal(p.plat)) {
           pending.set(String(chatId), { mode: "cliAddServPrecio", clientId: p.clientId, plat: p.plat, mail: normalizedMail, clave: "", pin: "" });
-          return bot.sendMessage(chatId, "💰 Precio (solo número, Lps):");
+          return bot.sendMessage(chatId, "💰 Precio (solo número, en lempiras):");
         }
         if (requiereClaveLocal(p.plat)) {
           pending.set(String(chatId), { mode: "cliAddServClave", clientId: p.clientId, plat: p.plat, mail: normalizedMail });
@@ -7927,12 +8062,12 @@ bot.on("message", async (msg) => {
           return bot.sendMessage(chatId, "🔐 Escriba el PIN del perfil:");
         }
         pending.set(String(chatId), { mode: "cliAddServPrecio", clientId: p.clientId, plat: p.plat, mail: p.mail, clave: t, pin: "" });
-        return bot.sendMessage(chatId, "💰 Precio (solo número, Lps):");
+        return bot.sendMessage(chatId, "💰 Precio (solo número, en lempiras):");
       }
 
       if (p.mode === "cliAddServPin") {
         pending.set(String(chatId), { mode: "cliAddServPrecio", clientId: p.clientId, plat: p.plat, mail: p.mail, clave: p.clave || "", pin: t });
-        return bot.sendMessage(chatId, "💰 Precio (solo número, Lps):");
+        return bot.sendMessage(chatId, "💰 Precio (solo número, en lempiras):");
       }
 
       if (p.mode === "cliAddServPrecio") {
@@ -7971,7 +8106,7 @@ bot.on("message", async (msg) => {
         } catch (e) {
           return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo agregar el servicio."}`);
         }
-        {const cAudit=await getCliente(p.clientId);await registrarActividadTelegramLocal(userId,chatId,'agregar_servicio',{clienteId:p.clientId,cliente:cAudit?.nombrePerfil||cAudit?.nombre||'Cliente',telefono:cAudit?.telefono||'',plataforma:humanPlataforma(p.plat),cuenta:p.mail||'',vendedor,campo:'servicio',cambio:`precio L ${p.precio} · renovación ${p.fechaRenovacion}`},`Agregó ${humanPlataforma(p.plat)} a ${cAudit?.nombrePerfil||cAudit?.nombre||'Cliente'}${p.mail?` · cuenta ${p.mail}`:''} · L ${p.precio} · renueva ${p.fechaRenovacion}.`);}
+        {const cAudit=await getCliente(p.clientId);await registrarActividadTelegramLocal(userId,chatId,'agregar_servicio',{clienteId:p.clientId,cliente:cAudit?.nombrePerfil||cAudit?.nombre||'Cliente',telefono:cAudit?.telefono||'',plataforma:humanPlataforma(p.plat),cuenta:p.mail||'',vendedor,campo:'servicio',cambio:`precio L${p.precio} · renovación ${p.fechaRenovacion}`},`Agregó ${humanPlataforma(p.plat)} a ${cAudit?.nombrePerfil||cAudit?.nombre||'Cliente'}${p.mail?` · cuenta ${p.mail}`:''} · L${p.precio} · renueva ${p.fechaRenovacion}.`);}
         if (await finLibro.esLibroUser(userId)) { // R106: compra nueva = operación financiera (total + recibido + banco/responsable)
           const cF = await getCliente(p.clientId);
           await enviarFichaCliente(chatId, p.clientId);
@@ -8083,7 +8218,7 @@ bot.on("message", async (msg) => {
         pending.delete(String(chatId));
       forceNextPanelAtBottom(chatId);
         try { await patchServicio(p.clientId, p.idx, { precio: n }, p.compraId || ""); } catch (e) { return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo actualizar el servicio."}`); }
-        {const aud=await actividadClienteServicioLocal(p.clientId,p.idx,p.compraId||"");await registrarActividadTelegramLocal(userId,chatId,'editar_servicio',{...aud,campo:'precio',cambio:`precio → L ${n}`},`Actualizó el precio de ${aud.cliente||'cliente'}${aud.plataforma?` · ${aud.plataforma}`:''} → L ${n}.`);}
+        {const aud=await actividadClienteServicioLocal(p.clientId,p.idx,p.compraId||"");await registrarActividadTelegramLocal(userId,chatId,'editar_servicio',{...aud,campo:'precio',cambio:`precio → L${n}`},`Actualizó el precio de ${aud.cliente||'cliente'}${aud.plataforma?` · ${aud.plataforma}`:''} → L${n}.`);}
         return menuServicio(chatId, p.clientId, p.idx);
       }
 
@@ -8176,10 +8311,10 @@ async function enviarListaRenovacionesVendedor7AM(chatId, vendedorNombre) {
   if (!list.length) return false;
   let total = 0; list.forEach(x => { total += Number(x.precio || 0); });
   let txt = `📅 *RENOVACIONES DE HOY — ${escMD(fecha)}*\n`;
-  txt += `👤 *${escMD(vendedorNombre)}* · 👥 *${list.length}* · 💰 *${escMD(total.toFixed(2))} Lps*\n\n`;
+  txt += `👤 *${escMD(vendedorNombre)}* · 👥 *${list.length}* · 💰 *L${escMD(total.toFixed(2))}*\n\n`;
   list.forEach((x, i) => {
     txt += `*${i + 1}.* ${iconPlataforma(x.plataforma || "")} ${escMD(x.nombrePerfil || "Sin nombre")}\n`;
-    txt += `   📱 ${escMD(x.telefono || "-")} · 💰 ${escMD(Number(x.precio || 0).toFixed(2))} Lps\n`;
+    txt += `   📱 ${escMD(x.telefono || "-")} · 💰 L${escMD(Number(x.precio || 0).toFixed(2))}\n`;
   });
   const kb = list.slice(0, 20).map((x, i) => [{ text: `${i + 1}) ${(x.nombrePerfil || "Sin nombre").slice(0, 22)} • ${humanPlataforma(x.plataforma || "")}`, callback_data: `vend:cli:${x.clientId || x.id || ""}` }]);
   try { await bot.sendMessage(String(chatId), txt, { parse_mode: "Markdown", reply_markup: { inline_keyboard: kb } }); return true; } catch(e) { return false; }
@@ -8272,7 +8407,7 @@ function construirMensajeRecordatorio(row) {
   const cuerpo = elegirVariado(REC_CUERPOS_HOY, semilla + ":c")(plat, emoji);
   const cierre = elegirVariado(REC_CIERRES, semilla + ":z")();
 
-  return `${saludo}\n\n${cuerpo}\n\n💰 Monto: *L. ${precio}*\n\n${cierre}`;
+  return `${saludo}\n\n${cuerpo}\n\n💰 Monto: *L${precio}*\n\n${cierre}`;
 }
 
 // WhatsApp Business (Android): los enlaces https://wa.me no permiten elegir

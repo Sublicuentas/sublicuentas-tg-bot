@@ -494,6 +494,24 @@ function addDaysDMY(baseDmy = "", days = 0) {
   return `${String(dt.getDate()).padStart(2,"0")}/${String(dt.getMonth()+1).padStart(2,"0")}/${dt.getFullYear()}`;
 }
 
+// Oct-2026 · Renovación por duración (igual que Sublichat Web y la APK):
+// vigente → se suma desde la fecha de vencimiento; vencido → desde hoy. Meses calendario (31/01 + 1 mes = 28/02).
+function sumarDuracionRenovacionLocal(fechaAnterior = "", { dias = 0, meses = 0 } = {}) {
+  const hoy = hoyDMY();
+  const vigente = isFechaDMY(fechaAnterior) && parseDMYtoTS(fechaAnterior) >= parseDMYtoTS(hoy);
+  const base = vigente ? fechaAnterior : hoy;
+  const m = Number(meses || 0);
+  if (m > 0) {
+    const dt = parseDMYtoDate(base) || parseDMYtoDate(hoy);
+    const dia = dt.getDate();
+    const destino = new Date(dt.getFullYear(), dt.getMonth() + m, 1, 12);
+    const ultimo = new Date(destino.getFullYear(), destino.getMonth() + 1, 0).getDate();
+    destino.setDate(Math.min(dia, ultimo));
+    return `${String(destino.getDate()).padStart(2, "0")}/${String(destino.getMonth() + 1).padStart(2, "0")}/${destino.getFullYear()}`;
+  }
+  return addDaysDMY(base, Number(dias || 0));
+}
+
 function mesesEntreDMYLocal(inicio = "", fin = "") {
   const a = parseDMYtoDate(inicio);
   const b = parseDMYtoDate(fin);
@@ -1032,7 +1050,7 @@ async function generarHistorialTXT(clientId) {
   txt += `Telefono: ${c.telefono || "-"}\n`;
   txt += `Vendedores: ${resumenVendedoresCliente(servicios, c).vendedores.join(" + ") || "-"}\n`;
   txt += `Estado actual: ${resumen.estadoTexto}\n`;
-  txt += `Total mensual actual: ${Number(resumen.total || 0).toFixed(2)} Lps\n`;
+  txt += `Total mensual actual: L${Number(resumen.total || 0).toFixed(2)}\n`;
   txt += `Proxima renovacion: ${resumen.proxima}\n`;
   txt += `Compras activas: ${servicios.length}\n`;
   txt += `Perfiles activos: ${resumen.perfiles}\n\n`;
@@ -1050,7 +1068,7 @@ async function generarHistorialTXT(clientId) {
       txt += `\n${i + 1}) ${humanPlataforma(s.plataforma || "")}\n`;
       txt += `Uso: ${benef.texto}\n`;
       txt += renderCredencialesServicioLocal(s, false, "");
-      txt += `Precio: ${Number(s.precio || 0).toFixed(2)} Lps\n`;
+      txt += `Precio: L${Number(s.precio || 0).toFixed(2)}\n`;
       txt += `Renovacion: ${fechaDMYLocal(s.fechaRenovacion || "") || "-"}\n`;
       txt += `Vendedor responsable: ${vendedorEfectivoServicio(s, c).vendedor || "-"}\n`;
       txt += `Estado: ${est.texto}\n`;
@@ -1073,9 +1091,9 @@ async function generarHistorialTXT(clientId) {
       if (ev.clave)               txt += `   Clave: ${ev.clave}\n`;
       if (ev.pin)                 txt += `   PIN: ${ev.pin}\n`;
       if (ev.precio !== undefined && ev.precio !== null)
-                                  txt += `   Precio: ${Number(ev.precio || 0).toFixed(2)} Lps\n`;
+                                  txt += `   Precio: L${Number(ev.precio || 0).toFixed(2)}\n`;
       if (ev.precioAnterior !== undefined && ev.precioAnterior !== null)
-                                  txt += `   Precio anterior: ${Number(ev.precioAnterior || 0).toFixed(2)} Lps\n`;
+                                  txt += `   Precio anterior: L${Number(ev.precioAnterior || 0).toFixed(2)}\n`;
       if (ev.fechaRenovacion)     txt += `   Fecha renovacion: ${ev.fechaRenovacion}\n`;
       if (ev.fechaAnterior)       txt += `   Fecha anterior: ${ev.fechaAnterior}\n`;
       txt += "\n";
@@ -1320,7 +1338,7 @@ function clienteResumenTXT(c = {}) {
 
   let txt = "CRM CLIENTE\n";
   txt += `Nombre: ${nombre}\nTelefono: ${telefono}\nVendedor: ${vendedor}\n`;
-  txt += `Estado general: ${resumen.estadoTexto}\nTotal mensual: ${Number(resumen.total || 0).toFixed(2)} Lps\n`;
+  txt += `Estado general: ${resumen.estadoTexto}\nTotal mensual: L${Number(resumen.total || 0).toFixed(2)}\n`;
   txt += `Proxima renovacion: ${resumen.proxima}\nCompras activas: ${servicios.length}\nPerfiles activos: ${resumen.perfiles}\n\nCOMPRAS / SERVICIOS\n`;
 
   if (!servicios.length) {
@@ -1333,7 +1351,7 @@ function clienteResumenTXT(c = {}) {
       txt += `Uso: ${benef.texto}\n`;
       txt += `Vendedor responsable: ${vendedorEfectivoServicio(s, c).vendedor || "-"}\n`;
       txt += renderCredencialesServicioLocal(s, false, "");
-      txt += `Precio: ${Number(s.precio || 0).toFixed(2)} Lps\n`;
+      txt += `Precio: L${Number(s.precio || 0).toFixed(2)}\n`;
       txt += `Renovacion: ${fechaDMYLocal(s.fechaRenovacion || "") || "-"}\nEstado: ${est.texto}\n`;
     });
   }
@@ -1352,7 +1370,7 @@ function renderFichaClienteMarkdown(c = {}) {
   let txt = `👤 *CRM CLIENTE*\n\n`;
   txt += `🙍 *Nombre:* ${escMD(nombre)}\n📱 *Teléfono:* ${escMD(telefono)}\n🧾 *Vendedor:* ${escMD(vendedor)}\n`;
   txt += `📊 *Estado general:* ${resumen.estadoEmoji} ${escMD(resumen.estadoTexto)}\n`;
-  txt += `💰 *Total mensual:* ${escMD(`${Number(resumen.total || 0).toFixed(2)} Lps`)}\n`;
+  txt += `💰 *Total mensual:* ${escMD(`L${Number(resumen.total || 0).toFixed(2)}`)}\n`;
   txt += `📅 *Próxima renovación:* ${escMD(resumen.proxima)}\n`;
   txt += `🛒 *Compras activas:* ${escMD(String(servicios.length))}\n👥 *Perfiles activos:* ${escMD(String(resumen.perfiles))}\n\n*COMPRAS / SERVICIOS*\n`;
 
@@ -1369,7 +1387,7 @@ function renderFichaClienteMarkdown(c = {}) {
       txt += `\n\n${i + 1}) ${iconPlataforma(s.plataforma || "")} *${escMD(humanPlataforma(s.plataforma || ""))}* — ${uso}\n`;
       txt += `🧾 *Vendedor responsable:* ${escMD(vendedorEfectivoServicio(s, c).vendedor || "-")}\n`;
       txt += renderCredencialesServicioLocal(s, true, "");
-      txt += `💵 *Precio:* ${escMD(`${Number(s.precio || 0).toFixed(2)} Lps`)}\n`;
+      txt += `💵 *Precio:* ${escMD(`L${Number(s.precio || 0).toFixed(2)}`)}\n`;
       txt += `📅 *Renovación:* ${escMD(fechaDMYLocal(s.fechaRenovacion || "") || "-")} — ${est.emoji} ${escMD(est.texto)}`;
     });
   }
@@ -1408,7 +1426,7 @@ async function enviarFichaClienteVendedor(chatId, clientId, backCb = "vend:clien
 
   let txt = `👤 *${escMD(c.nombrePerfil || "Sin nombre")}*\n`;
   txt += `📱 ${escMD(c.telefono || "-")}\n`;
-  if (total > 0) txt += `💰 *Total mensual: ${escMD(total.toFixed(2))} Lps*\n`;
+  if (total > 0) txt += `💰 *Total mensual: L${escMD(total.toFixed(2))}*\n`;
   txt += `\n`;
 
   if (!servicios.length) {
@@ -1420,7 +1438,7 @@ async function enviarFichaClienteVendedor(chatId, clientId, backCb = "vend:clien
       txt += `*${i + 1}.* *${escMD(humanPlataforma(s.plataforma || ""))}* — ${benef.esTercero ? "🔑" : "👤"} ${escMD(benef.texto)}\n`;
       txt += renderCredencialesServicioLocal(s, true, "   ");
       txt += `   📅 ${escMD(fechaDMYLocal(s.fechaRenovacion || "") || "-")} ${est.emoji}\n`;
-      txt += `   💵 ${escMD(Number(s.precio || 0).toFixed(2))} Lps\n\n`;
+      txt += `   💵 L${escMD(Number(s.precio || 0).toFixed(2))}\n\n`;
     });
   }
 
@@ -1509,7 +1527,7 @@ async function menuServicio(chatId, clientId, selector) {
   txt += renderCredencialesServicioLocal(s, true, "");
   txt += `🧾 *Vendedor responsable:* ${escMD(vendedorEfectivoServicio(s, c).vendedor || "-")}\n`;
   txt += `🛒 *Compra:* ${cantidadPerfilesServicioLocal(s, c.nombrePerfil || "")} perfil(es) · un solo precio\n`;
-  txt += `💰 *Precio:* ${escMD(`${Number(s.precio || 0).toFixed(2)} Lps`)}\n`;
+  txt += `💰 *Precio:* ${escMD(`L${Number(s.precio || 0).toFixed(2)}`)}\n`;
   txt += `📅 *Renovación:* ${escMD(fechaDMYLocal(s.fechaRenovacion || "") || "-")}\n`;
   if (TV_DIGITAL_KEYS_LOCAL.has(normalizarPlataforma(s.plataforma || ""))) {
     const mesesRaw = Math.max(1, Number(s.mesesContratados || (isFechaDMY(s.fechaRenovacion || "") ? mesesContratadosDesdeFechaLocal(s.fechaRenovacion) : 1)) || 1);
@@ -1558,7 +1576,7 @@ async function menuListaPerfilesServicio(chatId, clientId, selector) {
   kb.push([{ text: "➕ Añadir otro perfil", callback_data: `cli:prof:add:${clientId}:${compraSel}` }]);
   kb.push([{ text: "⬅️ Volver compra", callback_data: `cli:serv:menu:${clientId}:${compraSel}` }]);
   return upsertPanel(chatId,
-    `👥 *PERFILES DE LA COMPRA*\n\n👤 Titular: *${escMD(c.nombrePerfil || "Cliente")}*\n📦 ${escMD(humanPlataforma(s.plataforma || ""))}\n💰 Un solo precio: *${escMD(Number(s.precio || 0).toFixed(2))} Lps*\n📅 Una sola renovación: *${escMD(fechaDMYLocal(s.fechaRenovacion || "") || "-")}*\n\nSeleccione un perfil:`,
+    `👥 *PERFILES DE LA COMPRA*\n\n👤 Titular: *${escMD(c.nombrePerfil || "Cliente")}*\n📦 ${escMD(humanPlataforma(s.plataforma || ""))}\n💰 Un solo precio: *L${escMD(Number(s.precio || 0).toFixed(2))}*\n📅 Una sola renovación: *${escMD(fechaDMYLocal(s.fechaRenovacion || "") || "-")}*\n\nSeleccione un perfil:`,
     kb
   );
 }
@@ -1579,7 +1597,7 @@ async function menuPerfilServicio(chatId, clientId, compraSelector, perfilSelect
   const individual = servicioParaPerfilLocal(s, p, c.nombrePerfil || "");
   let txt = `👤 *PERFIL ${perfilIndex + 1} DE ${perfiles.length}*\n\n🙍 *Nombre:* ${escMD(p.nombre || "-")}\n📦 *Plataforma:* ${escMD(humanPlataforma(s.plataforma || ""))}\n`;
   txt += renderCredencialesServicioLocal(individual, true, "");
-  txt += `\n💰 _El precio pertenece a toda la compra: ${escMD(Number(s.precio || 0).toFixed(2))} Lps._`;
+  txt += `\n💰 _El precio pertenece a toda la compra: L${escMD(Number(s.precio || 0).toFixed(2))}_`;
   const kb = [
     [{ text: "👤 Cambiar nombre", callback_data: `cli:prof:edit:name:${clientId}:${compraSel}:${perfilSel}` }],
   ];
@@ -1827,7 +1845,7 @@ async function patchServicio(clientId, idx, patch = {}, compraId = "") {
   if (patchLimpio.pin !== undefined && patchLimpio.pin !== actual.pin)
     cambios.push(`PIN cambiado`);
   if (patchLimpio.precio !== undefined && patchLimpio.precio !== actual.precio)
-    cambios.push(`Precio: ${Number(actual.precio || 0).toFixed(2)} → ${Number(patchLimpio.precio || 0).toFixed(2)} Lps`);
+    cambios.push(`Precio: ${Number(actual.precio || 0).toFixed(2)} → L${Number(patchLimpio.precio || 0).toFixed(2)}`);
   if (patchLimpio.fechaRenovacion && patchLimpio.fechaRenovacion !== actual.fechaRenovacion)
     cambios.push(`Fecha: ${fechaDMYLocal(actual.fechaRenovacion || "") || "-"} → ${fechaDMYLocal(patchLimpio.fechaRenovacion || "") || patchLimpio.fechaRenovacion}`);
   if (patchLimpio.plataforma && normalizarPlataforma(patchLimpio.plataforma) !== normalizarPlataforma(actual.plataforma || ""))
@@ -2109,7 +2127,7 @@ async function eliminarServicioTx(clientId, idx, compraId = "", options = {}) {
   return { ok: true, eliminado, servicioIndex: resultado.actualIdx, nombreCliente: resultado.nombreTitular || "", sync, papeleraId: resultado.papeleraId };
 }
 
-async function renovarServicioTx(clientId, idx, { dias = 0, fechaExacta = "", compraId = "", operationId = "", pagoExtra = null } = {}) {
+async function renovarServicioTx(clientId, idx, { dias = 0, meses = 0, fechaExacta = "", compraId = "", operationId = "", pagoExtra = null } = {}) {
   // HOTFIX 2026-09-28:
   // La renovación debe ser una operación CRM simple y no depender de la capa
   // de idempotencia/papelera. Esa capa continúa activa para eliminaciones y
@@ -2124,7 +2142,7 @@ async function renovarServicioTx(clientId, idx, { dias = 0, fechaExacta = "", co
     const fechaAnterior = String(anterior.fechaRenovacion || "");
     const fechaNueva = fechaExacta
       ? String(fechaExacta || "").trim()
-      : addDaysDMY(isFechaDMY(fechaAnterior) ? fechaAnterior : hoyDMY(), Number(dias || 0));
+      : sumarDuracionRenovacionLocal(fechaAnterior, { dias, meses });
 
     if (!isFechaDMY(fechaNueva)) throw new Error("Fecha inválida.");
 
@@ -2220,7 +2238,7 @@ async function renovarServicioTx(clientId, idx, { dias = 0, fechaExacta = "", co
   };
 }
 
-async function renovarTodosServiciosTx(clientId, { dias = 0, fechaExacta = "", operationId = "", pagoExtra = null } = {}) {
+async function renovarTodosServiciosTx(clientId, { dias = 0, meses = 0, fechaExacta = "", operationId = "", pagoExtra = null } = {}) {
   // HOTFIX 2026-09-28: misma regla que renovación individual. Renovar TODOS
   // nunca debe bloquearse por plan IPTV ni por una clave de idempotencia.
   const id = String(clientId || "").trim();
@@ -2235,7 +2253,7 @@ async function renovarTodosServiciosTx(clientId, { dias = 0, fechaExacta = "", o
       const base = isFechaDMY(fechaAnterior) ? fechaAnterior : hoyDMY();
       const fechaNueva = fechaExacta
         ? String(fechaExacta || "").trim()
-        : addDaysDMY(base, Number(dias || 0));
+        : sumarDuracionRenovacionLocal(fechaAnterior, { dias, meses });
 
       if (!isFechaDMY(fechaNueva)) throw new Error("Fecha inválida.");
 
@@ -2503,11 +2521,9 @@ async function menuListaRenovacion(chatId, clientId) {
     text: safeBtnLabel(`${iconPlataforma(s.plataforma || "")} ${humanPlataforma(s.plataforma || "")} · ${cantidadPerfilesServicioLocal(s, c.nombrePerfil || "")} perfil(es) — ${s.fechaRenovacion || "sin fecha"}`),
     callback_data: `cli:ren:one:${clientId}:${compraSelectorLocal(s, s.idxOriginal)}`,
   }]);
-  kb.push([
-    { text: "⏫ Todos +30 días", callback_data: `cli:ren:all:ask:${clientId}` },
-    { text: "⏫ Todos +31 días", callback_data: `cli:ren:all31:ask:${clientId}` },
-  ]);
-  kb.push([{ text: "📅 Todos — fecha personalizada", callback_data: `cli:ren:allcustom:ask:${clientId}` }]);
+  // Oct-2026 · mismas opciones que Web y APK: +31 días, 1, 2, 3, 6 y 12 meses + Personalizado.
+  kb.push(...filasDuracionRenovacionLocal((code) => `cli:ren:alldur:ask:${code}:${clientId}`, "⏫ Todos "));
+  kb.push([{ text: "📅 Todos — Personalizado", callback_data: `cli:ren:allcustom:ask:${clientId}` }]);
   kb.push([{ text: "🗑️ Baja masiva de servicios", callback_data: `cli:baja:menu:${clientId}` }]);
   kb.push([{ text: "⬅️ Volver Ficha", callback_data: `cli:view:${clientId}` }, { text: "🏠 Inicio", callback_data: "go:inicio" }]);
 
@@ -2520,6 +2536,22 @@ async function menuListaRenovacion(chatId, clientId) {
 // ===============================
 // ✅ MENÚ ACCIÓN DE RENOVACIÓN — 4 opciones por servicio
 // ===============================
+// Botones de duración: d31 = +31 días · m1/m2/m3/m6/m12 = meses.
+const DURACIONES_RENOVACION = Object.freeze([["d31", "+31 días"], ["m1", "+1 mes"], ["m2", "+2 meses"], ["m3", "+3 meses"], ["m6", "+6 meses"], ["m12", "+12 meses"]]);
+function duracionDesdeCodigoLocal(code = "") {
+  const m = String(code).match(/^([dm])(\d{1,3})$/);
+  if (!m || !DURACIONES_RENOVACION.some(([c]) => c === code)) return null;
+  const n = Number(m[2]);
+  return m[1] === "d" ? { dias: n, etiqueta: `+${n} días` } : { meses: n, etiqueta: `+${n} mes${n === 1 ? "" : "es"}` };
+}
+function filasDuracionRenovacionLocal(cb, prefijo = "") {
+  const filas = [];
+  for (let i = 0; i < DURACIONES_RENOVACION.length; i += 2) {
+    filas.push(DURACIONES_RENOVACION.slice(i, i + 2).map(([code, label]) => ({ text: `${prefijo}${label}`, callback_data: cb(code) })));
+  }
+  return filas;
+}
+
 async function menuRenovacionServicio(chatId, clientId, selector) {
   const c = await getCliente(clientId);
   if (!c) return bot.sendMessage(chatId, "⚠️ Cliente no encontrado.");
@@ -2537,16 +2569,13 @@ async function menuRenovacionServicio(chatId, clientId, selector) {
     `👤 *${escMD(c.nombrePerfil || "Cliente")}*\n` +
     `${iconPlataforma(s.plataforma || "")} *${escMD(humanPlataforma(s.plataforma || ""))}*\n` +
     renderCredencialesServicioLocal(s, true, "") +
-    `💰 ${escMD(`${Number(s.precio || 0).toFixed(2)} Lps`)}\n` +
+    `💰 ${escMD(`L${Number(s.precio || 0).toFixed(2)}`)}\n` +
     `📅 Vence: ${escMD(fechaDMYLocal(s.fechaRenovacion || "") || "-")} — ${est.emoji} ${escMD(est.texto)}\n\n` +
     `¿Qué pasó con este servicio?`;
 
   return upsertPanel(chatId, txt, [
-    [
-      { text: "✅ +30 días", callback_data: `cli:ren:auto:${clientId}:${compraSel}` },
-      { text: "✅ +31 días", callback_data: `cli:ren:auto31:${clientId}:${compraSel}` },
-    ],
-    [{ text: "📅 Renovó — otra fecha", callback_data: `cli:ren:manual:${clientId}:${compraSel}` }],
+    ...filasDuracionRenovacionLocal((code) => `cli:ren:dur:${code}:${clientId}:${compraSel}`, "✅ "),
+    [{ text: "📅 Personalizado", callback_data: `cli:ren:manual:${clientId}:${compraSel}` }],
     [{ text: "🔄 Cambió de servicio", callback_data: `cli:ren:cambio:${clientId}:${compraSel}` }],
     [{ text: "❌ No renovó — eliminar", callback_data: `cli:ren:noren:ask:${clientId}:${compraSel}` }],
     [{ text: "⬅️ Volver",                    callback_data: `cli:ren:list:${clientId}` }, { text: "🏠 Inicio", callback_data: "go:inicio" }],
@@ -2569,7 +2598,7 @@ async function enviarPanelRenovacionesConAcciones(chatId, fecha, rows = []) {
     `📅 *RENOVACIONES DEL ${escMD(fecha)}*\n\n` +
     `*Compras a renovar:* ${rows.length}\n` +
     `*Perfiles incluidos:* ${totalPerfiles}\n` +
-    `*Total esperado:* ${escMD(`${total.toFixed(2)} Lps`)}\n\n` +
+    `*Total esperado:* ${escMD(`L${total.toFixed(2)}`)}\n\n` +
     `Seleccione una compra para gestionar su renovación:`;
 
   const kb = rows.slice(0, 20).map((x, i) => [{
@@ -2637,7 +2666,7 @@ async function wizardNext(chatId, rawText = "") {
       }
 
       st.servStep = 5; wizard.set(String(chatId), st);
-      return bot.sendMessage(chatId, "(Servicio 5/6) Precio (solo número, Lps):");
+      return bot.sendMessage(chatId, "(Servicio 5/6) Precio (solo número, en lempiras):");
     }
 
     if (st.servStep === 3) {
@@ -2648,13 +2677,13 @@ async function wizardNext(chatId, rawText = "") {
       }
 
       st.servStep = 5; wizard.set(String(chatId), st);
-      return bot.sendMessage(chatId, "(Servicio 5/6) Precio (solo número, Lps):");
+      return bot.sendMessage(chatId, "(Servicio 5/6) Precio (solo número, en lempiras):");
     }
 
     if (st.servStep === 4) {
       st.servicio.pin = t;
       st.servStep = 5; wizard.set(String(chatId), st);
-      return bot.sendMessage(chatId, "(Servicio 5/6) Precio (solo número, Lps):");
+      return bot.sendMessage(chatId, "(Servicio 5/6) Precio (solo número, en lempiras):");
     }
 
     if (st.servStep === 5) {
@@ -2804,14 +2833,14 @@ function renovacionesTexto(rows = [], fecha = "", vendedor = null) {
   const totalPerfiles = items.reduce((sum, x) => sum + Number(x.cantidadPerfiles || cantidadPerfilesServicioLocal(x, x.nombrePerfil || "")), 0);
   txt += `*Compras a renovar:* ${escMD(String(items.length))}\n`;
   txt += `*Perfiles incluidos:* ${escMD(String(totalPerfiles))}\n`;
-  txt += `*Total esperado:* ${escMD(`${total.toFixed(2)} Lps`)}\n\n`;
+  txt += `*Total esperado:* ${escMD(`L${total.toFixed(2)}`)}\n\n`;
 
   items.forEach((x, i) => {
     txt += `${i + 1}. ${iconPlataforma(x.plataforma || "")} *${escMD(x.nombrePerfil || "Sin nombre")}*\n`;
     txt += `   📱 ${escMD(x.telefono || "-")}\n`;
     txt += `   📦 ${escMD(humanPlataforma(x.plataforma || ""))}\n`;
     txt += renderCredencialesServicioLocal(x, true, "   ");
-    txt += `   💰 ${escMD(`${Number(x.precio || 0).toFixed(2)} Lps`)}\n`;
+    txt += `   💰 ${escMD(`L${Number(x.precio || 0).toFixed(2)}`)}\n`;
     txt += `   🧾 ${escMD(x.vendedor || "-")}\n\n`;
   });
 
@@ -2829,13 +2858,13 @@ function renovacionesTextoPlano(rows = [], fecha = "", vendedor = null) {
   items.forEach((x) => { total += Number(x.precio || 0); });
 
   const totalPerfiles = items.reduce((sum, x) => sum + Number(x.cantidadPerfiles || cantidadPerfilesServicioLocal(x, x.nombrePerfil || "")), 0);
-  txt += `Compras a renovar: ${items.length}\nPerfiles incluidos: ${totalPerfiles}\nTotal esperado: ${total.toFixed(2)} Lps\n\n`;
+  txt += `Compras a renovar: ${items.length}\nPerfiles incluidos: ${totalPerfiles}\nTotal esperado: L${total.toFixed(2)}\n\n`;
 
   items.forEach((x, i) => {
     txt += `${i + 1}) ${x.nombrePerfil || "Sin nombre"}\n`;
     txt += `Telefono: ${x.telefono || "-"}\nPlataforma: ${humanPlataforma(x.plataforma || "")}\n`;
     txt += renderCredencialesServicioLocal(x, false, "");
-    txt += `Precio: ${Number(x.precio || 0).toFixed(2)} Lps\nVendedor: ${x.vendedor || "-"}\n\n`;
+    txt += `Precio: L${Number(x.precio || 0).toFixed(2)}\nVendedor: ${x.vendedor || "-"}\n\n`;
   });
 
   return txt;
@@ -3018,7 +3047,7 @@ module.exports = {
   menuListaServicios, menuServicio,
   menuListaPerfilesServicio, menuPerfilServicio,
   patchServicio, addServicioTx, addPerfilTx, patchPerfilTx, eliminarPerfilTx, eliminarServicioTx,
-  renovarServicioTx, renovarTodosServiciosTx, eliminarServiciosTx,
+  renovarServicioTx, renovarTodosServiciosTx, eliminarServiciosTx, duracionDesdeCodigoLocal, sumarDuracionRenovacionLocal,
   eliminarClienteConPapelera, restaurarClienteDesdePapelera, restaurarServiciosDesdePapelera,
   removeServicioDeInventario, sincronizarCuentaEnComprasTx,
   menuListaRenovacion, menuRenovacionServicio, enviarPanelRenovacionesConAcciones,

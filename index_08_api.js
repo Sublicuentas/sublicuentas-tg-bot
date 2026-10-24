@@ -92,7 +92,7 @@ async function generarMensajeCobroIA({ nombre, plataforma, precio, fecha }) {
     `Redactá UN mensaje de WhatsApp de cobro para un cliente de Sublicuentas ` +
     `(reventa de suscripciones en Honduras). Tono cordial y profesional, de usted, ` +
     `hondureño, cálido, breve (máx 3 líneas). Incluí 1 emoji discreto. ` +
-    `Datos: cliente "${nombre}", servicio "${plataforma}", monto Lps ${precio}, ` +
+    `Datos: cliente "${nombre}", servicio "${plataforma}", monto L${precio}, ` +
     `renueva el ${fecha}. Devolvé SOLO el mensaje, sin comillas ni explicación.`;
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
   const body = {
