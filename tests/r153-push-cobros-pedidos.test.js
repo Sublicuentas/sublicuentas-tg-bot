@@ -42,11 +42,11 @@ test("el aviso pasa el filtro de datos sensibles y respeta el interruptor de cob
   assert.match(ix, /id: "push_cobros_7pm", type: "daily", hour: 19/);
 });
 
-test("pedido nuevo de socio avisa a Sublicuentas y Relojes (sin datos de entrega)", () => {
+test("pedido nuevo de socio avisa SOLO al vendedor elegido por el socio (sin datos de entrega)", () => {
   const s = leer("server_api.js");
-  const i = s.indexOf("Fase 2 · push a Sublicuentas y Relojes");
+  const i = s.indexOf("Fase 2 · push SOLO al vendedor que eligió el socio");
   assert.ok(i > s.indexOf('app.post("/rev/compra"'));
   const bloque = s.slice(i, i + 700);
-  assert.match(bloque, /usuarios: \["sublicuentas", "relojes"\]/);
+  assert.match(bloque, /usuarios: \[destino\.key\]/);
   assert.doesNotMatch(bloque, /correo|perfilNombre|clave|dispositivo/);
 });
