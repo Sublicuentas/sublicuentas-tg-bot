@@ -40,8 +40,8 @@ test("R132: cuadre muestra lo que solo ve Telegram (fechaTS número de una edici
   const { L, paneles } = cargar(docs);
   await L.cuadreTgApkR132(1);
   const t1 = paneles.pop().txt;
-  assert.match(t1, /APK \(disponible\): \*Lps\. 400/);
-  assert.match(t1, /Telegram mismo período: \*Lps\. 1,?010/);
+  assert.match(t1, /APK \(disponible\): \*L400/);
+  assert.match(t1, /Telegram mismo período: \*L1,?010/);
   assert.match(t1, /Solo en Telegram \(1\)[\s\S]*Beto/);
   assert.match(t1, /1 con fecha descuadrada/);
   assert.equal((await L.descuadresFechaR132("2026-10-01")).length, 1, "el egreso manual del bot (medianoche UTC) no se toca");

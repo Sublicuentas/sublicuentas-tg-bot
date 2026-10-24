@@ -12,7 +12,7 @@ test("reglas del bot = reglas del servidor/APK (casos del PDF)", () => {
   assert.equal(total, 6000);
   const v = R.validatePlanilla({ montoTotal: 2000, asignaciones: [{ bancoId: "bac", monto: 1000 }, { bancoId: "ficohsa", monto: 1000 }], bancos });
   assert.equal(v.ok, true);
-  assert.match(R.validatePlanilla({ montoTotal: 2000, asignaciones: [{ bancoId: "bac", monto: 1700 }], bancos }).errors.join(" "), /Faltan Lps\. 300/);
+  assert.match(R.validatePlanilla({ montoTotal: 2000, asignaciones: [{ bancoId: "bac", monto: 1700 }], bancos }).errors.join(" "), /Faltan L300/);
   assert.match(R.validatePlanilla({ montoTotal: 700, asignaciones: [{ bancoId: "atl", monto: 700 }], bancos }).errors.join(" "), /Saldo insuficiente/);
   assert.equal(R.resolveBankId("bac", methods), "bac");
   const t = R.cycleTotals([{ tipo: "ingreso", monto: 20000, fecha: "02/10/2026" }, { tipo: "egreso", monto: 12000, fecha: "03/10/2026" }, { tipo: "egreso", subtipo: "pago_planilla", monto: 5500, fecha: "09/10/2026" }], "2026-10-01", "2026-10-10");
@@ -21,7 +21,7 @@ test("reglas del bot = reglas del servidor/APK (casos del PDF)", () => {
 
 test("Telegram: renovar pide pago real a Sublicuentas/Relojes en todas las rutas; planilla y Excel conectados", () => {
   const h = fs.readFileSync(path.join(__dirname, "..", "index_06_handlers.js"), "utf8");
-  assert.equal((h.match(/finLibro\.iniciarPagoRenovacion\(/g) || []).length, 6, "+30, +31, todos +30, todos +31, fecha manual uno y todos");
+  assert.equal((h.match(/finLibro\.iniciarPagoRenovacion\(/g) || []).length, 8, "+30, +31, todos +30, todos +31, fecha manual uno y todos + Oct-2026 duración uno y todos");
   assert.match(h, /finLibro\.iniciarPagoCompra\(/, "R106: compra nueva pide el pago");
   assert.match(h, /if \(data\.startsWith\("fl:"\)\) return finLibro\.handleCallback/);
   assert.match(h, /return finLibro\.handleText\(chatId, userId, t, p\)/);

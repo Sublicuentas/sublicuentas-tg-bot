@@ -41,9 +41,9 @@ test("R140: recargar Binance desde Telegram (banco → Lempiras → USDT → con
   const { pending } = require(path.join(B, "index_02_utils_roles"));
   await T.texto(1, 7, "2,820", pending.get("1"));
   await T.texto(1, 7, "100", pending.get("1"));
-  assert.match(paneles[paneles.length - 1].t, /Tasa efectiva: L 28\.2000/);
+  assert.match(paneles[paneles.length - 1].t, /Tasa efectiva: L28\.2000/);
   await T.callback(1, 7, "fl:emp:rok");
-  assert.ok(mensajes.some((m) => /Binance \+100 USDT · tasa L 28\.2/.test(m)), mensajes.join(" | "));
+  assert.ok(mensajes.some((m) => /Binance \+100 USDT · tasa L28\.2/.test(m)), mensajes.join(" | "));
   assert.equal(store.get("fin_billeteras/binance").saldo, 100);
   const aud = [...store.entries()].find(([k, v]) => k.startsWith("auditoria_eventos/") && v.accion === "recarga_binance");
   assert.ok(aud); assert.equal(aud[1].origen, "telegram");
