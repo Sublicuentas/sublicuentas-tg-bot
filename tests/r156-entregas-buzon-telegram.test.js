@@ -280,3 +280,20 @@ test("Cableado: bot, cola incierta, comprobante repetido y puente HQ", () => {
   assert.match(tg, /msg\.chat\?\.type !== "private"/); assert.match(tg, /Solo administradores pueden responder/);
   assert.equal(L.hiloDesdeTelegram({ abiertas: 3 }).consultaId, "", "texto suelto con varias abiertas: nunca al último hilo");
 });
+
+test("Pago del socio ya amarrado a una ficha (APK/web “Ya pagó por Socios”): se sugiere y autoriza esa ficha para la entrega", async () => {
+  const { db, app } = montar(); await sembrar(db); const s = await servidor(app); const api = cliente(s);
+  try {
+    // Ficha creada por el admin en la APK (vendedor sin poner) y amarrada al pago del pedido (renglón 2 = productoIdx 1).
+    await db.collection("clientes").doc("cli_admin").set({ nombre: "Juan Pérez", servicios: [{ plataforma: "Prime Video", compraId: "svc_apk_pv" }] });
+    await db.collection("finanzas_movimientos").doc("socio_compra_web_pedidojuan01_cobro").set({ tipo: "ingreso", subtipo: "compra_socio", fichasVinculadas: [{ productoIdx: 1, clienteId: "cli_admin", compraId: "svc_apk_pv", clienteNombre: "Juan Pérez", plataforma: "Prime Video" }] });
+    const d = await api("GET", "/rev/admin/entregas?compraId=web_pedidojuan01", { admin: true });
+    assert.equal(d.j.renglones[0].fichaPagada, null);
+    assert.deepEqual(d.j.renglones[1].fichaPagada, { clienteId: "cli_admin", servicioCompraId: "svc_apk_pv", clienteNombre: "Juan Pérez", plataforma: "Prime Video" });
+    const ok = await api("POST", "/rev/admin/entregas/guardar", { admin: true, body: { accion: "publicar", compraId: "web_pedidojuan01", renglonId: "r2", opId: "pp1", ficha: d.j.renglones[1].fichaPagada } });
+    assert.equal(ok.status, 200, JSON.stringify(ok.j));
+    // La misma ficha en OTRO renglón (no amarrado) sigue bloqueada.
+    const no = await api("POST", "/rev/admin/entregas/guardar", { admin: true, body: { accion: "publicar", compraId: "web_pedidojuan01", renglonId: "r1", opId: "pp2", ficha: { clienteId: "cli_admin", servicioCompraId: "svc_apk_pv" } } });
+    assert.equal(no.status, 403); assert.equal(no.j.error, "ficha_de_otro_socio", "el amarre vale solo para su servicio");
+  } finally { s.close(); }
+});
