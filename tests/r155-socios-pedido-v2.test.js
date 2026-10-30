@@ -31,12 +31,24 @@ test("Caso A · Ana compra HBO y Canva: nombre una vez, dispositivo para HBO y c
   assert.equal(c.renglon.correo, "ana@ejemplo.com"); assert.equal(c.renglon.clienteNombre, "Ana López"); assert.equal(c.renglon.dispositivo, "", "no copia el dispositivo de HBO");
 });
 
-test("Caso B · Ana compra HBO y Carlos Disney: la excepción va en ese renglón", () => {
+test("Caso B (brief maestro) · otro cliente = otro pedido: el renglón 'otro' se rechaza; cambiar el principal actualiza los que heredan", () => {
   const d = CS.normalizarRenglon({ renglonId: "r2", destinatario: { tipo: "otro", nombre: "Carlos", apellido: "Mejía" }, dispositivo: "celular" }, { n: "Disney", entregaTipo: "perfil" }, ANA, 1);
-  assert.equal(d.renglon.clienteNombre, "Carlos Mejía"); assert.equal(d.renglon.perfil, "Carlos Mejía"); assert.equal(d.renglon.destinatario.tipo, "otro");
+  assert.equal(d.errores[0].campo, "destinatario");
+  assert.match(d.errores[0].mensaje, /solo cliente/);
+  assert.equal(d.renglon.clienteNombre, "Ana López", "nunca toma al otro cliente");
   const h = CS.normalizarRenglon({ renglonId: "r1", dispositivo: "tv" }, HBO, { ...ANA, nombre: "Ana María" }, 0);
   assert.equal(h.renglon.perfil, "Ana María López", "cambiar el principal actualiza los que heredan");
-  assert.equal(CS.normalizarRenglon({ destinatario: { tipo: "otro", nombre: "" }, dispositivo: "tv" }, HBO, ANA, 0).errores[0].campo, "destinatario");
+  assert.match(src, /error: "cliente_unico"/);
+  assert.match(src, /const ids = \[clientePrincipal\.clienteId\]\.filter\(Boolean\);/);
+});
+
+test("Pedidos viejos que mezclaban clientes: se conservan y se marcan Histórico anterior; entrega parcial derivada", () => {
+  assert.equal(CS.historicoMixto({ version: 2, productos: [{ destinatario: { tipo: "principal" } }, { destinatario: { tipo: "otro" } }] }), true);
+  assert.equal(CS.historicoMixto({ version: 1, productos: [{ nombreCliente: "Ana" }, { nombreCliente: "Carlos" }] }), true);
+  assert.equal(CS.historicoMixto({ version: 2, productos: [{ destinatario: { tipo: "principal" } }] }), false);
+  const r = CS.entregaResumen({ productos: [{ renglonId: "r1" }, { renglonId: "r2" }], entregas: { r1: { estado: "publicada", entregaId: "ent_x_r1" } } });
+  assert.equal(r.estado, "parcial"); assert.equal(r.texto, "Entrega parcial · 1 de 2 servicios"); assert.equal(r.renglones.r2.estado, "pendiente");
+  assert.equal(CS.pedidoPublico("web_abc123", { pagoRevision: { motivo: "x" } }).pagoEnRevision, true);
 });
 
 test("Caso C · dos perfiles HBO: dos renglones con ID propio; otro nombre de perfil sin cambiar el cliente", () => {
