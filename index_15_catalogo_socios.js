@@ -133,6 +133,9 @@ function agruparCatalogo(rows = []) {
       stockCantidad: p.stockCantidad == null || p.stockCantidad === "" ? null : Number(p.stockCantidad),
       entregaTipo: String(p.entregaTipo || p.entrega_tipo || "").trim(),
       entregaCanal: String(p.entregaCanal || p.entrega_canal || "manual").trim(),
+      // Oct-2026 · el catálogo define los datos que se piden en Panel de Socios (no el nombre comercial).
+      pideDispositivo: ["si", "no"].includes(String(p.pideDispositivo || "").toLowerCase()) ? String(p.pideDispositivo).toLowerCase() : "auto",
+      datoRequerido: String(p.datoRequerido || "").trim().slice(0, 60),
     });
   }
   return grupos;

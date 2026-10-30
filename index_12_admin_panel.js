@@ -55,6 +55,9 @@ const wrap = (fn) => (req, res) => Promise.resolve(fn(req, res)).catch((e) => {
   fail(res, e.status || 500, e.publicError || e.message || "server");
 });
 
+// Oct-2026 · modalidades de entrega del catálogo de socios (Rediseño Panel de Socios).
+const ENTREGA_TIPOS_SOCIOS = ["", "perfil", "correo", "cuenta_completa", "tv_digital", "acceso", "serial", "serial_key", "detalle"];
+const PIDE_DISPOSITIVO_SOCIOS = ["auto", "si", "no"];
 function normNombre(v = "") {
   return String(v || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().replace(/\s+/g, " ");
 }
@@ -450,8 +453,10 @@ module.exports = function mountAdminPanel(app) {
       nombre, variante: String(b.variante || "").trim(),
       precio, // null = "Por comisión" (mismo significado que it.p===null en el catálogo original)
       detalle: String(b.detalle || "").trim().slice(0, 600),
-      entregaTipo: ["","perfil","correo","acceso","serial","serial_key","detalle"].includes(String(b.entregaTipo || "").toLowerCase()) ? String(b.entregaTipo || "").toLowerCase() : "",
+      entregaTipo: ENTREGA_TIPOS_SOCIOS.includes(String(b.entregaTipo || "").toLowerCase()) ? String(b.entregaTipo || "").toLowerCase() : "",
       entregaCanal: ["manual","bot_tg","inventario","invitacion","iptv"].includes(String(b.entregaCanal || "manual").toLowerCase()) ? String(b.entregaCanal || "manual").toLowerCase() : "manual",
+      pideDispositivo: PIDE_DISPOSITIVO_SOCIOS.includes(String(b.pideDispositivo || "auto").toLowerCase()) ? String(b.pideDispositivo || "auto").toLowerCase() : "auto",
+      datoRequerido: String(b.datoRequerido || "").trim().slice(0, 60),
       activo: b.activo !== false,
       stockModo: ["auto","manual"].includes(String(b.stockModo || "auto").toLowerCase()) ? String(b.stockModo || "auto").toLowerCase() : "auto",
       stockEstado: ["disponible","bajo","agotado","consultar",""] .includes(String(b.stockEstado || "").toLowerCase()) ? String(b.stockEstado || "").toLowerCase() : "",
@@ -481,8 +486,10 @@ module.exports = function mountAdminPanel(app) {
     if (b.nombre !== undefined) patch.nombre = String(b.nombre).trim();
     if (b.variante !== undefined) patch.variante = String(b.variante).trim();
     if (b.detalle !== undefined) patch.detalle = String(b.detalle).trim().slice(0, 600);
-    if (b.entregaTipo !== undefined) { const et=String(b.entregaTipo||"").toLowerCase(); if(!["","perfil","correo","acceso","serial","serial_key","detalle"].includes(et)) return fail(res,400,"entrega_tipo_invalido"); patch.entregaTipo=et; }
+    if (b.entregaTipo !== undefined) { const et=String(b.entregaTipo||"").toLowerCase(); if(!ENTREGA_TIPOS_SOCIOS.includes(et)) return fail(res,400,"entrega_tipo_invalido"); patch.entregaTipo=et; }
     if (b.entregaCanal !== undefined) { const ec=String(b.entregaCanal||"manual").toLowerCase(); if(!["manual","bot_tg","inventario","invitacion","iptv"].includes(ec)) return fail(res,400,"entrega_canal_invalido"); patch.entregaCanal=ec; }
+    if (b.pideDispositivo !== undefined) { const pd=String(b.pideDispositivo||"auto").toLowerCase(); if(!PIDE_DISPOSITIVO_SOCIOS.includes(pd)) return fail(res,400,"pide_dispositivo_invalido"); patch.pideDispositivo=pd; }
+    if (b.datoRequerido !== undefined) patch.datoRequerido = String(b.datoRequerido || "").trim().slice(0, 60);
     if (b.activo !== undefined) patch.activo = !!b.activo;
     if (b.stockModo !== undefined) { const m=String(b.stockModo||"auto").toLowerCase(); if(!["auto","manual"].includes(m)) return fail(res,400,"stock_modo_invalido"); patch.stockModo=m; }
     if (b.stockEstado !== undefined) { const st=String(b.stockEstado||"").toLowerCase(); if(!["disponible","bajo","agotado","consultar",""] .includes(st)) return fail(res,400,"stock_estado_invalido"); patch.stockEstado=st; }

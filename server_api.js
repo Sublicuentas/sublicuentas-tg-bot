@@ -57,6 +57,7 @@ const {
   clientePublicoPanel,
 } = require("./index_17_vendedores_servicio");
 const admin = require("firebase-admin");
+const CS = require("./lib_compra_socios"); // Oct-2026 · pedido v2 del Panel de Socios
 const STORAGE_BUCKET_CANDIDATES = Array.from(new Set([
   process.env.STORAGE_BUCKET,
   process.env.FIREBASE_STORAGE_BUCKET,
@@ -635,14 +636,27 @@ app.get("/rev/compras/mias", revAuth, async (req, res) => {
     const aliases = socioNorm === "geisell" ? ["geisell", "geissel"] : [socioNorm];
     const snaps = await Promise.all(aliases.map(a=>db.collection("compras").where("socio_norm","==",a).get()));
     const m=new Map();snaps.forEach(snap=>snap.docs.forEach(d=>m.set(d.id,{id:d.id,...d.data()})));
-    const limit=Math.min(50,Math.max(1,Number(req.query.limit)||20));
+    const limit=Math.min(100,Math.max(1,Number(req.query.limit)||20));
+    // Oct-2026 · Pedidos del Panel de Socios: detalle por renglón (destinatario, datos, notas). Sin imagen ni datos de finanzas.
     const items=[...m.values()].sort((a,b)=>revDateMs(b.createdAt)-revDateMs(a.createdAt)).slice(0,limit).map(x=>({
-      id:x.id, servicio:x.servicio||"Compra", estado:x.estado||"pendiente", detalleEstado:x.detalleEstado||"", destino:x.destino||"", destinoLabel:x.destinoLabel||"",
-      monto:revMoneyNumber(x.monto),
-      createdAt:x.createdAt, estadoUpdatedAt:x.estadoUpdatedAt||x.updatedAt||x.createdAt, estadoHistorial:Array.isArray(x.estadoHistorial)?x.estadoHistorial.slice(-10):[],
+      ...CS.pedidoPublico(x.id,x), monto:revMoneyNumber(x.monto),
     }));
     res.json({ok:true,items});
   } catch(e){console.error("rev/compras/mias",e);res.status(500).json({error:"server"})}
+});
+
+// Oct-2026 · ¿Ya llegó este pedido? Si la conexión se cortó al enviar, el panel pregunta aquí antes de reintentar.
+app.get("/rev/compra/estado", revAuth, async (req, res) => {
+  try {
+    const live = await revLiveProfile(req.rev);
+    const requestId = cleanTg(req.query.requestId, 120);
+    if (!requestId) return res.status(400).json({ error: "falta_request_id" });
+    const docId = `web_${crypto.createHash("sha256").update(`${live.id || live.nombre_norm || "socio"}|${requestId}`).digest("hex").slice(0, 40)}`;
+    const snap = await db.collection("compras").doc(docId).get();
+    res.set("Cache-Control", "no-store");
+    if (!snap.exists) return res.json({ ok: true, existe: false });
+    res.json({ ok: true, existe: true, pedido: { ...CS.pedidoPublico(snap.id, snap.data() || {}), monto: revMoneyNumber((snap.data() || {}).monto) } });
+  } catch (e) { console.error("rev/compra/estado", e); res.status(500).json({ error: "server" }); }
 });
 
 // ── AVISOS — buzón publicado desde Telegram (/aviso) ──
@@ -968,7 +982,14 @@ async function revRenovarSeleccionConPago({ clienteId, socioNorm, socioNombre, s
 }
 
 app.get("/rev/metodos-pago", revAuth, async (req, res) => {
-  try { res.json({ ok: true, metodos: await require("./index_31_finanzas_libro").loadMethods() }); }
+  try {
+    // Oct-2026 · además del id/nombre, el titular, número y nota reales (los mismos que ve el cliente en su portal).
+    const metodos = await require("./index_31_finanzas_libro").loadMethods();
+    const cfg = await db.collection("portal_cliente").doc("configuracion").get().catch(() => null);
+    const raw = cfg && cfg.exists && Array.isArray(cfg.data()?.metodos) ? cfg.data().metodos : [];
+    const extra = new Map(raw.map((m) => [String(m.id || ""), m]));
+    res.json({ ok: true, metodos: metodos.map((m) => { const x = extra.get(m.id) || {}; return { ...m, titular: cleanTg(x.titular, 130), cuenta: cleanTg(x.cuenta, 60), nota: cleanTg(x.nota, 120) }; }) });
+  }
   catch (e) { console.error("rev/metodos-pago", e); res.status(500).json({ error: "server" }); }
 });
 
@@ -1192,6 +1213,7 @@ app.post("/rev/compra", revAuth, async (req, res) => {
       const MARCA_LABEL={samsung:"Samsung",lg:"LG",tcl:"TCL",roku:"Roku TV"};
       const marcaTv=MARCA_LABEL[String(p.marcaTv||"").toLowerCase()]||cleanTg(p.marcaTv,80);
       return {
+        __raw: p, __item: productoCatalogo,
         id: cleanTg(productoCatalogo.id || p.catalogId || p.id, 90),
         catalogId: cleanTg(productoCatalogo.id || "", 90),
         servicio,
@@ -1220,9 +1242,39 @@ app.post("/rev/compra", revAuth, async (req, res) => {
 
     if (!productos.length) return res.status(400).json({ error: "falta_servicio" });
 
+    // ── Pedido v2: cliente principal + destinatario, datos y notas por renglón (validados aquí, no solo en el navegador) ──
+    const v2 = Number(b.version) === 2;
+    let clientePrincipal = null;
+    if (v2) {
+      const cp = b.clientePrincipal && typeof b.clientePrincipal === "object" ? b.clientePrincipal : {};
+      clientePrincipal = { clienteId: cleanTg(cp.clienteId, 120), nombre: cleanTg(cp.nombre, 80), apellido: cleanTg(cp.apellido, 80) };
+      const errores = CS.validarPrincipal(clientePrincipal);
+      productos.forEach((p, i) => {
+        const { renglon, errores: e } = CS.normalizarRenglon(p.__raw || {}, { ...(p.__item || {}), categoria: p.__item?.categoria || p.catalogCategory }, clientePrincipal, i);
+        errores.push(...e);
+        Object.assign(p, {
+          renglonId: renglon.renglonId, modalidad: renglon.modalidad, modalidadInferida: renglon.modalidadInferida,
+          destinatario: renglon.destinatario, clienteNombre: renglon.clienteNombre, nombreCliente: renglon.clienteNombre,
+          perfilNombre: renglon.perfilNombre, perfilApellido: renglon.perfilApellido, perfil: renglon.perfil,
+          dispositivo: renglon.dispositivo, correo: renglon.correo, marcaTv: renglon.marcaTv, modeloTv: renglon.modeloTv,
+          detalleServicio: renglon.detalleServicio, datoRequerido: renglon.datoRequerido, notas: renglon.notas,
+          cantidad: renglon.modalidad === "cuenta_completa" ? renglon.cantidad : 1,
+        });
+      });
+      if (errores.length) return res.status(400).json({ error: "datos_incompletos", errores: errores.slice(0, 40) });
+      // Los clientes elegidos de la lista deben ser del socio (nunca de otro).
+      const aliases = revSocioAliases(live, req.rev);
+      const ids = [...new Set([clientePrincipal.clienteId, ...productos.map((p) => p.destinatario?.clienteId)].filter(Boolean))];
+      for (const id of ids.slice(0, 25)) {
+        const snapCli = await db.collection("clientes").doc(id).get();
+        if (!snapCli.exists || !revFiltrarClientePorAliases(snapCli.data() || {}, aliases).servicios.length) return res.status(403).json({ error: "cliente_ajeno" });
+      }
+    }
+    productos.forEach((p) => { delete p.__raw; delete p.__item; });
+
     const comentario = cleanTg(b.comentario, 700);
-    const clienteNombre = cleanTg(b.clienteNombre, 80);
-    const clienteApellido = cleanTg(b.clienteApellido, 80);
+    const clienteNombre = v2 ? clientePrincipal.nombre : cleanTg(b.clienteNombre, 80);
+    const clienteApellido = v2 ? clientePrincipal.apellido : cleanTg(b.clienteApellido, 80);
     const subtotalCatalogo = productos.reduce((a, p) => a + (p.precioCatalogo !== null ? Number(p.precioCatalogo || 0) * (p.cantidad || 1) : 0), 0);
     const conPrecio = productos.reduce((a, p) => a + (p.precioCatalogo !== null ? (p.cantidad || 1) : 0), 0);
     const hayComisionR108 = productos.some((p) => p.precioCatalogo === null);
@@ -1230,6 +1282,26 @@ app.post("/rev/compra", revAuth, async (req, res) => {
     const totalCombo = Math.max(0, subtotalCatalogo - descuentoCombo);
     // R108: con precio fijo el monto es SIEMPRE el total del servidor (nunca el del navegador) y el banco es obligatorio.
     // Si hay productos "por comisión" no se inventa un monto: siguen la regla anterior, fuera del flujo automático.
+    // El socio confirmó un total; si el catálogo cambió desde entonces no se registra nada: se le muestra el nuevo total.
+    if (v2 && b.totalEsperado !== undefined && b.totalEsperado !== null && b.totalEsperado !== "" && !hayComisionR108 && Number(b.totalEsperado) !== totalCombo) {
+      return res.status(409).json({ error: "precio_cambio", subtotalCatalogo, descuentoCombo, totalCombo, precios: productos.map((p) => ({ renglonId: p.renglonId || "", catalogId: p.catalogId, precio: p.precioCatalogo })) });
+    }
+    // Stock manual con cantidad: se revisa ahora y se descuenta dentro de la misma transacción del pedido.
+    const coleccionStock = catalogoSocio.tarifaId === "general" ? "precios" : "precios_especiales";
+    const pedidasStock = CS.unidadesPorProducto(productos.map((p) => ({ catalogId: p.catalogId, cantidad: p.cantidad || 1 })));
+    const itemsStock = catalogoPlano(catalogoSocio.grupos).filter((it) => it.id && pedidasStock.has(it.id) && String(it.stockModo || "").toLowerCase() === "manual");
+    for (const it of itemsStock) if (CS.stockInsuficiente(it, pedidasStock.get(it.id))) return res.status(409).json({ error: "sin_stock", detail: `${it.nombreCompleto || it.n}: no hay disponibilidad suficiente.`, catalogId: it.id });
+    const stockRefs = itemsStock.map((it) => ({ ref: db.collection(coleccionStock).doc(String(it.id)), pedidas: pedidasStock.get(it.id), nombre: it.nombreCompleto || it.n }));
+    const reservarStock = async (tx) => {
+      const snaps = [];
+      for (const x of stockRefs) snaps.push(await tx.get(x.ref));
+      return () => snaps.forEach((sn, i) => {
+        const d = sn.exists ? (sn.data() || {}) : null;
+        if (!d) return;
+        if (CS.stockInsuficiente(d, stockRefs[i].pedidas)) { const e = new Error("sin_stock"); e.status = 409; e.publicError = "sin_stock"; e.detail = `${stockRefs[i].nombre}: no hay disponibilidad suficiente.`; throw e; }
+        if (d.stockCantidad !== null && d.stockCantidad !== undefined && d.stockCantidad !== "") tx.update(stockRefs[i].ref, { stockCantidad: Math.max(0, Number(d.stockCantidad) - stockRefs[i].pedidas), updatedAt: new Date() });
+      });
+    };
     const monto = hayComisionR108 ? (revMoneyNumber(b.monto) || totalCombo || 0) : totalCombo;
     const bancoR108 = hayComisionR108 ? null : await r108Banco(b.bancoId);
     if (!hayComisionR108 && !bancoR108) return res.status(400).json({ error: "falta_banco", detail: "Elija el banco donde se hizo el pago." });
@@ -1246,6 +1318,8 @@ app.post("/rev/compra", revAuth, async (req, res) => {
 
     const doc = {
       tipo: "compra",
+      version: v2 ? 2 : 1,
+      ...(v2 ? { clientePrincipal } : {}),
       requestId,
       servicio,
       productos,
@@ -1299,6 +1373,8 @@ app.post("/rev/compra", revAuth, async (req, res) => {
         const ya = await tx.get(ref);
         if (ya.exists) return { dup: ya.data() || {} };
         const cicloId = await r108CicloId(tx);
+        const aplicarStock = await reservarStock(tx);
+        aplicarStock();
         tx.set(ref, doc);
         r108Movs(tx, { idBase: `socio_compra_${ref.id}`, subtipo: "compra_socio", total: totalCombo, banco: bancoR108, cicloId,
           rel: { socioNorm: live.nombre_norm || req.rev.nombre_norm || "", socioNombre: socio, clienteNombre: r121NombreCompraSocio(productos, doc.cliente, socio), compraId: ref.id, pedidoId: ref.id, plataforma: productos.map((p) => p.servicio).join(", ").slice(0, 200), tipoOrigen: "compra", operationId: requestId, destino: destino.key,
@@ -1310,7 +1386,17 @@ app.post("/rev/compra", revAuth, async (req, res) => {
     } else if (requestRef) {
       ref = requestRef;
       try {
-        await ref.create(doc);
+        if (stockRefs.length) {
+          const dupTx = await db.runTransaction(async (tx) => {
+            const ya = await tx.get(ref);
+            if (ya.exists) return ya.data() || {};
+            const aplicarStock = await reservarStock(tx);
+            aplicarStock();
+            tx.set(ref, doc);
+            return null;
+          });
+          if (dupTx) { const d = dupTx; return res.json({ ok:true, id:ref.id, duplicate:true, estado:d.estado||"pendiente", destino:d.destino||"", destinoLabel:d.destinoLabel||"", totalCombo:Number(d.totalCombo||0), descuentoCombo:Number(d.descuentoCombo||0) }); }
+        } else await ref.create(doc);
       } catch (createErr) {
         if (createErr?.code === 6 || createErr?.code === "already-exists" || /already exists/i.test(String(createErr?.message || ""))) {
           const existente = await ref.get();
@@ -1323,7 +1409,7 @@ app.post("/rev/compra", revAuth, async (req, res) => {
       ref = await db.collection("compras").add(doc);
     }
 
-    const productoLineas = productos.flatMap((p, i) => {
+    const productoLineas = v2 ? CS.lineasTelegram(productos, CS.nombreCompleto(clientePrincipal)) : productos.flatMap((p, i) => {
       const precio = p.precioCatalogo === null ? "Por comisión" : `L${p.precioCatalogo}`;
       const datos = [];
       if (p.perfil) datos.push(`Perfil: ${p.perfil}`);
@@ -1351,6 +1437,7 @@ app.post("/rev/compra", revAuth, async (req, res) => {
       `━━━━━━━━━━━━━━`,
       `📍 Avisar: ${destino.label}`,
       `👤 Socio: ${cleanTg(socio, 80)}`,
+      v2 ? `🙍 Cliente principal: ${cleanTg(CS.nombreCompleto(clientePrincipal), 80)}` : "",
       `📦 Productos:`,
       ...productoLineas,
       ``,
@@ -1377,10 +1464,10 @@ app.post("/rev/compra", revAuth, async (req, res) => {
       data: { tipo: "pedido", ir: "inicio", id: ref.id },
     });
 
-    res.json({ ok: true, id: ref.id, imagenUrl, destino: destino.key, destinoLabel: destino.label, totalCombo, descuentoCombo, estado: "pendiente" });
+    res.json({ ok: true, id: ref.id, ref: ref.id.slice(-6).toUpperCase(), imagenUrl, destino: destino.key, destinoLabel: destino.label, subtotalCatalogo, totalCombo, descuentoCombo, estado: "pendiente", comprobante: !!(imagenUrl || imagenObj.buffer) });
   } catch (e) {
     console.error("rev/compra", e);
-    res.status(e.status || 500).json({ error: e.publicError || "server", detail: e.message });
+    res.status(e.status || 500).json({ error: e.publicError || "server", detail: e.detail || e.message });
   }
 });
 
@@ -1402,6 +1489,7 @@ app.get("/rev/sugerencias/mias", revAuth, async (req, res) => {
         destinoLabel: String(d.destinoLabel || d.destino || "Equipo"),
         estado: String(d.estado || (d.respuesta ? "respondida" : "enviada")),
         respuesta: String(d.respuesta || d.respuestaTexto || "").slice(0, 4000),
+        pedidoId: String(d.pedidoId || ""), pedidoRef: String(d.pedidoRef || ""), renglonId: String(d.renglonId || ""),
         createdAt: d.createdAt || null,
         respondedAt: d.respondedAt || d.respuestaAt || null,
       };
@@ -1422,16 +1510,29 @@ app.post("/rev/sugerencia", revAuth, async (req, res) => {
     if (!texto) return res.status(400).json({ error: "falta_texto" });
     const nombre = req.rev.nombre || req.rev.nombre_norm || "Revendedor";
 
-    const destino = (req.body.destino || "sublicuentas").toString().trim();
+    let destino = (req.body.destino || "sublicuentas").toString().trim();
+    // Oct-2026 · consulta vinculada a un pedido (y renglón): solo pedidos del mismo socio; va al destino del pedido.
+    let pedido = null;
+    const pedidoId = cleanTg(req.body.pedidoId, 120);
+    if (pedidoId) {
+      const ps = await db.collection("compras").doc(pedidoId).get();
+      const aliases = revSocioAliases(live, req.rev);
+      if (!ps.exists || !aliases.includes(revNormKey((ps.data() || {}).socio_norm || ""))) return res.status(403).json({ error: "pedido_ajeno" });
+      pedido = { id: ps.id, ref: ps.id.slice(-6).toUpperCase(), renglonId: cleanTg(req.body.renglonId, 60), servicio: cleanTg((ps.data() || {}).servicio, 120) };
+      destino = (ps.data() || {}).destino || destino;
+    }
     const destinoCfg = destinoInfo(destino);
     const quien = destinoCfg.label;
 
     await db.collection("sugerencias").add({
       texto, nombre, nombre_norm: req.rev.nombre_norm || "",
       destino: destinoCfg.key, destinoLabel: destinoCfg.label, estado: "enviada", createdAt: new Date(),
+      ...(pedido ? { pedidoId: pedido.id, pedidoRef: pedido.ref, renglonId: pedido.renglonId, tipo: "consulta_pedido" } : {}),
     });
 
-    const aviso = `💬 *Nueva sugerencia* (${quien})\n👤 ${nombre}\n\n${texto}`;
+    const aviso = pedido
+      ? `🧾 *Consulta de pedido #${pedido.ref}* (${quien})\n👤 ${nombre}\n📦 ${pedido.servicio}\n\n${texto}`
+      : `💬 *Nueva sugerencia* (${quien})\n👤 ${nombre}\n\n${texto}`;
     const ids = await getDestinoChatIds(destinoCfg.key);
     await Promise.all(ids.map((id) => sendTelegramMessage(id, aviso)));
 
@@ -1559,6 +1660,7 @@ app.get("/rev/admin/compras", revAdminAuth, adminAnyPermission(["socios.compras.
         detalleServicio: r.detalleServicio || "",
         precioCatalogo: r.precioCatalogo === null || r.precioCatalogo === undefined ? null : Number(r.precioCatalogo) || 0,
         cliente: r.cliente || `${r.clienteNombre || ""} ${r.clienteApellido || ""}`.trim(),
+        clientePrincipal: r.clientePrincipal || null, version: Number(r.version) || 1,
         perfil: r.perfil || `${r.perfilNombre || ""} ${r.perfilApellido || ""}`.trim(),
         correo: r.correo || "",
         acceso: r.acceso || "",
