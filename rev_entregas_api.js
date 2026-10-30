@@ -106,7 +106,7 @@ function registrar(app, d) {
     if (!enAmbito(req, compra)) return fail(res, 403, "fuera_de_ambito");
     const socio = await socioPorNorm(compra.socio_norm || compra.socio);
     const productos = Array.isArray(compra.productos) && compra.productos.length ? compra.productos : [{ renglonId: "r1", servicio: compra.servicio }];
-    const renglones = [];
+    const renglones = [], amarradas = await fichasDelPago(compraId);
     for (let i = 0; i < productos.length; i++) {
       const p = productos[i], rid = p.renglonId || `r${i + 1}`, id = L.entregaId(compraId, rid);
       const s = await db.collection(COL.ent).doc(id).get();
@@ -115,6 +115,7 @@ function registrar(app, d) {
       renglones.push({
         renglonId: rid, servicio: p.servicio || compra.servicio || "", clienteNombre: p.clienteNombre || p.perfil || compra.cliente || "", modalidad: p.modalidad || p.entregaTipo || "",
         datos: { dispositivo: p.dispositivo || "", correo: p.correo || "", detalle: p.detalleServicio || "", notas: p.notas || "" },
+        fichaPagada: (() => { const v = amarradas.filter((x) => x.productoIdx === i).pop(); return v ? { clienteId: v.clienteId, servicioCompraId: v.servicioCompraId, clienteNombre: v.clienteNombre, plataforma: v.plataforma } : null; })(),
         entrega: e ? {
           id, estado: e.estado, version: Number(e.version) || 0, ficha: e.portal || null, fichaResumen: e.fichaResumen || null, portalAutorizado: !!e.portalAutorizado,
           codigoGuardado: !!e.codigoCifrado, codigoAutorizado: !!e.codigoAutorizado, notaSocio: e.notaSocio || "", mensajeCliente: e.mensajeCliente || "",
@@ -167,9 +168,20 @@ function registrar(app, d) {
     if (i < 0) throw Object.assign(new Error("renglon"), { status: 400, publicError: "renglon_invalido" });
     const socio = await socioPorNorm(compra.socio_norm || compra.socio);
     if (!socio) throw Object.assign(new Error("socio"), { status: 409, publicError: "socio_no_verificado" });
-    return { compra, productos, producto: productos[i], socio };
+    return { compra, productos, producto: productos[i], socio, idx: i };
   }
-  async function resolverFicha(ficha, socio) {
+  // Fichas que el admin ya amarró al PAGO de este pedido ("Ya pagó por Socios" en APK/web · R121):
+  // finanzas_movimientos/socio_compra_<compraId>_cobro.fichasVinculadas[{productoIdx, clienteId, compraId}].
+  async function fichasDelPago(compraId) {
+    try {
+      const s = await db.collection("finanzas_movimientos").doc(`socio_compra_${L.safeId(compraId, 120)}_cobro`).get();
+      const m = s.exists ? s.data() || {} : {};
+      if (m.estadoFinanciero || m.reversaDe) return [];
+      return (Array.isArray(m.fichasVinculadas) ? m.fichasVinculadas : []).filter((v) => v && v.clienteId && v.compraId)
+        .map((v) => ({ productoIdx: Number(v.productoIdx) || 0, clienteId: L.clean(v.clienteId, 120), servicioCompraId: L.clean(v.compraId, 120), clienteNombre: L.clean(v.clienteNombre, 80), plataforma: L.clean(v.plataforma, 40), at: v.at || "" }));
+    } catch (_) { return []; }
+  }
+  async function resolverFicha(ficha, socio, amarradas = []) {
     if (!ficha || !ficha.clienteId) return null;
     const cdoc = await db.collection("clientes").doc(L.clean(ficha.clienteId, 120)).get();
     if (!cdoc.exists) throw Object.assign(new Error("ficha"), { status: 404, publicError: "ficha_no_existe" });
@@ -177,7 +189,8 @@ function registrar(app, d) {
     const found = servicioDeFicha(cliente, ficha);
     if (!found) throw Object.assign(new Error("svc"), { status: 404, publicError: "servicio_no_existe" });
     const visibles = revFiltrarClientePorAliases(cliente, revSocioAliases(socio, {})).servicios || [];
-    if (!visibles.some((v) => String(v?.compraId || "") === String(found.servicio.compraId || ""))) throw Object.assign(new Error("ajena"), { status: 403, publicError: "ficha_de_otro_socio" });
+    const delPago = amarradas.some((v) => v.clienteId === cdoc.id && v.servicioCompraId === String(found.servicio.compraId || ""));
+    if (!delPago && !visibles.some((v) => String(v?.compraId || "") === String(found.servicio.compraId || ""))) throw Object.assign(new Error("ajena"), { status: 403, publicError: "ficha_de_otro_socio" });
     return {
       portal: { clienteId: cdoc.id, servicioCompraId: String(found.servicio.compraId || ""), servicioIndex: found.index, beneficiarioKey: keyBeneficiario(found.servicio) },
       fichaResumen: { cliente: L.clean(cliente.nombre || cliente.nombrePerfil, 120), plataforma: L.clean(found.servicio.plataforma, 60), vence: fechaServicio(found.servicio) },
@@ -188,8 +201,8 @@ function registrar(app, d) {
   app.post("/rev/admin/entregas/vista-previa", ...adminW, wrap(async (req, res) => {
     const b = req.body || {};
     const compraId = L.clean(b.compraId, 120), renglonId = L.clean(b.renglonId, 60);
-    const { compra, producto, socio } = await prepararEntrega(req, compraId, renglonId);
-    const f = await resolverFicha(b.ficha, socio);
+    const { compra, producto, socio, idx } = await prepararEntrega(req, compraId, renglonId);
+    const f = await resolverFicha(b.ficha, socio, (await fichasDelPago(compraId)).filter((v) => v.productoIdx === idx));
     const cliente = producto.clienteNombre || compra.cliente || "";
     res.json({ ok: true,
       socio: { nombre: socio.nombre || compra.socio, telegram: chatSocio(socio) ? "vinculado" : "sin_vinculo" },
@@ -210,9 +223,9 @@ function registrar(app, d) {
     if (accion !== "borrador" && !opId) return fail(res, 400, "falta_op_id");
     const motivo = L.clean(b.motivo, 300);
     if (accion === "actualizar" && !motivo) return fail(res, 400, "falta_motivo");
-    const { compra, productos, producto, socio } = await prepararEntrega(req, compraId, renglonId);
+    const { compra, productos, producto, socio, idx } = await prepararEntrega(req, compraId, renglonId);
     if (accion !== "borrador" && String(compra.estado || "").toLowerCase() === "cancelado") return fail(res, 409, "pedido_cancelado");
-    const f = await resolverFicha(b.ficha, socio);
+    const f = await resolverFicha(b.ficha, socio, (await fichasDelPago(compraId)).filter((v) => v.productoIdx === idx));
     const codigoNuevo = L.clean(b.codigo, 200);
     const cifrado = codigoNuevo ? L.cifrarCodigo(codigoNuevo, llave()) : null;
     const actor = actorDe(req), id = L.entregaId(compraId, renglonId);
