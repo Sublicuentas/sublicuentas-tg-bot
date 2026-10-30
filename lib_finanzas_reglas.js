@@ -206,8 +206,35 @@ function estadoPago(total, recibido) {
   return { total: t, recibido: r, saldo, estado: saldo <= 0 ? "pagado" : (r > 0 ? "parcial" : "pendiente") };
 }
 
+// Oct-2026 · Pago dividido: el cliente paga lo recibido en 2 o más bancos/métodos el mismo día.
+// Entra [{bancoId, monto}] y la lista de métodos activos; devuelve los pagos limpios o un error para mostrar.
+// 0–1 renglones = pago de un solo banco (se usa bancoId de siempre). Máximo 4 bancos, sin repetir banco.
+function repartoPagos(pagos, recibido, methods = [], bancoUnico = "") {
+  const r = money(recibido);
+  const lista = (Array.isArray(pagos) ? pagos : []).map((p) => ({ bancoId: String(p?.bancoId || "").trim(), monto: money(p?.monto) })).filter((p) => p.bancoId || p.monto);
+  const metodo = (id) => (Array.isArray(methods) ? methods : []).find((m) => m && m.id === id && m.activo !== false);
+  if (lista.length <= 1) {
+    if (!(r > 0)) return { ok: true, pagos: [] };
+    const id = lista[0]?.bancoId || String(bancoUnico || "").trim(), b = metodo(id);
+    if (!b) return { ok: false, error: "Elija el método/banco donde entró el dinero." };
+    return { ok: true, pagos: [{ bancoId: b.id, banco: b.nombre, monto: r }] };
+  }
+  if (lista.length > 4) return { ok: false, error: "Máximo 4 bancos o métodos en un mismo pago." };
+  const vistos = new Set(), out = [];
+  for (const p of lista) {
+    const b = metodo(p.bancoId);
+    if (!b) return { ok: false, error: "Elija el banco o método de cada parte del pago." };
+    if (vistos.has(b.id)) return { ok: false, error: `${b.nombre} está repetido: sume ese monto en una sola línea.` };
+    if (!(p.monto > 0)) return { ok: false, error: `Escriba cuánto entró en ${b.nombre}.` };
+    vistos.add(b.id); out.push({ bancoId: b.id, banco: b.nombre, monto: p.monto });
+  }
+  const suma = money(out.reduce((a, p) => a + p.monto, 0));
+  if (Math.abs(suma - r) > 0.009) return { ok: false, error: `Los bancos suman L${fmt(suma)} y lo recibido es L${fmt(r)}: deben coincidir.` };
+  return { ok: true, pagos: out };
+}
+
 function fmt(n) {
   return money(n).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 2 });
 }
 
-module.exports = { anuladoOReversa, PLANILLA_CONCEPTOS, PLANILLA_SUBTIPOS, SIN_BANCO, norm, money, ymd, addDaysYmd, daysBetweenYmd, movementYmd, publicMethods, resolveBankId, movementBankId, movementKind, cycleTotals, bankBalances, validatePlanilla, estadoPago, fmt };
+module.exports = { repartoPagos, anuladoOReversa, PLANILLA_CONCEPTOS, PLANILLA_SUBTIPOS, SIN_BANCO, norm, money, ymd, addDaysYmd, daysBetweenYmd, movementYmd, publicMethods, resolveBankId, movementBankId, movementKind, cycleTotals, bankBalances, validatePlanilla, estadoPago, fmt };

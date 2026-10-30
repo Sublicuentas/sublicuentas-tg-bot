@@ -506,13 +506,16 @@ function auditarTg(tx, actor, ev) {
   tx.set(db.collection("auditoria_eventos").doc(), { actorUsuario: actor.usuario, rol: "telegram", origen: "tg", modulo: ev.modulo || "finanzas", accion: ev.accion, targetType: ev.targetType || "", targetId: ev.targetId || "", clienteId: ev.clienteId || "", compraId: ev.compraId || "", movimientoId: ev.movimientoId || "", cuentaId: ev.cuentaId || "", operationId: ev.operationId || "", before: ev.before ?? null, after: ev.after ?? null, motivo: "", detalle: ev.detalle || "", monto: ev.monto ?? null, bancos: ev.bancos || [], resultado: "ok", tipo: `finanzas_${ev.accion}`, createdAt: new Date().toISOString() });
 }
 // R107: preparar (fuera) → leer (al inicio de la transacción) → escribir (junto con la renovación).
-async function prepararPagoTg({ tipoOrigen, total, recibido, bancoId, responsable, vendedorNombre, opId, actor, fechaPago = "" }) {
+async function prepararPagoTg({ tipoOrigen, total, recibido, bancoId, pagos = null, responsable, vendedorNombre, opId, actor, fechaPago = "" }) {
   const ep = R.estadoPago(total, recibido);
   if (!(ep.total > 0) || ep.recibido < 0 || ep.recibido > ep.total) throw Object.assign(new Error("Montos inválidos."), { userError: true });
-  const methods = await loadMethods(); const banco = methods.find((m) => m.id === bancoId);
-  if (ep.recibido > 0 && !banco) throw Object.assign(new Error("Elija el banco donde entró el dinero."), { userError: true });
+  const methods = await loadMethods();
+  // Oct-2026 · pago dividido en 2+ bancos (mismas reglas que web/APK: repartoPagos).
+  const reparto = R.repartoPagos(pagos, ep.recibido, methods, bancoId);
+  if (!reparto.ok) throw Object.assign(new Error(reparto.error), { userError: true });
+  const banco = reparto.pagos.length ? methods.find((m) => m.id === reparto.pagos[0].bancoId) : null;
   const hoyP = hoyYmd(); const fp = /^\d{4}-\d{2}-\d{2}$/.test(String(fechaPago)) && fechaPago <= hoyP && R.daysBetweenYmd(fechaPago, hoyP) <= 30 ? fechaPago : hoyP; // R110
-  return { fechaPago: fp, ep, banco, tipoOrigen, deudorTipo: responsable === "vendedor" ? "vendedor" : "cliente", vendedorNombre: String(vendedorNombre || "").slice(0, 60), opId, id: opDocId("oper", actor.uid, opId), actor };
+  return { fechaPago: fp, ep, banco, pagos: reparto.pagos, tipoOrigen, deudorTipo: responsable === "vendedor" ? "vendedor" : "cliente", vendedorNombre: String(vendedorNombre || "").slice(0, 60), opId, id: opDocId("oper", actor.uid, opId), actor };
 }
 async function leerPagoTg(tx, prep) {
   const ventaRef = db.collection("finanzas_movimientos").doc(`${prep.id}_venta`);
@@ -523,13 +526,15 @@ async function leerPagoTg(tx, prep) {
 function escribirPagoTg(tx, prep, lectura, cliente = {}) {
   const { ep, banco, tipoOrigen, deudorTipo, vendedorNombre, id, opId, actor } = prep;
   if (lectura.yaExiste) return { duplicado: true, ...ep };
+  const pagos = Array.isArray(prep.pagos) ? prep.pagos : [], dividido = pagos.length > 1;
   const ventaRef = db.collection("finanzas_movimientos").doc(`${id}_venta`), ingRef = db.collection("finanzas_movimientos").doc(`${id}_cobro`), cxcRef = db.collection(CXC).doc(id);
   const hoy = prep.fechaPago || hoyYmd(), now = new Date().toISOString(); // R110: día real del pago
   const base = { origen: "telegram", origenCanal: "tg", registradoPor: actor.usuario, registradoPorId: actor.uid, ...fechaCampos(hoy), createdAt: now, updatedAt: now };
   const clsTg = require("./lib_catalogo_categorias").clasificarServicio({ plataforma: cliente.plataforma || "", tipoVenta: cliente.tipoVenta, categoria: cliente.categoria }); // R118
   const rel = { categoria: clsTg.categoria, tipoVenta: clsTg.tipoVenta, categoriaLabel: require("./lib_catalogo_categorias").CATEGORIAS[clsTg.categoria]?.finanzas || "", clienteId: cliente.clienteId || "", clienteNombre: String(cliente.nombre || "").slice(0, 80), compraId: cliente.compraId || "", plataforma: String(cliente.plataforma || "").slice(0, 40), tipoOrigen, operacionId: id, cicloId: lectura.cicloId, operationId: opId, fechaNueva: cliente.fechaNueva || "", fechaAnterior: cliente.fechaAnterior || "", vendedor: vendedorNombre };
-  tx.set(ventaRef, { ...base, movimientoId: ventaRef.id, tipo: "venta", subtipo: tipoOrigen === "compra" ? "compra_nueva" : "renovacion", monto: ep.total, montoRecibido: ep.recibido, saldoPendiente: ep.saldo, estadoPago: ep.estado, ...rel });
-  if (ep.recibido > 0) tx.set(ingRef, { ...base, movimientoId: ingRef.id, tipo: "ingreso", subtipo: tipoOrigen === "compra" ? "cobro_compra" : "cobro_renovacion", monto: ep.recibido, bancoId: banco.id, banco: banco.nombre, metodoPago: banco.nombre, cobradoPor: actor.usuario, ...(ep.saldo > 0 ? { cuentaId: cxcRef.id } : {}), ...rel });
+  tx.set(ventaRef, { ...base, movimientoId: ventaRef.id, tipo: "venta", subtipo: tipoOrigen === "compra" ? "compra_nueva" : "renovacion", monto: ep.total, montoRecibido: ep.recibido, saldoPendiente: ep.saldo, estadoPago: ep.estado, ...(dividido ? { pagosDetalle: pagos, pagoDividido: true } : {}), ...rel });
+  // Oct-2026 · un ingreso por banco: _cobro, _cobro_2… (cada banco suma solo lo suyo)
+  pagos.forEach((pg, i) => { const ref = i ? db.collection("finanzas_movimientos").doc(`${id}_cobro_${i + 1}`) : ingRef; tx.set(ref, { ...base, movimientoId: ref.id, tipo: "ingreso", subtipo: tipoOrigen === "compra" ? "cobro_compra" : "cobro_renovacion", monto: pg.monto, bancoId: pg.bancoId, banco: pg.banco, metodoPago: pg.banco, cobradoPor: actor.usuario, ...(dividido ? { pagoDividido: true, parte: i + 1, partes: pagos.length } : {}), ...(ep.saldo > 0 ? { cuentaId: cxcRef.id } : {}), ...rel }); });
   if (ep.saldo > 0) tx.set(cxcRef, { cuentaId: cxcRef.id, deudorTipo, deudorId: deudorTipo === "cliente" ? rel.clienteId : vendedorNombre, deudorNombre: deudorTipo === "cliente" ? rel.clienteNombre : vendedorNombre, ...rel, montoTotalOperacion: ep.total, montoRecibidoInicial: ep.recibido, montoOriginalPendiente: ep.saldo, montoRecibidoPosterior: 0, saldoPendiente: ep.saldo, estado: ep.recibido > 0 ? "parcial" : "pendiente", cicloOrigen: lectura.cicloId, abonos: [], creadoPor: actor.usuario, createdAt: now, updatedAt: now });
   auditarTg(tx, actor, { modulo: tipoOrigen === "compra" ? "compras" : "renovaciones", accion: tipoOrigen === "compra" ? "compra_pago" : "renovacion_pago", targetType: "operacion", targetId: id, clienteId: rel.clienteId, compraId: rel.compraId, operationId: opId, monto: ep.total, after: { total: ep.total, recibido: ep.recibido, saldo: ep.saldo, estado: ep.estado, banco: banco?.nombre || "", responsable: ep.saldo > 0 ? deudorTipo : "" }, detalle: `${rel.clienteNombre} · ${rel.plataforma} · total ${ep.total} · recibido ${ep.recibido}${banco ? ` en ${banco.nombre}` : ""}${ep.saldo > 0 ? ` · pendiente ${ep.saldo} (${deudorTipo})` : ""}`, bancos: ep.recibido > 0 ? [{ bancoId: banco.id, monto: ep.recibido, direccion: "entrada" }] : [] });
   return { duplicado: false, ...ep, cuentaId: ep.saldo > 0 ? cxcRef.id : "" };
@@ -709,6 +714,30 @@ Si el cliente pagó aparte, registre el pago normal.`, [volver]);
 La ficha queda amarrada a ese pago y *no se registra otro ingreso*.`, [...filas.map((f, i) => [{ text: f.texto.slice(0, 60), callback_data: `fl:pg:sp:${i}` }]), volver]);
 }
 
+// Oct-2026 · Pago dividido: banco 1 + monto → banco 2 (el resto, o escribe monto) → … hasta cuadrar con lo recibido (máx. 4).
+async function panelSplit(chatId, p, ep) {
+  const methods = await loadMethods(), usados = new Set(p.split.map((x) => x.bancoId));
+  const suma = R.money(p.split.reduce((a, x) => a + x.monto, 0)), resto = R.money(ep.recibido - suma);
+  p.mode = "flPgSplit"; pending.set(String(chatId), p);
+  const kb = []; const libres = methods.filter((m) => !usados.has(m.id));
+  for (let i = 0; i < libres.length; i += 2) kb.push(libres.slice(i, i + 2).map((m) => ({ text: m.nombre, callback_data: `fl:pg:sb:${m.id}` })));
+  kb.push([{ text: "↩️ Un solo banco", callback_data: "fl:pg:split:no" }]);
+  const lineas = p.split.map((x, i) => `${i + 1}) ${x.banco}: *${lps(x.monto)}*`).join("\n");
+  return upsertPanel(chatId, `➗ *Pago en varios bancos* · recibido ${lps(ep.recibido)}\n${lineas ? `${lineas}\nFalta: *${lps(resto)}*\n` : ""}\n¿Banco ${p.split.length + 1}?`, kb);
+}
+async function splitAgregar(chatId, p, monto) {
+  const ep = R.estadoPago(p.total, p.recibido), suma = R.money(p.split.reduce((a, x) => a + x.monto, 0)), resto = R.money(ep.recibido - suma);
+  monto = R.money(monto);
+  if (!(monto > 0)) return bot.sendMessage(chatId, "Escriba un monto mayor que 0.");
+  if (monto > resto + 0.009) return bot.sendMessage(chatId, `Es más de lo que falta (${lps(resto)}). Escriba otro monto.`);
+  if (p.split.length === 0 && Math.abs(monto - resto) < 0.01) return bot.sendMessage(chatId, `Ese es todo lo recibido. Para un solo banco toque “↩️ Un solo banco”; si no, escriba solo lo que entró en ${p.splitBanco.nombre}.`);
+  p.split.push({ bancoId: p.splitBanco.id, banco: p.splitBanco.nombre, monto }); p.splitBanco = null;
+  const falta = R.money(resto - monto);
+  if (falta <= 0.009) { p.pagos = p.split.map(({ bancoId, monto: m }) => ({ bancoId, monto: m })); p.bancoId = p.split[0].bancoId; p.bancosTxt = p.split.map((x) => `${x.banco} ${lps(x.monto)}`).join(" + "); return siguientePaso(chatId, p); }
+  if (p.split.length >= 4) { p.split.pop(); return bot.sendMessage(chatId, "Máximo 4 bancos. Ajuste los montos."); }
+  return panelSplit(chatId, p, ep);
+}
+
 // -- hoja de pago (compra y renovación): total → recibido → banco → responsable → confirmar
 async function iniciarPago(chatId, userId, datos) {
   pending.set(String(chatId), { mode: "flPgTotal", ...datos, opId: newOpId(), userId: String(userId) });
@@ -721,9 +750,11 @@ async function iniciarPagoCompra(chatId, userId, compra) { return iniciarPago(ch
 async function siguientePaso(chatId, p) {
   const ep = R.estadoPago(p.total, p.recibido);
   if (ep.recibido > 0 && !p.bancoId) {
+    if (Array.isArray(p.split)) return panelSplit(chatId, p, ep);
     p.mode = "flPgBanco"; pending.set(String(chatId), p);
     const methods = await loadMethods(); const kb = [];
     for (let i = 0; i < methods.length; i += 2) kb.push(methods.slice(i, i + 2).map((m) => ({ text: m.nombre, callback_data: `fl:pg:bank:${m.id}` })));
+    kb.push([{ text: "➗ Pagó en 2 bancos o métodos", callback_data: "fl:pg:split" }]);
     return upsertPanel(chatId, `Recibido ahora: *${lps(ep.recibido)}*\n3) ¿Dónde entró el dinero?`, kb);
   }
   if (ep.saldo > 0 && !p.responsable) {
@@ -732,7 +763,7 @@ async function siguientePaso(chatId, p) {
   }
   p.mode = "flPgConfirm"; pending.set(String(chatId), p);
   const banco = p.bancoId ? (await loadMethods()).find((m) => m.id === p.bancoId) : null;
-  let txt = [`💵 *Revisar ${p.tipoOrigen === "compra" ? "compra" : "renovación"}* · ${p.etiqueta || ""}`, "", `Monto total: *${lps(ep.total)}*`, `Recibido ahora: *${lps(ep.recibido)}*${banco ? ` en ${banco.nombre}` : ""}`, `Saldo pendiente: *${lps(ep.saldo)}*${ep.saldo > 0 ? ` (${p.responsable === "vendedor" ? `vendedor ${p.vendedorNombre}` : "cliente"})` : ""}`, `Estado: *${ep.estado.toUpperCase()}*`].join("\n");
+  let txt = [`💵 *Revisar ${p.tipoOrigen === "compra" ? "compra" : "renovación"}* · ${p.etiqueta || ""}`, "", `Monto total: *${lps(ep.total)}*`, `Recibido ahora: *${lps(ep.recibido)}*${p.bancosTxt ? ` en ${p.bancosTxt}` : banco ? ` en ${banco.nombre}` : ""}`, `Saldo pendiente: *${lps(ep.saldo)}*${ep.saldo > 0 ? ` (${p.responsable === "vendedor" ? `vendedor ${p.vendedorNombre}` : "cliente"})` : ""}`, `Estado: *${ep.estado.toUpperCase()}*`].join("\n");
   const hoyF = hoyYmd(), fSel = p.fechaPago || hoyF;
   txt += `\n📅 Día que entró el dinero: *${ymdToDmy(fSel)}*${fSel === hoyF ? " (hoy)" : ""}`; // R110
   const kb = [[0, "Hoy"], [-1, "Ayer"], [-2, "Antier"]].map(([n, t]) => { const f = R.addDaysYmd(hoyF, n); return { text: `${f === fSel ? "✅ " : ""}${t} ${ymdToDmy(f).slice(0, 5)}`, callback_data: `fl:pg:fecha:${f}` }; });
@@ -750,13 +781,13 @@ async function confirmarPago(chatId, userId, p) {
   if (p.tipoOrigen !== "compra") {
     if (typeof cfg.ejecutarRenovacion !== "function") throw new Error("Renovación no configurada.");
     // R107: la renovación y su pago se guardan en UNA sola transacción (o se guarda todo, o nada).
-    const prep = await prepararPagoTg({ tipoOrigen: "renovacion", total: p.total, recibido: p.recibido, bancoId: p.bancoId, responsable: p.responsable, vendedorNombre: p.vendedorNombre, opId: p.opId, actor, fechaPago: p.fechaPago || "" });
+    const prep = await prepararPagoTg({ tipoOrigen: "renovacion", total: p.total, recibido: p.recibido, bancoId: p.bancoId, pagos: p.pagos || null, responsable: p.responsable, vendedorNombre: p.vendedorNombre, opId: p.opId, actor, fechaPago: p.fechaPago || "" });
     const pagoExtra = { leer: (tx) => leerPagoTg(tx, prep), escribir: (tx, res, cl, lectura) => escribirPagoTg(tx, prep, lectura, { clienteId: p.accion.clientId, nombre: cl?.nombrePerfil || cl?.nombre || "", compraId: res?.siguiente?.compraId || p.accion.compraId || "", plataforma: res?.siguiente?.plataforma || (Array.isArray(res?.servicios) ? res.servicios.map((x) => x?.plataforma).filter(Boolean).join(", ") : ""), fechaAnterior: res?.fechaAnterior || "", fechaNueva: res?.fechaNueva || "" }) };
     const info = await cfg.ejecutarRenovacion(chatId, userId, p.accion, { ajuste: false, pagoExtra });
     cliente = { ...(info || {}), clienteId: p.accion.clientId, compraId: p.accion.compraId || "" };
     r = info?.pagoOperacion || null;
   }
-  if (!r) r = await registrarOperacionPago({ tipoOrigen: p.tipoOrigen, total: p.total, recibido: p.recibido, bancoId: p.bancoId, responsable: p.responsable, vendedorNombre: p.vendedorNombre, cliente, opId: p.opId, actor, fechaPago: p.fechaPago || "" });
+  if (!r) r = await registrarOperacionPago({ tipoOrigen: p.tipoOrigen, total: p.total, recibido: p.recibido, bancoId: p.bancoId, pagos: p.pagos || null, responsable: p.responsable, vendedorNombre: p.vendedorNombre, cliente, opId: p.opId, actor, fechaPago: p.fechaPago || "" });
   return bot.sendMessage(chatId, `✅ ${p.tipoOrigen === "compra" ? "Compra" : "Renovación"} registrada · *${r.estado.toUpperCase()}*${r.duplicado ? " (ya estaba registrada)" : ""}\nTotal ${lps(r.total)} · Recibido ${lps(r.recibido)} · Pendiente ${lps(r.saldo)}${cliente.fechaNueva ? `\nNueva fecha: ${cliente.fechaNueva}` : ""}`, { parse_mode: "Markdown" });
 }
 
@@ -881,7 +912,17 @@ No se registró otro ingreso.`, { parse_mode: "Markdown" });
       } catch (e) { if (e.userError) { await bot.sendMessage(chatId, `⚠️ ${e.message}`); return panelPagosSocios(chatId, p); } throw e; }
     }
     // R106 · hoja de pago (compra / renovación)
-    if (data.startsWith("fl:pg:bank:") && p.mode === "flPgBanco") { p.bancoId = data.slice("fl:pg:bank:".length); return siguientePaso(chatId, p); }
+    if (data.startsWith("fl:pg:bank:") && p.mode === "flPgBanco") { p.bancoId = data.slice("fl:pg:bank:".length); p.pagos = null; p.bancosTxt = ""; return siguientePaso(chatId, p); }
+    if (data === "fl:pg:split" && p.mode === "flPgBanco") { p.split = []; return siguientePaso(chatId, p); }
+    if (data === "fl:pg:split:no" && ["flPgSplit", "flPgSplitMonto"].includes(p.mode)) { delete p.split; p.pagos = null; p.bancoId = ""; return siguientePaso(chatId, p); }
+    if (data.startsWith("fl:pg:sb:") && p.mode === "flPgSplit") {
+      const m = (await loadMethods()).find((x) => x.id === data.slice("fl:pg:sb:".length)); if (!m) return bot.sendMessage(chatId, "⚠️ Banco no válido.");
+      p.splitBanco = { id: m.id, nombre: m.nombre }; p.mode = "flPgSplitMonto"; pending.set(String(chatId), p);
+      const ep = R.estadoPago(p.total, p.recibido), resto = R.money(ep.recibido - p.split.reduce((a, x) => a + x.monto, 0));
+      const kb = p.split.length ? [[{ text: `✅ ${m.nombre}: el resto ${lps(resto)}`, callback_data: "fl:pg:sr" }]] : [];
+      return upsertPanel(chatId, `¿Cuánto entró en *${m.nombre}*?${p.split.length ? `\n(falta ${lps(resto)})` : ""}`, [...kb, [{ text: "↩️ Un solo banco", callback_data: "fl:pg:split:no" }]]);
+    }
+    if (data === "fl:pg:sr" && p.mode === "flPgSplitMonto") { const ep = R.estadoPago(p.total, p.recibido); return splitAgregar(chatId, p, R.money(ep.recibido - p.split.reduce((a, x) => a + x.monto, 0))); }
     if (data.startsWith("fl:pg:resp:") && p.mode === "flPgResp") {
       p.responsable = data.endsWith("vendedor") ? "vendedor" : "cliente";
       if (p.responsable === "vendedor") { p.mode = "flPgVendedor"; pending.set(String(chatId), p); return bot.sendMessage(chatId, "🧑‍💼 Escriba el nombre del vendedor que tiene el dinero:"); }
@@ -957,6 +998,7 @@ async function handleText(chatId, userId, text, p) {
       if (num > p.total) return bot.sendMessage(chatId, `No puede ser mayor que el total (${lps(p.total)}).`);
       p.recibido = R.money(num); return siguientePaso(chatId, p);
     }
+    if (p.mode === "flPgSplitMonto") { if (!(num > 0)) return bot.sendMessage(chatId, "Escriba el monto (mayor que 0)."); return splitAgregar(chatId, p, num); }
     if (p.mode === "flPgVendedor") {
       if (t.length < 2) return bot.sendMessage(chatId, "Escriba el nombre del vendedor.");
       p.vendedorNombre = t.slice(0, 60); return siguientePaso(chatId, p);
