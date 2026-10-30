@@ -1,7 +1,8 @@
 "use strict";
 /* SUBLICUENTAS · Compras del Panel de Socios — pedido v2 (Rediseño Socios, oct-2026)
-   Un pedido = un cliente principal + varios renglones. Cada renglón hereda ese cliente o lleva
-   "este servicio es para otro cliente". Los datos que se piden salen del CATÁLOGO (entregaTipo,
+   Un pedido = UN cliente + varios renglones (brief maestro 30/10/2026: un pedido, un cliente, un pago).
+   Todos los renglones heredan el cliente principal; "otro cliente" se rechaza (otro pedido). Los pedidos
+   viejos que mezclaban clientes se conservan tal cual y se marcan "Histórico anterior". Los datos que se piden salen del CATÁLOGO (entregaTipo,
    entregaCanal, pideDispositivo, datoRequerido); el nombre comercial solo se usa para productos
    viejos que todavía no tienen esa configuración (quedan marcados como "inferida").
    Funciones puras: las usa /rev/compra en server_api.js y las pruebas. */
@@ -55,10 +56,8 @@ function normalizarRenglon(p = {}, item = {}, principal = {}, index = 0) {
   const err = (campo, mensaje) => errores.push({ renglonId, campo, mensaje });
   const d = p.destinatario && typeof p.destinatario === "object" ? p.destinatario : {};
   const esOtro = d.tipo === "otro";
-  const dest = esOtro
-    ? { tipo: "otro", clienteId: clean(d.clienteId, 120), nombre: clean(d.nombre, 80), apellido: clean(d.apellido, 80) }
-    : { tipo: "principal", clienteId: clean(principal.clienteId, 120), nombre: clean(principal.nombre, 80), apellido: clean(principal.apellido, 80) };
-  if (esOtro && !dest.nombre) err("destinatario", "Escriba el nombre del otro cliente.");
+  const dest = { tipo: "principal", clienteId: clean(principal.clienteId, 120), nombre: clean(principal.nombre, 80), apellido: clean(principal.apellido, 80) };
+  if (esOtro) err("destinatario", "Un pedido es para un solo cliente. Haga otro pedido para esa persona.");
   const pide = pideDispositivo(item, m);
   const disp = norm(p.dispositivo).replace(/^[^a-z]+/, "");
   const dispKey = Object.keys(DISPOSITIVOS).find((k) => disp === k || disp.endsWith(k)) || "";
@@ -148,10 +147,29 @@ function lineasTelegram(productos = [], principalNombre = "") {
   });
 }
 
+// Pedido viejo que mezclaba clientes (v2 con "otro cliente" o v1 con nombres distintos): se conserva, con etiqueta.
+function historicoMixto(x = {}) {
+  const productos = Array.isArray(x.productos) ? x.productos : [];
+  if (Number(x.version) === 2) return productos.some((p) => p.destinatario && p.destinatario.tipo === "otro");
+  return new Set(productos.map((p) => norm(p.nombreCliente || p.clienteNombre || "")).filter(Boolean)).size > 1;
+}
+// Estado de entrega derivado de los renglones publicados (lo escribe rev_entregas_api.js en compra.entregas).
+function entregaResumen(x = {}) {
+  const productos = Array.isArray(x.productos) && x.productos.length ? x.productos : [{ renglonId: "r1" }];
+  const e = x.entregas && typeof x.entregas === "object" ? x.entregas : {};
+  const req = productos.map((p, i) => p.renglonId || `r${i + 1}`);
+  const pub = req.filter((r) => e[r] && e[r].estado === "publicada").length;
+  if (norm(x.estado) === "cancelado") return { estado: "cancelado", requeridos: req.length, publicados: pub, texto: "Cancelado" };
+  const estado = pub === 0 ? "pendiente" : pub < req.length ? "parcial" : "entregado";
+  return { estado, requeridos: req.length, publicados: pub, texto: estado === "parcial" ? `Entrega parcial · ${pub} de ${req.length} servicio${req.length === 1 ? "" : "s"}` : estado === "entregado" ? "Entregado al socio" : "Pendiente de entrega",
+    renglones: Object.fromEntries(req.map((r) => [r, e[r] ? { estado: e[r].estado, entregaId: e[r].estado === "publicada" ? e[r].entregaId || "" : "" } : { estado: "pendiente", entregaId: "" }])) };
+}
+
 // Lo que ve el socio en "Pedidos" (sin imagen, sin datos internos de finanzas).
 function pedidoPublico(id, x = {}) {
   const productos = Array.isArray(x.productos) ? x.productos : [];
   return {
+    historicoAnterior: historicoMixto(x), entregaResumen: entregaResumen(x), pagoEnRevision: !!x.pagoRevision,
     id, ref: String(id).slice(-6).toUpperCase(), version: Number(x.version) || 1,
     servicio: x.servicio || "Compra", estado: x.estado || "pendiente", detalleEstado: x.detalleEstado || "",
     destino: x.destino || "", destinoLabel: x.destinoLabel || "",
@@ -171,4 +189,4 @@ function pedidoPublico(id, x = {}) {
   };
 }
 
-module.exports = { norm, clean, EMAIL, CANTIDADES, DISPOSITIVOS, MARCAS_TV, MODALIDADES, modalidad, pideDispositivo, normalizarRenglon, validarPrincipal, totales, unidadesPorProducto, stockInsuficiente, lineasTelegram, pedidoPublico, nombreCompleto };
+module.exports = { norm, clean, EMAIL, CANTIDADES, DISPOSITIVOS, MARCAS_TV, MODALIDADES, modalidad, pideDispositivo, normalizarRenglon, validarPrincipal, totales, unidadesPorProducto, stockInsuficiente, lineasTelegram, pedidoPublico, nombreCompleto, historicoMixto, entregaResumen };

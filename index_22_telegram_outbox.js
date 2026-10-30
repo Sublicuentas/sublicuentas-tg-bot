@@ -41,6 +41,16 @@ function telegramErrorInfo(e) {
   return { code, description, kind, retryAfterSec };
 }
 
+// Oct-2026 · Entregas/Buzón: si la conexión se cortó DESPUÉS de enviar (timeout/reset), Telegram pudo haber
+// aceptado el mensaje. Para trabajos marcados noRetryOnUncertain no se reintenta a ciegas: queda "uncertain"
+// y administración decide reenviar. Errores donde la petición nunca salió (DNS, conexión rechazada) sí se reintentan.
+function resultadoIncierto(e) {
+  const info = telegramErrorInfo(e);
+  if (info.code) return false;
+  const txt = `${e?.code || ''} ${e?.message || ''} ${e?.cause?.code || ''}`.toUpperCase();
+  return /ETIMEDOUT|ESOCKETTIMEDOUT|ECONNRESET|SOCKET HANG UP|EPIPE|ABORT/.test(txt);
+}
+
 function isUnauthorizedTelegramError(e) {
   return telegramErrorInfo(e).kind === 'bot_token_invalido';
 }
@@ -138,6 +148,11 @@ async function processOne(ref) {
   if (!job) return;
   try {
     const msg = await sendJob(job);
+    // Oct-2026 · enlazar message_id → hilo (respuesta nativa en Telegram identifica la consulta sin suponer).
+    if (job.onSent && job.onSent.collection && msg?.message_id) {
+      const linkId = `${String(job.chatId).replace(/[^0-9-]/g, '')}_${Number(msg.message_id)}`;
+      await db.collection(String(job.onSent.collection)).doc(linkId).set({ ...(job.onSent.data || {}), chatId: String(job.chatId), messageId: Number(msg.message_id), createdAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true }).catch((e) => console.error('telegram_outbox_onSent', e?.message || e));
+    }
     await ref.set({
       status: 'sent',
       messageId: Number(msg?.message_id || 0),
@@ -152,6 +167,11 @@ async function processOne(ref) {
     }, { merge: true });
   } catch (e) {
     const info = telegramErrorInfo(e);
+    if (job.noRetryOnUncertain && resultadoIncierto(e)) {
+      await ref.set({ status: 'uncertain', error: info.description, errorKind: 'resultado_incierto', errorCode: 0, leaseUntilMillis: 0,
+        claimedBy: admin.firestore.FieldValue.delete(), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+      return;
+    }
     const retryable = (info.code >= 500 || info.kind === 'rate_limit' || info.code === 0) && Number(job.attempts || 0) < MAX_ATTEMPTS;
     const delay = retryDelayMs(job.attempts, info.retryAfterSec);
     await ref.set({
@@ -223,7 +243,12 @@ async function recoverStuckJobs() {
     });
     if (!stuck.length) return 0;
     const batch = db.batch();
-    stuck.forEach((d) => batch.set(d.ref, {
+    // Un trabajo marcado noRetryOnUncertain que quedó a medias (el proceso cayó mientras enviaba) puede haber salido: incierto.
+    stuck.filter((d) => (d.data() || {}).noRetryOnUncertain).forEach((d) => batch.set(d.ref, {
+      status: 'uncertain', errorKind: 'resultado_incierto', leaseUntilMillis: 0, claimedBy: admin.firestore.FieldValue.delete(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true }));
+    stuck.filter((d) => !(d.data() || {}).noRetryOnUncertain).forEach((d) => batch.set(d.ref, {
       status: 'pending',
       recoveredAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -288,6 +313,7 @@ module.exports = {
   startTelegramOutboxWorker,
   telegramErrorInfo,
   isUnauthorizedTelegramError,
+  resultadoIncierto,
   getTelegramOutboxHealth,
   recoverStuckJobs,
   releaseDueRetries,

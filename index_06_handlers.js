@@ -4858,6 +4858,7 @@ bot.on("callback_query", async (q) => {
     const vendOk = !!(vend && vend.nombre);
 
     if (!adminOk && !vendOk) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+    if (data.startsWith("bz:r:")) { await require("./index_36_socios_telegram").tryCallback(q,{vend}); return; }
 
     const neededPermission = callbackPermission(data);
     if (neededPermission === "self-service" && !vendOk) return bot.sendMessage(chatId, "⛔ Esta opción corresponde a su perfil de vendedor.");
@@ -7030,6 +7031,9 @@ bot.on("message", async (msg) => {
   }
 
   try {
+    // Oct-2026 · /start v_<token> desde "Conectar Telegram" del Panel de Socios (antes del control de acceso:
+    // es justamente el paso que vincula al socio).
+    if (await require("./index_36_socios_telegram").tryVincular(msg)) return;
     // Los comandos y listas de emojis se consumen aquí una sola vez, antes
     // de los flujos de clientes y de la búsqueda libre (incluye captions).
     if (await premiumIcons?.handleMessage?.(msg)) {
@@ -7047,6 +7051,8 @@ bot.on("message", async (msg) => {
     const vendOk = !!(vend && vend.nombre);
 
     if ((adminOk || vendOk) && await ticketTryConsumeTelegramReply(msg,superOk,vend)) return;
+    // Oct-2026 · Buzón de dos vías: respuesta nativa o botón "Responder consulta #C…" (nunca por suposición).
+    if ((adminOk || vendOk) && await require("./index_36_socios_telegram").tryMensaje(msg,{adminOk,superOk,vend})) return;
 
     // Si hay wizard activo y mandan un comando que no sea menu/start, avisar
     if (wizard.has(String(chatId)) && text.startsWith("/")) {

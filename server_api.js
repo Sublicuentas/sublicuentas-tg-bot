@@ -793,34 +793,7 @@ async function sendTelegramImageSmart(chatId, imageObj, caption) {
 function cleanTg(v, max = 300) {
   return (v == null ? "" : String(v)).replace(/[\*_`\[\]]/g, "").trim().slice(0, max);
 }
-function destinoInfo(destinoRaw) {
-  const destino = revNormKey(String(destinoRaw || "sublicuentas")).replace(/^geissel$/, "geisell");
-  const destinos = {
-    relojes: { key: "relojes", label: "⌚ Relojes", fallback: "411539492", env: "RELOJES_CHAT_ID" },
-    sublicuentas: { key: "sublicuentas", label: "🟣 Sublicuentas", fallback: "5728675990", env: "SUBLICUENTAS_CHAT_ID" },
-    geisell: { key: "geisell", label: "👤 Geisell", fallback: "", env: "GEISELL_CHAT_ID" },
-  };
-  const info = destinos[destino];
-  if (!info) {
-    const err = new Error("destino_invalido");
-    err.status = 400; err.publicError = "destino_invalido";
-    throw err;
-  }
-  return info;
-}
-async function getDestinoChatIds(destinoRaw) {
-  const info = destinoInfo(destinoRaw);
-  const envIds = String(process.env[info.env] || "").split(",").map((s) => s.trim()).filter(Boolean);
-  if (envIds.length) return [envIds[0]]; // destinatario específico: nunca abanicar un comprobante a varios chats
-  if (info.key === "sublicuentas") {
-    const superIds = String(process.env.SUPER_ADMIN || "").split(",").map((s) => s.trim()).filter(Boolean);
-    if (superIds.length) return [superIds[0]];
-  }
-  if (info.fallback) return [info.fallback];
-  const err = new Error(`destino_sin_chat_id:${info.key}`);
-  err.status = 503; err.publicError = "destino_sin_configurar";
-  throw err;
-}
+const { destinoInfo, getDestinoChatIds } = require("./lib_destinos_tg"); // Oct-2026 · compartido con el bot
 function parsePanelImage(imagen) {
   if (!imagen) return null;
   const m = String(imagen).match(/^data:(image\/(?:jpe?g|png|webp));base64,(.+)$/);
@@ -1245,6 +1218,11 @@ app.post("/rev/compra", revAuth, async (req, res) => {
     // ── Pedido v2: cliente principal + destinatario, datos y notas por renglón (validados aquí, no solo en el navegador) ──
     const v2 = Number(b.version) === 2;
     let clientePrincipal = null;
+    // Brief maestro 30/10/2026 · un pedido = un cliente = un pago. Un servicio "para otro cliente" ya no se acepta:
+    // se rechaza aquí aunque el navegador haya sido manipulado. Otro cliente → otro pedido y otro comprobante.
+    if (v2 && productosRaw.some((p) => p && p.destinatario && p.destinatario.tipo === "otro")) {
+      return res.status(400).json({ error: "cliente_unico", detail: "Un pedido es para un solo cliente. Haga otro pedido (con su propio pago) para la otra persona." });
+    }
     if (v2) {
       const cp = b.clientePrincipal && typeof b.clientePrincipal === "object" ? b.clientePrincipal : {};
       clientePrincipal = { clienteId: cleanTg(cp.clienteId, 120), nombre: cleanTg(cp.nombre, 80), apellido: cleanTg(cp.apellido, 80) };
@@ -1264,7 +1242,7 @@ app.post("/rev/compra", revAuth, async (req, res) => {
       if (errores.length) return res.status(400).json({ error: "datos_incompletos", errores: errores.slice(0, 40) });
       // Los clientes elegidos de la lista deben ser del socio (nunca de otro).
       const aliases = revSocioAliases(live, req.rev);
-      const ids = [...new Set([clientePrincipal.clienteId, ...productos.map((p) => p.destinatario?.clienteId)].filter(Boolean))];
+      const ids = [clientePrincipal.clienteId].filter(Boolean);
       for (const id of ids.slice(0, 25)) {
         const snapCli = await db.collection("clientes").doc(id).get();
         if (!snapCli.exists || !revFiltrarClientePorAliases(snapCli.data() || {}, aliases).servicios.length) return res.status(403).json({ error: "cliente_ajeno" });
@@ -1315,6 +1293,17 @@ app.post("/rev/compra", revAuth, async (req, res) => {
 
     const imagenObj = await uploadPanelImage(b.imagen, "compras");
     const imagenUrl = imagenObj.url || "";
+    // Un pago = un pedido. Si llega exactamente la misma imagen de otro pedido, no se rechaza ni se deduplica por monto:
+    // el pedido se crea marcado para revisión del equipo.
+    const comprobanteHash = (() => { const m = String(b.imagen || "").match(/;base64,(.+)$/); return m ? crypto.createHash("sha256").update(Buffer.from(m[1], "base64")).digest("hex") : ""; })();
+    let pagoRevision = null;
+    if (comprobanteHash) {
+      try {
+        const rep = await db.collection("compras").where("comprobanteHash", "==", comprobanteHash).limit(3).get();
+        const otro = rep.docs.find((x) => x.id !== requestDocId);
+        if (otro) pagoRevision = { motivo: "posible_comprobante_repetido", pedidoRelacionado: otro.id, pedidoRelacionadoRef: otro.id.slice(-6).toUpperCase() };
+      } catch (e) { console.error("comprobanteHash", e?.message || e); }
+    }
 
     const doc = {
       tipo: "compra",
@@ -1359,6 +1348,7 @@ app.post("/rev/compra", revAuth, async (req, res) => {
       // guardamos una copia liviana en Firestore cuando no hay URL pública.
       imagenData: imagenUrl ? "" : (imagenObj.dataUri && imagenObj.dataUri.length < 850000 ? imagenObj.dataUri : ""),
       imagenStorageError: imagenObj.storageError || "",
+      comprobanteHash, ...(pagoRevision ? { pagoRevision } : {}),
       estado: "pendiente",
       detalleEstado: "Pedido recibido",
       estadoHistorial: [{ estado: "pendiente", detalle: "Pedido recibido", at: new Date().toISOString(), por: "sistema" }],
@@ -1445,6 +1435,7 @@ app.post("/rev/compra", revAuth, async (req, res) => {
         ? `💰 Subtotal: L${subtotalCatalogo}\n🏷️ Descuento combo: L${descuentoCombo}\n✅ Total sugerido: L${totalCombo}\n💵 Monto pagado: ${monto ? `L${monto}` : "—"}`
         : `💵 Monto pagado: ${monto ? `L${monto}` : "—"}${productos[0].precioCatalogo !== null ? ` | Catálogo: L${productos[0].precioCatalogo}` : ""}`,
       doc.banco ? `🏦 Banco: ${cleanTg(doc.banco, 40)}` : "",
+      pagoRevision ? `⚠️ Posible comprobante repetido (igual al pedido #${pagoRevision.pedidoRelacionadoRef}). Revisar antes de aprobar.` : "",
       comentario ? `📝 Nota: ${cleanTg(comentario, 220)}` : "",
       (imagenUrl || imagenObj.buffer) ? `📎 Comprobante adjunto` : `⚠️ Sin comprobante`,
       `🆔 Ref: ${ref.id.slice(-6)}`,
@@ -1661,6 +1652,7 @@ app.get("/rev/admin/compras", revAdminAuth, adminAnyPermission(["socios.compras.
         precioCatalogo: r.precioCatalogo === null || r.precioCatalogo === undefined ? null : Number(r.precioCatalogo) || 0,
         cliente: r.cliente || `${r.clienteNombre || ""} ${r.clienteApellido || ""}`.trim(),
         clientePrincipal: r.clientePrincipal || null, version: Number(r.version) || 1,
+        entregaResumen: CS.pedidoPublico(d.id, r).entregaResumen, historicoAnterior: CS.pedidoPublico(d.id, r).historicoAnterior, pagoRevision: r.pagoRevision || null,
         perfil: r.perfil || `${r.perfilNombre || ""} ${r.perfilApellido || ""}`.trim(),
         correo: r.correo || "",
         acceso: r.acceso || "",
@@ -1877,6 +1869,13 @@ app.post("/rev/admin/tickets-telegram", revAdminAuth, adminPermission("tickets.b
     console.error("rev/admin/tickets-telegram", e);
     return res.status(500).json({ ok:false, error:"telegram_bridge_error", detail:String(e?.message || e).slice(0,240) });
   }
+});
+
+// ── Oct-2026 · Entregas publicadas por renglón, Buzón de dos vías, vínculo de Telegram e historial anterior ──
+require("./rev_entregas_api").registrar(app, {
+  db, bot, revAuth, revAdminAuth, adminAnyPermission, isFullAdmin, adminScopeProfile, revLiveProfile, revSocioAliases, revNormKey,
+  revFiltrarClientePorAliases, destinoInfo, getDestinoChatIds, allClientDocs: () => revAllClientDocsCached(30000),
+  invalidarSocio: (id) => _revLiveCache.delete(String(id)),
 });
 
 // ── ADMIN: "ver como" ──
