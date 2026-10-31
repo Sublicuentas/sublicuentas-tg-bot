@@ -557,13 +557,55 @@ function extraerLink(text="", html="") {
 }
 
 function extraerLinkObtenerCodigo(html="") {
-  const pat = /https:\/\/[^"'>]+netflix\.com[^"'>]*(?:travel|verify|temporary|update|account\/travel)[^"'>]*/i;
-  const m = html.match(pat);
-  if(m) return m[0].replace(/&amp;/g, "&").trim();
+  // R159: "update" quedó fuera: el enlace de APROBAR HOGAR (update-primary-location) no es un código.
+  const pat = /https:\/\/[^"'>]+netflix\.com[^"'>]*(?:travel|verify|temporary|account\/travel)[^"'>]*/ig;
+  for (const m of String(html || "").matchAll(pat)) if (!/update-primary-location/i.test(m[0])) return m[0].replace(/&amp;/g, "&").trim();
   return null;
 }
 
+// R159 · Netflix Hogar: "¿Solicitaste actualizar tu Hogar con Netflix?" es una APROBACIÓN. Trae el botón
+// "Sí, la envié yo" (vence en 15 minutos), NUNCA un número de código. Solo el "código de acceso temporal"
+// (viaje) trae código. El enlace jamás se abre desde el servidor: lo abre la persona.
+function esHogarAprobacion(subject = "", text = "", html = "") {
+  const t = normalizarTextoBusqueda(`${subject} ${String(text || "").slice(0, 4000)} ${htmlATextoVisible(String(html || "")).slice(0, 4000)}`);
+  return /update-primary-location/i.test(String(html || "") + String(text || "")) ||
+    /actualizar tu hogar|actualiza tu hogar|update your netflix household|update your household|solicitaste actualizar|si, la envie yo|yes, this was me|yes, it was me|yes, i sent it/.test(t);
+}
+function extraerLinkAprobacionHogar(html = "", text = "") {
+  for (const f of [String(html || ""), String(text || "")]) {
+    const m = f.match(/https:\/\/[^\s"'<>]*netflix\.com\/[^\s"'<>]*update-primary-location[^\s"'<>]*/i);
+    if (m) return m[0].replace(/&amp;/g, "&").trim();
+  }
+  const re = /<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]{0,600}?)<\/a>/gi;
+  let m;
+  while ((m = re.exec(String(html || "")))) {
+    const t = normalizarTextoBusqueda(m[2].replace(/<[^>]+>/g, " "));
+    if (/si, la envie yo|yes, this was me|yes, it was me|yes, i sent it/.test(t) && /^https:\/\/[^\s]*netflix\.com/i.test(m[1])) return m[1].replace(/&amp;/g, "&").trim();
+  }
+  return null;
+}
+// "Solicitud de Yulisa Vasquez, enviada desde Samsung - Smart TV, el 31 de octubre…" → { quien, dispositivo }
+function detalleSolicitudHogar(text = "", html = "") {
+  const t = `${String(text || "")} ${htmlATextoVisible(String(html || ""))}`.replace(/\s+/g, " ");
+  const m = t.match(/Solicitud de (.{1,60}?), enviada desde (.{1,60}?), el /i) || t.match(/Request from (.{1,60}?), sent from (.{1,60}?), on /i);
+  return m ? { quien: m[1].trim(), dispositivo: m[2].trim() } : null;
+}
+function mensajeAprobacionHogar(correo, e, link) {
+  const d = detalleSolicitudHogar(e.text, e.html);
+  const min = Math.floor((Date.now() - Number(e.ts || new Date(e.date || 0).getTime() || 0)) / 60000);
+  const vencido = Number.isFinite(min) && min > 15;
+  return {
+    texto: `🏠 *APROBAR NETFLIX HOGAR*\n\n📧 *Correo:* ${escMD(correo)}\n` +
+      (d ? `📺 *Solicitud de:* ${escMD(d.quien)} · ${escMD(d.dispositivo)}\n` : "") +
+      `🕒 *Fecha:* ${escMD(formatearFecha(e.date))}\n\n` +
+      (vencido ? `⚠️ Llegó hace ${min} min y Netflix lo vence a los 15: si ya no abre, pida otra vez la actualización desde el televisor.\n\n` : "") +
+      `Es un *enlace de aprobación*, no un código. Toque el botón y elija *“Sí, la envié yo”*.`,
+    opciones: { parse_mode: "Markdown", reply_markup: { inline_keyboard: [[{ text: "✅ Aprobar Hogar (Sí, la envié yo)", url: link }]] } },
+  };
+}
+
 async function scrapearCodigoWeb(url) {
+  if (/update-primary-location/i.test(String(url || ""))) return null; // R159: nunca abrir el enlace de aprobación de Hogar
   try {
     if(typeof fetch !== "undefined") {
       const res = await fetch(url, {
@@ -580,121 +622,16 @@ async function scrapearCodigoWeb(url) {
 // ===============================
 // LECTURA IMAP — sin SEARCH para compatibilidad con cPanel
 // ===============================
+// R159 · Lectura rápida: conexión reutilizada + escucha (IDLE) + descarga en lote solo de los correos de esa cuenta.
+// Ver lib_imap_rapido.js (mismo texto en Sublichat HQ · api/_imap-rapido.js).
+const LECTOR = require("./lib_imap_rapido").crearLector({ ImapFlow, simpleParser, escuchar: process.env.IMAP_ESCUCHA !== "0" });
 async function buscarEmailsCuenta(correo, limite=15, cuenta={}) {
-  const correoBuscar = String(correo||"").trim().toLowerCase();
   const base = resolverImapBase();
-
-  const client = new ImapFlow({
-    host:String(cuenta.host||base.host), port:Number(cuenta.port||base.port), secure:cuenta.tls!==false,
-    auth:{user:String(cuenta.user||base.user), pass:String(cuenta.password||cuenta.pass||base.password)},
-    logger:{
-      debug: (obj) => console.log("[IMAP DBG]", obj?.msg || JSON.stringify(obj).slice(0,120)),
-      info:  (obj) => console.log("[IMAP INF]", obj?.msg || ""),
-      warn:  (obj) => console.warn("[IMAP WRN]", obj?.msg || ""),
-      error: (obj) => console.error("[IMAP ERR]", obj?.msg || ""),
-    },
-    tls:{rejectUnauthorized:false},
-  });
-
-  await client.connect();
-  const emails = [];
-
-  try {
-    const lock = await client.getMailboxLock("INBOX");
-    try {
-      const total = client.mailbox?.exists || 0;
-      if (!total) return [];
-
-      const fechaLimite = new Date();
-      fechaLimite.setDate(fechaLimite.getDate() - 3);
-
-      // Traer suficientes headers para buzones con bastante tráfico. Solo se
-      // descarga el cuerpo de los candidatos, así que sigue siendo liviano.
-      const inicio = total;
-      const fin    = Math.max(1, total - 199);
-      const rango  = `${fin}:${inicio}`;
-
-      // ✅ Paso 1: traer envelope con internalDate — guardar seq + fecha exacta del servidor
-      const candidatos = []; // { seq, uid, ts }
-      for await (const msg of client.fetch(rango, { envelope: true, internalDate: true, uid: true })) {
-        try {
-          const fecha = msg.internalDate ? new Date(msg.internalDate) : new Date(0);
-          if (fecha < fechaLimite) continue;
-
-          const fromStr = String(msg.envelope?.from?.[0]?.address || msg.envelope?.from?.[0]?.name || "").toLowerCase();
-          const subjStr = String(msg.envelope?.subject || "").toLowerCase();
-
-          const esPlatConocida =
-            fromStr.includes("netflix") || fromStr.includes("disney") ||
-            fromStr.includes("hbo") || fromStr.includes("max.com") ||
-            fromStr.includes("amazon") || fromStr.includes("primevideo") ||
-            fromStr.includes("paramount") || fromStr.includes("vix") ||
-            fromStr.includes("universal") || fromStr.includes("spotify") || fromStr.includes("crunchyroll") ||
-            subjStr.includes("netflix") || subjStr.includes("disney") || subjStr.includes("spotify") ||
-            subjStr.includes("hbo") || subjStr.includes("amazon") ||
-            subjStr.includes("código") || subjStr.includes("codigo") ||
-            subjStr.includes("verifica") || subjStr.includes("acceso") ||
-            subjStr.includes("contrase") || subjStr.includes("restablec");
-
-          if (esPlatConocida) candidatos.push({ seq: msg.seq, uid: Number(msg.uid || 0), ts: fecha.getTime() });
-        } catch(_) {}
-      }
-
-      // ✅ Ordenar candidatos: más reciente primero (por internalDate del servidor)
-      // Algunos hostings guardan dos OTP reenviados dentro del mismo segundo.
-      // En ese caso internalDate empata; UID/sequence más alto es el correo que
-      // llegó último y, para Disney, el único código que sigue siendo válido.
-      candidatos.sort((a, b) => b.ts - a.ts || b.uid - a.uid || b.seq - a.seq);
-
-      // ✅ Paso 2: descargar source solo de candidatos, del más reciente al más viejo
-      for (const { seq, uid, ts } of candidatos) {
-        if (emails.length >= limite) break;
-        try {
-          const data = await client.fetchOne(String(seq), { source: true });
-          if (!data?.source) continue;
-
-          const p = await simpleParser(data.source);
-
-          const bodyText = String(p.text    || "").toLowerCase();
-          const bodyHtml = String(p.html    || "").toLowerCase();
-          const subj     = String(p.subject || "").toLowerCase();
-          const toAddr   = (p.to?.text      || "").toLowerCase();
-          // En correos reenviados/catch-all, el destinatario original puede
-          // aparecer solo en Delivered-To, X-Original-To o Envelope-To. Esos
-          // encabezados siguen presentes en el source aunque p.to sea admin@.
-          const rawSource = Buffer.isBuffer(data.source) ? data.source.toString("utf8") : String(data.source || "");
-          const rawHeaders = rawSource.split(/\r?\n\r?\n/, 1)[0].toLowerCase();
-          const allText  = bodyText + " " + bodyHtml + " " + subj + " " + toAddr + " " + rawHeaders;
-
-          if (!allText.includes(correoBuscar)) continue;
-
-          emails.push({
-            from:    String(p.from?.text || ""),
-            subject: String(p.subject   || ""),
-            text:    String(p.text      || ""),
-            html:    String(p.html      || ""),
-            // Para ordenar y mostrar usamos la llegada real al hosting. La
-            // cabecera Date puede repetirse, venir retrasada o faltar.
-            date:    ts > 0 ? new Date(ts) : (p.date || new Date(0)),
-            ts:      ts || 0,
-            uid:     uid || 0,
-            seq:     seq || 0,
-            mailbox: String(cuenta.name || cuenta.label || cuenta.user || "hosting"),
-          });
-        } catch(_) {}
-      }
-    } finally { lock.release(); }
-  } catch(err) {
-    console.error("[IMAP buscarEmails] Error:", err?.message || err);
-    throw err;
-  } finally {
-    try { await client.logout(); } catch(_) {}
-  }
-
-  // Más reciente primero
-  // Ordenar por timestamp del servidor (más preciso que p.date)
-  return emails.sort((a, b) => (b.ts || 0) - (a.ts || 0) || (b.uid || 0) - (a.uid || 0) || (b.seq || 0) - (a.seq || 0));
+  const c = { ...cuenta, host: cuenta.host || base.host, port: cuenta.port || base.port, user: cuenta.user || base.user, password: cuenta.password || cuenta.pass || base.password };
+  return LECTOR.buscar(c, correo, limite, { deadline: Date.now() + 30000 });
 }
+// Al arrancar, deja los buzones escuchando para que los códigos estén leídos antes de que los pidan.
+setTimeout(() => { try { cuentasImapCodigos().forEach((c) => LECTOR.escucharCuenta(c)); } catch (e) { logErr("IMAP escucha", e); } }, 4000).unref?.();
 
 async function buscarEmails(correo, limite=15) {
   const cuentas = cuentasImapCodigos();
@@ -733,9 +670,16 @@ async function cmdCode(chatId, correo){
     // El reenvío hacia el hosting suele tardar unos segundos. Si ya existe un
     // correo Disney, hacemos una segunda lectura para no contestar con el OTP
     // anterior justo cuando el nuevo todavía está entrando al buzón.
-    if (emails.some(e => esDisney(e.from, e.subject))) {
-      await esperar(4500);
-      emails = await buscarEmails(correo);
+    // R159: solo se espera si el Disney más nuevo tiene más de 25 s (el nuevo puede venir en camino);
+    // se vuelve a mirar cada 1.5 s hasta 4.5 s y se responde apenas entra uno más nuevo.
+    const disneyTs = () => Math.max(0, ...emails.filter(e => esDisney(e.from, e.subject)).map(e => Number(e.ts || 0)));
+    const tsDisney = disneyTs();
+    if (tsDisney && Date.now() - tsDisney > 25000) {
+      for (let i = 0; i < 3; i++) {
+        await esperar(1500);
+        emails = await buscarEmails(correo);
+        if (disneyTs() > tsDisney) break;
+      }
     }
     if(!emails.length) return bot.sendMessage(chatId,`📬 Sin emails recientes para *${escMD(correo)}*`,{parse_mode:"Markdown"});
 
@@ -772,6 +716,10 @@ async function cmdCode(chatId, correo){
             return bot.sendMessage(chatId,`🎬 *CÓDIGO NETFLIX TEMPORAL*\n\n📧 *Correo:* ${escMD(correo)}\n⚠️ El código está dentro del enlace:`,{parse_mode:"Markdown",reply_markup:{inline_keyboard:[[{text:"🔑 Ver código temporal",url:linkWeb}]]}});
           }
           continue;
+        }
+        if (esHogarAprobacion(e.subject, e.text, e.html)) {
+          const linkAprob = extraerLinkAprobacionHogar(e.html, e.text);
+          if (linkAprob) { const m = mensajeAprobacionHogar(correo, e, linkAprob); return bot.sendMessage(chatId, m.texto, m.opciones); }
         }
         if(subjL.includes("hogar")||subjL.includes("household")||subjL.includes("extra member")) {
           return bot.sendMessage(chatId,`🏠 *NETFLIX HOGAR*\n\n📧 *Correo:* ${escMD(correo)}\n⚠️ Usa el comando /hogar para este correo.`,{parse_mode:"Markdown"});
@@ -942,7 +890,13 @@ async function cmdHogar(chatId, correo){
 
     for(const e of emails){
       if(!esNetflix(e.from,e.subject)) continue;
-      if(!esHogar(e.subject,e.text)) continue;
+      if(!esHogar(e.subject,e.text) && !esHogarAprobacion(e.subject,e.text,e.html)) continue;
+
+      // R159: actualizar Hogar = enlace de aprobación ("Sí, la envié yo"), nunca un número.
+      if (esHogarAprobacion(e.subject, e.text, e.html)) {
+        const linkAprob = extraerLinkAprobacionHogar(e.html, e.text);
+        if (linkAprob) { const m = mensajeAprobacionHogar(correo, e, linkAprob); return bot.sendMessage(chatId, m.texto, m.opciones); }
+      }
 
       let codigo = extraerCodigoInteligente(e.text, e.subject, e.html, "netflix");
       let linkWeb = extraerLinkObtenerCodigo(e.html);
