@@ -600,6 +600,7 @@ function createGraficosSheet(wb, meta) {
 // Hojas: Planilla (pago padre), Distribución Planilla (una fila por banco), Cierres y Saldos Libro.
 // Lee las MISMAS colecciones que la APK y /api/finanzas; los borradores nunca se guardan, así que no aparecen.
 const RL = require("./lib_finanzas_reglas");
+const PLAT = require("./lib_finanzas_plataformas"); // R158 · Excel de finanzas por plataforma
 function dmyToYmd(dmy) { const [d, m, y] = String(dmy).split("/"); return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`; }
 function simpleSheet(wb, name, title, subtitle, headers, widths, rows, moneyCols = [], totalCols = []) {
   const ws = wb.addWorksheet(name);
@@ -730,7 +731,11 @@ async function generarReporteExcelPorRango(fechaInicio, fechaFin) {
   try {
     // R104: misma clasificación que la APK y /api/finanzas (lib_finanzas_reglas.js):
     // saldos iniciales no son ingresos; la planilla/comisiones va aparte de los egresos operativos.
-    const todosR123 = (await getMovimientosPorRango(ini, fin)).map((m) => ({ ...m, kind: RL.movementKind(m.raw || {}) }));
+    // R158: UNA sola lectura que cubre el período, su período de comparación y los 6 meses del resumen mensual.
+    const desdeY = PLAT.dmyAYmd(ini), hastaY = PLAT.dmyAYmd(fin), lec = PLAT.rangoLectura(desdeY, hastaY);
+    const amplio = await getMovimientosPorRango(PLAT.dmyAYmd(ini) === lec.desde ? ini : `${lec.desde.slice(8, 10)}/${lec.desde.slice(5, 7)}/${lec.desde.slice(0, 4)}`, fin);
+    const iniMsR158 = dmyToMillis(ini);
+    const todosR123 = amplio.filter((m) => m.fechaTs >= iniMsR158).map((m) => ({ ...m, kind: RL.movementKind(m.raw || {}) }));
     // R123: los movimientos ANULADOS/CORREGIDOS y sus reversas no se mezclan con los vigentes: van en su propia hoja
     // "Anulados" y no suman en Ingresos, Egresos ni el Resumen (así el día muestra solo lo que de verdad entró/salió).
     const anulados = todosR123.filter((m) => esAnuladoR123(m) && ["ingreso", "egreso", "ajuste", "planilla"].includes(m.kind));
@@ -769,6 +774,11 @@ async function generarReporteExcelPorRango(fechaInicio, fechaFin) {
     wb.properties.date1904 = false;
 
     const subtitle = `Período ${ini} al ${fin} · ${movimientos.length} movimientos`;
+
+    // R158 · Hojas por plataforma PRIMERO (RESUMEN_PLATAFORMAS abre al abrir el archivo). Mismo generador para Bot TG y Web.
+    PLAT.agregarHojasPlataformas(wb, PLAT.datosPlataformas(amplio.map((m) => ({ ...(m.raw || {}), id: m.id, _fuente: m.source })), {
+      R: RL, C: require("./lib_finanzas_costeo"), normKey: require("./lib_catalogo_categorias").normPlataformaKey, desde: desdeY, hasta: hastaY,
+    }));
 
     // Creamos primero Resumen para que abra como primera hoja. Los totales apuntan a
     // filas conocidas de Ingresos/Egresos, aunque esas hojas se creen después.

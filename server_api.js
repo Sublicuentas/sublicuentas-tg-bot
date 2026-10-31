@@ -1872,6 +1872,27 @@ app.post("/rev/admin/tickets-telegram", revAdminAuth, adminPermission("tickets.b
 });
 
 // ── Oct-2026 · Entregas publicadas por renglón, Buzón de dos vías, vínculo de Telegram e historial anterior ──
+// R158 · Excel de finanzas (con hojas por plataforma). ÚNICO generador: el mismo de "📤 Excel por rango" del Bot TG.
+// Lo pide la Web (Sublichat HQ · /api/finanzas → accion exportar_excel_finanzas) con el token de administración.
+app.get("/rev/admin/finanzas/excel", revAdminAuth, async (req, res) => {
+  try {
+    if (!isFullAdmin(req)) return res.status(403).json({ ok: false, error: "sin_permiso" });
+    const re = /^\d{4}-\d{2}-\d{2}$/;
+    const desde = String(req.query.desde || ""), hasta = String(req.query.hasta || "");
+    if (!re.test(desde) || !re.test(hasta) || desde > hasta) return res.status(400).json({ ok: false, error: "rango_invalido" });
+    if ((Date.parse(`${hasta}T12:00:00Z`) - Date.parse(`${desde}T12:00:00Z`)) / 86400000 > 731) return res.status(400).json({ ok: false, error: "rango_muy_largo" });
+    const P = require("./lib_finanzas_plataformas");
+    const dmy = (y) => `${y.slice(8, 10)}/${y.slice(5, 7)}/${y.slice(0, 4)}`;
+    const raw = await require("./index_10_reportes_excel").generarReporteExcelPorRango(dmy(desde), dmy(hasta));
+    const buf = Buffer.isBuffer(raw) ? raw : Buffer.from(raw || []);
+    res.set("Cache-Control", "no-store");
+    return res.json({ ok: true, filename: P.nombreArchivo(desde, hasta), version: P.VERSION, bytes: buf.length, base64: buf.toString("base64") });
+  } catch (e) {
+    console.error("finanzas_excel", e?.message || e);
+    return res.status(500).json({ ok: false, error: "no_se_pudo_generar" });
+  }
+});
+
 require("./rev_entregas_api").registrar(app, {
   db, bot, revAuth, revAdminAuth, adminAnyPermission, isFullAdmin, adminScopeProfile, revLiveProfile, revSocioAliases, revNormKey,
   revFiltrarClientePorAliases, destinoInfo, getDestinoChatIds, allClientDocs: () => revAllClientDocsCached(30000),

@@ -939,7 +939,7 @@ async function exportarFinanzasRangoExcel(chatId, fechaInicio, fechaFin, _userId
   if (dmyToMillis(ini) > dmyToMillis(fin)) throw new Error("La fecha inicial no puede ser mayor a la final.");
 
   const safeName = (v = "") => String(v || "").replace(/\//g, "-").replace(/[^0-9A-Za-z_-]+/g, "_");
-  const filename = `finanzas_${safeName(ini)}_${safeName(fin)}.xlsx`;
+  const filename = require("./lib_finanzas_plataformas").nombreArchivo(require("./lib_finanzas_plataformas").dmyAYmd(ini), require("./lib_finanzas_plataformas").dmyAYmd(fin)); // R158 · mismo nombre en Bot TG y Web
   const tempPath = `/tmp/${filename}`;
 
   try {
