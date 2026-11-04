@@ -55,8 +55,14 @@ function crearLector({ ImapFlow, simpleParser, log = console, diasAtras = 3, ven
     p.ocioso = setTimeout(() => { enCola(p, async () => { if (p.client) { try { await p.client.logout(); } catch (_) {} p.client = null; } }); }, ociosoMs);
     if (p.ocioso.unref) p.ocioso.unref();
   }
+  // Motivo legible de un error IMAP, sin credenciales (nunca se registra el comando LOGIN).
+  function motivo(e) {
+    if (e && e.authenticationFailed) return "el hosting rechazó usuario o clave de este buzón";
+    const t = String((e && (e.responseText || e.serverResponseCode)) || "").slice(0, 160);
+    return `${(e && e.message) || e}${t ? " · " + t : ""}`;
+  }
   function programarReconexion(p) {
-    if (!escuchar || p.reconectar) return;
+    if (!escuchar || p.reconectar || p.authFallo) return; // con clave rechazada no se insiste (evita bloqueo del hosting)
     const espera = Math.min(60000, 3000 * Math.pow(2, Math.min(5, p.reintento++)));
     p.reconectar = setTimeout(() => { p.reconectar = null; escucharCuenta(p.cuenta).catch(() => {}); }, espera);
     if (p.reconectar.unref) p.reconectar.unref();
@@ -81,7 +87,7 @@ function crearLector({ ImapFlow, simpleParser, log = console, diasAtras = 3, ven
       const uv = String(client.mailbox?.uidValidity || "");
       if (p.uidValidity && uv && p.uidValidity !== uv) { p.env.clear(); p.cuerpos.clear(); p.maxUid = 0; }
       p.uidValidity = uv;
-      p.client = client; p.reintento = 0;
+      p.client = client; p.reintento = 0; p.authFallo = false;
       return client;
     })();
     try { return await p.conectando; } finally { p.conectando = null; }
@@ -193,7 +199,8 @@ function crearLector({ ImapFlow, simpleParser, log = console, diasAtras = 3, ven
     try {
       await enCola(p, async () => { const client = await conectar(p); const lock = await client.getMailboxLock("INBOX"); try { await refrescar(p, client, true); } finally { lock.release(); } });
     } catch (e) {
-      try { log.warn("[IMAP rápido] no se pudo dejar escuchando", cuenta.name || cuenta.user, e?.message || e); } catch (_) {}
+      if (e && e.authenticationFailed) p.authFallo = true;
+      try { log.warn("[IMAP rápido] no se pudo dejar escuchando", cuenta.name || cuenta.user, motivo(e)); } catch (_) {}
       cerrar(p); programarReconexion(p);
     }
   }
