@@ -1992,4 +1992,15 @@ app.post("/rev/ask", revAuth, async (req, res) => {
 require("./index_12_admin_panel")(app);
 require("./index_13_gamificacion")(app);
 
-app.listen(PORT, () => { console.log("🌐 Panel API (revendedores) activa en puerto", PORT); r121RellenarNombresCompraSocio(); try { require("./index_31_finanzas_libro").iniciarCosteoAutomatico(); } catch (e) { console.error("R137 costeo", e?.message || e); } }); // R137
+// R161 · Tareas de arranque del panel (también las llama index.js cuando la Panel API va unificada).
+function iniciarTareasPanel() {
+  if (iniciarTareasPanel.hecho) return; iniciarTareasPanel.hecho = true;
+  r121RellenarNombresCompraSocio();
+  try { require("./index_31_finanzas_libro").iniciarCosteoAutomatico(); } catch (e) { console.error("R137 costeo", e?.message || e); } // R137
+}
+// R161 · `node server_api.js` (servicio aparte, como hasta hoy) escucha el puerto. Si index.js lo carga con
+// UNIFICAR_PANEL_API=1, solo se exporta la app y la monta index_08_api.js: un único app.listen(PORT).
+if (require.main === module) {
+  app.listen(PORT, () => { console.log("🌐 Panel API (revendedores) activa en puerto", PORT); iniciarTareasPanel(); });
+}
+module.exports = { app, iniciarTareasPanel, PANEL_API_VERSION };

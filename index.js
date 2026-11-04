@@ -1,4 +1,8 @@
 const { startBotPollingSafe, db, admin } = require("./index_01_core");
+// R161 · Interruptores de la Fase 1 (unificar Bot + Panel API). Sin variables nuevas todo queda como antes.
+const INFRA = require("./lib_infra_flags");
+const FLAGS = INFRA.leerFlags();
+console.log(INFRA.resumenArranque(FLAGS, INFRA.variablesFaltantes(process.env, FLAGS)));
 const { startTelegramOutboxWorker } = require("./index_22_telegram_outbox");
 const { startDurableScheduler } = require("./index_24_durable_scheduler");
 
@@ -39,15 +43,20 @@ async function keepPanelApiAwake() {
   }
 }
 
-const keepAliveInicial = setTimeout(keepPanelApiAwake, 5_000);
-const keepAliveRecurrente = setInterval(keepPanelApiAwake, 8 * 60 * 1000);
-keepAliveInicial.unref?.();
-keepAliveRecurrente.unref?.();
+if (FLAGS.keepalivePanel) {
+  const keepAliveInicial = setTimeout(keepPanelApiAwake, 5_000);
+  const keepAliveRecurrente = setInterval(keepPanelApiAwake, 8 * 60 * 1000);
+  keepAliveInicial.unref?.();
+  keepAliveRecurrente.unref?.();
+}
 
 (async () => {
-  startTelegramOutboxWorker();
   // Auditoría Firestore: un listener por colección en vez de miles de lecturas completas repetidas.
   try { require("./index_30_espejo_firestore").iniciarEspejos(); } catch (e) { console.error("espejos", e?.message || e); }
+  if (!FLAGS.tareasFondo) {
+    console.log("⏸️ Tareas de fondo DESACTIVADAS (TAREAS_FONDO_ENABLED=0): sin outbox, programador ni consolidación.");
+  } else {
+  startTelegramOutboxWorker();
 
   // Consolidación de fichas duplicadas (mismo nombre + mismo teléfono).
   // Sublichat HQ y el bot responden "reinicie el bot para ejecutar la
@@ -127,6 +136,10 @@ keepAliveRecurrente.unref?.();
       run: ({ scheduledDateDMY }) => finanzasMenus.ejecutarBackupDominical(scheduledDateDMY),
     },
   ]);
+  // Panel API unificada: tareas que antes arrancaba server_api.js al escuchar el puerto.
+  if (FLAGS.panelApiUnificada) { try { require("./server_api").iniciarTareasPanel(); } catch (e) { console.error("R161 tareas panel", e?.message || e); } }
+  }
 
-  await startBotPollingSafe();
+  if (FLAGS.pollingTelegram) await startBotPollingSafe();
+  else console.log("⏸️ Telegram polling DESACTIVADO (TELEGRAM_POLLING_ENABLED=0). El bot no recibe mensajes en este servicio.");
 })();

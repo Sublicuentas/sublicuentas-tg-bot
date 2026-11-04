@@ -122,15 +122,24 @@ const wrap = (fn) => (req, res) => Promise.resolve(fn(req, res)).catch((e) => {
 // APP
 // ===============================
 const app = express();
+// R161 · Con UNIFICAR_PANEL_API=1 este proceso atiende también la Panel API (server_api.js): mismas rutas, un solo puerto.
+const PANEL_UNIFICADA = require("./lib_infra_flags").leerFlags().panelApiUnificada;
 const corsOptions = buildCorsOptions();
 app.use(cors(corsOptions));
 app.use(apiSecurityHeaders);
-app.use(express.json({ limit: "1mb" }));
-app.use("/rev/admin", createAdminAuditMiddleware({ db, source: "Bot API / Panel Admin" }));
+app.use(express.json({ limit: PANEL_UNIFICADA ? "15mb" : "1mb" })); // el panel recibe comprobantes (hasta 15 MB)
+// Con la Panel API montada, su propia auditoría de /rev/admin es la que vale (no registrar dos veces).
+if (!PANEL_UNIFICADA) app.use("/rev/admin", createAdminAuditMiddleware({ db, source: "Bot API / Panel Admin" }));
 
 // Healthcheck (público, lo usa Render para keepalive)
 app.get("/health", (_req, res) => res.json(getCoreHealth ? getCoreHealth() : { ok: true }));
 app.get("/", (_req, res) => res.send("Sublicuentas API OK"));
+// R161 · Panel API montada aquí (antes de las rutas /rev de este archivo): las versiones de server_api.js son las
+// vigentes (perfil vivo del socio, permisos, entregas, buzón). /health y / siguen siendo los de este proceso.
+if (PANEL_UNIFICADA) {
+  app.use(require("./server_api").app);
+  console.log("🔗 Panel API montada en este proceso (UNIFICAR_PANEL_API=1).");
+}
 
 // 📲 Puente público para abrir EXCLUSIVAMENTE WhatsApp Business en Android.
 // Telegram solo acepta de forma fiable botones https://; una URL wa.me puede
@@ -361,6 +370,9 @@ const REV_JWT_SECRET = getJwtSecret();
 // ahora se importan de index_09_api_auth (módulo compartido)
 // Esto elimina duplicación y mantiene consistencia con server_api.js
 
+// R161 · Estas rutas /rev existen también en server_api.js (versión vigente). Si la Panel API está unificada,
+// se usan las de server_api.js y estas no se registran.
+if (!PANEL_UNIFICADA) {
 // LOGIN (revendedor con clave, o admin con ADMIN_USER/ADMIN_PASSWORD) — handler compartido
 app.post("/rev/login", revLoginIpLimiter, createRevLoginHandler({ db, bot, SUPER_ADMIN }));
 app.get("/rev/admin/me", revAdminAuth, createAdminMeHandler());
@@ -506,6 +518,7 @@ app.post("/rev/admin/impersonate", revAdminAuth, adminPermission("admin.imperson
     res.json({ token, nombre, nombre_norm: nn, soloCatalogo, sinCompras });
   } catch (e) { console.error("rev/impersonate", e); res.status(500).json({ error: "server" }); }
 });
+} // fin if (!PANEL_UNIFICADA)
 /* ════════════ fin panel revendedores ════════════ */
 
 app.use("/api", (_req, res) => fail(res, 404, "Ruta no encontrada"));
@@ -515,8 +528,10 @@ app.use("/api", (_req, res) => fail(res, 404, "Ruta no encontrada"));
 // ===============================
 // Montar en el proceso principal las mismas herramientas administrativas
 // que usa el servicio independiente server_api.js.
-require("./index_12_admin_panel")(app);
-require("./index_13_gamificacion")(app);
+if (!PANEL_UNIFICADA) { // con la Panel API unificada ya vienen montadas desde server_api.js
+  require("./index_12_admin_panel")(app);
+  require("./index_13_gamificacion")(app);
+}
 
 if (!global.__SUBLICUENTAS_API_SERVER__) {
   global.__SUBLICUENTAS_API_SERVER__ = app.listen(PORT, () => {
