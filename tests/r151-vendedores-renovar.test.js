@@ -33,7 +33,7 @@ test("renovar: +31 días, 1, 2, 3, 6 y 12 meses + Personalizado (igual que Web y
   assert.ok(m);
   assert.deepEqual(JSON.parse(m[1]).map((x) => x[1]), ["+31 días", "+1 mes", "+2 meses", "+3 meses", "+6 meses", "+12 meses"]);
   assert.match(c, /\{ text: "📅 Personalizado", callback_data: `cli:ren:manual:/);
-  // Regla: vigente → desde el vencimiento; vencido → desde hoy. Meses calendario.
+  // Regla R163: siempre desde el vencimiento (también si ya venció) · 1 mes = 30 días.
   const src = c.slice(c.indexOf("function sumarDuracionRenovacionLocal"), c.indexOf("function mesesEntreDMYLocal"));
   const hoy = "15/10/2026";
   const parse = (d) => { const [dd, mm, yy] = d.split("/").map(Number); return new Date(yy, mm - 1, dd, 12); };
@@ -41,9 +41,10 @@ test("renovar: +31 días, 1, 2, 3, 6 y 12 meses + Personalizado (igual que Web y
     () => hoy, (d) => /^\d{2}\/\d{2}\/\d{4}$/.test(d || ""), (d) => parse(d).getTime(), (d) => parse(d),
     (b, n) => { const x = parse(b); x.setDate(x.getDate() + n); return `${String(x.getDate()).padStart(2, "0")}/${String(x.getMonth() + 1).padStart(2, "0")}/${x.getFullYear()}`; });
   assert.equal(fn("20/10/2026", { dias: 31 }), "20/11/2026", "vigente: desde el vencimiento");
-  assert.equal(fn("01/10/2026", { dias: 31 }), "15/11/2026", "vencido: desde hoy");
-  assert.equal(fn("31/10/2026", { meses: 1 }), "30/11/2026", "mes calendario");
-  assert.equal(fn("20/10/2026", { meses: 12 }), "20/10/2027");
+  assert.equal(fn("01/10/2026", { dias: 31 }), "01/11/2026", "vencido: también desde el vencimiento");
+  assert.equal(fn("31/10/2026", { meses: 1 }), "30/11/2026", "1 mes = 30 días");
+  assert.equal(fn("01/10/2026", { meses: 1 }), "31/10/2026", "1 mes = 30 días aunque octubre tenga 31");
+  assert.equal(fn("20/10/2026", { meses: 12 }), "15/10/2027", "12 meses = 360 días");
 });
 
 test("moneda: L pegado al número", () => {

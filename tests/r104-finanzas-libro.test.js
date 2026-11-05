@@ -21,7 +21,7 @@ test("reglas del bot = reglas del servidor/APK (casos del PDF)", () => {
 
 test("Telegram: renovar pide pago real a Sublicuentas/Relojes en todas las rutas; planilla y Excel conectados", () => {
   const h = fs.readFileSync(path.join(__dirname, "..", "index_06_handlers.js"), "utf8");
-  assert.equal((h.match(/finLibro\.iniciarPagoRenovacion\(/g) || []).length, 8, "+30, +31, todos +30, todos +31, fecha manual uno y todos + Oct-2026 duración uno y todos");
+  assert.equal((h.match(/finLibro\.iniciarPagoRenovacion\(/g) || []).length, 9, "+30, +31, todos +30, todos +31, fecha manual uno y todos, todos +N días (R163) + Oct-2026 duración uno y todos");
   assert.match(h, /finLibro\.iniciarPagoCompra\(/, "R106: compra nueva pide el pago");
   assert.match(h, /if \(data\.startsWith\("fl:"\)\) return finLibro\.handleCallback/);
   assert.match(h, /return finLibro\.handleText\(chatId, userId, t, p\)/);
