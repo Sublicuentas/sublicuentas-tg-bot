@@ -494,22 +494,15 @@ function addDaysDMY(baseDmy = "", days = 0) {
   return `${String(dt.getDate()).padStart(2,"0")}/${String(dt.getMonth()+1).padStart(2,"0")}/${dt.getFullYear()}`;
 }
 
-// Oct-2026 · Renovación por duración (igual que Sublichat Web y la APK):
-// vigente → se suma desde la fecha de vencimiento; vencido → desde hoy. Meses calendario (31/01 + 1 mes = 28/02).
+// R163 (04/11/2026) · Renovación por duración — misma regla que Sublichat (api/renovar.js), de donde sale la APK:
+//   · Se cuenta SIEMPRE desde la fecha de vencimiento (si vencía el 1 y renueva el 4, se cuenta desde el 1).
+//     Solo si el servicio no tiene fecha válida se usa hoy.
+//   · 1 mes = 30 días exactos (2 meses = 60, 3 = 90, 6 = 180, 12 = 360). "+31 días" = 31 días.
 function sumarDuracionRenovacionLocal(fechaAnterior = "", { dias = 0, meses = 0 } = {}) {
-  const hoy = hoyDMY();
-  const vigente = isFechaDMY(fechaAnterior) && parseDMYtoTS(fechaAnterior) >= parseDMYtoTS(hoy);
-  const base = vigente ? fechaAnterior : hoy;
+  const base = isFechaDMY(fechaAnterior) ? fechaAnterior : hoyDMY();
   const m = Number(meses || 0);
-  if (m > 0) {
-    const dt = parseDMYtoDate(base) || parseDMYtoDate(hoy);
-    const dia = dt.getDate();
-    const destino = new Date(dt.getFullYear(), dt.getMonth() + m, 1, 12);
-    const ultimo = new Date(destino.getFullYear(), destino.getMonth() + 1, 0).getDate();
-    destino.setDate(Math.min(dia, ultimo));
-    return `${String(destino.getDate()).padStart(2, "0")}/${String(destino.getMonth() + 1).padStart(2, "0")}/${destino.getFullYear()}`;
-  }
-  return addDaysDMY(base, Number(dias || 0));
+  const total = m > 0 ? m * 30 /* 1 mes = 30 días */ : Number(dias || 0);
+  return addDaysDMY(base, total);
 }
 
 function mesesEntreDMYLocal(inicio = "", fin = "") {
@@ -2194,7 +2187,7 @@ async function renovarServicioTx(clientId, idx, { dias = 0, meses = 0, fechaExac
         compraId: compraEvento,
         fechaEvento: resultado.fechaNueva,
         eventoId: `renov:${compraEvento}:${resultado.fechaNueva}`,
-        meses: Math.max(1, Math.round(Number(dias || 30) / 30)),
+        meses: Math.max(1, Number(meses) || Math.round(Number(dias || 30) / 30)),
         clienteNombre: resultado.cliente?.nombrePerfil || resultado.cliente?.nombre || resultado.nombreTitular || "Cliente",
         telefono: resultado.cliente?.telefono || "",
         vendedor: resultado.siguiente?.vendedor || resultado.cliente?.vendedor || "",
@@ -2215,7 +2208,7 @@ async function renovarServicioTx(clientId, idx, { dias = 0, meses = 0, fechaExac
       correo: resultado.siguiente.correo || "",
       fechaAnterior: resultado.fechaAnterior,
       fechaRenovacion: resultado.fechaNueva,
-      meses: Math.max(1, Math.round(Number(dias || 30) / 30)),
+      meses: Math.max(1, Number(meses) || Math.round(Number(dias || 30) / 30)),
       vendedor: resultado.siguiente?.vendedor || resultado.cliente?.vendedor || "",
       servicioIndex: resultado.actualIdx,
       sorteoOk: sorteo?.ok !== false,
@@ -2308,7 +2301,7 @@ async function renovarTodosServiciosTx(clientId, { dias = 0, meses = 0, fechaExa
         compraId: cambio.compraId,
         fechaEvento: cambio.fechaNueva,
         eventoId: `renov:${cambio.compraId}:${cambio.fechaNueva}`,
-        meses: Math.max(1, Math.round(Number(dias || 30) / 30)),
+        meses: Math.max(1, Number(meses) || Math.round(Number(dias || 30) / 30)),
         clienteNombre: resultado.cliente?.nombrePerfil || resultado.cliente?.nombre || resultado.nombreTitular || "Cliente",
         telefono: resultado.cliente?.telefono || "",
         vendedor: cambio.vendedor || resultado.cliente?.vendedor || "",
@@ -2333,7 +2326,7 @@ async function renovarTodosServiciosTx(clientId, { dias = 0, meses = 0, fechaExa
           fechaAnterior: item.fechaAnterior,
           fechaRenovacion: item.fechaNueva,
           vendedor: item.vendedor,
-          meses: Math.max(1, Math.round(Number(dias || 30) / 30)),
+          meses: Math.max(1, Number(meses) || Math.round(Number(dias || 30) / 30)),
           sorteoOk: sorteo?.ok !== false,
           boletosCreados: Math.max(0, Number(sorteo?.creados) || 0),
         };
