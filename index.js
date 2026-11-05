@@ -136,6 +136,8 @@ if (FLAGS.keepalivePanel) {
       run: ({ scheduledDateDMY }) => finanzasMenus.ejecutarBackupDominical(scheduledDateDMY),
     },
   ]);
+  // R168 · Sala de Juntas: invitaciones y recordatorios de Telegram (solo en el proceso con tareas de fondo).
+  try { require("./lib_sala_juntas").iniciar({ db, bot: require("./index_01_core").bot }); } catch (e) { console.error("R168 sala de juntas", e?.message || e); }
   // Panel API unificada: tareas que antes arrancaba server_api.js al escuchar el puerto.
   if (FLAGS.panelApiUnificada) { try { require("./server_api").iniciarTareasPanel(); } catch (e) { console.error("R161 tareas panel", e?.message || e); } }
   }

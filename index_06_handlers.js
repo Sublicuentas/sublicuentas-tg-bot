@@ -4844,6 +4844,7 @@ bot.on("callback_query", async (q) => {
   const data = String(q.data || "");
 
   try {
+    if (data.startsWith("sj:")) { await require("./lib_sala_juntas").handleCallback(q, { db, bot }); return; } // R168 · Sala de Juntas (valida chat ↔ cuenta; responde el callback)
     await answerCallbackSilentlySafe(q);
 
     if (!chatId) return;
