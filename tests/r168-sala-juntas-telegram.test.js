@@ -60,7 +60,9 @@ test("sin Telegram vinculado o chat bloqueado: queda fallido (sin reintentar sin
   const db = crearFakeDb(), bot = botFalso(); await sembrar(db);
   const r = await S.procesarPendientes({ db, bot, env: { ...ENV, TELEGRAM_CHAT_ID_GEISELL: "", TELEGRAM_CHAT_ID_RELOJES: "bloqueado" }, ahora: T0 });
   assert.equal(r.fallidos, 2);
-  assert.ok(db.todos("sala_avisos").filter((x) => x.tipo === "invitacion").every((x) => x.estado === "fallido"));
+  const inv = db.todos("sala_avisos").filter((x) => x.tipo === "invitacion");
+  assert.equal(inv.find((x) => x.usuario === "geisell").estado, "sin_vinculo", "R182: sin Telegram = sin_vinculo (nunca enviado)");
+  assert.equal(inv.find((x) => x.usuario === "libni").estado, "fallido", "bloqueó al bot = fallido");
 });
 
 test("RSVP por Telegram: solo el chat de esa cuenta; actualiza solo su invitación; avisa a Naara", async () => {
