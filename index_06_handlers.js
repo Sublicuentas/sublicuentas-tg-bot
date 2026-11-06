@@ -7035,6 +7035,7 @@ bot.on("message", async (msg) => {
     // Oct-2026 · /start v_<token> desde "Conectar Telegram" del Panel de Socios (antes del control de acceso:
     // es justamente el paso que vincula al socio).
     if (await require("./index_36_socios_telegram").tryVincular(msg)) return;
+    if (await require("./lib_sala_juntas").tryVincular(msg, { db, bot })) return; // R182 · /start sj_<token> vincula Telegram para la Sala de Juntas
     // Los comandos y listas de emojis se consumen aquí una sola vez, antes
     // de los flujos de clientes y de la búsqueda libre (incluye captions).
     if (await premiumIcons?.handleMessage?.(msg)) {
