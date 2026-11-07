@@ -79,7 +79,7 @@ const IPTV_USUARIO_KEYS_LOCAL = new Set([
   "latintv1", "latintv2", "latintv3", "latintv4",
   "liontv1", "liontv2", "liontv3", "liontv5",
   "evoutouch1", "evoutouch2", "evoutouch3",
-  "icomplay1", "icomplay3", "icomplay5", "icomplay7",
+  "icomplay1", "icomplay2", "icomplay3", "icomplay5", "icomplay7",
   // Compatibilidad de solo lectura/edición con registros anteriores.
   "iptv1", "iptv3", "iptv4",
 ]);
@@ -90,7 +90,7 @@ const TV_DIGITAL_BRANDS_LOCAL = {
   lion: { label: "Lion TV", icon: "🦁", keys: ["liontv1", "liontv2", "liontv3", "liontv5"] },
   latin: { label: "Latin TV", icon: "📡", keys: ["latintv1", "latintv2", "latintv3", "latintv4"] },
   evoutouch: { label: "Nanotech", icon: "📺", keys: ["evoutouch1","evoutouch2","evoutouch3"] },
-  icomplay: { label: "ICOMPLAY MAX", icon: "▶️", keys: ["icomplay1","icomplay3","icomplay5","icomplay7"] },
+  icomplay: { label: "ICOMPLAY", icon: "▶️", keys: ["icomplay1","icomplay2","icomplay3","icomplay5","icomplay7"] },
 };
 const TV_DIGITAL_KEYS_LOCAL = new Set(Object.values(TV_DIGITAL_BRANDS_LOCAL).flatMap((marca) => marca.keys));
 // Claves que solo existen para LEER registros viejos. Nunca se ofrecen como botón:
@@ -112,7 +112,7 @@ const TV_DIGITAL_MESES_VALIDOS_LOCAL = Object.freeze({
   stellatv: [1, 3, 7],         // 6 + 1 gratis = 7
   oleadatv: [1, 3, 7, 14],     // 6 + 1 = 7 / 12 + 2 = 14
   evoutouch: [1, 3, 6, 12],    // Nanotech: 1, 3, 6 y 12 meses (sin meses gratis)
-  icomplay: [1, 3, 6, 12],     // ICOMPLAY MAX: 1, 3, 6 y 12 meses
+  icomplay: [1, 3, 6, 12],     // ICOMPLAY: 1, 3, 6 y 12 meses
 });
 
 function familiaTvDigitalMesesLocal(plataforma = "") {
@@ -224,7 +224,7 @@ function humanPlataforma(key = "") {
     oleadatv1:"Oleada TV (1 dispositivo)", oleadatv3:"Oleada TV (3 dispositivos)",
     latintv1:"LatinTV (1 dispositivo)", latintv2:"LatinTV (2 dispositivos)", latintv3:"LatinTV (3 dispositivos)", latintv4:"LatinTV (4 dispositivos)",
     liontv1:"LionTV (1 dispositivo)", liontv2:"LionTV (2 dispositivos)", liontv3:"LionTV (3 dispositivos)", liontv5:"LionTV (5 dispositivos)", evoutouch1:"Nanotech (1 dispositivo)", evoutouch2:"Nanotech (2 dispositivos)", evoutouch3:"Nanotech (3 dispositivos)", evoutouch4:"Nanotech (1 dispositivo)",
-    icomplay1:"ICOMPLAY MAX (1 pantalla)", icomplay3:"ICOMPLAY MAX (3 pantallas)", icomplay5:"ICOMPLAY MAX (5 pantallas)", icomplay7:"ICOMPLAY MAX (7 pantallas)",
+    icomplay1:"ICOMPLAY (1 pantalla)", icomplay2:"ICOMPLAY (2 pantallas)", icomplay3:"ICOMPLAY (3 pantallas)", icomplay5:"ICOMPLAY (5 pantallas)", icomplay7:"ICOMPLAY (7 pantallas)",
     iptv1:"IPTV anterior (1)", iptv3:"IPTV anterior (3)", iptv4:"IPTV anterior (4)",
   };
   return map[k] || String(key || "");
@@ -457,7 +457,7 @@ function docIdInventarioLocal(ident = "", plataforma = "") {
 
 function getTotalPorPlataformaLocal(plat = "") {
   const p = normalizarPlataforma(plat);
-  const map = { netflix:5, vipnetflix:1, disneyp:6, disneys:3, hbomax:5, primevideo:5, paramount:5, crunchyroll:5, vix:4, appletv:4, universal:4, spotify:1, youtube:1, deezer:1, stellatv1:1, stellatv2:2, stellatv3:3, oleadatv1:1, oleadatv3:3, latintv1:1, latintv2:2, latintv3:3, latintv4:4, liontv1:1, liontv2:2, liontv3:3, liontv5:5, evoutouch1:1, evoutouch2:2, evoutouch3:3, evoutouch4:1, icomplay1:1, icomplay3:3, icomplay5:5, icomplay7:7, iptv1:1, iptv3:3, iptv4:4, canva:1, gemini:1, chatgpt:1, duolingo:1, office:1, office2021:1 };
+  const map = { netflix:5, vipnetflix:1, disneyp:6, disneys:3, hbomax:5, primevideo:5, paramount:5, crunchyroll:5, vix:4, appletv:4, universal:4, spotify:1, youtube:1, deezer:1, stellatv1:1, stellatv2:2, stellatv3:3, oleadatv1:1, oleadatv3:3, latintv1:1, latintv2:2, latintv3:3, latintv4:4, liontv1:1, liontv2:2, liontv3:3, liontv5:5, evoutouch1:1, evoutouch2:2, evoutouch3:3, evoutouch4:1, icomplay1:1, icomplay2:2, icomplay3:3, icomplay5:5, icomplay7:7, iptv1:1, iptv3:3, iptv4:4, canva:1, gemini:1, chatgpt:1, duolingo:1, office:1, office2021:1 };
   return map[p] || 1;
 }
 
@@ -913,7 +913,7 @@ function normalizarCompraLocal(servicio = {}, titular = "", anterior = {}) {
     compraFinal.iptvProveedor = "evoutouch";
     compraFinal.iptvPantallas = mDisp ? Number(mDisp[1]) : 1;
   }
-  // ICOMPLAY MAX: mismos campos que Sublichat HQ (proveedor + pantallas).
+  // ICOMPLAY: mismos campos que Sublichat HQ (proveedor + pantallas).
   if (plat.startsWith("icomplay")) {
     const mDisp = plat.match(/([1357])$/);
     compraFinal.iptvProveedor = "icomplay";

@@ -76,7 +76,7 @@ function humanPlatSafe(key = "") {
     liontv2: "LionTV (2 dispositivos)",
     liontv3: "LionTV (3 dispositivos)",
     liontv5: "LionTV (5 dispositivos)",
-    evoutouch1: "Nanotech (1 dispositivo)", evoutouch2: "Nanotech (2 dispositivos)", evoutouch3: "Nanotech (3 dispositivos)", evoutouch4: "Nanotech (1 dispositivo)", icomplay1: "ICOMPLAY MAX (1)", icomplay3: "ICOMPLAY MAX (3)", icomplay5: "ICOMPLAY MAX (5)", icomplay7: "ICOMPLAY MAX (7)",
+    evoutouch1: "Nanotech (1 dispositivo)", evoutouch2: "Nanotech (2 dispositivos)", evoutouch3: "Nanotech (3 dispositivos)", evoutouch4: "Nanotech (1 dispositivo)", icomplay1: "ICOMPLAY (1)", icomplay2: "ICOMPLAY (2)", icomplay3: "ICOMPLAY (3)", icomplay5: "ICOMPLAY (5)", icomplay7: "ICOMPLAY (7)",
     iptv1: "IPTV anterior (1)",
     iptv3: "IPTV anterior (3)",
     iptv4: "IPTV anterior (4)",
@@ -96,7 +96,7 @@ function isUserPlatform(plataforma = "") {
     "latintv1", "latintv2", "latintv3", "latintv4",
     "liontv1", "liontv2", "liontv3", "liontv5",
     "evoutouch1", "evoutouch2", "evoutouch3",
-    "icomplay1", "icomplay3", "icomplay5", "icomplay7",
+    "icomplay1", "icomplay2", "icomplay3", "icomplay5", "icomplay7",
     "iptv1", "iptv3", "iptv4",
   ].includes(p);
 }
@@ -206,7 +206,7 @@ function getCapacidadCorreo(data = {}, plataforma = "") {
     liontv2: 2,
     liontv3: 3,
     liontv5: 5,
-    evoutouch1: 1, evoutouch2: 2, evoutouch3: 3, evoutouch4: 1, icomplay1: 1, icomplay3: 3, icomplay5: 5, icomplay7: 7,
+    evoutouch1: 1, evoutouch2: 2, evoutouch3: 3, evoutouch4: 1, icomplay1: 1, icomplay2: 2, icomplay3: 3, icomplay5: 5, icomplay7: 7,
     iptv1: 1,
     iptv3: 3,
     iptv4: 4,
