@@ -1,0 +1,2890 @@
+diff --git a/index_01_core.js b/index_01_core.js
+index 55a4321..28de872 100644
+--- a/index_01_core.js
++++ b/index_01_core.js
+@@ -142,11 +142,12 @@ const PLATAFORMAS = {
+   evoutouch1:   { key: "evoutouch1",   nombre: "Nanotech (1 dispositivo)", categoria: "iptv", acceso: "usuario_clave", capacidadDefault: 1, requiereCorreo: false, requiereClave: true, requierePin: false, permiteUsuario: true },
+   evoutouch2:   { key: "evoutouch2",   nombre: "Nanotech (2 dispositivos)", categoria: "iptv", acceso: "usuario_clave", capacidadDefault: 2, requiereCorreo: false, requiereClave: true, requierePin: false, permiteUsuario: true },
+   evoutouch3:   { key: "evoutouch3",   nombre: "Nanotech (3 dispositivos)", categoria: "iptv", acceso: "usuario_clave", capacidadDefault: 3, requiereCorreo: false, requiereClave: true, requierePin: false, permiteUsuario: true },
+-  // ICOMPLAY MAX (oct-2026) · IPTV con Max Player incluido; 1/3/5/7 pantallas; 1, 3, 6 y 12 meses.
+-  icomplay1:    { key: "icomplay1",    nombre: "ICOMPLAY MAX (1 pantalla)", categoria: "iptv", acceso: "usuario_clave", capacidadDefault: 1, requiereCorreo: false, requiereClave: true, requierePin: false, permiteUsuario: true },
+-  icomplay3:    { key: "icomplay3",    nombre: "ICOMPLAY MAX (3 pantallas)", categoria: "iptv", acceso: "usuario_clave", capacidadDefault: 3, requiereCorreo: false, requiereClave: true, requierePin: false, permiteUsuario: true },
+-  icomplay5:    { key: "icomplay5",    nombre: "ICOMPLAY MAX (5 pantallas)", categoria: "iptv", acceso: "usuario_clave", capacidadDefault: 5, requiereCorreo: false, requiereClave: true, requierePin: false, permiteUsuario: true },
+-  icomplay7:    { key: "icomplay7",    nombre: "ICOMPLAY MAX (7 pantallas)", categoria: "iptv", acceso: "usuario_clave", capacidadDefault: 7, requiereCorreo: false, requiereClave: true, requierePin: false, permiteUsuario: true },
++  // ICOMPLAY (nombre oficial, R187; NO "Max": Max Player es otro reproductor) · 1/2/3/5/7 pantallas; 1, 3, 6 y 12 meses.
++  icomplay1:    { key: "icomplay1",    nombre: "ICOMPLAY (1 pantalla)", categoria: "iptv", acceso: "usuario_clave", capacidadDefault: 1, requiereCorreo: false, requiereClave: true, requierePin: false, permiteUsuario: true },
++  icomplay2:    { key: "icomplay2",    nombre: "ICOMPLAY (2 pantallas)", categoria: "iptv", acceso: "usuario_clave", capacidadDefault: 2, requiereCorreo: false, requiereClave: true, requierePin: false, permiteUsuario: true },
++  icomplay3:    { key: "icomplay3",    nombre: "ICOMPLAY (3 pantallas)", categoria: "iptv", acceso: "usuario_clave", capacidadDefault: 3, requiereCorreo: false, requiereClave: true, requierePin: false, permiteUsuario: true },
++  icomplay5:    { key: "icomplay5",    nombre: "ICOMPLAY (5 pantallas)", categoria: "iptv", acceso: "usuario_clave", capacidadDefault: 5, requiereCorreo: false, requiereClave: true, requierePin: false, permiteUsuario: true },
++  icomplay7:    { key: "icomplay7",    nombre: "ICOMPLAY (7 pantallas)", categoria: "iptv", acceso: "usuario_clave", capacidadDefault: 7, requiereCorreo: false, requiereClave: true, requierePin: false, permiteUsuario: true },
+   // Alias legado: ventas antiguas evoutouch4 se leen como Nanotech 1 hasta que se editen.
+   evoutouch4:   { key: "evoutouch4",   nombre: "Nanotech (1 dispositivo)", categoria: "iptv", acceso: "usuario_clave", capacidadDefault: 1, requiereCorreo: false, requiereClave: true, requierePin: false, permiteUsuario: true },
+   // Compatibilidad con fichas antiguas sin marca. Ya no se ofrecen para altas nuevas.
+diff --git a/index_02_utils_roles.js b/index_02_utils_roles.js
+index 3e6228b..8ad9f6c 100644
+--- a/index_02_utils_roles.js
++++ b/index_02_utils_roles.js
+@@ -120,7 +120,7 @@ function humanPlataformaFallback(key = "") {
+     oleadatv3: "OleadaTV (3)", latintv1: "LatinTV (1)", latintv2: "LatinTV (2)",
+     latintv3: "LatinTV (3)", latintv4: "LatinTV (4)", liontv1: "LionTV (1)",
+     liontv2: "LionTV (2)", liontv3: "LionTV (3)", liontv5: "LionTV (5)", evoutouch1: "Nanotech (1 dispositivo)", evoutouch2: "Nanotech (2 dispositivos)", evoutouch3: "Nanotech (3 dispositivos)", evoutouch4: "Nanotech (1 dispositivo)",
+-    icomplay1: "ICOMPLAY MAX (1)", icomplay3: "ICOMPLAY MAX (3)", icomplay5: "ICOMPLAY MAX (5)", icomplay7: "ICOMPLAY MAX (7)",
++    icomplay1: "ICOMPLAY (1)", icomplay2: "ICOMPLAY (2)", icomplay3: "ICOMPLAY (3)", icomplay5: "ICOMPLAY (5)", icomplay7: "ICOMPLAY (7)",
+     iptv1: "IPTV anterior (1)", iptv3: "IPTV anterior (3)",
+     iptv4: "IPTV anterior (4)", canva: "Canva", gemini: "Gemini Pro", chatgpt: "ChatGPT",
+     duolingo: "Duolingo", office: "Microsoft 365", office2021: "Office 2021",
+@@ -156,8 +156,8 @@ function normalizarPlataforma(v = "") {
+     "lion tv 3": "liontv3", "liontv 3": "liontv3", "liontv3": "liontv3",
+     "lion tv 5": "liontv5", "liontv 5": "liontv5", "liontv5": "liontv5",
+     "nanotech": "evoutouch1", "nanotech 1": "evoutouch1", "nanotech 2": "evoutouch2", "nanotech 3": "evoutouch3", "evoutouch": "evoutouch1", "evou touch": "evoutouch1", "evoutouch 1": "evoutouch1", "evoutouch 2": "evoutouch2", "evoutouch 3": "evoutouch3", "evoutouch 4": "evoutouch1", "evou touch 4": "evoutouch1",
+-    "icomplay": "icomplay1", "icomplay max": "icomplay1", "icomplay 1": "icomplay1", "icomplay 3": "icomplay3", "icomplay 5": "icomplay5", "icomplay 7": "icomplay7",
+-    "icomplay max 1": "icomplay1", "icomplay max 3": "icomplay3", "icomplay max 5": "icomplay5", "icomplay max 7": "icomplay7",
++    "icomplay": "icomplay1", "icomplay max": "icomplay1", "icomplay 1": "icomplay1", "icomplay 2": "icomplay2", "icomplay 3": "icomplay3", "icomplay 5": "icomplay5", "icomplay 7": "icomplay7",
++    "icomplay max 1": "icomplay1", "icomplay max 2": "icomplay2", "icomplay max 3": "icomplay3", "icomplay max 5": "icomplay5", "icomplay max 7": "icomplay7",
+     "iptv": "iptv1",
+     "iptv 1": "iptv1", "iptv 3": "iptv3", "iptv 4": "iptv4",
+     "canva": "canva", "gemini": "gemini", "chatgpt": "chatgpt", "chat gpt": "chatgpt", "duolingo": "duolingo",
+@@ -176,7 +176,7 @@ function normalizarPlataforma(v = "") {
+     oleadatv3: "oleadatv3", oleada3: "oleadatv3",
+     latintv1: "latintv1", latintv2: "latintv2", latintv3: "latintv3", latintv4: "latintv4",
+     liontv1: "liontv1", liontv2: "liontv2", liontv3: "liontv3", liontv5: "liontv5", nanotech: "evoutouch1", nanotech1: "evoutouch1", nanotech2: "evoutouch2", nanotech3: "evoutouch3", evoutouch: "evoutouch1", evoutouch1: "evoutouch1", evoutouch2: "evoutouch2", evoutouch3: "evoutouch3", evoutouch4: "evoutouch1",
+-    icomplay: "icomplay1", icomplay1: "icomplay1", icomplay3: "icomplay3", icomplay5: "icomplay5", icomplay7: "icomplay7", icomplaymax: "icomplay1",
++    icomplay: "icomplay1", icomplay1: "icomplay1", icomplay2: "icomplay2", icomplay3: "icomplay3", icomplay5: "icomplay5", icomplay7: "icomplay7", icomplaymax: "icomplay1",
+     iptv1: "iptv1", iptv3: "iptv3", iptv4: "iptv4", universal: "universal", duolingo: "duolingo", office: "office", office2021: "office2021", microsoft365: "office", office365: "office", m365: "office",
+   };
+ 
+--- R186/index_03_clientes_crm.js
++++ R187/index_03_clientes_crm.js
+@@ -79,7 +79,7 @@
+   "latintv1", "latintv2", "latintv3", "latintv4",
+   "liontv1", "liontv2", "liontv3", "liontv5",
+   "evoutouch1", "evoutouch2", "evoutouch3",
+-  "icomplay1", "icomplay3", "icomplay5", "icomplay7",
++  "icomplay1", "icomplay2", "icomplay3", "icomplay5", "icomplay7",
+   // Compatibilidad de solo lectura/edición con registros anteriores.
+   "iptv1", "iptv3", "iptv4",
+ ]);
+@@ -90,7 +90,7 @@
+   lion: { label: "Lion TV", icon: "🦁", keys: ["liontv1", "liontv2", "liontv3", "liontv5"] },
+   latin: { label: "Latin TV", icon: "📡", keys: ["latintv1", "latintv2", "latintv3", "latintv4"] },
+   evoutouch: { label: "Nanotech", icon: "📺", keys: ["evoutouch1","evoutouch2","evoutouch3"] },
+-  icomplay: { label: "ICOMPLAY MAX", icon: "▶️", keys: ["icomplay1","icomplay3","icomplay5","icomplay7"] },
++  icomplay: { label: "ICOMPLAY", icon: "▶️", keys: ["icomplay1","icomplay2","icomplay3","icomplay5","icomplay7"] },
+ };
+ const TV_DIGITAL_KEYS_LOCAL = new Set(Object.values(TV_DIGITAL_BRANDS_LOCAL).flatMap((marca) => marca.keys));
+ // Claves que solo existen para LEER registros viejos. Nunca se ofrecen como botón:
+@@ -112,7 +112,7 @@
+   stellatv: [1, 3, 7],         // 6 + 1 gratis = 7
+   oleadatv: [1, 3, 7, 14],     // 6 + 1 = 7 / 12 + 2 = 14
+   evoutouch: [1, 3, 6, 12],    // Nanotech: 1, 3, 6 y 12 meses (sin meses gratis)
+-  icomplay: [1, 3, 6, 12],     // ICOMPLAY MAX: 1, 3, 6 y 12 meses
++  icomplay: [1, 3, 6, 12],     // ICOMPLAY: 1, 3, 6 y 12 meses
+ });
+ 
+ function familiaTvDigitalMesesLocal(plataforma = "") {
+@@ -224,7 +224,7 @@
+     oleadatv1:"Oleada TV (1 dispositivo)", oleadatv3:"Oleada TV (3 dispositivos)",
+     latintv1:"LatinTV (1 dispositivo)", latintv2:"LatinTV (2 dispositivos)", latintv3:"LatinTV (3 dispositivos)", latintv4:"LatinTV (4 dispositivos)",
+     liontv1:"LionTV (1 dispositivo)", liontv2:"LionTV (2 dispositivos)", liontv3:"LionTV (3 dispositivos)", liontv5:"LionTV (5 dispositivos)", evoutouch1:"Nanotech (1 dispositivo)", evoutouch2:"Nanotech (2 dispositivos)", evoutouch3:"Nanotech (3 dispositivos)", evoutouch4:"Nanotech (1 dispositivo)",
+-    icomplay1:"ICOMPLAY MAX (1 pantalla)", icomplay3:"ICOMPLAY MAX (3 pantallas)", icomplay5:"ICOMPLAY MAX (5 pantallas)", icomplay7:"ICOMPLAY MAX (7 pantallas)",
++    icomplay1:"ICOMPLAY (1 pantalla)", icomplay2:"ICOMPLAY (2 pantallas)", icomplay3:"ICOMPLAY (3 pantallas)", icomplay5:"ICOMPLAY (5 pantallas)", icomplay7:"ICOMPLAY (7 pantallas)",
+     iptv1:"IPTV anterior (1)", iptv3:"IPTV anterior (3)", iptv4:"IPTV anterior (4)",
+   };
+   return map[k] || String(key || "");
+@@ -457,7 +457,7 @@
+ 
+ function getTotalPorPlataformaLocal(plat = "") {
+   const p = normalizarPlataforma(plat);
+-  const map = { netflix:5, vipnetflix:1, disneyp:6, disneys:3, hbomax:5, primevideo:5, paramount:5, crunchyroll:5, vix:4, appletv:4, universal:4, spotify:1, youtube:1, deezer:1, stellatv1:1, stellatv2:2, stellatv3:3, oleadatv1:1, oleadatv3:3, latintv1:1, latintv2:2, latintv3:3, latintv4:4, liontv1:1, liontv2:2, liontv3:3, liontv5:5, evoutouch1:1, evoutouch2:2, evoutouch3:3, evoutouch4:1, icomplay1:1, icomplay3:3, icomplay5:5, icomplay7:7, iptv1:1, iptv3:3, iptv4:4, canva:1, gemini:1, chatgpt:1, duolingo:1, office:1, office2021:1 };
++  const map = { netflix:5, vipnetflix:1, disneyp:6, disneys:3, hbomax:5, primevideo:5, paramount:5, crunchyroll:5, vix:4, appletv:4, universal:4, spotify:1, youtube:1, deezer:1, stellatv1:1, stellatv2:2, stellatv3:3, oleadatv1:1, oleadatv3:3, latintv1:1, latintv2:2, latintv3:3, latintv4:4, liontv1:1, liontv2:2, liontv3:3, liontv5:5, evoutouch1:1, evoutouch2:2, evoutouch3:3, evoutouch4:1, icomplay1:1, icomplay2:2, icomplay3:3, icomplay5:5, icomplay7:7, iptv1:1, iptv3:3, iptv4:4, canva:1, gemini:1, chatgpt:1, duolingo:1, office:1, office2021:1 };
+   return map[p] || 1;
+ }
+ 
+@@ -913,7 +913,7 @@
+     compraFinal.iptvProveedor = "evoutouch";
+     compraFinal.iptvPantallas = mDisp ? Number(mDisp[1]) : 1;
+   }
+-  // ICOMPLAY MAX: mismos campos que Sublichat HQ (proveedor + pantallas).
++  // ICOMPLAY: mismos campos que Sublichat HQ (proveedor + pantallas).
+   if (plat.startsWith("icomplay")) {
+     const mDisp = plat.match(/([1357])$/);
+     compraFinal.iptvProveedor = "icomplay";
+diff --git a/index_04_inventario_correos.js b/index_04_inventario_correos.js
+index b53cf03..2f12499 100644
+--- a/index_04_inventario_correos.js
++++ b/index_04_inventario_correos.js
+@@ -1,993 +1,993 @@
+-/* ✅ SUBLICUENTAS TG BOT — PARTE 4/6 CORREGIDA Y COMPATIBLE
+-   INVENTARIO / CUENTAS / PANEL POR CORREO-USUARIO
+-   -----------------------------------------------
+-   Compatible con index_05_finanzas_menus_2filas y index_06_handlers_columna_corregido
+-
+-   ✅ AJUSTES CLAVE:
+-   - Se respeta correo || usuario en vistas y botones
+-   - disneys ajustado a capacidad 3
+-   - ✅ v4: Eliminada línea "Tipo:" innecesaria del panel de cuenta
+-*/
+-
+-const {
+-  bot,
+-  admin,
+-  db,
+-  PLATAFORMAS,
+-} = require("./index_01_core");
+-
+-const crypto = require("crypto");
+-
+-const {
+-  escMD,
+-  upsertPanel,
+-  normalizarPlataforma,
+-  isEmailLike,
+-  logErr,
+-} = require("./index_02_utils_roles");
+-
+-// ===============================
+-// HELPERS BASE
+-// ===============================
+-const PLATFORM_KEYS = Array.isArray(PLATAFORMAS)
+-  ? PLATAFORMAS
+-  : Object.keys(PLATAFORMAS || {});
+-
+-function platMeta(key = "") {
+-  if (Array.isArray(PLATAFORMAS)) return {};
+-  return PLATAFORMAS[String(key || "").trim()] || {};
+-}
+-
+-function getStoredIdent(data = {}) {
+-  return String(data.correo || data.usuario || data.ident || "").trim();
+-}
+-
+-function humanPlatSafe(key = "") {
+-  const k = String(key || "").trim().toLowerCase();
+-  const labels = {
+-    netflix: "Netflix",
+-    vipnetflix: "Netflix VIP",
+-    disneyp: "Disney Premium",
+-    disneys: "Disney Premium sin ESPN",
+-    hbomax: "HBO Max",
+-    primevideo: "Prime Video",
+-    paramount: "Paramount+",
+-    crunchyroll: "Crunchyroll",
+-    vix: "Vix",
+-    appletv: "Apple TV",
+-    universal: "Universal+",
+-    spotify: "Spotify",
+-    office: "Office",
+-    office2021: "Office 2021",
+-    office365: "Office 365",
+-    microsoft365: "Microsoft 365",
+-    youtube: "YouTube",
+-    deezer: "Deezer",
+-    stellatv1: "Stella TV (1 dispositivo)",
+-    stellatv2: "Stella TV (2 dispositivos)",
+-    stellatv3: "Stella TV (3 dispositivos)",
+-    oleadatv1: "Oleada TV (1 dispositivo)",
+-    oleadatv3: "Oleada TV (3 dispositivos)",
+-    latintv1: "LatinTV (1 dispositivo)",
+-    latintv2: "LatinTV (2 dispositivos)",
+-    latintv3: "LatinTV (3 dispositivos)",
+-    latintv4: "LatinTV (4 dispositivos)",
+-    liontv1: "LionTV (1 dispositivo)",
+-    liontv2: "LionTV (2 dispositivos)",
+-    liontv3: "LionTV (3 dispositivos)",
+-    liontv5: "LionTV (5 dispositivos)",
+-    evoutouch1: "Nanotech (1 dispositivo)", evoutouch2: "Nanotech (2 dispositivos)", evoutouch3: "Nanotech (3 dispositivos)", evoutouch4: "Nanotech (1 dispositivo)", icomplay1: "ICOMPLAY MAX (1)", icomplay3: "ICOMPLAY MAX (3)", icomplay5: "ICOMPLAY MAX (5)", icomplay7: "ICOMPLAY MAX (7)",
+-    iptv1: "IPTV anterior (1)",
+-    iptv3: "IPTV anterior (3)",
+-    iptv4: "IPTV anterior (4)",
+-    canva: "Canva",
+-    gemini: "Gemini Pro",
+-    chatgpt: "ChatGPT",
+-    duolingo: "Duolingo",
+-  };
+-  return labels[k] || platMeta(k)?.nombre || k;
+-}
+-
+-function isUserPlatform(plataforma = "") {
+-  const p = normalizarPlataforma(plataforma);
+-  return [
+-    "stellatv1", "stellatv2", "stellatv3",
+-    "oleadatv1", "oleadatv3",
+-    "latintv1", "latintv2", "latintv3", "latintv4",
+-    "liontv1", "liontv2", "liontv3", "liontv5",
+-    "evoutouch1", "evoutouch2", "evoutouch3",
+-    "icomplay1", "icomplay3", "icomplay5", "icomplay7",
+-    "iptv1", "iptv3", "iptv4",
+-  ].includes(p);
+-}
+-
+-function isNetflixPlatform(plataforma = "") {
+-  const p = normalizarPlataforma(plataforma);
+-  return p === "netflix" || p === "vipnetflix";
+-}
+-
+-function isSoloCorreoPlatform(plataforma = "") {
+-  const p = normalizarPlataforma(plataforma);
+-  return ["canva", "gemini", "chatgpt", "duolingo"].includes(p);
+-}
+-
+-function requiresPinPlatform(plataforma = "") {
+-  const p = normalizarPlataforma(plataforma);
+-  return [
+-    "netflix",
+-    "disneyp",
+-    "disneys",
+-    "hbomax",
+-    "primevideo",
+-    "crunchyroll",
+-    "universal",
+-  ].includes(p);
+-}
+-
+-function requiresClavePlatform(plataforma = "") {
+-  return !isSoloCorreoPlatform(plataforma);
+-}
+-
+-function getPinFromAny(data = {}) {
+-  const keys = [
+-    "pin", "PIN", "pinPerfil", "pin_perfil", "perfilPin", "perfil_pin",
+-    "profilePin", "profile_pin", "pinProfile", "pin_profile",
+-    "pinCliente", "pin_cliente", "pinCuenta", "pin_cuenta",
+-  ];
+-  for (const k of keys) {
+-    const v = data && data[k];
+-    if (v !== undefined && v !== null && String(v).trim()) return String(v).trim();
+-  }
+-  return "";
+-}
+-
+-function getIdentLabel(plataforma = "") {
+-  return isUserPlatform(plataforma) ? "Usuario" : "Correo";
+-}
+-
+-function getIdentIcon(plataforma = "") {
+-  return isUserPlatform(plataforma) ? "👤" : "📧";
+-}
+-
+-function getAccessTypeLabel(plataforma = "") {
+-  const p = normalizarPlataforma(plataforma);
+-  if (isSoloCorreoPlatform(p)) return "Solo correo";
+-  if (isUserPlatform(p)) return "Usuario + clave";
+-  if (requiresPinPlatform(p)) return "Correo + clave + PIN";
+-  return "Correo + clave";
+-}
+-
+-function normalizeAccess(plataforma = "", acceso = "") {
+-  const p = normalizarPlataforma(plataforma);
+-  const v = String(acceso || "").trim();
+-  if (isUserPlatform(p)) return v;
+-  return v.toLowerCase();
+-}
+-
+-function docIdInventario(acceso = "", plataforma = "") {
+-  const p = normalizarPlataforma(plataforma);
+-  const a = normalizeAccess(p, acceso)
+-    .toLowerCase()
+-    .replace(/[.#$/\[\]\s]+/g, "_");
+-  return `${p}__${a}`;
+-}
+-
+-function getCapacidadCorreo(data = {}, plataforma = "") {
+-  const p = normalizarPlataforma(plataforma || data.plataforma || "");
+-  const defaults = {
+-    netflix: 5,
+-    vipnetflix: 1,
+-    disneyp: 6,
+-    disneys: 3,
+-    hbomax: 5,
+-    primevideo: 5,
+-    paramount: 5,
+-    crunchyroll: 5,
+-    vix: 4,
+-    appletv: 4,
+-    universal: 4,
+-    spotify: 1,
+-    youtube: 1,
+-    deezer: 1,
+-    office: 1,
+-    office2021: 1,
+-    office365: 1,
+-    microsoft365: 1,
+-    stellatv1: 1,
+-    stellatv2: 2,
+-    stellatv3: 3,
+-    oleadatv1: 1,
+-    oleadatv3: 3,
+-    latintv1: 1,
+-    latintv2: 2,
+-    latintv3: 3,
+-    latintv4: 4,
+-    liontv1: 1,
+-    liontv2: 2,
+-    liontv3: 3,
+-    liontv5: 5,
+-    evoutouch1: 1, evoutouch2: 2, evoutouch3: 3, evoutouch4: 1, icomplay1: 1, icomplay3: 3, icomplay5: 5, icomplay7: 7,
+-    iptv1: 1,
+-    iptv3: 3,
+-    iptv4: 4,
+-    canva: 1,
+-    gemini: 1,
+-    chatgpt: 1,
+-    duolingo: 1,
+-  };
+-
+-  const n = Number(data.capacidad || data.total || 0);
+-  if (Number.isFinite(n) && n > 0) return n;
+-  return defaults[p] || 1;
+-}
+-
+-function getClientesArray(data = {}) {
+-  return Array.isArray(data.clientes) ? data.clientes : [];
+-}
+-
+-// Oct-2026 · Los cupos salen de los clientes realmente asignados (clientes[]).
+-// Los contadores guardados (ocupados/disponibles/disp) podían quedar viejos y mostrar
+-// una cuenta llena con menos clientes de los reales; ya no mandan si existe la lista.
+-function getOcupados(data = {}) {
+-  if (Array.isArray(data.clientes)) return data.clientes.length;
+-  const n = Number(data.ocupados);
+-  return Number.isFinite(n) && n >= 0 ? n : 0;
+-}
+-
+-function getDisponibles(data = {}, plataforma = "") {
+-  const capacidad = getCapacidadCorreo(data, plataforma);
+-  const ocupados = getOcupados(data);
+-  return Math.max(0, capacidad - ocupados);
+-}
+-
+-function getEstado(data = {}, plataforma = "") {
+-  const disp = getDisponibles(data, plataforma);
+-  return disp <= 0 ? "llena" : "activa";
+-}
+-
+-function boolHasCodes(data = {}) {
+-  const keys = [
+-    "codigo", "code", "codigo_hogar", "hogarCode", "hogar_code",
+-    "codigo_temporal", "tempCode", "pin_hogar", "pin_temporal",
+-  ];
+-  return keys.some((k) => data[k]);
+-}
+-
+-function formatCuentaResumen(data = {}, plataforma = "") {
+-  const capacidad = getCapacidadCorreo(data, plataforma);
+-  const ocupados = getOcupados(data);
+-  const disponibles = getDisponibles(data, plataforma);
+-  const estado = getEstado(data, plataforma) === "llena" ? "🔴 LLENA" : "🟢 ACTIVA";
+-  return { capacidad, ocupados, disponibles, estado };
+-}
+-
+-function normalizeLooseText(txt = "") {
+-  return String(txt || "")
+-    .toLowerCase()
+-    .normalize("NFD")
+-    .replace(/[\u0300-\u036f]/g, "")
+-    .replace(/\s+/g, " ")
+-    .trim();
+-}
+-
+-function pairButtons(buttons = []) {
+-  const rows = [];
+-  for (let i = 0; i < buttons.length; i += 2) {
+-    rows.push(buttons.slice(i, i + 2));
+-  }
+-  return rows;
+-}
+-
+-function scoreMatch(value = "", query = "") {
+-  const v = normalizeLooseText(value);
+-  const q = normalizeLooseText(query);
+-  if (!v || !q) return 0;
+-  if (v === q) return 100;
+-  if (v.startsWith(q)) return 80;
+-  if (v.includes(q)) return 50;
+-  return 0;
+-}
+-
+-// ===============================
+-// BÚSQUEDAS INVENTARIO
+-// ===============================
+-async function buscarInventarioPorCorreo(query = "") {
+-  const q = String(query || "").trim();
+-  if (!q) return [];
+-
+-  try {
+-    const snap = await require("./index_30_espejo_firestore").getColeccion("inventario");
+-    const out = [];
+-
+-    snap.forEach((doc) => {
+-      const data = doc.data() || {};
+-      const plat = normalizarPlataforma(data.plataforma || "");
+-      const acceso = getStoredIdent(data);
+-      const clave = String(data.clave || "");
+-      const nombrePlat = humanPlatSafe(plat);
+-
+-      let score = 0;
+-      score = Math.max(score, scoreMatch(acceso, q));
+-      score = Math.max(score, scoreMatch(clave, q));
+-      score = Math.max(score, scoreMatch(nombrePlat, q));
+-      score = Math.max(score, scoreMatch(plat, q));
+-
+-      if (score > 0) {
+-        out.push({
+-          id: doc.id,
+-          ...data,
+-          plataforma: plat,
+-          _score: score,
+-        });
+-      }
+-    });
+-
+-    out.sort((a, b) => {
+-      if ((b._score || 0) !== (a._score || 0)) return (b._score || 0) - (a._score || 0);
+-      const da = getDisponibles(a, a.plataforma);
+-      const dbb = getDisponibles(b, b.plataforma);
+-      if (dbb !== da) return dbb - da;
+-      return getStoredIdent(a).localeCompare(getStoredIdent(b), "es", { sensitivity: "base" });
+-    });
+-
+-    return out.slice(0, 30);
+-  } catch (e) {
+-    logErr("buscarInventarioPorCorreo", e);
+-    return [];
+-  }
+-}
+-
+-async function buscarCorreoInventarioPorPlatCorreo(plataforma = "", acceso = "") {
+-  const plat = normalizarPlataforma(plataforma);
+-  const ident = String(acceso || "").trim();
+-  if (!plat || !ident) return null;
+-
+-  try {
+-    const id = docIdInventario(ident, plat);
+-    const byId = await db.collection("inventario").doc(id).get();
+-    if (byId.exists) {
+-      return { id: byId.id, ref: byId.ref, data: byId.data() || {} };
+-    }
+-
+-    const snap = await db.collection("inventario").where("plataforma", "==", plat).get();
+-    const exactNorm = normalizeAccess(plat, ident);
+-    let partial = null;
+-
+-    for (const doc of snap.docs) {
+-      const data = doc.data() || {};
+-      const stored = normalizeAccess(plat, getStoredIdent(data));
+-      if (stored === exactNorm) {
+-        return { id: doc.id, ref: doc.ref, data };
+-      }
+-      if (!partial && stored.includes(normalizeLooseText(exactNorm))) {
+-        partial = { id: doc.id, ref: doc.ref, data };
+-      }
+-    }
+-
+-    return partial;
+-  } catch (e) {
+-    logErr("buscarCorreoInventarioPorPlatCorreo", e);
+-    return null;
+-  }
+-}
+-
+-// ===============================
+-// CONTEXTO DEL PANEL + MOVER CUENTA ENTRE PLATAFORMAS
+-// ===============================
+-const MAIL_PANEL_CTX = global.__SUBLICUENTAS_MAIL_PANEL_CTX__ || new Map();
+-global.__SUBLICUENTAS_MAIL_PANEL_CTX__ = MAIL_PANEL_CTX;
+-
+-function setMailPanelContext(chatId, ctx = {}) {
+-  if (chatId === undefined || chatId === null) return;
+-  MAIL_PANEL_CTX.set(String(chatId), {
+-    docId: String(ctx.docId || ""),
+-    plataforma: normalizarPlataforma(ctx.plataforma || ""),
+-    acceso: String(ctx.acceso || "").trim(),
+-    updatedAt: Date.now(),
+-  });
+-}
+-
+-function getMailPanelContext(chatId) {
+-  const ctx = MAIL_PANEL_CTX.get(String(chatId));
+-  if (!ctx) return null;
+-  // Evita reutilizar una cuenta vieja horas después.
+-  if (Date.now() - Number(ctx.updatedAt || 0) > 30 * 60 * 1000) {
+-    MAIL_PANEL_CTX.delete(String(chatId));
+-    return null;
+-  }
+-  return { ...ctx };
+-}
+-
+-// Token corto y estable para callbacks de Telegram.
+-// NO depende de memoria RAM/pending: si el bot reinicia entre dos clics,
+-// el callback todavía puede resolver la cuenta real desde Firestore.
+-function getInventoryMoveToken(docId = "") {
+-  const id = String(docId || "").trim();
+-  if (!id) return "";
+-  return crypto.createHash("sha256").update(id).digest("base64url").slice(0, 16);
+-}
+-
+-async function buscarCuentaInventarioPorMoveToken(token = "") {
+-  const wanted = String(token || "").trim();
+-  if (!wanted) return null;
+-
+-  try {
+-    const snap = await require("./index_30_espejo_firestore").getColeccion("inventario");
+-    let found = null;
+-    for (const doc of snap.docs) {
+-      if (getInventoryMoveToken(doc.id) !== wanted) continue;
+-      // Una colisión de 96 bits es extremadamente improbable, pero si pasara
+-      // preferimos no tocar nada antes que mover la cuenta equivocada.
+-      if (found) throw new Error("Token de cuenta ambiguo. Abra nuevamente la cuenta.");
+-      found = { id: doc.id, ref: doc.ref, data: doc.data() || {} };
+-    }
+-    return found;
+-  } catch (e) {
+-    logErr("buscarCuentaInventarioPorMoveToken", e);
+-    throw e;
+-  }
+-}
+-
+-async function actualizarCapacidadCuenta(docId, valor) {
+-  const text = String(valor == null ? "" : valor).trim();
+-  const capacidad = Number(text);
+-  if (!/^[1-9]\d*$/.test(text) || !Number.isSafeInteger(capacidad)) {
+-    throw new Error("Escriba la cantidad TOTAL de perfiles como número entero, por ejemplo: 7.");
+-  }
+-  if (!String(docId || "").trim()) throw new Error("Abra nuevamente la cuenta.");
+-  const ref = db.collection("inventario").doc(String(docId));
+-  return db.runTransaction(async tx => {
+-    const snap = await tx.get(ref);
+-    if (!snap.exists) throw new Error("La cuenta ya no existe. Abra nuevamente Inventario.");
+-    const data = snap.data() || {};
+-    const ocupados = getClientesArray(data).length;
+-    if (capacidad < ocupados) throw new Error(`La cuenta tiene ${ocupados} clientes asociados. La capacidad no puede ser menor que ${ocupados}.`);
+-    const disponibles = capacidad - ocupados;
+-    const estadoActual = String(data.estado || "").trim().toLowerCase();
+-    const patch = {capacidad, ocupados, disponibles, disp:disponibles, updatedAt:admin.firestore.FieldValue.serverTimestamp()};
+-    // Cambiar cupos no debe reactivar una cuenta suspendida o bloqueada.
+-    if (!estadoActual || ["activa", "llena"].includes(estadoActual)) patch.estado = disponibles ? "activa" : "llena";
+-    if (data.total != null) patch.total = capacidad;
+-    tx.set(ref, patch, {merge:true});
+-    return {docId:String(docId), plataforma:normalizarPlataforma(data.plataforma || ""), ident:getStoredIdent(data),
+-      anterior:getCapacidadCorreo(data, data.plataforma), capacidad, ocupados, disponibles};
+-  });
+-}
+-
+-async function moverCuentaInventarioPlataforma(docId = "", nuevaPlataforma = "") {
+-  const id = String(docId || "").trim();
+-  const nueva = normalizarPlataforma(nuevaPlataforma);
+-  if (!id || !nueva || !PLATFORM_KEYS.includes(nueva)) {
+-    throw new Error("Plataforma destino inválida.");
+-  }
+-
+-  const srcRef = db.collection("inventario").doc(id);
+-  const srcSnap = await srcRef.get();
+-  if (!srcSnap.exists) throw new Error("La cuenta ya no existe en Bodega.");
+-
+-  const src = srcSnap.data() || {};
+-  const anterior = normalizarPlataforma(src.plataforma || "");
+-  const ident = getStoredIdent(src);
+-  if (!ident) throw new Error("La cuenta no tiene correo/usuario para moverla.");
+-  if (anterior === nueva) {
+-    return { ok: true, sinCambios: true, anterior, nueva, ident, docId: srcSnap.id, data: src };
+-  }
+-
+-  // No permitir que dos documentos terminen representando la misma cuenta.
+-  const exactaDestino = await buscarCorreoInventarioPorPlatCorreo(nueva, ident);
+-  if (exactaDestino && exactaDestino.id !== srcSnap.id) {
+-    const stored = normalizeAccess(nueva, getStoredIdent(exactaDestino.data || {}));
+-    const wanted = normalizeAccess(nueva, ident);
+-    if (stored === wanted) {
+-      throw new Error(`Ya existe ${humanPlatSafe(nueva)} con ese ${getIdentLabel(nueva).toLowerCase()}. No se movió nada.`);
+-    }
+-  }
+-
+-  const clientes = getClientesArray(src);
+-  const capActual = Math.max(1, Number(src.capacidad || src.total || 0) || getCapacidadCorreo(src, anterior));
+-  const defaultAnterior = getCapacidadCorreo({}, anterior);
+-  const defaultNueva = getCapacidadCorreo({}, nueva);
+-  // Si la capacidad era exactamente el valor por defecto de la plataforma mal puesta,
+-  // adopta el default de la plataforma correcta. Una capacidad personalizada se conserva.
+-  const capBase = capActual === defaultAnterior ? defaultNueva : capActual;
+-  const capacidad = Math.max(clientes.length, capBase, 1);
+-  const ocupados = clientes.length;
+-  const disponibles = Math.max(0, capacidad - ocupados);
+-
+-  const ahora = admin.firestore.FieldValue.serverTimestamp();
+-  const destino = {
+-    plataforma: nueva,
+-    capacidad,
+-    ocupados,
+-    disponibles,
+-    disp: disponibles,
+-    estado: disponibles <= 0 ? "llena" : "activa",
+-    movedFromPlatform: anterior,
+-    accountId: srcSnap.id,
+-    updatedAt: ahora,
+-  };
+-
+-  // Oct-2026: la cuenta cambia de plataforma EN SU MISMO documento. Antes se creaba un documento
+-  // nuevo y se borraba el viejo: el accountId cambiaba y las fichas enlazadas perdían el vínculo.
+-  await db.runTransaction(async (tx) => {
+-    const srcNow = await tx.get(srcRef);
+-    if (!srcNow.exists) throw new Error("La cuenta desapareció durante el cambio.");
+-    tx.set(srcRef, destino, { merge: true });
+-  });
+-
+-  return { ok: true, anterior, nueva, ident, docId: srcSnap.id, data: { ...src, ...destino }, capacidad, ocupados, disponibles };
+-}
+-
+-// ===============================
+-// VISTAS INVENTARIO
+-// ===============================
+-async function getInventarioRowsByPlataforma(plataforma = "") {
+-  const plat = normalizarPlataforma(plataforma);
+-  let rows = [];
+-
+-  try {
+-    const snap = await db.collection("inventario").where("plataforma", "==", plat).get();
+-    rows = snap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
+-  } catch (e) {
+-    logErr("getInventarioRowsByPlataforma.where", e);
+-  }
+-
+-  if (!rows.length) {
+-    try {
+-      const snapAll = await require("./index_30_espejo_firestore").getColeccion("inventario");
+-      rows = snapAll.docs
+-        .map((d) => ({ id: d.id, ...(d.data() || {}) }))
+-        .filter((r) => normalizarPlataforma(r.plataforma || "") === plat);
+-    } catch (e) {
+-      logErr("getInventarioRowsByPlataforma.fallback", e);
+-      rows = [];
+-    }
+-  }
+-
+-  // Cuenta más vacía primero: menor % de ocupación; empate → más libres; llenas al final.
+-  rows.sort((a, b) => {
+-    const ca = Math.max(1, getCapacidadCorreo(a, plat)), cb = Math.max(1, getCapacidadCorreo(b, plat));
+-    const la = getDisponibles(a, plat), lb = getDisponibles(b, plat);
+-    if ((la > 0) !== (lb > 0)) return la > 0 ? -1 : 1;
+-    const pa = getOcupados(a) / ca, pb = getOcupados(b) / cb;
+-    if (pa !== pb) return pa - pb;
+-    if (lb !== la) return lb - la;
+-    return getStoredIdent(a).localeCompare(getStoredIdent(b), "es", { sensitivity: "base" });
+-  });
+-
+-  return rows;
+-}
+-
+-async function enviarInventarioPlataforma(chatId, plataforma = "", page = 0) {
+-  const plat = normalizarPlataforma(plataforma);
+-
+-  try {
+-    const rows = await getInventarioRowsByPlataforma(plat);
+-    const disponibles = rows.filter((r) => getDisponibles(r, plat) > 0);
+-    const llenas = rows.filter((r) => getDisponibles(r, plat) <= 0);
+-
+-    const platLabel = humanPlatSafe(plat).toUpperCase();
+-    let txt = `*${escMD(platLabel)}*\n\nDisponibles: ${disponibles.length}\nLlenas: ${llenas.length}`;
+-
+-    return upsertPanel(
+-      chatId,
+-      txt,
+-      [
+-        [
+-          { text: `🟢 Disponibles (${disponibles.length})`, callback_data: `invf:${plat}:disponibles:0` },
+-          { text: `🔴 Llenas (${llenas.length})`, callback_data: `invf:${plat}:llenas:0` },
+-        ],
+-        [{ text: "➕ Nueva cuenta", callback_data: `inv:new:plat:${plat}` }],
+-        [
+-          { text: "⬅️ Volver Inventario", callback_data: "menu:inventario" },
+-          { text: "🏠 Inicio", callback_data: "go:inicio" },
+-        ],
+-      ]
+-    );
+-  } catch (e) {
+-    logErr("enviarInventarioPlataforma.selector", e);
+-    return bot.sendMessage(chatId, "⚠️ Error al abrir inventario de esa plataforma.");
+-  }
+-}
+-
+-async function enviarInventarioPlataformaEstado(chatId, plataforma = "", filtro = "disponibles", page = 0) {
+-  const plat = normalizarPlataforma(plataforma);
+-  const pageSize = 10;
+-  const filtroNorm = String(filtro || "").toLowerCase() === "llenas" ? "llenas" : "disponibles";
+-
+-  try {
+-    const rowsAll = await getInventarioRowsByPlataforma(plat);
+-    const rows = filtroNorm === "llenas"
+-      ? rowsAll.filter((r) => getDisponibles(r, plat) <= 0)
+-      : rowsAll.filter((r) => getDisponibles(r, plat) > 0);
+-
+-    if (!rows.length) {
+-      return upsertPanel(
+-        chatId,
+-        `*${escMD(humanPlatSafe(plat).toUpperCase())}*\n\nNo hay cuentas en la seccion ${filtroNorm === "llenas" ? "llenas" : "disponibles"}.`,
+-        [
+-          [
+-            { text: "⬅️ Volver plataforma", callback_data: `inv:${plat}:0` },
+-            { text: "🏠 Inicio", callback_data: "go:inicio" },
+-          ],
+-        ]
+-      );
+-    }
+-
+-    const totalPages = Math.max(1, Math.ceil(rows.length / pageSize));
+-    const safePage = Math.max(0, Math.min(Number(page || 0), totalPages - 1));
+-    const start = safePage * pageSize;
+-    const slice = rows.slice(start, start + pageSize);
+-
+-    const emojiEstado = filtroNorm === "llenas" ? "🔴" : "🟢";
+-    const tituloEstado = filtroNorm === "llenas" ? "LLENAS" : "DISPONIBLES";
+-
+-    let txt = `*${escMD(humanPlatSafe(plat).toUpperCase())}*\n`;
+-    txt += `*${tituloEstado}*\n`;
+-    txt += `Pagina *${safePage + 1}/${totalPages}*\n\n`;
+-
+-    slice.forEach((r, idx) => {
+-      const ident = getStoredIdent(r);
+-      const { capacidad, ocupados, disponibles } = formatCuentaResumen(r, plat);
+-      const recomendada = filtroNorm === "disponibles" && safePage === 0 && idx === 0 && capacidad > 1;
+-      const sobre = ocupados > capacidad ? " ⚠️ SOBREASIGNADA" : "";
+-      txt += `*${start + idx + 1}.* ${filtroNorm === "llenas" ? "[X]" : "[OK]"} ${getIdentIcon(plat)} ${escMD(ident)}${recomendada ? " ⭐ *MÁS VACÍA*" : ""}${sobre}\n`;
+-      txt += `   Perfiles: ${ocupados}/${capacidad} • OK ${disponibles}\n`;
+-      if (requiresClavePlatform(plat) && r.clave) txt += `   Clave: ${escMD(String(r.clave))}\n`;
+-      const pin = getPinFromAny(r);
+-      if (requiresPinPlatform(plat) && pin) txt += `   PIN: ${escMD(pin)}\n`;
+-    });
+-
+-    const kb = slice.map((r) => {
+-      const ident = getStoredIdent(r);
+-      return [
+-        {
+-          text: `${filtroNorm === "llenas" ? "🔴" : "🟢"} ${ident} • ${getDisponibles(r, plat)}/${getCapacidadCorreo(r, plat)}`,
+-          callback_data: `inv:open:${plat}:${encodeURIComponent(String(ident || ""))}`,
+-        },
+-      ];
+-    });
+-
+-    const nav = [];
+-    if (safePage > 0) nav.push({ text: "⬅️ Anterior", callback_data: `invf:${plat}:${filtroNorm}:${safePage - 1}` });
+-    if (safePage < totalPages - 1) nav.push({ text: "Siguiente ➡️", callback_data: `invf:${plat}:${filtroNorm}:${safePage + 1}` });
+-    if (nav.length) kb.push(nav);
+-
+-    kb.push([
+-      { text: "⬅️ Volver plataforma", callback_data: `inv:${plat}:0` },
+-      { text: "🏠 Inicio", callback_data: "go:inicio" },
+-    ]);
+-
+-    return upsertPanel(chatId, txt, kb);
+-  } catch (e) {
+-    logErr("enviarInventarioPlataformaEstado", e);
+-    return bot.sendMessage(chatId, "⚠️ Error al listar cuentas de esa plataforma.");
+-  }
+-}
+-
+-async function mostrarListaCorreosPlataforma(chatId, plataforma = "") {
+-  return enviarInventarioPlataforma(chatId, plataforma, 0);
+-}
+-
+-async function mostrarStockGeneral(chatId) {
+-  try {
+-    const snap = await require("./index_30_espejo_firestore").getColeccion("inventario");
+-    const map = {};
+-
+-    snap.forEach((doc) => {
+-      const data = doc.data() || {};
+-      let plat = normalizarPlataforma(data.plataforma || "");
+-      if (!plat) return;
+-      if (plat === "evoutouch4") plat = "evoutouch1"; // alias legado = Nanotech 1 dispositivo
+-      if (!map[plat]) {
+-        map[plat] = {
+-          cuentas: 0,
+-          capacidad: 0,
+-          ocupados: 0,
+-          disponibles: 0,
+-        };
+-      }
+-      map[plat].cuentas += 1;
+-      map[plat].capacidad += getCapacidadCorreo(data, plat);
+-      map[plat].ocupados += getOcupados(data);
+-      map[plat].disponibles += getDisponibles(data, plat);
+-    });
+-
+-    const keys = Object.keys(map).sort((a, b) => {
+-      return humanPlatSafe(a).localeCompare(humanPlatSafe(b), "es", { sensitivity: "base" });
+-    });
+-
+-    let txt = "STOCK *STOCK GENERAL*\n\n";
+-    if (!keys.length) {
+-      txt += "_No hay cuentas cargadas en inventario._";
+-    } else {
+-      for (const k of keys) {
+-        const x = map[k];
+-        txt += `*${escMD(humanPlatSafe(k))}*\n`;
+-        txt += `    Cuentas: ${x.cuentas}\n`;
+-        txt += `   Perfiles: Ocupados: ${x.ocupados}/${x.capacidad}\n`;
+-        txt += `   OK Disponibles: ${x.disponibles}\n\n`;
+-      }
+-    }
+-
+-    return upsertPanel(
+-      chatId,
+-      txt,
+-      [
+-        [{ text: "⬅️ Volver Inventario", callback_data: "menu:inventario" }],
+-        [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
+-      ]
+-    );
+-  } catch (e) {
+-    logErr("mostrarStockGeneral", e);
+-    return bot.sendMessage(chatId, "⚠️ Error al generar stock general.");
+-  }
+-}
+-
+-// ===============================
+-// ✅ PANEL DE CUENTA — sin línea "Tipo:"
+-// ===============================
+-async function mostrarPanelCorreo(chatId, plataforma = "", acceso = "") {
+-  const plat = normalizarPlataforma(plataforma);
+-  const found = await buscarCorreoInventarioPorPlatCorreo(plat, acceso);
+-  if (!found) return bot.sendMessage(chatId, "⚠️ Esa cuenta no existe en inventario.");
+-
+-  const data = found.data || {};
+-  const ident = getStoredIdent(data) || String(acceso || "");
+-  setMailPanelContext(chatId, { docId: found.id, plataforma: plat, acceso: ident });
+-  const clave = String(data.clave || "").trim();
+-  const pin = getPinFromAny(data);
+-  const { capacidad, ocupados, disponibles, estado } = formatCuentaResumen(data, plat);
+-
+-  // Panel compacto para que ocupe menos pantalla
+-  let txt = ` *${escMD(humanPlatSafe(plat))}*\n`;
+-  txt += `${getIdentIcon(plat)} ${escMD(ident)}\n`;
+-  if (requiresClavePlatform(plat)) txt += `Clave: ${escMD(clave || "Sin clave")}\n`;
+-  if (requiresPinPlatform(plat) && pin) txt += `PIN: ${escMD(pin)}\n`;
+-  txt += `Perfiles: ${ocupados}/${capacidad} · OK ${disponibles}\n`;
+-  txt += `${escMD(estado)}`;
+-
+-  if (isNetflixPlatform(plat) && boolHasCodes(data)) {
+-    txt += `\n\nNota: Tiene datos/códigos de Netflix disponibles.`;
+-  }
+-
+-  const kb = [
+-    [{ text: "👥 Clientes", callback_data: `mail_menu_clientes|${plat}|${encodeURIComponent(ident)}` }],
+-  ];
+-
+-  if (isNetflixPlatform(plat) && boolHasCodes(data)) {
+-    kb.push([{ text: "🔑 Ver códigos Netflix", callback_data: `mail_menu_codigos|${plat}|${encodeURIComponent(ident)}` }]);
+-  }
+-
+-  if (requiresClavePlatform(plat)) {
+-    kb.push([
+-      { text: "✏️ Editar clave", callback_data: `mail_edit_clave|${plat}|${encodeURIComponent(ident)}` },
+-      { text: "✉️ Editar correo", callback_data: `mail_edit_correo|${plat}|${encodeURIComponent(ident)}` },
+-    ]);
+-  } else {
+-    kb.push([{ text: "✉️ Editar correo", callback_data: `mail_edit_correo|${plat}|${encodeURIComponent(ident)}` }]);
+-  }
+-
+-  const moveToken = getInventoryMoveToken(found.id);
+-  kb.push([{ text: "✏️ Cambiar cantidad de perfiles", callback_data: `mail_edit_capacidad|${moveToken}` }]);
+-  kb.push([{ text: "🔄 Cambiar plataforma de esta cuenta", callback_data: `mail_move_platform|${moveToken}` }]);
+-  kb.push([{ text: "🗑️ Borrar cuenta", callback_data: `mail_delete|${plat}|${encodeURIComponent(ident)}` }]);
+-
+-  kb.push([
+-    { text: "⬅️ Volver plataforma", callback_data: `inv:${plat}:0` },
+-    { text: "🏠 Inicio", callback_data: "go:inicio" },
+-  ]);
+-
+-  return upsertPanel(chatId, txt, kb);
+-}
+-
+-async function enviarSubmenuInventario(chatId, plataforma = "", acceso = "") {
+-  return mostrarPanelCorreo(chatId, plataforma, acceso);
+-}
+-
+-async function mostrarMenuClientesCorreo(chatId, plataforma = "", acceso = "") {
+-  const plat = normalizarPlataforma(plataforma);
+-  const found = await buscarCorreoInventarioPorPlatCorreo(plat, acceso);
+-  if (!found) return bot.sendMessage(chatId, "⚠️ Esa cuenta no existe en inventario.");
+-
+-  const data = found.data || {};
+-  const ident = getStoredIdent(data) || String(acceso || "");
+-  const { capacidad, ocupados, disponibles, estado } = formatCuentaResumen(data, plat);
+-
+-  const txt =
+-    `👥 *CLIENTES DE LA CUENTA*\n\n` +
+-    `📌 *Plataforma:* ${escMD(humanPlatSafe(plat))}\n` +
+-    `${getIdentIcon(plat)} *${escMD(getIdentLabel(plat))}:* ${escMD(ident)}\n` +
+-    `👥 *Ocupados:* ${ocupados}/${capacidad}\n` +
+-    `✅ *Disponibles:* ${disponibles}\n` +
+-    `📊 *Estado:* ${escMD(estado)}\n\n` +
+-    `Seleccione una acción:`;
+-
+-  return upsertPanel(
+-    chatId,
+-    txt,
+-    [
+-      [
+-        { text: "➕ Agregar cliente", callback_data: `mail_add_cliente|${plat}|${encodeURIComponent(ident)}` },
+-        { text: "➖ Quitar cliente", callback_data: `mail_del_cliente|${plat}|${encodeURIComponent(ident)}` },
+-      ],
+-      requiresPinPlatform(plat)
+-        ? [
+-            { text: "🔐 Editar PIN cliente", callback_data: `mail_edit_pin|${plat}|${encodeURIComponent(ident)}` },
+-            { text: "👥 Ver clientes", callback_data: `mail_ver_clientes|${plat}|${encodeURIComponent(ident)}` },
+-          ]
+-        : [
+-            { text: "👥 Ver clientes", callback_data: `mail_ver_clientes|${plat}|${encodeURIComponent(ident)}` },
+-          ],
+-      [{ text: "✏️ Cambiar cantidad de perfiles", callback_data: `mail_edit_capacidad|${getInventoryMoveToken(found.id)}` }],
+-      [
+-        { text: "⬅️ Cuenta", callback_data: `mail_panel|${plat}|${encodeURIComponent(ident)}` },
+-        { text: "🏠 Inicio", callback_data: "go:inicio" },
+-      ],
+-    ]
+-  );
+-}
+-
+-// ===============================
+-// NETFLIX CÓDIGOS
+-// ===============================
+-async function responderMenuCodigosNetflix(chatId, plataforma = "", acceso = "") {
+-  const plat = normalizarPlataforma(plataforma);
+-  const found = await buscarCorreoInventarioPorPlatCorreo(plat, acceso);
+-  if (!found) return bot.sendMessage(chatId, "⚠️ Esa cuenta no existe en inventario.");
+-
+-  const data = found.data || {};
+-  const ident = getStoredIdent(data) || String(acceso || "");
+-
+-  const txt =
+-    `🔑 *CÓDIGOS / DATOS NETFLIX*\n\n` +
+-    `📌 *Plataforma:* ${escMD(humanPlatSafe(plat))}\n` +
+-    `📧 *Cuenta:* ${escMD(ident)}\n\n` +
+-    `Seleccione qué desea ver:`;
+-
+-  const kb = [
+-    [
+-      { text: "🔐 Login", callback_data: `nf_code|login|${encodeURIComponent(ident)}` },
+-      { text: "🏠 Código hogar", callback_data: `nf_code|hogar|${encodeURIComponent(ident)}` },
+-    ],
+-  ];
+-
+-  if (requiresPinPlatform(plat)) {
+-    kb.push([
+-      { text: "⏱️ Código temporal", callback_data: `nf_code|temporal|${encodeURIComponent(ident)}` },
+-      { text: "📌 PIN / perfil", callback_data: `nf_code|pin|${encodeURIComponent(ident)}` },
+-    ]);
+-  } else {
+-    kb.push([{ text: "⏱️ Código temporal", callback_data: `nf_code|temporal|${encodeURIComponent(ident)}` }]);
+-  }
+-
+-  kb.push([
+-    { text: "⬅️ Cuenta", callback_data: `mail_panel|${plat}|${encodeURIComponent(ident)}` },
+-    { text: "🏠 Inicio", callback_data: "go:inicio" },
+-  ]);
+-
+-  return upsertPanel(chatId, txt, kb);
+-}
+-
+-async function responderCodigoNetflix(chatId, acceso = "", tipo = "") {
+-  const ident = String(acceso || "").trim();
+-  const tipoNorm = String(tipo || "").trim().toLowerCase();
+-
+-  const plats = ["netflix", "vipnetflix"];
+-  let found = null;
+-  for (const p of plats) {
+-    found = await buscarCorreoInventarioPorPlatCorreo(p, ident);
+-    if (found) break;
+-  }
+-
+-  if (!found) return bot.sendMessage(chatId, "⚠️ No encontré esa cuenta de Netflix.");
+-
+-  const data = found.data || {};
+-  const plat = normalizarPlataforma(data.plataforma || "");
+-  const cuenta = getStoredIdent(data) || ident;
+-
+-  const maps = {
+-    login: [
+-      ["Correo", cuenta],
+-      ["Clave", data.clave || "Sin clave"],
+-    ],
+-    hogar: [
+-      ["Código hogar", data.codigo_hogar || data.hogarCode || data.hogar_code || data.hogar || "No disponible"],
+-    ],
+-    temporal: [
+-      ["Código temporal", data.codigo_temporal || data.tempCode || data.temporal || data.codigo || data.code || "No disponible"],
+-    ],
+-    pin: [
+-      ["PIN", getPinFromAny(data) || data.pin_hogar || data.pin_temporal || "No disponible"],
+-      ["Perfil", data.perfil || data.profile || "No disponible"],
+-    ],
+-  };
+-
+-  const rows = maps[tipoNorm] || [["Dato", "No disponible"]];
+-  let txt = `Clave: *NETFLIX — ${escMD(tipoNorm.toUpperCase())}*\n\n`;
+-  txt += `📧 *Cuenta:* ${escMD(cuenta)}\n`;
+-  txt += `📌 *Plataforma:* ${escMD(humanPlatSafe(plat))}\n\n`;
+-
+-  rows.forEach(([k, v]) => {
+-    txt += `*${escMD(String(k))}:* ${escMD(String(v || "No disponible"))}\n`;
+-  });
+-
+-  return upsertPanel(
+-    chatId,
+-    txt,
+-    [
+-      [
+-        { text: "⬅️ Volver códigos", callback_data: `mail_menu_codigos|${plat}|${encodeURIComponent(cuenta)}` },
+-        { text: "🏠 Inicio", callback_data: "go:inicio" },
+-      ],
+-    ]
+-  );
+-}
+-
+-// ===============================
+-// AUTO LLENO
+-// ===============================
+-async function aplicarAutoLleno(chatId, ref, antes = {}, despues = {}) {
+-  try {
+-    const plat = normalizarPlataforma(despues.plataforma || antes.plataforma || "");
+-    const ident = getStoredIdent(despues) || getStoredIdent(antes);
+-    const beforeDisp = getDisponibles(antes, plat);
+-    const afterDisp = getDisponibles(despues, plat);
+-    const newEstado = afterDisp <= 0 ? "llena" : "activa";
+-
+-    await ref.set(
+-      {
+-        estado: newEstado,
+-        disponibles: afterDisp,
+-        disp: afterDisp,
+-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+-      },
+-      { merge: true }
+-    );
+-
+-    if (beforeDisp > 0 && afterDisp <= 0 && chatId) {
+-      await bot.sendMessage(
+-        chatId,
+-        `🔴 *CUENTA LLENA*\n\n📌 ${escMD(humanPlatSafe(plat))}\n${getIdentIcon(plat)} ${escMD(ident)}`,
+-        { parse_mode: "Markdown" }
+-      );
+-    }
+-
+-    if (beforeDisp <= 0 && afterDisp > 0 && chatId) {
+-      await bot.sendMessage(
+-        chatId,
+-        `🟢 *CUENTA CON ESPACIO*\n\n📌 ${escMD(humanPlatSafe(plat))}\n${getIdentIcon(plat)} ${escMD(ident)}\n✅ Disponibles: ${afterDisp}`,
+-        { parse_mode: "Markdown" }
+-      );
+-    }
+-
+-    return true;
+-  } catch (e) {
+-    logErr("aplicarAutoLleno", e);
+-    return false;
+-  }
+-}
+-
+-// ===============================
+-// EXPORTS
+-// ===============================
+-module.exports = {
+-  buscarInventarioPorCorreo,
+-  enviarInventarioPlataforma,
+-  enviarInventarioPlataformaEstado,
+-  mostrarStockGeneral,
+-  enviarSubmenuInventario,
+-  buscarCorreoInventarioPorPlatCorreo,
+-  mostrarMenuClientesCorreo,
+-  mostrarListaCorreosPlataforma,
+-  mostrarPanelCorreo,
+-  responderMenuCodigosNetflix,
+-  responderCodigoNetflix,
+-  getCapacidadCorreo,
+-  aplicarAutoLleno,
+-  getMailPanelContext,
+-  getInventoryMoveToken,
+-  buscarCuentaInventarioPorMoveToken,
+-  moverCuentaInventarioPlataforma,
+-  actualizarCapacidadCuenta,
+-};
++/* ✅ SUBLICUENTAS TG BOT — PARTE 4/6 CORREGIDA Y COMPATIBLE
++   INVENTARIO / CUENTAS / PANEL POR CORREO-USUARIO
++   -----------------------------------------------
++   Compatible con index_05_finanzas_menus_2filas y index_06_handlers_columna_corregido
++
++   ✅ AJUSTES CLAVE:
++   - Se respeta correo || usuario en vistas y botones
++   - disneys ajustado a capacidad 3
++   - ✅ v4: Eliminada línea "Tipo:" innecesaria del panel de cuenta
++*/
++
++const {
++  bot,
++  admin,
++  db,
++  PLATAFORMAS,
++} = require("./index_01_core");
++
++const crypto = require("crypto");
++
++const {
++  escMD,
++  upsertPanel,
++  normalizarPlataforma,
++  isEmailLike,
++  logErr,
++} = require("./index_02_utils_roles");
++
++// ===============================
++// HELPERS BASE
++// ===============================
++const PLATFORM_KEYS = Array.isArray(PLATAFORMAS)
++  ? PLATAFORMAS
++  : Object.keys(PLATAFORMAS || {});
++
++function platMeta(key = "") {
++  if (Array.isArray(PLATAFORMAS)) return {};
++  return PLATAFORMAS[String(key || "").trim()] || {};
++}
++
++function getStoredIdent(data = {}) {
++  return String(data.correo || data.usuario || data.ident || "").trim();
++}
++
++function humanPlatSafe(key = "") {
++  const k = String(key || "").trim().toLowerCase();
++  const labels = {
++    netflix: "Netflix",
++    vipnetflix: "Netflix VIP",
++    disneyp: "Disney Premium",
++    disneys: "Disney Premium sin ESPN",
++    hbomax: "HBO Max",
++    primevideo: "Prime Video",
++    paramount: "Paramount+",
++    crunchyroll: "Crunchyroll",
++    vix: "Vix",
++    appletv: "Apple TV",
++    universal: "Universal+",
++    spotify: "Spotify",
++    office: "Office",
++    office2021: "Office 2021",
++    office365: "Office 365",
++    microsoft365: "Microsoft 365",
++    youtube: "YouTube",
++    deezer: "Deezer",
++    stellatv1: "Stella TV (1 dispositivo)",
++    stellatv2: "Stella TV (2 dispositivos)",
++    stellatv3: "Stella TV (3 dispositivos)",
++    oleadatv1: "Oleada TV (1 dispositivo)",
++    oleadatv3: "Oleada TV (3 dispositivos)",
++    latintv1: "LatinTV (1 dispositivo)",
++    latintv2: "LatinTV (2 dispositivos)",
++    latintv3: "LatinTV (3 dispositivos)",
++    latintv4: "LatinTV (4 dispositivos)",
++    liontv1: "LionTV (1 dispositivo)",
++    liontv2: "LionTV (2 dispositivos)",
++    liontv3: "LionTV (3 dispositivos)",
++    liontv5: "LionTV (5 dispositivos)",
++    evoutouch1: "Nanotech (1 dispositivo)", evoutouch2: "Nanotech (2 dispositivos)", evoutouch3: "Nanotech (3 dispositivos)", evoutouch4: "Nanotech (1 dispositivo)", icomplay1: "ICOMPLAY (1)", icomplay2: "ICOMPLAY (2)", icomplay3: "ICOMPLAY (3)", icomplay5: "ICOMPLAY (5)", icomplay7: "ICOMPLAY (7)",
++    iptv1: "IPTV anterior (1)",
++    iptv3: "IPTV anterior (3)",
++    iptv4: "IPTV anterior (4)",
++    canva: "Canva",
++    gemini: "Gemini Pro",
++    chatgpt: "ChatGPT",
++    duolingo: "Duolingo",
++  };
++  return labels[k] || platMeta(k)?.nombre || k;
++}
++
++function isUserPlatform(plataforma = "") {
++  const p = normalizarPlataforma(plataforma);
++  return [
++    "stellatv1", "stellatv2", "stellatv3",
++    "oleadatv1", "oleadatv3",
++    "latintv1", "latintv2", "latintv3", "latintv4",
++    "liontv1", "liontv2", "liontv3", "liontv5",
++    "evoutouch1", "evoutouch2", "evoutouch3",
++    "icomplay1", "icomplay2", "icomplay3", "icomplay5", "icomplay7",
++    "iptv1", "iptv3", "iptv4",
++  ].includes(p);
++}
++
++function isNetflixPlatform(plataforma = "") {
++  const p = normalizarPlataforma(plataforma);
++  return p === "netflix" || p === "vipnetflix";
++}
++
++function isSoloCorreoPlatform(plataforma = "") {
++  const p = normalizarPlataforma(plataforma);
++  return ["canva", "gemini", "chatgpt", "duolingo"].includes(p);
++}
++
++function requiresPinPlatform(plataforma = "") {
++  const p = normalizarPlataforma(plataforma);
++  return [
++    "netflix",
++    "disneyp",
++    "disneys",
++    "hbomax",
++    "primevideo",
++    "crunchyroll",
++    "universal",
++  ].includes(p);
++}
++
++function requiresClavePlatform(plataforma = "") {
++  return !isSoloCorreoPlatform(plataforma);
++}
++
++function getPinFromAny(data = {}) {
++  const keys = [
++    "pin", "PIN", "pinPerfil", "pin_perfil", "perfilPin", "perfil_pin",
++    "profilePin", "profile_pin", "pinProfile", "pin_profile",
++    "pinCliente", "pin_cliente", "pinCuenta", "pin_cuenta",
++  ];
++  for (const k of keys) {
++    const v = data && data[k];
++    if (v !== undefined && v !== null && String(v).trim()) return String(v).trim();
++  }
++  return "";
++}
++
++function getIdentLabel(plataforma = "") {
++  return isUserPlatform(plataforma) ? "Usuario" : "Correo";
++}
++
++function getIdentIcon(plataforma = "") {
++  return isUserPlatform(plataforma) ? "👤" : "📧";
++}
++
++function getAccessTypeLabel(plataforma = "") {
++  const p = normalizarPlataforma(plataforma);
++  if (isSoloCorreoPlatform(p)) return "Solo correo";
++  if (isUserPlatform(p)) return "Usuario + clave";
++  if (requiresPinPlatform(p)) return "Correo + clave + PIN";
++  return "Correo + clave";
++}
++
++function normalizeAccess(plataforma = "", acceso = "") {
++  const p = normalizarPlataforma(plataforma);
++  const v = String(acceso || "").trim();
++  if (isUserPlatform(p)) return v;
++  return v.toLowerCase();
++}
++
++function docIdInventario(acceso = "", plataforma = "") {
++  const p = normalizarPlataforma(plataforma);
++  const a = normalizeAccess(p, acceso)
++    .toLowerCase()
++    .replace(/[.#$/\[\]\s]+/g, "_");
++  return `${p}__${a}`;
++}
++
++function getCapacidadCorreo(data = {}, plataforma = "") {
++  const p = normalizarPlataforma(plataforma || data.plataforma || "");
++  const defaults = {
++    netflix: 5,
++    vipnetflix: 1,
++    disneyp: 6,
++    disneys: 3,
++    hbomax: 5,
++    primevideo: 5,
++    paramount: 5,
++    crunchyroll: 5,
++    vix: 4,
++    appletv: 4,
++    universal: 4,
++    spotify: 1,
++    youtube: 1,
++    deezer: 1,
++    office: 1,
++    office2021: 1,
++    office365: 1,
++    microsoft365: 1,
++    stellatv1: 1,
++    stellatv2: 2,
++    stellatv3: 3,
++    oleadatv1: 1,
++    oleadatv3: 3,
++    latintv1: 1,
++    latintv2: 2,
++    latintv3: 3,
++    latintv4: 4,
++    liontv1: 1,
++    liontv2: 2,
++    liontv3: 3,
++    liontv5: 5,
++    evoutouch1: 1, evoutouch2: 2, evoutouch3: 3, evoutouch4: 1, icomplay1: 1, icomplay2: 2, icomplay3: 3, icomplay5: 5, icomplay7: 7,
++    iptv1: 1,
++    iptv3: 3,
++    iptv4: 4,
++    canva: 1,
++    gemini: 1,
++    chatgpt: 1,
++    duolingo: 1,
++  };
++
++  const n = Number(data.capacidad || data.total || 0);
++  if (Number.isFinite(n) && n > 0) return n;
++  return defaults[p] || 1;
++}
++
++function getClientesArray(data = {}) {
++  return Array.isArray(data.clientes) ? data.clientes : [];
++}
++
++// Oct-2026 · Los cupos salen de los clientes realmente asignados (clientes[]).
++// Los contadores guardados (ocupados/disponibles/disp) podían quedar viejos y mostrar
++// una cuenta llena con menos clientes de los reales; ya no mandan si existe la lista.
++function getOcupados(data = {}) {
++  if (Array.isArray(data.clientes)) return data.clientes.length;
++  const n = Number(data.ocupados);
++  return Number.isFinite(n) && n >= 0 ? n : 0;
++}
++
++function getDisponibles(data = {}, plataforma = "") {
++  const capacidad = getCapacidadCorreo(data, plataforma);
++  const ocupados = getOcupados(data);
++  return Math.max(0, capacidad - ocupados);
++}
++
++function getEstado(data = {}, plataforma = "") {
++  const disp = getDisponibles(data, plataforma);
++  return disp <= 0 ? "llena" : "activa";
++}
++
++function boolHasCodes(data = {}) {
++  const keys = [
++    "codigo", "code", "codigo_hogar", "hogarCode", "hogar_code",
++    "codigo_temporal", "tempCode", "pin_hogar", "pin_temporal",
++  ];
++  return keys.some((k) => data[k]);
++}
++
++function formatCuentaResumen(data = {}, plataforma = "") {
++  const capacidad = getCapacidadCorreo(data, plataforma);
++  const ocupados = getOcupados(data);
++  const disponibles = getDisponibles(data, plataforma);
++  const estado = getEstado(data, plataforma) === "llena" ? "🔴 LLENA" : "🟢 ACTIVA";
++  return { capacidad, ocupados, disponibles, estado };
++}
++
++function normalizeLooseText(txt = "") {
++  return String(txt || "")
++    .toLowerCase()
++    .normalize("NFD")
++    .replace(/[\u0300-\u036f]/g, "")
++    .replace(/\s+/g, " ")
++    .trim();
++}
++
++function pairButtons(buttons = []) {
++  const rows = [];
++  for (let i = 0; i < buttons.length; i += 2) {
++    rows.push(buttons.slice(i, i + 2));
++  }
++  return rows;
++}
++
++function scoreMatch(value = "", query = "") {
++  const v = normalizeLooseText(value);
++  const q = normalizeLooseText(query);
++  if (!v || !q) return 0;
++  if (v === q) return 100;
++  if (v.startsWith(q)) return 80;
++  if (v.includes(q)) return 50;
++  return 0;
++}
++
++// ===============================
++// BÚSQUEDAS INVENTARIO
++// ===============================
++async function buscarInventarioPorCorreo(query = "") {
++  const q = String(query || "").trim();
++  if (!q) return [];
++
++  try {
++    const snap = await require("./index_30_espejo_firestore").getColeccion("inventario");
++    const out = [];
++
++    snap.forEach((doc) => {
++      const data = doc.data() || {};
++      const plat = normalizarPlataforma(data.plataforma || "");
++      const acceso = getStoredIdent(data);
++      const clave = String(data.clave || "");
++      const nombrePlat = humanPlatSafe(plat);
++
++      let score = 0;
++      score = Math.max(score, scoreMatch(acceso, q));
++      score = Math.max(score, scoreMatch(clave, q));
++      score = Math.max(score, scoreMatch(nombrePlat, q));
++      score = Math.max(score, scoreMatch(plat, q));
++
++      if (score > 0) {
++        out.push({
++          id: doc.id,
++          ...data,
++          plataforma: plat,
++          _score: score,
++        });
++      }
++    });
++
++    out.sort((a, b) => {
++      if ((b._score || 0) !== (a._score || 0)) return (b._score || 0) - (a._score || 0);
++      const da = getDisponibles(a, a.plataforma);
++      const dbb = getDisponibles(b, b.plataforma);
++      if (dbb !== da) return dbb - da;
++      return getStoredIdent(a).localeCompare(getStoredIdent(b), "es", { sensitivity: "base" });
++    });
++
++    return out.slice(0, 30);
++  } catch (e) {
++    logErr("buscarInventarioPorCorreo", e);
++    return [];
++  }
++}
++
++async function buscarCorreoInventarioPorPlatCorreo(plataforma = "", acceso = "") {
++  const plat = normalizarPlataforma(plataforma);
++  const ident = String(acceso || "").trim();
++  if (!plat || !ident) return null;
++
++  try {
++    const id = docIdInventario(ident, plat);
++    const byId = await db.collection("inventario").doc(id).get();
++    if (byId.exists) {
++      return { id: byId.id, ref: byId.ref, data: byId.data() || {} };
++    }
++
++    const snap = await db.collection("inventario").where("plataforma", "==", plat).get();
++    const exactNorm = normalizeAccess(plat, ident);
++    let partial = null;
++
++    for (const doc of snap.docs) {
++      const data = doc.data() || {};
++      const stored = normalizeAccess(plat, getStoredIdent(data));
++      if (stored === exactNorm) {
++        return { id: doc.id, ref: doc.ref, data };
++      }
++      if (!partial && stored.includes(normalizeLooseText(exactNorm))) {
++        partial = { id: doc.id, ref: doc.ref, data };
++      }
++    }
++
++    return partial;
++  } catch (e) {
++    logErr("buscarCorreoInventarioPorPlatCorreo", e);
++    return null;
++  }
++}
++
++// ===============================
++// CONTEXTO DEL PANEL + MOVER CUENTA ENTRE PLATAFORMAS
++// ===============================
++const MAIL_PANEL_CTX = global.__SUBLICUENTAS_MAIL_PANEL_CTX__ || new Map();
++global.__SUBLICUENTAS_MAIL_PANEL_CTX__ = MAIL_PANEL_CTX;
++
++function setMailPanelContext(chatId, ctx = {}) {
++  if (chatId === undefined || chatId === null) return;
++  MAIL_PANEL_CTX.set(String(chatId), {
++    docId: String(ctx.docId || ""),
++    plataforma: normalizarPlataforma(ctx.plataforma || ""),
++    acceso: String(ctx.acceso || "").trim(),
++    updatedAt: Date.now(),
++  });
++}
++
++function getMailPanelContext(chatId) {
++  const ctx = MAIL_PANEL_CTX.get(String(chatId));
++  if (!ctx) return null;
++  // Evita reutilizar una cuenta vieja horas después.
++  if (Date.now() - Number(ctx.updatedAt || 0) > 30 * 60 * 1000) {
++    MAIL_PANEL_CTX.delete(String(chatId));
++    return null;
++  }
++  return { ...ctx };
++}
++
++// Token corto y estable para callbacks de Telegram.
++// NO depende de memoria RAM/pending: si el bot reinicia entre dos clics,
++// el callback todavía puede resolver la cuenta real desde Firestore.
++function getInventoryMoveToken(docId = "") {
++  const id = String(docId || "").trim();
++  if (!id) return "";
++  return crypto.createHash("sha256").update(id).digest("base64url").slice(0, 16);
++}
++
++async function buscarCuentaInventarioPorMoveToken(token = "") {
++  const wanted = String(token || "").trim();
++  if (!wanted) return null;
++
++  try {
++    const snap = await require("./index_30_espejo_firestore").getColeccion("inventario");
++    let found = null;
++    for (const doc of snap.docs) {
++      if (getInventoryMoveToken(doc.id) !== wanted) continue;
++      // Una colisión de 96 bits es extremadamente improbable, pero si pasara
++      // preferimos no tocar nada antes que mover la cuenta equivocada.
++      if (found) throw new Error("Token de cuenta ambiguo. Abra nuevamente la cuenta.");
++      found = { id: doc.id, ref: doc.ref, data: doc.data() || {} };
++    }
++    return found;
++  } catch (e) {
++    logErr("buscarCuentaInventarioPorMoveToken", e);
++    throw e;
++  }
++}
++
++async function actualizarCapacidadCuenta(docId, valor) {
++  const text = String(valor == null ? "" : valor).trim();
++  const capacidad = Number(text);
++  if (!/^[1-9]\d*$/.test(text) || !Number.isSafeInteger(capacidad)) {
++    throw new Error("Escriba la cantidad TOTAL de perfiles como número entero, por ejemplo: 7.");
++  }
++  if (!String(docId || "").trim()) throw new Error("Abra nuevamente la cuenta.");
++  const ref = db.collection("inventario").doc(String(docId));
++  return db.runTransaction(async tx => {
++    const snap = await tx.get(ref);
++    if (!snap.exists) throw new Error("La cuenta ya no existe. Abra nuevamente Inventario.");
++    const data = snap.data() || {};
++    const ocupados = getClientesArray(data).length;
++    if (capacidad < ocupados) throw new Error(`La cuenta tiene ${ocupados} clientes asociados. La capacidad no puede ser menor que ${ocupados}.`);
++    const disponibles = capacidad - ocupados;
++    const estadoActual = String(data.estado || "").trim().toLowerCase();
++    const patch = {capacidad, ocupados, disponibles, disp:disponibles, updatedAt:admin.firestore.FieldValue.serverTimestamp()};
++    // Cambiar cupos no debe reactivar una cuenta suspendida o bloqueada.
++    if (!estadoActual || ["activa", "llena"].includes(estadoActual)) patch.estado = disponibles ? "activa" : "llena";
++    if (data.total != null) patch.total = capacidad;
++    tx.set(ref, patch, {merge:true});
++    return {docId:String(docId), plataforma:normalizarPlataforma(data.plataforma || ""), ident:getStoredIdent(data),
++      anterior:getCapacidadCorreo(data, data.plataforma), capacidad, ocupados, disponibles};
++  });
++}
++
++async function moverCuentaInventarioPlataforma(docId = "", nuevaPlataforma = "") {
++  const id = String(docId || "").trim();
++  const nueva = normalizarPlataforma(nuevaPlataforma);
++  if (!id || !nueva || !PLATFORM_KEYS.includes(nueva)) {
++    throw new Error("Plataforma destino inválida.");
++  }
++
++  const srcRef = db.collection("inventario").doc(id);
++  const srcSnap = await srcRef.get();
++  if (!srcSnap.exists) throw new Error("La cuenta ya no existe en Bodega.");
++
++  const src = srcSnap.data() || {};
++  const anterior = normalizarPlataforma(src.plataforma || "");
++  const ident = getStoredIdent(src);
++  if (!ident) throw new Error("La cuenta no tiene correo/usuario para moverla.");
++  if (anterior === nueva) {
++    return { ok: true, sinCambios: true, anterior, nueva, ident, docId: srcSnap.id, data: src };
++  }
++
++  // No permitir que dos documentos terminen representando la misma cuenta.
++  const exactaDestino = await buscarCorreoInventarioPorPlatCorreo(nueva, ident);
++  if (exactaDestino && exactaDestino.id !== srcSnap.id) {
++    const stored = normalizeAccess(nueva, getStoredIdent(exactaDestino.data || {}));
++    const wanted = normalizeAccess(nueva, ident);
++    if (stored === wanted) {
++      throw new Error(`Ya existe ${humanPlatSafe(nueva)} con ese ${getIdentLabel(nueva).toLowerCase()}. No se movió nada.`);
++    }
++  }
++
++  const clientes = getClientesArray(src);
++  const capActual = Math.max(1, Number(src.capacidad || src.total || 0) || getCapacidadCorreo(src, anterior));
++  const defaultAnterior = getCapacidadCorreo({}, anterior);
++  const defaultNueva = getCapacidadCorreo({}, nueva);
++  // Si la capacidad era exactamente el valor por defecto de la plataforma mal puesta,
++  // adopta el default de la plataforma correcta. Una capacidad personalizada se conserva.
++  const capBase = capActual === defaultAnterior ? defaultNueva : capActual;
++  const capacidad = Math.max(clientes.length, capBase, 1);
++  const ocupados = clientes.length;
++  const disponibles = Math.max(0, capacidad - ocupados);
++
++  const ahora = admin.firestore.FieldValue.serverTimestamp();
++  const destino = {
++    plataforma: nueva,
++    capacidad,
++    ocupados,
++    disponibles,
++    disp: disponibles,
++    estado: disponibles <= 0 ? "llena" : "activa",
++    movedFromPlatform: anterior,
++    accountId: srcSnap.id,
++    updatedAt: ahora,
++  };
++
++  // Oct-2026: la cuenta cambia de plataforma EN SU MISMO documento. Antes se creaba un documento
++  // nuevo y se borraba el viejo: el accountId cambiaba y las fichas enlazadas perdían el vínculo.
++  await db.runTransaction(async (tx) => {
++    const srcNow = await tx.get(srcRef);
++    if (!srcNow.exists) throw new Error("La cuenta desapareció durante el cambio.");
++    tx.set(srcRef, destino, { merge: true });
++  });
++
++  return { ok: true, anterior, nueva, ident, docId: srcSnap.id, data: { ...src, ...destino }, capacidad, ocupados, disponibles };
++}
++
++// ===============================
++// VISTAS INVENTARIO
++// ===============================
++async function getInventarioRowsByPlataforma(plataforma = "") {
++  const plat = normalizarPlataforma(plataforma);
++  let rows = [];
++
++  try {
++    const snap = await db.collection("inventario").where("plataforma", "==", plat).get();
++    rows = snap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
++  } catch (e) {
++    logErr("getInventarioRowsByPlataforma.where", e);
++  }
++
++  if (!rows.length) {
++    try {
++      const snapAll = await require("./index_30_espejo_firestore").getColeccion("inventario");
++      rows = snapAll.docs
++        .map((d) => ({ id: d.id, ...(d.data() || {}) }))
++        .filter((r) => normalizarPlataforma(r.plataforma || "") === plat);
++    } catch (e) {
++      logErr("getInventarioRowsByPlataforma.fallback", e);
++      rows = [];
++    }
++  }
++
++  // Cuenta más vacía primero: menor % de ocupación; empate → más libres; llenas al final.
++  rows.sort((a, b) => {
++    const ca = Math.max(1, getCapacidadCorreo(a, plat)), cb = Math.max(1, getCapacidadCorreo(b, plat));
++    const la = getDisponibles(a, plat), lb = getDisponibles(b, plat);
++    if ((la > 0) !== (lb > 0)) return la > 0 ? -1 : 1;
++    const pa = getOcupados(a) / ca, pb = getOcupados(b) / cb;
++    if (pa !== pb) return pa - pb;
++    if (lb !== la) return lb - la;
++    return getStoredIdent(a).localeCompare(getStoredIdent(b), "es", { sensitivity: "base" });
++  });
++
++  return rows;
++}
++
++async function enviarInventarioPlataforma(chatId, plataforma = "", page = 0) {
++  const plat = normalizarPlataforma(plataforma);
++
++  try {
++    const rows = await getInventarioRowsByPlataforma(plat);
++    const disponibles = rows.filter((r) => getDisponibles(r, plat) > 0);
++    const llenas = rows.filter((r) => getDisponibles(r, plat) <= 0);
++
++    const platLabel = humanPlatSafe(plat).toUpperCase();
++    let txt = `*${escMD(platLabel)}*\n\nDisponibles: ${disponibles.length}\nLlenas: ${llenas.length}`;
++
++    return upsertPanel(
++      chatId,
++      txt,
++      [
++        [
++          { text: `🟢 Disponibles (${disponibles.length})`, callback_data: `invf:${plat}:disponibles:0` },
++          { text: `🔴 Llenas (${llenas.length})`, callback_data: `invf:${plat}:llenas:0` },
++        ],
++        [{ text: "➕ Nueva cuenta", callback_data: `inv:new:plat:${plat}` }],
++        [
++          { text: "⬅️ Volver Inventario", callback_data: "menu:inventario" },
++          { text: "🏠 Inicio", callback_data: "go:inicio" },
++        ],
++      ]
++    );
++  } catch (e) {
++    logErr("enviarInventarioPlataforma.selector", e);
++    return bot.sendMessage(chatId, "⚠️ Error al abrir inventario de esa plataforma.");
++  }
++}
++
++async function enviarInventarioPlataformaEstado(chatId, plataforma = "", filtro = "disponibles", page = 0) {
++  const plat = normalizarPlataforma(plataforma);
++  const pageSize = 10;
++  const filtroNorm = String(filtro || "").toLowerCase() === "llenas" ? "llenas" : "disponibles";
++
++  try {
++    const rowsAll = await getInventarioRowsByPlataforma(plat);
++    const rows = filtroNorm === "llenas"
++      ? rowsAll.filter((r) => getDisponibles(r, plat) <= 0)
++      : rowsAll.filter((r) => getDisponibles(r, plat) > 0);
++
++    if (!rows.length) {
++      return upsertPanel(
++        chatId,
++        `*${escMD(humanPlatSafe(plat).toUpperCase())}*\n\nNo hay cuentas en la seccion ${filtroNorm === "llenas" ? "llenas" : "disponibles"}.`,
++        [
++          [
++            { text: "⬅️ Volver plataforma", callback_data: `inv:${plat}:0` },
++            { text: "🏠 Inicio", callback_data: "go:inicio" },
++          ],
++        ]
++      );
++    }
++
++    const totalPages = Math.max(1, Math.ceil(rows.length / pageSize));
++    const safePage = Math.max(0, Math.min(Number(page || 0), totalPages - 1));
++    const start = safePage * pageSize;
++    const slice = rows.slice(start, start + pageSize);
++
++    const emojiEstado = filtroNorm === "llenas" ? "🔴" : "🟢";
++    const tituloEstado = filtroNorm === "llenas" ? "LLENAS" : "DISPONIBLES";
++
++    let txt = `*${escMD(humanPlatSafe(plat).toUpperCase())}*\n`;
++    txt += `*${tituloEstado}*\n`;
++    txt += `Pagina *${safePage + 1}/${totalPages}*\n\n`;
++
++    slice.forEach((r, idx) => {
++      const ident = getStoredIdent(r);
++      const { capacidad, ocupados, disponibles } = formatCuentaResumen(r, plat);
++      const recomendada = filtroNorm === "disponibles" && safePage === 0 && idx === 0 && capacidad > 1;
++      const sobre = ocupados > capacidad ? " ⚠️ SOBREASIGNADA" : "";
++      txt += `*${start + idx + 1}.* ${filtroNorm === "llenas" ? "[X]" : "[OK]"} ${getIdentIcon(plat)} ${escMD(ident)}${recomendada ? " ⭐ *MÁS VACÍA*" : ""}${sobre}\n`;
++      txt += `   Perfiles: ${ocupados}/${capacidad} • OK ${disponibles}\n`;
++      if (requiresClavePlatform(plat) && r.clave) txt += `   Clave: ${escMD(String(r.clave))}\n`;
++      const pin = getPinFromAny(r);
++      if (requiresPinPlatform(plat) && pin) txt += `   PIN: ${escMD(pin)}\n`;
++    });
++
++    const kb = slice.map((r) => {
++      const ident = getStoredIdent(r);
++      return [
++        {
++          text: `${filtroNorm === "llenas" ? "🔴" : "🟢"} ${ident} • ${getDisponibles(r, plat)}/${getCapacidadCorreo(r, plat)}`,
++          callback_data: `inv:open:${plat}:${encodeURIComponent(String(ident || ""))}`,
++        },
++      ];
++    });
++
++    const nav = [];
++    if (safePage > 0) nav.push({ text: "⬅️ Anterior", callback_data: `invf:${plat}:${filtroNorm}:${safePage - 1}` });
++    if (safePage < totalPages - 1) nav.push({ text: "Siguiente ➡️", callback_data: `invf:${plat}:${filtroNorm}:${safePage + 1}` });
++    if (nav.length) kb.push(nav);
++
++    kb.push([
++      { text: "⬅️ Volver plataforma", callback_data: `inv:${plat}:0` },
++      { text: "🏠 Inicio", callback_data: "go:inicio" },
++    ]);
++
++    return upsertPanel(chatId, txt, kb);
++  } catch (e) {
++    logErr("enviarInventarioPlataformaEstado", e);
++    return bot.sendMessage(chatId, "⚠️ Error al listar cuentas de esa plataforma.");
++  }
++}
++
++async function mostrarListaCorreosPlataforma(chatId, plataforma = "") {
++  return enviarInventarioPlataforma(chatId, plataforma, 0);
++}
++
++async function mostrarStockGeneral(chatId) {
++  try {
++    const snap = await require("./index_30_espejo_firestore").getColeccion("inventario");
++    const map = {};
++
++    snap.forEach((doc) => {
++      const data = doc.data() || {};
++      let plat = normalizarPlataforma(data.plataforma || "");
++      if (!plat) return;
++      if (plat === "evoutouch4") plat = "evoutouch1"; // alias legado = Nanotech 1 dispositivo
++      if (!map[plat]) {
++        map[plat] = {
++          cuentas: 0,
++          capacidad: 0,
++          ocupados: 0,
++          disponibles: 0,
++        };
++      }
++      map[plat].cuentas += 1;
++      map[plat].capacidad += getCapacidadCorreo(data, plat);
++      map[plat].ocupados += getOcupados(data);
++      map[plat].disponibles += getDisponibles(data, plat);
++    });
++
++    const keys = Object.keys(map).sort((a, b) => {
++      return humanPlatSafe(a).localeCompare(humanPlatSafe(b), "es", { sensitivity: "base" });
++    });
++
++    let txt = "STOCK *STOCK GENERAL*\n\n";
++    if (!keys.length) {
++      txt += "_No hay cuentas cargadas en inventario._";
++    } else {
++      for (const k of keys) {
++        const x = map[k];
++        txt += `*${escMD(humanPlatSafe(k))}*\n`;
++        txt += `    Cuentas: ${x.cuentas}\n`;
++        txt += `   Perfiles: Ocupados: ${x.ocupados}/${x.capacidad}\n`;
++        txt += `   OK Disponibles: ${x.disponibles}\n\n`;
++      }
++    }
++
++    return upsertPanel(
++      chatId,
++      txt,
++      [
++        [{ text: "⬅️ Volver Inventario", callback_data: "menu:inventario" }],
++        [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
++      ]
++    );
++  } catch (e) {
++    logErr("mostrarStockGeneral", e);
++    return bot.sendMessage(chatId, "⚠️ Error al generar stock general.");
++  }
++}
++
++// ===============================
++// ✅ PANEL DE CUENTA — sin línea "Tipo:"
++// ===============================
++async function mostrarPanelCorreo(chatId, plataforma = "", acceso = "") {
++  const plat = normalizarPlataforma(plataforma);
++  const found = await buscarCorreoInventarioPorPlatCorreo(plat, acceso);
++  if (!found) return bot.sendMessage(chatId, "⚠️ Esa cuenta no existe en inventario.");
++
++  const data = found.data || {};
++  const ident = getStoredIdent(data) || String(acceso || "");
++  setMailPanelContext(chatId, { docId: found.id, plataforma: plat, acceso: ident });
++  const clave = String(data.clave || "").trim();
++  const pin = getPinFromAny(data);
++  const { capacidad, ocupados, disponibles, estado } = formatCuentaResumen(data, plat);
++
++  // Panel compacto para que ocupe menos pantalla
++  let txt = ` *${escMD(humanPlatSafe(plat))}*\n`;
++  txt += `${getIdentIcon(plat)} ${escMD(ident)}\n`;
++  if (requiresClavePlatform(plat)) txt += `Clave: ${escMD(clave || "Sin clave")}\n`;
++  if (requiresPinPlatform(plat) && pin) txt += `PIN: ${escMD(pin)}\n`;
++  txt += `Perfiles: ${ocupados}/${capacidad} · OK ${disponibles}\n`;
++  txt += `${escMD(estado)}`;
++
++  if (isNetflixPlatform(plat) && boolHasCodes(data)) {
++    txt += `\n\nNota: Tiene datos/códigos de Netflix disponibles.`;
++  }
++
++  const kb = [
++    [{ text: "👥 Clientes", callback_data: `mail_menu_clientes|${plat}|${encodeURIComponent(ident)}` }],
++  ];
++
++  if (isNetflixPlatform(plat) && boolHasCodes(data)) {
++    kb.push([{ text: "🔑 Ver códigos Netflix", callback_data: `mail_menu_codigos|${plat}|${encodeURIComponent(ident)}` }]);
++  }
++
++  if (requiresClavePlatform(plat)) {
++    kb.push([
++      { text: "✏️ Editar clave", callback_data: `mail_edit_clave|${plat}|${encodeURIComponent(ident)}` },
++      { text: "✉️ Editar correo", callback_data: `mail_edit_correo|${plat}|${encodeURIComponent(ident)}` },
++    ]);
++  } else {
++    kb.push([{ text: "✉️ Editar correo", callback_data: `mail_edit_correo|${plat}|${encodeURIComponent(ident)}` }]);
++  }
++
++  const moveToken = getInventoryMoveToken(found.id);
++  kb.push([{ text: "✏️ Cambiar cantidad de perfiles", callback_data: `mail_edit_capacidad|${moveToken}` }]);
++  kb.push([{ text: "🔄 Cambiar plataforma de esta cuenta", callback_data: `mail_move_platform|${moveToken}` }]);
++  kb.push([{ text: "🗑️ Borrar cuenta", callback_data: `mail_delete|${plat}|${encodeURIComponent(ident)}` }]);
++
++  kb.push([
++    { text: "⬅️ Volver plataforma", callback_data: `inv:${plat}:0` },
++    { text: "🏠 Inicio", callback_data: "go:inicio" },
++  ]);
++
++  return upsertPanel(chatId, txt, kb);
++}
++
++async function enviarSubmenuInventario(chatId, plataforma = "", acceso = "") {
++  return mostrarPanelCorreo(chatId, plataforma, acceso);
++}
++
++async function mostrarMenuClientesCorreo(chatId, plataforma = "", acceso = "") {
++  const plat = normalizarPlataforma(plataforma);
++  const found = await buscarCorreoInventarioPorPlatCorreo(plat, acceso);
++  if (!found) return bot.sendMessage(chatId, "⚠️ Esa cuenta no existe en inventario.");
++
++  const data = found.data || {};
++  const ident = getStoredIdent(data) || String(acceso || "");
++  const { capacidad, ocupados, disponibles, estado } = formatCuentaResumen(data, plat);
++
++  const txt =
++    `👥 *CLIENTES DE LA CUENTA*\n\n` +
++    `📌 *Plataforma:* ${escMD(humanPlatSafe(plat))}\n` +
++    `${getIdentIcon(plat)} *${escMD(getIdentLabel(plat))}:* ${escMD(ident)}\n` +
++    `👥 *Ocupados:* ${ocupados}/${capacidad}\n` +
++    `✅ *Disponibles:* ${disponibles}\n` +
++    `📊 *Estado:* ${escMD(estado)}\n\n` +
++    `Seleccione una acción:`;
++
++  return upsertPanel(
++    chatId,
++    txt,
++    [
++      [
++        { text: "➕ Agregar cliente", callback_data: `mail_add_cliente|${plat}|${encodeURIComponent(ident)}` },
++        { text: "➖ Quitar cliente", callback_data: `mail_del_cliente|${plat}|${encodeURIComponent(ident)}` },
++      ],
++      requiresPinPlatform(plat)
++        ? [
++            { text: "🔐 Editar PIN cliente", callback_data: `mail_edit_pin|${plat}|${encodeURIComponent(ident)}` },
++            { text: "👥 Ver clientes", callback_data: `mail_ver_clientes|${plat}|${encodeURIComponent(ident)}` },
++          ]
++        : [
++            { text: "👥 Ver clientes", callback_data: `mail_ver_clientes|${plat}|${encodeURIComponent(ident)}` },
++          ],
++      [{ text: "✏️ Cambiar cantidad de perfiles", callback_data: `mail_edit_capacidad|${getInventoryMoveToken(found.id)}` }],
++      [
++        { text: "⬅️ Cuenta", callback_data: `mail_panel|${plat}|${encodeURIComponent(ident)}` },
++        { text: "🏠 Inicio", callback_data: "go:inicio" },
++      ],
++    ]
++  );
++}
++
++// ===============================
++// NETFLIX CÓDIGOS
++// ===============================
++async function responderMenuCodigosNetflix(chatId, plataforma = "", acceso = "") {
++  const plat = normalizarPlataforma(plataforma);
++  const found = await buscarCorreoInventarioPorPlatCorreo(plat, acceso);
++  if (!found) return bot.sendMessage(chatId, "⚠️ Esa cuenta no existe en inventario.");
++
++  const data = found.data || {};
++  const ident = getStoredIdent(data) || String(acceso || "");
++
++  const txt =
++    `🔑 *CÓDIGOS / DATOS NETFLIX*\n\n` +
++    `📌 *Plataforma:* ${escMD(humanPlatSafe(plat))}\n` +
++    `📧 *Cuenta:* ${escMD(ident)}\n\n` +
++    `Seleccione qué desea ver:`;
++
++  const kb = [
++    [
++      { text: "🔐 Login", callback_data: `nf_code|login|${encodeURIComponent(ident)}` },
++      { text: "🏠 Código hogar", callback_data: `nf_code|hogar|${encodeURIComponent(ident)}` },
++    ],
++  ];
++
++  if (requiresPinPlatform(plat)) {
++    kb.push([
++      { text: "⏱️ Código temporal", callback_data: `nf_code|temporal|${encodeURIComponent(ident)}` },
++      { text: "📌 PIN / perfil", callback_data: `nf_code|pin|${encodeURIComponent(ident)}` },
++    ]);
++  } else {
++    kb.push([{ text: "⏱️ Código temporal", callback_data: `nf_code|temporal|${encodeURIComponent(ident)}` }]);
++  }
++
++  kb.push([
++    { text: "⬅️ Cuenta", callback_data: `mail_panel|${plat}|${encodeURIComponent(ident)}` },
++    { text: "🏠 Inicio", callback_data: "go:inicio" },
++  ]);
++
++  return upsertPanel(chatId, txt, kb);
++}
++
++async function responderCodigoNetflix(chatId, acceso = "", tipo = "") {
++  const ident = String(acceso || "").trim();
++  const tipoNorm = String(tipo || "").trim().toLowerCase();
++
++  const plats = ["netflix", "vipnetflix"];
++  let found = null;
++  for (const p of plats) {
++    found = await buscarCorreoInventarioPorPlatCorreo(p, ident);
++    if (found) break;
++  }
++
++  if (!found) return bot.sendMessage(chatId, "⚠️ No encontré esa cuenta de Netflix.");
++
++  const data = found.data || {};
++  const plat = normalizarPlataforma(data.plataforma || "");
++  const cuenta = getStoredIdent(data) || ident;
++
++  const maps = {
++    login: [
++      ["Correo", cuenta],
++      ["Clave", data.clave || "Sin clave"],
++    ],
++    hogar: [
++      ["Código hogar", data.codigo_hogar || data.hogarCode || data.hogar_code || data.hogar || "No disponible"],
++    ],
++    temporal: [
++      ["Código temporal", data.codigo_temporal || data.tempCode || data.temporal || data.codigo || data.code || "No disponible"],
++    ],
++    pin: [
++      ["PIN", getPinFromAny(data) || data.pin_hogar || data.pin_temporal || "No disponible"],
++      ["Perfil", data.perfil || data.profile || "No disponible"],
++    ],
++  };
++
++  const rows = maps[tipoNorm] || [["Dato", "No disponible"]];
++  let txt = `Clave: *NETFLIX — ${escMD(tipoNorm.toUpperCase())}*\n\n`;
++  txt += `📧 *Cuenta:* ${escMD(cuenta)}\n`;
++  txt += `📌 *Plataforma:* ${escMD(humanPlatSafe(plat))}\n\n`;
++
++  rows.forEach(([k, v]) => {
++    txt += `*${escMD(String(k))}:* ${escMD(String(v || "No disponible"))}\n`;
++  });
++
++  return upsertPanel(
++    chatId,
++    txt,
++    [
++      [
++        { text: "⬅️ Volver códigos", callback_data: `mail_menu_codigos|${plat}|${encodeURIComponent(cuenta)}` },
++        { text: "🏠 Inicio", callback_data: "go:inicio" },
++      ],
++    ]
++  );
++}
++
++// ===============================
++// AUTO LLENO
++// ===============================
++async function aplicarAutoLleno(chatId, ref, antes = {}, despues = {}) {
++  try {
++    const plat = normalizarPlataforma(despues.plataforma || antes.plataforma || "");
++    const ident = getStoredIdent(despues) || getStoredIdent(antes);
++    const beforeDisp = getDisponibles(antes, plat);
++    const afterDisp = getDisponibles(despues, plat);
++    const newEstado = afterDisp <= 0 ? "llena" : "activa";
++
++    await ref.set(
++      {
++        estado: newEstado,
++        disponibles: afterDisp,
++        disp: afterDisp,
++        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
++      },
++      { merge: true }
++    );
++
++    if (beforeDisp > 0 && afterDisp <= 0 && chatId) {
++      await bot.sendMessage(
++        chatId,
++        `🔴 *CUENTA LLENA*\n\n📌 ${escMD(humanPlatSafe(plat))}\n${getIdentIcon(plat)} ${escMD(ident)}`,
++        { parse_mode: "Markdown" }
++      );
++    }
++
++    if (beforeDisp <= 0 && afterDisp > 0 && chatId) {
++      await bot.sendMessage(
++        chatId,
++        `🟢 *CUENTA CON ESPACIO*\n\n📌 ${escMD(humanPlatSafe(plat))}\n${getIdentIcon(plat)} ${escMD(ident)}\n✅ Disponibles: ${afterDisp}`,
++        { parse_mode: "Markdown" }
++      );
++    }
++
++    return true;
++  } catch (e) {
++    logErr("aplicarAutoLleno", e);
++    return false;
++  }
++}
++
++// ===============================
++// EXPORTS
++// ===============================
++module.exports = {
++  buscarInventarioPorCorreo,
++  enviarInventarioPlataforma,
++  enviarInventarioPlataformaEstado,
++  mostrarStockGeneral,
++  enviarSubmenuInventario,
++  buscarCorreoInventarioPorPlatCorreo,
++  mostrarMenuClientesCorreo,
++  mostrarListaCorreosPlataforma,
++  mostrarPanelCorreo,
++  responderMenuCodigosNetflix,
++  responderCodigoNetflix,
++  getCapacidadCorreo,
++  aplicarAutoLleno,
++  getMailPanelContext,
++  getInventoryMoveToken,
++  buscarCuentaInventarioPorMoveToken,
++  moverCuentaInventarioPlataforma,
++  actualizarCapacidadCuenta,
++};
+diff --git a/index_05_finanzas_menus.js b/index_05_finanzas_menus.js
+index 100265f..acfaf58 100644
+--- a/index_05_finanzas_menus.js
++++ b/index_05_finanzas_menus.js
+@@ -60,7 +60,7 @@ function categoryOfPlat(key = "") {
+   if (["video","musica","iptv","diseno_ia"].includes(c)) return c;
+   if (["netflix","vipnetflix","disneyp","disneys","hbomax","primevideo","paramount","crunchyroll","vix","appletv","universal"].includes(k)) return "video";
+   if (["spotify","youtube","deezer"].includes(k)) return "musica";
+-  if (["stellatv1","stellatv2","stellatv3","oleadatv1","oleadatv3","latintv1","latintv2","latintv3","latintv4","liontv1","liontv2","liontv3","liontv5","evoutouch1","evoutouch2","evoutouch3","icomplay1","icomplay3","icomplay5","icomplay7","iptv1","iptv3","iptv4"].includes(k)) return "iptv";
++  if (["stellatv1","stellatv2","stellatv3","oleadatv1","oleadatv3","latintv1","latintv2","latintv3","latintv4","liontv1","liontv2","liontv3","liontv5","evoutouch1","evoutouch2","evoutouch3","icomplay1","icomplay2","icomplay3","icomplay5","icomplay7","iptv1","iptv3","iptv4"].includes(k)) return "iptv";
+   if (["canva","gemini","chatgpt","duolingo"].includes(k)) return "diseno_ia";
+   return "video";
+ }
+@@ -421,7 +421,7 @@ const TV_DIGITAL_INVENTARIO_MARCAS = {
+   lion: { label: "Lion TV", icon: "🦁", prefix: "liontv" },
+   latin: { label: "Latin TV", icon: "📡", prefix: "latintv" },
+   evoutouch: { label: "Nanotech", icon: "📺", prefix: "evoutouch" },
+-  icomplay: { label: "ICOMPLAY MAX", icon: "▶️", prefix: "icomplay" },
++  icomplay: { label: "ICOMPLAY", icon: "▶️", prefix: "icomplay" },
+ };
+ async function menuInventarioIptv(chatId) {
+   const kb = pairButtons(Object.entries(TV_DIGITAL_INVENTARIO_MARCAS).map(([key, marca]) => ({
+--- R186/index_06_handlers.js
++++ R187/index_06_handlers.js
+@@ -318,7 +318,7 @@
+     "latintv1", "latintv2", "latintv3", "latintv4",
+     "liontv1", "liontv2", "liontv3", "liontv5",
+     "evoutouch1", "evoutouch2", "evoutouch3",
+-    "icomplay1", "icomplay3", "icomplay5", "icomplay7",
++    "icomplay1", "icomplay2", "icomplay3", "icomplay5", "icomplay7",
+     "iptv1", "iptv3", "iptv4",
+   ].includes(p);
+ }
+@@ -534,7 +534,7 @@
+   if (/^latintv[1234]$/.test(p) || p === "latintv") return "latintv";
+   if (/^liontv[1235]$/.test(p) || p === "liontv") return "liontv";
+   if (/^evoutouch[1-4]?$/.test(p) || /^nanotech[1-3]?$/.test(p)) return "evoutouch";
+-  if (/^icomplay(max)?[1357]?$/.test(p)) return "icomplay";
++  if (/^icomplay(max)?[12357]?$/.test(p)) return "icomplay";
+   if (/^iptv[134]$/.test(p) || p === "iptv") return "iptv";
+   return p;
+ }
+@@ -1228,7 +1228,7 @@
+     liontv2: "LionTV (2 dispositivos)",
+     liontv3: "LionTV (3 dispositivos)",
+     liontv5: "LionTV (5 dispositivos)",
+-    evoutouch1: "Nanotech (1 dispositivo)", evoutouch2: "Nanotech (2 dispositivos)", evoutouch3: "Nanotech (3 dispositivos)", evoutouch4: "Nanotech (1 dispositivo)", icomplay1: "ICOMPLAY MAX (1)", icomplay3: "ICOMPLAY MAX (3)", icomplay5: "ICOMPLAY MAX (5)", icomplay7: "ICOMPLAY MAX (7)",
++    evoutouch1: "Nanotech (1 dispositivo)", evoutouch2: "Nanotech (2 dispositivos)", evoutouch3: "Nanotech (3 dispositivos)", evoutouch4: "Nanotech (1 dispositivo)", icomplay1: "ICOMPLAY (1)", icomplay2: "ICOMPLAY (2)", icomplay3: "ICOMPLAY (3)", icomplay5: "ICOMPLAY (5)", icomplay7: "ICOMPLAY (7)",
+     iptv1: "IPTV anterior (1)",
+     iptv3: "IPTV anterior (3)",
+     iptv4: "IPTV anterior (4)",
+@@ -1272,7 +1272,7 @@
+     liontv2: 2,
+     liontv3: 3,
+     liontv5: 5,
+-    evoutouch1: 1, evoutouch2: 2, evoutouch3: 3, evoutouch4: 1, icomplay1: 1, icomplay3: 3, icomplay5: 5, icomplay7: 7,
++    evoutouch1: 1, evoutouch2: 2, evoutouch3: 3, evoutouch4: 1, icomplay1: 1, icomplay2: 2, icomplay3: 3, icomplay5: 5, icomplay7: 7,
+     iptv1: 1,
+     iptv3: 3,
+     iptv4: 4,
+@@ -4860,6 +4860,7 @@
+ 
+     if (!adminOk && !vendOk) return bot.sendMessage(chatId, "⛔ Acceso denegado");
+     if (data.startsWith("bz:r:")) { await require("./index_36_socios_telegram").tryCallback(q,{vend}); return; }
++    if (data.startsWith("baul:")) { await require("./index_37_baul_apks").tryCallback(q,{adminOk,superOk,vend}); return; } // R187 · Baúl de APKs + URLs TV (permisos en el módulo)
+ 
+     const neededPermission = callbackPermission(data);
+     if (neededPermission === "self-service" && !vendOk) return bot.sendMessage(chatId, "⛔ Esta opción corresponde a su perfil de vendedor.");
+@@ -5998,7 +5999,7 @@
+           lion: "🦁 LION TV",
+           latin: "📡 LATIN TV",
+           evoutouch: "📺 NANOTECH",
+-          icomplay: "▶️ ICOMPLAY MAX",
++          icomplay: "▶️ ICOMPLAY",
+         };
+         const brandDuraciones = {
+           stella: "1, 3 y 7 meses (6 + 1 gratis)",
+@@ -6006,7 +6007,7 @@
+           lion: "1, 3, 5 y 12 meses (10 + 2 gratis)",
+           latin: "1, 4, 8 y 12 meses (3 + 1 gratis = 4)",
+           evoutouch: "1, 3, 6 y 12 meses",
+-          icomplay: "1, 3, 6 y 12 meses · 1, 3, 5 o 7 pantallas · Max Player incluido",
++          icomplay: "1, 3, 6 y 12 meses · 1, 2, 3, 5 o 7 pantallas",
+         };
+         const addContextActions = (keyboard = []) => {
+           const kb = Array.isArray(keyboard) ? keyboard.slice() : [];
+@@ -7055,6 +7056,7 @@
+     if ((adminOk || vendOk) && await ticketTryConsumeTelegramReply(msg,superOk,vend)) return;
+     // Oct-2026 · Buzón de dos vías: respuesta nativa o botón "Responder consulta #C…" (nunca por suposición).
+     if ((adminOk || vendOk) && await require("./index_36_socios_telegram").tryMensaje(msg,{adminOk,superOk,vend})) return;
++    if ((adminOk || vendOk) && await require("./index_37_baul_apks").tryMensaje(msg,{adminOk,superOk,vend})) return; // R187 · /baul, /urltv
+ 
+     // Si hay wizard activo y mandan un comando que no sea menu/start, avisar
+     if (wizard.has(String(chatId)) && text.startsWith("/")) {
+--- /dev/null
++++ R187/index_37_baul_apks.js
+@@ -0,0 +1,161 @@
++"use strict";
++/* SUBLICUENTAS · Bot · R187 · Baúl de APKs de TV Digital + URLs de conexión (PDF «Sublichat 5 puntos», bloque 02).
++   - /baul: consulta por plataforma → dispositivo → enlaces (Downloader, APK, tienda). Mismo directorio que Web y APK
++     (Firestore configuracion_tv_digital/baul_apks · lib_baul_apks.js = copia fiel de Sublichat HQ).
++   - /urltv: URLs de CONEXIÓN (aparte del Baúl): ver, editar, activar/desactivar, eliminar e historial.
++   Permisos (servidor, nunca solo ocultar botones):
++     · consultar: administradores del bot, o vendedor Relojes/Geisell (igual que el módulo «baul-apks» de HQ).
++     · editar: solo administradores del bot. Todo queda en auditoria_eventos con el usuario.
++   Desactivar una URL de conexión NO rompe a los clientes que ya la tienen; eliminar solo si está desactivada,
++   no es proveedor base y no tiene clientes asignados. Lo llama index_06_handlers.js. */
++
++const { db, bot } = require("./index_01_core");
++const B = require("./lib_baul_apks");
++const T = require("./lib_tv_digital");
++
++const ESPERA_MS = 10 * 60 * 1000;
++const espera = global.__SUBLI_BAUL_ESPERA__ = global.__SUBLI_BAUL_ESPERA__ || new Map();
++const VEND_BAUL = ["relojes", "geisell", "geissel"];
++const norm = (v) => String(v || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]/g, "");
++
++function puedeVer({ adminOk = false, vend = null } = {}) {
++  if (adminOk) return true;
++  if (!vend) return false;
++  if (vend.permisos && vend.permisos["baul-apks"] === false) return false;
++  if (vend.permisos && vend.permisos["baul-apks"] === true) return true;
++  return [vend.nombre_norm, vend.nombre, vend.id].map(norm).some((n) => VEND_BAUL.includes(n));
++}
++const puedeEditar = ({ adminOk = false } = {}) => !!adminOk;
++const usuarioDe = (from = {}) => `tg:${from.id || ""}${from.username ? "@" + from.username : ""}`.slice(0, 60);
++const esc = (s) => String(s == null ? "" : s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
++
++// ───────── Textos (puros: los prueban los tests) ─────────
++function textoEnlace(e, { editor = false } = {}) {
++  const l = [`<b>${esc(e.app)}</b> · ${esc(B.METODOS[e.metodo] || e.metodo)}${e.activo === false ? " · <i>desactivado</i>" : ""}`];
++  if (e.url) l.push(`🔗 <code>${esc(e.url)}</code>`);
++  else if (e.metodo === "tv_store") l.push("🔎 Buscar en la tienda del TV (sin enlace).");
++  if (e.codigo) l.push(`🔢 Código Downloader: <code>${esc(e.codigo)}</code>`);
++  if (editor && e.codigoPendiente) l.push(`⚠️ Código por confirmar: ${esc(e.codigoPendiente)} (no se entrega)`);
++  if (e.costoExterno && e.costoExterno.texto) l.push(`💲 ${esc(e.costoExterno.texto)}`);
++  if (e.nota) l.push(`📝 ${esc(e.nota)}`);
++  if (editor) l.push(`<i>id ${esc(e.id)} · rev ${Number(e.revision || 1)}</i>`);
++  return l.join("\n");
++}
++function textoDispositivo(vista, dispId, opts = {}) {
++  const d = (vista.dispositivos || []).find((x) => x.id === dispId);
++  if (!d) return `${esc(vista.nombre)}: sin enlaces para ese dispositivo.`;
++  return [`🧰 <b>${esc(vista.nombre)} · ${esc(d.nombre)}</b>`, "", ...d.enlaces.map((e) => textoEnlace(e, opts)), "", `<i>${esc(B.AVISO_INSTALACION)}</i>`].join("\n\n").replace(/\n\n\n+/g, "\n\n");
++}
++function textoUrls(urls, editor = false) {
++  const l = ["📡 <b>URLs de conexión de TV Digital</b>", ""];
++  for (const [k, v] of Object.entries(urls)) l.push(`${v.activo === false ? "⏸️" : "✅"} <b>${esc(v.nombre)}</b> (${esc(k)})\n<code>${esc(v.url)}</code>${editor ? ` · v${Number(v.version || 1)}` : ""}`);
++  return l.join("\n");
++}
++
++// ───────── Envío ─────────
++const kb = (rows) => ({ reply_markup: { inline_keyboard: rows } });
++async function enviar(chatId, texto, rows = []) { return bot.sendMessage(chatId, texto, { parse_mode: "HTML", disable_web_page_preview: true, ...kb(rows) }); }
++
++async function menuPlataformas(chatId) {
++  const rows = []; const ps = B.PLATAFORMAS.map((p) => ({ text: p.nombre, callback_data: `baul:p:${p.id}` }));
++  for (let i = 0; i < ps.length; i += 2) rows.push(ps.slice(i, i + 2));
++  return enviar(chatId, "🧰 <b>Baúl de APKs</b>\nElija la plataforma:", rows);
++}
++async function menuDispositivos(chatId, plat, ctx) {
++  const v = B.vistaPlataforma(await B.leerBaul(db), plat, { incluirInactivos: puedeEditar(ctx) });
++  const rows = v.dispositivos.map((d) => [{ text: `${d.nombre} (${d.enlaces.length})`, callback_data: `baul:d:${plat}:${d.id}` }]);
++  rows.push([{ text: "⬅️ Plataformas", callback_data: "baul:m" }]);
++  return enviar(chatId, `🧰 <b>${esc(v.nombre)}</b>\nElija el dispositivo:`, rows);
++}
++async function verDispositivo(chatId, plat, disp, ctx) {
++  const editor = puedeEditar(ctx);
++  const v = B.vistaPlataforma(await B.leerBaul(db), plat, { incluirInactivos: editor });
++  const d = (v.dispositivos || []).find((x) => x.id === disp);
++  const rows = [];
++  if (editor && d) for (const e of d.enlaces) rows.push([
++    { text: `✏️ ${e.app}`, callback_data: `baul:e:${e.id}` },
++    { text: e.activo === false ? "▶️ Activar" : "⏸️ Desactivar", callback_data: `baul:a:${e.activo === false ? 1 : 0}:${e.id}` },
++    ...(e.activo === false ? [{ text: "🗑️", callback_data: `baul:x:${e.id}` }] : []),
++  ]);
++  rows.push([{ text: "⬅️ Dispositivos", callback_data: `baul:p:${plat}` }]);
++  return enviar(chatId, textoDispositivo(v, disp, { editor }), rows);
++}
++async function menuUrls(chatId, ctx) {
++  const editor = puedeEditar(ctx);
++  const urls = await T.leerUrlsTv(db, { fresco: true });
++  const rows = editor ? Object.entries(urls).map(([k, v]) => [
++    { text: `✏️ ${v.nombre}`, callback_data: `baul:ue:${k}` },
++    { text: v.activo === false ? "▶️" : "⏸️", callback_data: `baul:ua:${v.activo === false ? 1 : 0}:${k}` },
++    ...(v.activo === false ? [{ text: "🗑️", callback_data: `baul:ux:${k}` }] : []),
++  ]) : [];
++  if (editor) rows.push([{ text: "📜 Historial", callback_data: "baul:uh" }]);
++  return enviar(chatId, textoUrls(urls, editor) + (editor ? "\n\nNueva: <code>/urltv_nueva clave | Nombre | http://…</code>" : ""), rows);
++}
++
++// ───────── Entrada desde index_06 ─────────
++async function tryCallback(q, ctx = {}) {
++  const data = String(q.data || ""); if (!data.startsWith("baul:")) return false;
++  const chatId = q.message?.chat?.id; const p = data.split(":");
++  if (!puedeVer(ctx)) { await bot.sendMessage(chatId, "⛔ No tiene acceso al Baúl de APKs."); return true; }
++  const soloEditor = ["e", "a", "x", "ue", "ua", "ux", "uh", "xs", "uxs"].includes(p[1]);
++  if (soloEditor && !puedeEditar(ctx)) { await bot.sendMessage(chatId, "⛔ Solo administradores pueden editar."); return true; }
++  const u = usuarioDe(q.from);
++  try {
++    if (p[1] === "m") return await menuPlataformas(chatId), true;
++    if (p[1] === "p") return await menuDispositivos(chatId, p[2], ctx), true;
++    if (p[1] === "d") return await verDispositivo(chatId, p[2], p[3], ctx), true;
++    if (p[1] === "u") return await menuUrls(chatId, ctx), true;
++    if (p[1] === "a") { await B.activarEnlace(db, p[3], p[2] === "1", u); await bot.sendMessage(chatId, p[2] === "1" ? "✅ Enlace activado." : "⏸️ Enlace desactivado (ya no se ofrece)."); return true; }
++    if (p[1] === "x") { await enviar(chatId, `¿Eliminar el enlace <b>${esc(p[2])}</b>? No se puede deshacer.`, [[{ text: "🗑️ Sí, eliminar", callback_data: `baul:xs:${p[2]}` }]]); return true; }
++    if (p[1] === "xs") { await B.eliminarEnlace(db, p[2], u); await bot.sendMessage(chatId, "🗑️ Enlace eliminado (queda en auditoría)."); return true; }
++    if (p[1] === "e") { espera.set(String(chatId), { tipo: "enlace", id: p[2], at: Date.now() }); await enviar(chatId, `✏️ Envíe el nuevo dato de <b>${esc(p[2])}</b> así:\n<code>url | código | nota</code>\n(deje vacío lo que no cambia; «-» borra el código o la nota). /cancelar para salir.`); return true; }
++    if (p[1] === "ua") { await T.activarUrlTv(db, { proveedor: p[3], activo: p[2] === "1", usuario: u }); await bot.sendMessage(chatId, p[2] === "1" ? "✅ URL activada." : "⏸️ URL desactivada para entregas NUEVAS. Los clientes que ya la tienen no se tocan."); return true; }
++    if (p[1] === "ux") { const n = await T.clientesConProveedor(db, p[2]); await enviar(chatId, `¿Eliminar la URL <b>${esc(p[2])}</b>? Clientes asignados: ${n}.`, n ? [] : [[{ text: "🗑️ Sí, eliminar", callback_data: `baul:uxs:${p[2]}` }]]); return true; }
++    if (p[1] === "uxs") { await T.eliminarUrlTv(db, { proveedor: p[2], usuario: u }); await bot.sendMessage(chatId, "🗑️ URL eliminada (queda en historial)."); return true; }
++    if (p[1] === "ue") { espera.set(String(chatId), { tipo: "urltv", id: p[2], at: Date.now() }); await enviar(chatId, `✏️ Envíe la nueva URL de conexión de <b>${esc(p[2])}</b> (http://…). /cancelar para salir.`); return true; }
++    if (p[1] === "uh") { const h = (await T.historialUrlsTv(db)).slice(0, 15); await enviar(chatId, ["📜 <b>Historial URLs</b>", ...h.map((x) => `${esc(x.at ? String(x.at).slice(0, 16).replace("T", " ") : "")} · ${esc(x.accion)} · ${esc(x.proveedor)} · ${esc(x.por || x.usuario || "")}`)].join("\n") || "Sin historial."); return true; }
++  } catch (e) { await bot.sendMessage(chatId, `⚠️ ${String(e?.message || e).slice(0, 300)}`); return true; }
++  return true;
++}
++
++function parseEdicion(texto) {
++  const [url = "", codigo = "", nota = ""] = String(texto || "").split("|").map((s) => s.trim());
++  return { url, codigo, nota };
++}
++async function tryMensaje(msg, ctx = {}) {
++  const text = String(msg?.text || "").trim(); const chatId = msg?.chat?.id;
++  if (/^\/baul\b/i.test(text)) { if (!puedeVer(ctx)) { await bot.sendMessage(chatId, "⛔ No tiene acceso al Baúl de APKs."); return true; } await menuPlataformas(chatId); return true; }
++  if (/^\/urltv_nueva\b/i.test(text)) {
++    if (!puedeEditar(ctx)) { await bot.sendMessage(chatId, "⛔ Solo administradores pueden editar."); return true; }
++    const [clave = "", nombre = "", url = ""] = text.replace(/^\/urltv_nueva\s*/i, "").split("|").map((s) => s.trim());
++    try { await T.guardarUrlTv(db, { proveedor: norm(clave), nombre, url, usuario: usuarioDe(msg.from) }); await bot.sendMessage(chatId, "✅ URL de conexión agregada."); }
++    catch (e) { await bot.sendMessage(chatId, `⚠️ ${String(e?.message || e).slice(0, 300)}`); }
++    return true;
++  }
++  if (/^\/urltv\b/i.test(text)) { if (!puedeVer(ctx)) { await bot.sendMessage(chatId, "⛔ No tiene acceso."); return true; } await menuUrls(chatId, ctx); return true; }
++  const st = espera.get(String(chatId));
++  if (!st) return false;
++  if (Date.now() - st.at > ESPERA_MS) { espera.delete(String(chatId)); return false; }
++  if (/^\/cancelar\b/i.test(text)) { espera.delete(String(chatId)); await bot.sendMessage(chatId, "Cancelado."); return true; }
++  if (text.startsWith("/")) return false;
++  if (!puedeEditar(ctx)) { espera.delete(String(chatId)); return false; }
++  const u = usuarioDe(msg.from);
++  try {
++    if (st.tipo === "urltv") {
++      const urls = await T.leerUrlsTv(db, { fresco: true });
++      await T.guardarUrlTv(db, { proveedor: st.id, nombre: urls[st.id]?.nombre || st.id, url: text, usuario: u });
++      await bot.sendMessage(chatId, "✅ URL de conexión actualizada (versión nueva; queda en historial).");
++    } else {
++      const b = await B.leerBaul(db, { fresco: true }); const e = b.enlaces.find((x) => x.id === st.id);
++      if (!e) throw new Error("Ese enlace ya no existe.");
++      const c = parseEdicion(text);
++      const input = { ...e, url: c.url || e.url, codigo: c.codigo === "-" ? "" : (c.codigo || e.codigo || ""), nota: c.nota === "-" ? "" : (c.nota || e.nota || "") };
++      await B.guardarEnlace(db, input, u);
++      await bot.sendMessage(chatId, "✅ Enlace actualizado (revisión nueva; queda en auditoría).");
++    }
++    espera.delete(String(chatId));
++  } catch (e) { await bot.sendMessage(chatId, `⚠️ ${String(e?.message || e).slice(0, 300)}\nCorrija y envíe otra vez, o /cancelar.`); }
++  return true;
++}
++
++module.exports = { tryCallback, tryMensaje, puedeVer, puedeEditar, textoEnlace, textoDispositivo, textoUrls, parseEdicion };
+--- /dev/null
++++ R187/lib_baul_apks.js
+@@ -0,0 +1,153 @@
++// lib_baul_apks.js = COPIA FIEL de Sublichat HQ api/_baul-apks.js · · R187 · Baúl de APKs de TV Digital (PDF «Sublichat 5 puntos», bloque 03, 07/11/2026).
++// Fuente ÚNICA para Sublichat Web, APK y bot de Telegram (el bot tiene una copia fiel: lib_baul_apks.js).
++// Directorio oficial dado por la dirección: URLs y códigos EXACTOS. Nada se inventa:
++//   · sin URL → "tienda del TV (sin URL exacta)" · código no confirmado → pendiente de confirmar.
++//   · Stella TV: solo Android TV/TV Box y Android móvil (no iPhone ni PC).
++//   · El código 298863 es SOLO de la app "Sublicuentas" (no de Latv-Gt).
++// Una app compartida (p. ej. "Sublicuentas" en Lion/Icomplay/Latin/Nanotech) es UN enlace con varias plataformas:
++// editarlo cambia todas a la vez sin duplicar el recurso.
++// Vive en Firestore (configuracion_tv_digital/baul_apks); estos valores son la semilla si el documento no existe.
++// Separado de las URLs de conexión de cada IPTV (_tv-digital.js): aquí solo hay descargas de apps.
++// CommonJS a propósito (igual que _tv-digital.js).
++
++const PLATAFORMAS = Object.freeze([
++  { id: "liontv", nombre: "Lion TV" }, { id: "icomplay", nombre: "ICOMPLAY" }, { id: "latintv", nombre: "Latin TV" },
++  { id: "oleada", nombre: "Oleada TV" }, { id: "stellatv", nombre: "Stella TV" }, { id: "evoutouch", nombre: "Nanotech" },
++]);
++const DISPOSITIVOS = Object.freeze({
++  android_tv: "Android TV / TV Box", fire_tv: "Fire TV / Fire Stick", android_movil: "Celular / tableta Android",
++  smart_tv: "Smart TV Samsung / LG", iphone: "iPhone / iPad", pc: "PC / Laptop",
++});
++const METODOS = Object.freeze({ apk: "APK directo", downloader: "Downloader", play_store: "Google Play", app_store: "App Store", tv_store: "Tienda del TV", web: "Web" });
++
++const PURPLE = "https://apps.apple.com/hn/app/purple-lite-iptv-player/id6749171817";
++const L4 = ["liontv", "icomplay", "latintv", "evoutouch"];
++const SEMILLA = Object.freeze({
++  version: 1,
++  apps: [
++    { id: "sublicuentas", nombre: "Sublicuentas" }, { id: "purple", nombre: "Purple IPTV Lite" },
++    { id: "maxplayer", nombre: "Max Player" }, { id: "smartone", nombre: "SmartOne" },
++    { id: "latvgt", nombre: "Latv-Gt" }, { id: "evotouch", nombre: "Evotouch" },
++    { id: "oleada", nombre: "Oleada" }, { id: "oleadaweb", nombre: "Oleada Web" }, { id: "stellatv", nombre: "Stella TV" },
++  ],
++  enlaces: [
++    { id: "subli-atv", appId: "sublicuentas", plataformas: L4, dispositivo: "android_tv", metodo: "downloader", url: "http://aftv.news/298863", codigo: "298863" },
++    { id: "purple-ios", appId: "purple", plataformas: L4, dispositivo: "iphone", metodo: "app_store", url: PURPLE, codigo: "" },
++    { id: "maxplayer-tv", appId: "maxplayer", plataformas: L4, dispositivo: "smart_tv", metodo: "tv_store", url: "", codigo: "", nota: "Tienda de apps del TV (sin URL exacta). Alternativa a SmartOne." },
++    { id: "smartone-tv", appId: "smartone", plataformas: L4, dispositivo: "smart_tv", metodo: "tv_store", url: "", codigo: "", nota: "Tienda de apps del TV (sin URL exacta). Alternativa a Max Player.", costoExterno: { monto: 85, moneda: "HNL", texto: "L85 para activar 12 meses POR DISPOSITIVO, lo paga el cliente aparte del costo IPTV." } },
++    { id: "latvgt-atv", appId: "latvgt", plataformas: ["latintv"], dispositivo: "android_tv", metodo: "play_store", url: "https://play.google.com/store/apps/details?id=latvgt.appcom", codigo: "", nota: "Segunda app Android independiente. El código 298863 NO es de esta app." },
++    { id: "evotouch-atv", appId: "evotouch", plataformas: ["evoutouch"], dispositivo: "android_tv", metodo: "play_store", url: "https://play.google.com/store/apps/details?id=com.evotouch.app", codigo: "" },
++    { id: "oleada-atv", appId: "oleada", plataformas: ["oleada"], dispositivo: "android_tv", metodo: "apk", url: "https://dldsrvs.com/apks/tv/ola_tv.apk", codigo: "9387291" },
++    { id: "oleada-fire", appId: "oleada", plataformas: ["oleada"], dispositivo: "fire_tv", metodo: "apk", url: "https://dldsrvs.com/apks/firestick/mgs_pro.apk", codigo: "1290332" },
++    { id: "oleada-mov-aftv", appId: "oleada", plataformas: ["oleada"], dispositivo: "android_movil", metodo: "downloader", url: "http://aftv.news/4221609", codigo: "", codigoPendiente: "4221609", nota: "El número 4221609 está en la URL pero NO está confirmado como código Downloader." },
++    { id: "oleada-mov-apk", appId: "oleada", plataformas: ["oleada"], dispositivo: "android_movil", metodo: "apk", url: "https://dldsrvs.com/apks/mobile/ola_mob.apk", codigo: "" },
++    { id: "oleadaweb-ios", appId: "oleadaweb", plataformas: ["oleada"], dispositivo: "iphone", metodo: "web", url: "https://www.oleada-tv.online", codigo: "" },
++    { id: "oleadaweb-pc", appId: "oleadaweb", plataformas: ["oleada"], dispositivo: "pc", metodo: "web", url: "https://www.oleada-tv.online", codigo: "" },
++    { id: "stella-atv-aftv", appId: "stellatv", plataformas: ["stellatv"], dispositivo: "android_tv", metodo: "downloader", url: "http://aftv.news/7471459", codigo: "7471459" },
++    { id: "stella-atv-bit", appId: "stellatv", plataformas: ["stellatv"], dispositivo: "android_tv", metodo: "apk", url: "https://bit.ly/stv0904", codigo: "" },
++    { id: "stella-mov", appId: "stellatv", plataformas: ["stellatv"], dispositivo: "android_movil", metodo: "apk", url: "https://bit.ly/4bg5tgE", codigo: "" },
++  ].map((e, i) => ({ prioridad: i + 1, activo: true, revision: 1, nota: "", ...e })),
++});
++const AVISO_INSTALACION = "Para APK externas: instale Downloader si corresponde, active el permiso de instalar desde esa fuente y use solo estos enlaces. Si no instala por falta de espacio, libere espacio borrando a mano una app que no use (Sublichat no borra nada).";
++
++const COL = "configuracion_tv_digital", DOC = "baul_apks";
++const clean = (v, n = 200) => String(v == null ? "" : v).trim().slice(0, n);
++const idOk = (v) => /^[a-z0-9-]{2,40}$/.test(String(v || ""));
++
++// Solo http(s), sin espacios ni caracteres de inyección; dominio obligatorio.
++function validarUrlDescarga(url) {
++  const s = clean(url, 400);
++  if (!s) return "";
++  let u; try { u = new URL(s); } catch (_) { return null; }
++  if (!["http:", "https:"].includes(u.protocol) || !u.hostname || !u.hostname.includes(".")) return null;
++  if (/[\s<>"'`\\]/.test(s)) return null;
++  return s;
++}
++function validarCodigo(c) { const s = clean(c, 20); return !s || /^\d{3,12}$/.test(s) ? s : null; }
++
++function normalizar(data) {
++  const d = data && Array.isArray(data.enlaces) ? data : SEMILLA;
++  return { version: Number(d.version || 1), apps: (d.apps || SEMILLA.apps).map((a) => ({ id: a.id, nombre: clean(a.nombre, 60) })), enlaces: d.enlaces.map((e) => ({ ...e })), updatedAt: d.updatedAt || "", updatedBy: d.updatedBy || "" };
++}
++
++let cache = { at: 0, data: null };
++async function leerBaul(db, { fresco = false } = {}) {
++  if (!fresco && cache.data && Date.now() - cache.at < 60 * 1000) return cache.data;
++  let data = null;
++  try { const s = await db.collection(COL).doc(DOC).get(); data = s.exists ? s.data() : null; } catch (_) { if (cache.data) return cache.data; }
++  cache = { at: Date.now(), data: normalizar(data) };
++  return cache.data;
++}
++
++// Vista para consultar: por plataforma → dispositivos → enlaces activos (con nombre de app y método legibles).
++function vistaPlataforma(baul, plataformaId, { incluirInactivos = false } = {}) {
++  const apps = new Map(baul.apps.map((a) => [a.id, a.nombre]));
++  const enl = baul.enlaces.filter((e) => (incluirInactivos || e.activo !== false) && (e.plataformas || []).includes(plataformaId)).sort((a, b) => (a.prioridad || 99) - (b.prioridad || 99));
++  const porDisp = {};
++  for (const e of enl) (porDisp[e.dispositivo] = porDisp[e.dispositivo] || []).push({ ...e, app: apps.get(e.appId) || e.appId, metodoTxt: METODOS[e.metodo] || e.metodo, dispositivoTxt: DISPOSITIVOS[e.dispositivo] || e.dispositivo, compartidaCon: (e.plataformas || []).filter((p) => p !== plataformaId) });
++  const p = PLATAFORMAS.find((x) => x.id === plataformaId);
++  return { plataforma: plataformaId, nombre: p ? p.nombre : plataformaId, dispositivos: Object.keys(DISPOSITIVOS).filter((k) => porDisp[k]).map((k) => ({ id: k, nombre: DISPOSITIVOS[k], enlaces: porDisp[k] })), aviso: AVISO_INSTALACION };
++}
++
++async function escribir(db, usuario, mutar, auditoria) {
++  const ref = db.collection(COL).doc(DOC), ahora = new Date().toISOString();
++  let antes = null, despues = null;
++  await db.runTransaction(async (tx) => {
++    const s = await tx.get(ref);
++    const actual = normalizar(s.exists ? s.data() : null);
++    const r = mutar(actual);
++    antes = r.antes; despues = r.despues;
++    tx.set(ref, { version: actual.version + 1, apps: actual.apps, enlaces: actual.enlaces, updatedAt: ahora, updatedBy: clean(usuario, 60) });
++  });
++  await db.collection("auditoria_eventos").add({ tipo: "baul_apks", accion: auditoria, modulo: "baul-apks", usuario: clean(usuario, 60), antes: antes || null, despues: despues || null, createdAt: ahora });
++  cache = { at: 0, data: null };
++  return { ok: true, antes, despues };
++}
++
++// Alta o edición de un enlace. Editar sube la revisión. Validación estricta (URL, código, plataformas, dispositivo, método).
++async function guardarEnlace(db, input = {}, usuario = "") {
++  const plataformas = [...new Set((Array.isArray(input.plataformas) ? input.plataformas : []).map((x) => clean(x, 20)).filter((x) => PLATAFORMAS.some((p) => p.id === x)))];
++  if (!plataformas.length) throw new Error("Elija al menos una plataforma.");
++  if (!DISPOSITIVOS[input.dispositivo]) throw new Error("Dispositivo inválido.");
++  if (!METODOS[input.metodo]) throw new Error("Método inválido.");
++  if (plataformas.includes("stellatv") && ["iphone", "pc"].includes(input.dispositivo)) throw new Error("Stella TV no se ofrece en iPhone ni en PC.");
++  const url = validarUrlDescarga(input.url);
++  if (url === null) throw new Error("URL inválida: use http:// o https:// con dominio, sin espacios.");
++  if (!url && input.metodo !== "tv_store") throw new Error("Falta la URL (solo «Tienda del TV» puede ir sin URL).");
++  const codigo = validarCodigo(input.codigo);
++  if (codigo === null) throw new Error("El código Downloader son solo números (3 a 12).");
++  const appNombre = clean(input.appNombre, 60);
++  return escribir(db, usuario, (b) => {
++    let appId = clean(input.appId, 40);
++    if (!b.apps.some((a) => a.id === appId)) {
++      if (!appNombre) throw new Error("Elija la aplicación o escriba su nombre.");
++      appId = appNombre.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || `app-${Date.now()}`;
++      if (!b.apps.some((a) => a.id === appId)) b.apps.push({ id: appId, nombre: appNombre });
++    }
++    if (codigo && b.enlaces.some((e) => e.codigo === codigo && e.appId !== appId && e.id !== input.id)) throw new Error(`El código ${codigo} ya pertenece a otra aplicación: no se reutiliza.`);
++    const i = input.id ? b.enlaces.findIndex((e) => e.id === input.id) : -1;
++    const base = { appId, plataformas, dispositivo: input.dispositivo, metodo: input.metodo, url, codigo, nota: clean(input.nota, 300), prioridad: Math.max(1, Math.min(99, Number(input.prioridad) || 50)) };
++    if (i >= 0) { const antes = { ...b.enlaces[i] }; b.enlaces[i] = { ...b.enlaces[i], ...base, revision: Number(antes.revision || 1) + 1, activo: antes.activo !== false }; return { antes, despues: b.enlaces[i] }; }
++    const id = idOk(input.id) ? input.id : `${appId}-${input.dispositivo}-${Date.now().toString(36)}`.slice(0, 40);
++    if (b.enlaces.some((e) => e.id === id)) throw new Error("Ya existe un enlace con ese ID.");
++    const nuevo = { id, ...base, activo: true, revision: 1 };
++    b.enlaces.push(nuevo);
++    return { antes: null, despues: nuevo };
++  }, input.id ? "editar_enlace" : "agregar_enlace");
++}
++async function activarEnlace(db, id, activo, usuario = "") {
++  return escribir(db, usuario, (b) => {
++    const e = b.enlaces.find((x) => x.id === id); if (!e) throw new Error("Ese enlace ya no existe.");
++    const antes = { ...e }; e.activo = !!activo; e.revision = Number(e.revision || 1) + 1; return { antes, despues: { ...e } };
++  }, activo ? "activar_enlace" : "desactivar_enlace");
++}
++// Eliminación controlada: solo un enlace YA desactivado (primero se desactiva, queda en la auditoría).
++async function eliminarEnlace(db, id, usuario = "") {
++  return escribir(db, usuario, (b) => {
++    const i = b.enlaces.findIndex((x) => x.id === id); if (i < 0) throw new Error("Ese enlace ya no existe.");
++    if (b.enlaces[i].activo !== false) throw new Error("Primero desactívelo; luego se puede eliminar.");
++    const antes = b.enlaces[i]; b.enlaces.splice(i, 1); return { antes, despues: null };
++  }, "eliminar_enlace");
++}
++
++module.exports = { PLATAFORMAS, DISPOSITIVOS, METODOS, SEMILLA, AVISO_INSTALACION, validarUrlDescarga, validarCodigo, leerBaul, vistaPlataforma, guardarEnlace, activarEnlace, eliminarEnlace, _limpiarCache: () => { cache = { at: 0, data: null }; } };
+--- /dev/null
++++ R187/lib_planes_tv.js
+@@ -0,0 +1,73 @@
++// lib_planes_tv.js = COPIA FIEL de Sublichat HQ api/_planes-tv.js · · R187 · Catálogo CENTRAL de planes de TV Digital (empieza con ICOMPLAY, PDF bloque 03).
++// Web, APK y bot leen de aquí (el bot tiene copia fiel: lib_planes_tv.js). Nada de tarifas fijas por triplicado.
++// ICOMPLAY (nombre oficial; NO "Icomplay Max": Max Player es otro reproductor):
++//   20 variantes exactas = 1, 2, 3, 5, 7 pantallas × 1, 3, 6, 12 meses. Las pantallas NO se deducen de la duración.
++// Precios nuevos solo para ventas FUTURAS: cada servicio guarda su precio al confirmarse (foto del precio);
++// al cambiar una tarifa, la anterior se archiva con fecha y usuario (historial) y queda en auditoría.
++// Firestore: configuracion_tv_digital/planes { planes: { icomplay: { "2x3": {precio, desde, por}, … } }, historial: [...] }.
++// CommonJS a propósito (igual que _tv-digital.js).
++
++const PANTALLAS = Object.freeze({ icomplay: [1, 2, 3, 5, 7] });
++const MESES = Object.freeze({ icomplay: [1, 3, 6, 12] });
++const BASE = Object.freeze({
++  icomplay: Object.freeze({
++    1: { 1: 179, 3: 499, 6: 949, 12: 1799 },
++    2: { 1: 219, 3: 599, 6: 1149, 12: 2149 },
++    3: { 1: 249, 3: 699, 6: 1349, 12: 2499 },
++    5: { 1: 329, 3: 929, 6: 1799, 12: 3399 },
++    7: { 1: 399, 3: 1129, 6: 2199, 12: 4199 },
++  }),
++});
++const NOMBRE = Object.freeze({ icomplay: "ICOMPLAY" });
++const VIGENTE_DESDE = "2026-11-07";
++const COL = "configuracion_tv_digital", DOC = "planes";
++
++function variantes(plataforma = "icomplay", tabla = BASE[plataforma]) {
++  const out = [];
++  for (const p of PANTALLAS[plataforma] || []) for (const m of MESES[plataforma] || []) {
++    const precio = Number(tabla?.[p]?.[m]);
++    if (precio > 0) out.push({ plataforma, nombre: NOMBRE[plataforma], pantallas: p, meses: m, clave: `${plataforma}${p}`, precio, moneda: "HNL", etiqueta: `${NOMBRE[plataforma]} · ${p} pantalla${p === 1 ? "" : "s"} · ${m} mes${m === 1 ? "" : "es"}` });
++  }
++  return out;
++}
++function tablaDe(data = {}, plataforma = "icomplay") {
++  const t = JSON.parse(JSON.stringify(BASE[plataforma] || {}));
++  const g = (data.planes || {})[plataforma] || {};
++  for (const [k, v] of Object.entries(g)) { const [p, m] = k.split("x").map(Number); if (t[p] && t[p][m] != null && Number(v?.precio) > 0) t[p][m] = Number(v.precio); }
++  return t;
++}
++let cache = { at: 0, data: null };
++async function leerPlanesTv(db, { fresco = false } = {}) {
++  if (!fresco && cache.data && Date.now() - cache.at < 60 * 1000) return cache.data;
++  let data = {};
++  try { const s = await db.collection(COL).doc(DOC).get(); data = s.exists ? s.data() || {} : {}; } catch (_) { if (cache.data) return cache.data; }
++  const icomplay = tablaDe(data, "icomplay");
++  cache = { at: Date.now(), data: { version: Number(data.version || 0), icomplay: { nombre: NOMBRE.icomplay, pantallas: PANTALLAS.icomplay, meses: MESES.icomplay, precios: icomplay, variantes: variantes("icomplay", icomplay) }, historial: (data.historial || []).slice(-40) } };
++  return cache.data;
++}
++// Precio para una venta: plan permitido o error (nunca 0 silencioso, nunca mezclar con otro IPTV).
++function precioPlan(planes, plataforma, pantallas, meses) {
++  const P = planes?.[plataforma];
++  if (!P) throw new Error("Plataforma sin catálogo de planes.");
++  if (!P.pantallas.includes(Number(pantallas))) throw new Error(`${P.nombre}: pantallas permitidas ${P.pantallas.join(", ")}.`);
++  if (!P.meses.includes(Number(meses))) throw new Error(`${P.nombre}: meses permitidos ${P.meses.join(", ")}.`);
++  return Number(P.precios[pantallas][meses]);
++}
++async function guardarPrecioPlan(db, { plataforma = "icomplay", pantallas, meses, precio, usuario }) {
++  const p = Number(pantallas), m = Number(meses), nuevo = Math.round(Number(precio) * 100) / 100;
++  if (!(PANTALLAS[plataforma] || []).includes(p) || !(MESES[plataforma] || []).includes(m)) throw new Error("Esa combinación no existe en el catálogo.");
++  if (!(nuevo > 0 && nuevo < 100000)) throw new Error("Precio inválido.");
++  const ref = db.collection(COL).doc(DOC), ahora = new Date().toISOString(), hoy = new Date(Date.now() - 6 * 3600000).toISOString().slice(0, 10);
++  let anterior = 0;
++  await db.runTransaction(async (tx) => {
++    const s = await tx.get(ref); const d = s.exists ? s.data() || {} : {};
++    anterior = tablaDe(d, plataforma)[p][m];
++    const planes = { ...(d.planes || {}) }; planes[plataforma] = { ...(planes[plataforma] || {}), [`${p}x${m}`]: { precio: nuevo, desde: hoy, por: String(usuario || "").slice(0, 60) } };
++    const historial = [...(d.historial || []), { plataforma, pantallas: p, meses: m, precioAnterior: anterior, precioNuevo: nuevo, hasta: hoy, por: String(usuario || "").slice(0, 60), at: ahora }].slice(-200);
++    tx.set(ref, { planes, historial, version: Number(d.version || 0) + 1, updatedAt: ahora }, { merge: true });
++  });
++  await db.collection("auditoria_eventos").add({ tipo: "plan_tv_precio", plataforma, pantallas: p, meses: m, precioAnterior: anterior, precioNuevo: nuevo, usuario: String(usuario || ""), nota: "Solo ventas futuras; las ventas anteriores conservan su precio.", createdAt: ahora });
++  cache = { at: 0, data: null };
++  return { plataforma, pantallas: p, meses: m, precioAnterior: anterior, precioNuevo: nuevo };
++}
++module.exports = { PANTALLAS, MESES, BASE, NOMBRE, VIGENTE_DESDE, variantes, leerPlanesTv, precioPlan, guardarPrecioPlan, _limpiarCache: () => { cache = { at: 0, data: null }; } };
+--- /dev/null
++++ R187/lib_tv_digital.js
+@@ -0,0 +1,177 @@
++// lib_tv_digital.js = COPIA FIEL de Sublichat HQ api/_tv-digital.js · · Oct-2026 · Fuente única de URLs de TV Digital / IPTV.
++// Las URLs dejan de estar fijas en el código: viven en Firestore
++// (configuracion_tv_digital/urls) y se editan desde Sublichat Web (Bodega → URLs TV Digital).
++// Estos valores son SOLO el respaldo si el documento todavía no existe.
++// Orden de resolución de una entrega: URL propia de la cuenta (override en Bodega) → URL del proveedor → respaldo.
++// CommonJS a propósito: lo usan mobile-core.js (CommonJS) y acceso.js / inventario.js (ESM).
++const URLS_POR_DEFECTO = Object.freeze({
++  latintv: { nombre: "LatinTV", url: "http://latgt.com:8080" },
++  latintv2: { nombre: "LatinTV 2", url: "http://enlatv.com" },
++  liontv: { nombre: "LionTV", url: "http://liontv.es:80" },
++  evoutouch: { nombre: "Nanotech", url: "http://smarterstv99.dyndns.tv:25461/" },
++  icomplay: { nombre: "ICOMPLAY", url: "http://latinostream.xyz:80" } // R187: nombre oficial (Max Player es otro reproductor)
++});
++const CONFIG_COL = "configuracion_tv_digital";
++const CONFIG_DOC = "urls";
++
++function normKey(v) {
++  return String(v == null ? "" : v).toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]/g, "");
++}
++
++// Proveedor de una plataforma IPTV (la plataforma manda; el texto libre solo distingue LatinTV 2).
++function proveedorTv(plataforma, proveedorTexto) {
++  const p = normKey(plataforma);
++  const t = normKey(proveedorTexto);
++  if (p.startsWith("icomplay") || /icomplay/.test(t)) return "icomplay";
++  if (p.startsWith("evoutouch") || /nano|evou|smarter/.test(t)) return "evoutouch";
++  if (p.startsWith("liontv") || /lion/.test(t)) return "liontv";
++  if (p.startsWith("stellatv") || p.startsWith("oleada")) return "";
++  if (p.startsWith("latintv") || p.startsWith("iptv") || /latin|latgt|enlatv/.test(t)) {
++    return /enlatv|latintv2|latin2/.test(t) ? "latintv2" : "latintv";
++  }
++  return "";
++}
++
++// Solo http(s); se acepta HTTP y cualquier puerto (ICOMPLAY usa http://…:80).
++function validarUrlTv(url) {
++  const s = String(url == null ? "" : url).trim();
++  if (!s) return "";
++  let u;
++  try { u = new URL(s); } catch (_) { return null; }
++  if (!["http:", "https:"].includes(u.protocol) || !u.hostname) return null;
++  if (s.length > 300 || /[\s<>"'`]/.test(s)) return null;
++  return s;
++}
++
++let cache = { at: 0, data: null };
++async function leerUrlsTv(db, { fresco = false } = {}) {
++  if (!fresco && cache.data && Date.now() - cache.at < 60 * 1000) return cache.data;
++  const out = {};
++  for (const [k, v] of Object.entries(URLS_POR_DEFECTO)) out[k] = { ...v, activo: true, version: 1 };
++  try {
++    const snap = await db.collection(CONFIG_COL).doc(CONFIG_DOC).get();
++    const guardado = snap.exists ? (snap.data() || {}).proveedores || {} : {};
++    for (const [k, v] of Object.entries(guardado)) {
++      const url = validarUrlTv(v && v.url);
++      if (!url) continue;
++      out[k] = { nombre: String((v && v.nombre) || (out[k] && out[k].nombre) || k).replace(/^ICOMPLAY MAX$/i, "ICOMPLAY").slice(0, 60), url, activo: v.activo !== false, version: Number(v.version || 1), updatedAt: v.updatedAt || "", updatedBy: v.updatedBy || "" };
++    }
++  } catch (_) { /* sin documento: valores por defecto */ }
++  cache = { at: Date.now(), data: out };
++  return out;
++}
++
++function urlTvPara(servicio = {}, urls = URLS_POR_DEFECTO, cuenta = null) {
++  const propia = cuenta && validarUrlTv(cuenta.url || cuenta.serverUrl);
++  if (propia) return propia;
++  const prov = proveedorTv(servicio.plataforma || "", servicio.iptvProveedor || "");
++  if (!prov) return "";
++  return (urls[prov] && urls[prov].url) || (URLS_POR_DEFECTO[prov] && URLS_POR_DEFECTO[prov].url) || "";
++}
++
++// URLs propias por cuenta de Bodega (override). Solo se leen las cuentas que tienen url.
++let cacheCuentas = { at: 0, data: null };
++async function leerUrlsCuentas(db) {
++  if (cacheCuentas.data && Date.now() - cacheCuentas.at < 60 * 1000) return cacheCuentas.data;
++  const map = new Map();
++  try {
++    const snap = await db.collection("inventario").where("url", ">", "").get();
++    snap.forEach((d) => { const u = validarUrlTv((d.data() || {}).url); if (u) map.set(d.id, u); });
++  } catch (_) { /* sin índice o sin cuentas con URL propia */ }
++  cacheCuentas = { at: Date.now(), data: map };
++  return map;
++}
++
++function urlTvServicio(servicio = {}, urls, urlsCuentas) {
++  const perfiles = Array.isArray(servicio.perfiles) ? servicio.perfiles : [];
++  const id = String((perfiles[0] && perfiles[0].inventarioId) || servicio.inventarioId || "");
++  const propia = id && urlsCuentas && urlsCuentas.get(id);
++  return propia || urlTvPara(servicio, urls || URLS_POR_DEFECTO);
++}
++
++async function guardarUrlTv(db, { proveedor, url, nombre, usuario }) {
++  const prov = normKey(proveedor);
++  if (!prov || prov.length > 30) throw new Error("Proveedor inválido.");
++  const limpia = validarUrlTv(url);
++  if (!limpia) throw new Error("URL inválida. Use http:// o https:// (ejemplo: http://latinostream.xyz:80).");
++  const ref = db.collection(CONFIG_COL).doc(CONFIG_DOC);
++  const ahora = new Date().toISOString();
++  let anterior = "";
++  await db.runTransaction(async (tx) => {
++    const snap = await tx.get(ref);
++    const data = snap.exists ? snap.data() || {} : {};
++    const proveedores = { ...(data.proveedores || {}) };
++    anterior = (proveedores[prov] && proveedores[prov].url) || (URLS_POR_DEFECTO[prov] && URLS_POR_DEFECTO[prov].url) || "";
++    const previo = proveedores[prov] || {};
++    proveedores[prov] = { nombre: String(nombre || previo.nombre || (URLS_POR_DEFECTO[prov] && URLS_POR_DEFECTO[prov].nombre) || prov).slice(0, 60),
++      url: limpia, activo: previo.activo !== false, version: Number(previo.version || 1) + (previo.url && previo.url !== limpia ? 1 : 0), updatedAt: ahora, updatedBy: String(usuario || "") };
++    const historial = [...(Array.isArray(data.historial) ? data.historial : []), { proveedor: prov, accion: previo.url || URLS_POR_DEFECTO[prov] ? "editar" : "agregar", urlAnterior: anterior, urlNueva: limpia, por: String(usuario || ""), at: ahora }].slice(-100); // R187
++    tx.set(ref, { proveedores, historial, version: Number(data.version || 0) + 1, updatedAt: ahora }, { merge: true });
++  });
++  // Historial: URL anterior y nueva (no es un secreto: la ve el cliente final).
++  await db.collection("auditoria_eventos").add({ tipo: "tv_digital_url_cambiada", proveedor: prov, urlAnterior: anterior, urlNueva: limpia, usuario: String(usuario || ""), createdAt: ahora });
++  cache = { at: 0, data: null };
++  return { proveedor: prov, url: limpia, urlAnterior: anterior };
++}
++
++// R187 · Cuántos clientes tienen un servicio de ese proveedor (para no borrar una URL que todavía usan).
++async function clientesConProveedor(db, prov) {
++  const snap = await db.collection("clientes").get();
++  let n = 0;
++  snap.forEach((d) => { const s = (d.data() || {}).servicios; if (Array.isArray(s) && s.some((x) => proveedorTv(x && x.plataforma, x && x.iptvProveedor) === prov)) n++; });
++  return n;
++}
++// Desactivar = ya no se ofrece para configuraciones NUEVAS; las entregas que ya la usan la siguen mostrando (no se rompen).
++async function activarUrlTv(db, { proveedor, activo, usuario }) {
++  const prov = normKey(proveedor), ref = db.collection(CONFIG_COL).doc(CONFIG_DOC), ahora = new Date().toISOString();
++  await db.runTransaction(async (tx) => {
++    const snap = await tx.get(ref); const data = snap.exists ? snap.data() || {} : {};
++    const proveedores = { ...(data.proveedores || {}) };
++    const previo = proveedores[prov] || (URLS_POR_DEFECTO[prov] ? { ...URLS_POR_DEFECTO[prov] } : null);
++    if (!previo) throw new Error("Ese proveedor no existe.");
++    proveedores[prov] = { ...previo, activo: !!activo, updatedAt: ahora, updatedBy: String(usuario || "") };
++    const historial = [...(Array.isArray(data.historial) ? data.historial : []), { proveedor: prov, accion: activo ? "activar" : "desactivar", url: previo.url || "", por: String(usuario || ""), at: ahora }].slice(-100);
++    tx.set(ref, { proveedores, historial, version: Number(data.version || 0) + 1, updatedAt: ahora }, { merge: true });
++  });
++  await db.collection("auditoria_eventos").add({ tipo: activo ? "tv_digital_url_activada" : "tv_digital_url_desactivada", proveedor: prov, usuario: String(usuario || ""), createdAt: ahora });
++  cache = { at: 0, data: null };
++  return { proveedor: prov, activo: !!activo };
++}
++// Eliminar: solo proveedores agregados (no los de fábrica), desactivados y SIN clientes asignados.
++async function eliminarUrlTv(db, { proveedor, usuario }) {
++  const prov = normKey(proveedor);
++  if (URLS_POR_DEFECTO[prov]) throw new Error("Esta URL es de un proveedor base: se puede editar o desactivar, no eliminar.");
++  const asignados = await clientesConProveedor(db, prov);
++  if (asignados > 0) throw new Error(`No se puede eliminar: ${asignados} cliente(s) la usan. Desactívela y cree la nueva.`);
++  const ref = db.collection(CONFIG_COL).doc(CONFIG_DOC), ahora = new Date().toISOString();
++  let anterior = null;
++  await db.runTransaction(async (tx) => {
++    const snap = await tx.get(ref); const data = snap.exists ? snap.data() || {} : {};
++    const proveedores = { ...(data.proveedores || {}) };
++    if (!proveedores[prov]) throw new Error("Ese proveedor no existe.");
++    if (proveedores[prov].activo !== false) throw new Error("Primero desactívela; luego se puede eliminar.");
++    anterior = proveedores[prov]; delete proveedores[prov];
++    const historial = [...(Array.isArray(data.historial) ? data.historial : []), { proveedor: prov, accion: "eliminar", url: anterior.url || "", por: String(usuario || ""), at: ahora }].slice(-100);
++    tx.set(ref, { proveedores, historial, version: Number(data.version || 0) + 1, updatedAt: ahora });
++  });
++  await db.collection("auditoria_eventos").add({ tipo: "tv_digital_url_eliminada", proveedor: prov, urlAnterior: anterior && anterior.url || "", usuario: String(usuario || ""), createdAt: ahora });
++  cache = { at: 0, data: null };
++  return { proveedor: prov, eliminado: true };
++}
++async function historialUrlsTv(db) {
++  try { const s = await db.collection(CONFIG_COL).doc(CONFIG_DOC).get(); return ((s.exists ? s.data() || {} : {}).historial || []).slice(-50).reverse(); } catch (_) { return []; }
++}
++
++exports.activarUrlTv = activarUrlTv;
++exports.eliminarUrlTv = eliminarUrlTv;
++exports.historialUrlsTv = historialUrlsTv;
++exports.clientesConProveedor = clientesConProveedor;
++exports.URLS_POR_DEFECTO = URLS_POR_DEFECTO;
++exports.proveedorTv = proveedorTv;
++exports.validarUrlTv = validarUrlTv;
++exports.leerUrlsTv = leerUrlsTv;
++exports.urlTvPara = urlTvPara;
++exports.guardarUrlTv = guardarUrlTv;
++exports.leerUrlsCuentas = leerUrlsCuentas;
++exports.urlTvServicio = urlTvServicio;
++exports.limpiarCacheCuentas = () => { cacheCuentas = { at: 0, data: null }; };
+--- /dev/null
++++ R187/tests/r187-baul-icomplay.test.js
+@@ -0,0 +1,115 @@
++"use strict";
++// R187 · Fase 2 en el bot: ICOMPLAY (nombre oficial + 2 pantallas), Baúl de APKs y URLs de conexión. Datos ficticios.
++const test = require("node:test");
++const assert = require("node:assert/strict");
++const path = require("node:path");
++const fs = require("node:fs");
++const { FakeDb } = require("./helpers/fake-firestore");
++const B = path.join(__dirname, "..");
++
++function cargar() {
++  const db = new FakeDb(); const enviados = [];
++  const stub = (file, exports) => { require.cache[require.resolve(path.join(B, file))] = { id: file, filename: file, loaded: true, exports }; };
++  for (const k of Object.keys(require.cache)) if (/index_37_baul_apks|lib_baul_apks|lib_tv_digital/.test(k)) delete require.cache[k];
++  stub("index_01_core", { db, bot: { sendMessage: async (chatId, text, opts) => { enviados.push({ chatId, text, opts }); } } });
++  return { db, enviados, M: require("../index_37_baul_apks") };
++}
++const q = (data, id = 7) => ({ data, from: { id, username: "prueba" }, message: { chat: { id } } });
++
++test("libs del bot = copia fiel de Sublichat HQ (mismo código salvo la 1.ª línea)", () => {
++  const hq = path.join(B, "..", "hq-gh", "api");
++  for (const [bot, h] of [["lib_baul_apks.js", "_baul-apks.js"], ["lib_planes_tv.js", "_planes-tv.js"], ["lib_tv_digital.js", "_tv-digital.js"]]) {
++    if (!fs.existsSync(path.join(hq, h))) continue; // fuera del espacio de trabajo: se omite
++    const a = fs.readFileSync(path.join(B, bot), "utf8").split("\n").slice(1).join("\n");
++    const b = fs.readFileSync(path.join(hq, h), "utf8").split("\n").slice(1).join("\n");
++    assert.equal(a, b, bot);
++  }
++});
++
++test("ICOMPLAY: nombre oficial (sin «MAX»), 2 pantallas existe y tarifa 2×3 = L599", () => {
++  const P = require("../lib_planes_tv");
++  assert.equal(P.variantes("icomplay").length, 20);
++  assert.equal(P.BASE.icomplay[2][3], 599);
++  for (const f of ["index_01_core.js", "index_02_utils_roles.js", "index_03_clientes_crm.js", "index_04_inventario_correos.js", "index_05_finanzas_menus.js", "index_06_handlers.js"]) {
++    const s = fs.readFileSync(path.join(B, f), "utf8");
++    assert.doesNotMatch(s, /"[^"]*ICOMPLAY MAX[^"]*"/, `${f} sin etiqueta ICOMPLAY MAX`);
++  }
++  assert.match(fs.readFileSync(path.join(B, "index_01_core.js"), "utf8"), /icomplay2:\s+\{ key: "icomplay2",\s+nombre: "ICOMPLAY \(2 pantallas\)".*capacidadDefault: 2/);
++  assert.match(fs.readFileSync(path.join(B, "index_06_handlers.js"), "utf8"), /\/\^icomplay\(max\)\?\[12357\]\?\$\//);
++  assert.match(fs.readFileSync(path.join(B, "index_02_utils_roles.js"), "utf8"), /"icomplay max 2": "icomplay2"/, "lo escrito antes («icomplay max») se sigue entendiendo");
++});
++
++test("permisos: consulta admin o Relojes/Geisell; editar solo admin (en el servidor, no ocultando botones)", async () => {
++  const { M, enviados, db } = cargar();
++  assert.equal(M.puedeVer({ vend: { nombre: "Relojes" } }), true);
++  assert.equal(M.puedeVer({ vend: { nombre: "Heber" } }), false);
++  assert.equal(M.puedeVer({ vend: { nombre: "Heber", permisos: { "baul-apks": true } } }), true);
++  assert.equal(M.puedeEditar({ vend: { nombre: "Relojes" } }), false);
++  await M.tryCallback(q("baul:a:0:subli-atv"), { vend: { nombre: "Relojes" } });
++  assert.match(enviados.at(-1).text, /Solo administradores/);
++  await M.tryCallback(q("baul:p:liontv"), { vend: { nombre: "Heber" } });
++  assert.match(enviados.at(-1).text, /No tiene acceso/);
++  assert.equal(db.store.col("auditoria_eventos").size, 0, "sin permiso no se escribe nada");
++});
++
++test("/baul: plataforma → dispositivo muestra URL y código exactos; el código no confirmado no se entrega", async () => {
++  const { M, enviados } = cargar();
++  assert.equal(await M.tryMensaje({ text: "/baul", chat: { id: 7 }, from: { id: 7 } }, { vend: { nombre: "Geisell" } }), true);
++  assert.equal(enviados.at(-1).opts.reply_markup.inline_keyboard.flat().length, 6);
++  await M.tryCallback(q("baul:d:oleada:fire_tv"), { vend: { nombre: "Geisell" } });
++  assert.match(enviados.at(-1).text, /mgs_pro\.apk[\s\S]*1290332/);
++  await M.tryCallback(q("baul:d:oleada:android_movil"), { vend: { nombre: "Geisell" } });
++  assert.doesNotMatch(enviados.at(-1).text, /Código Downloader: <code>4221609|Código por confirmar/, "el código no confirmado no se entrega como código");
++  await M.tryCallback(q("baul:d:stellatv:iphone"), { vend: { nombre: "Geisell" } });
++  assert.match(enviados.at(-1).text, /sin enlaces/);
++});
++
++test("admin: editar enlace por mensaje, desactivar, eliminar con confirmación; todo auditado", async () => {
++  const { M, enviados, db } = cargar();
++  const ctx = { adminOk: true };
++  await M.tryCallback(q("baul:e:stella-mov"), ctx);
++  assert.equal(await M.tryMensaje({ text: "javascript:alert(1)", chat: { id: 7 }, from: { id: 7 } }, ctx), true);
++  assert.match(enviados.at(-1).text, /URL inválida/);
++  await M.tryMensaje({ text: "https://bit.ly/nuevo-stella | | Probado en Samsung", chat: { id: 7 }, from: { id: 7 } }, ctx);
++  assert.match(enviados.at(-1).text, /Enlace actualizado/);
++  const B2 = require("../lib_baul_apks");
++  let e = (await B2.leerBaul(db, { fresco: true })).enlaces.find((x) => x.id === "stella-mov");
++  assert.deepEqual([e.url, e.nota, e.revision], ["https://bit.ly/nuevo-stella", "Probado en Samsung", 2]);
++  await M.tryCallback(q("baul:xs:stella-mov"), ctx);
++  assert.match(enviados.at(-1).text, /Primero desactívelo/);
++  await M.tryCallback(q("baul:a:0:stella-mov"), ctx);
++  await M.tryCallback(q("baul:xs:stella-mov"), ctx);
++  assert.equal((await B2.leerBaul(db, { fresco: true })).enlaces.some((x) => x.id === "stella-mov"), false);
++  const aud = [...db.store.col("auditoria_eventos").values()];
++  assert.deepEqual(aud.map((a) => a.accion), ["editar_enlace", "desactivar_enlace", "eliminar_enlace"]);
++  assert.ok(aud.every((a) => /^tg:7(@prueba)?$/.test(a.usuario)));
++});
++
++test("/urltv: desactivar no rompe clientes; nueva → desactivar → eliminar; base no se elimina", async () => {
++  const { M, enviados, db } = cargar();
++  await db.collection("clientes").doc("c1").set({ servicios: [{ plataforma: "icomplay2", iptvProveedor: "icomplay" }] });
++  const ctx = { adminOk: true };
++  await M.tryMensaje({ text: "/urltv_nueva latin3 | LatinTV 3 | http://nuevo.latin.hn:8080", chat: { id: 7 }, from: { id: 7 } }, ctx);
++  assert.match(enviados.at(-1).text, /agregada/);
++  await M.tryCallback(q("baul:ua:0:icomplay"), ctx);
++  assert.match(enviados.at(-1).text, /no se tocan/);
++  const T = require("../lib_tv_digital");
++  const urls = await T.leerUrlsTv(db, { fresco: true });
++  assert.equal(T.urlTvPara({ plataforma: "icomplay2" }, urls), "http://latinostream.xyz:80");
++  await M.tryCallback(q("baul:ux:icomplay"), ctx);
++  assert.match(enviados.at(-1).text, /Clientes asignados: 1/);
++  assert.equal(enviados.at(-1).opts.reply_markup.inline_keyboard.length, 0, "con clientes no ofrece eliminar");
++  await M.tryCallback(q("baul:uxs:latin3"), ctx);
++  assert.match(enviados.at(-1).text, /Primero desactívela/);
++  await M.tryCallback(q("baul:ua:0:latin3"), ctx);
++  await M.tryCallback(q("baul:uxs:latin3"), ctx);
++  assert.equal((await T.leerUrlsTv(db, { fresco: true })).latin3, undefined);
++  await M.tryMensaje({ text: "/urltv", chat: { id: 7 }, from: { id: 7 } }, { vend: { nombre: "Relojes" } });
++  assert.doesNotMatch(enviados.at(-1).text, /urltv_nueva/, "vendedor solo consulta");
++});
++
++test("cableado en index_06: callback «baul:» y mensajes /baul, /urltv", () => {
++  const s = fs.readFileSync(path.join(B, "index_06_handlers.js"), "utf8");
++  assert.match(s, /data\.startsWith\("baul:"\)\) \{ await require\("\.\/index_37_baul_apks"\)\.tryCallback\(q,\{adminOk,superOk,vend\}\)/);
++  assert.match(s, /require\("\.\/index_37_baul_apks"\)\.tryMensaje\(msg,\{adminOk,superOk,vend\}\)/);
++});
