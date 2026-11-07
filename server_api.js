@@ -388,6 +388,7 @@ app.get("/rev/me", revAuth, async (req, res) => {
       tarifaId: live.tarifaId,
       priceTier: live.tarifaId,
       etiquetaRenovacion: live.etiquetaRenovacion || "",
+      ...require("./lib_portal_socios").metasPublicas(live), // R185: meta mensual configurada por Sublicuentas (si existe)
     });
   } catch (e) {
     console.error("rev/me", e);
@@ -601,8 +602,12 @@ app.get("/rev/metricas", revAuth, async (req, res) => {
     const dedupe = (snaps) => { const m=new Map(); snaps.forEach(snap=>snap.docs.forEach(d=>m.set(d.id,{id:d.id,...d.data()}))); return [...m.values()]; };
     const compras = dedupe(compraSnaps), renovaciones = dedupe(renovSnaps);
     const now = new Date();
-    const start = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
-    const end = new Date(now.getFullYear(), now.getMonth()+1, 1).getTime();
+    let start = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+    let end = new Date(now.getFullYear(), now.getMonth()+1, 1).getTime();
+    // R185 · ?periodo=YYYY-MM (Metas del mes por mes y año). Misma convención de fechas que el mes actual.
+    const perPedido = require("./lib_portal_socios").periodoValido(req.query.periodo);
+    let periodo = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}`;
+    if (perPedido) { const r = require("./lib_portal_socios").rangoMesServidor(perPedido); start = r.desde; end = r.hasta; periodo = perPedido.txt; }
     const enMes = (x) => { const t=revDateMs(x.createdAt || x.fecha || x.ts); return t>=start && t<end; };
     const ops = [
       ...compras.filter(enMes).map(x=>({...x,_tipo:"compra"})),
@@ -615,7 +620,7 @@ app.get("/rev/metricas", revAuth, async (req, res) => {
     const pendientes = compras.filter(x=>!["entregado","completado","cancelado"].includes(String(x.estado||"pendiente").toLowerCase())).length;
     res.json({
       ok:true,
-      periodo:`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}`,
+      periodo,
       operacionesMes:ops.length, comprasMes:ops.filter(x=>x._tipo==="compra").length, renovacionesMes:ops.filter(x=>x._tipo==="renovacion").length,
       costoMes, operadoMes:costoMes,
       pedidosPendientes:pendientes,
@@ -636,7 +641,7 @@ app.get("/rev/compras/mias", revAuth, async (req, res) => {
     const aliases = socioNorm === "geisell" ? ["geisell", "geissel"] : [socioNorm];
     const snaps = await Promise.all(aliases.map(a=>db.collection("compras").where("socio_norm","==",a).get()));
     const m=new Map();snaps.forEach(snap=>snap.docs.forEach(d=>m.set(d.id,{id:d.id,...d.data()})));
-    const limit=Math.min(100,Math.max(1,Number(req.query.limit)||20));
+    const limit=require("./lib_portal_socios").limiteHistorial(req.query.limit,20,500); // R185: historial completo (antes máx. 100)
     // Oct-2026 · Pedidos del Panel de Socios: detalle por renglón (destinatario, datos, notas). Sin imagen ni datos de finanzas.
     const items=[...m.values()].sort((a,b)=>revDateMs(b.createdAt)-revDateMs(a.createdAt)).slice(0,limit).map(x=>({
       ...CS.pedidoPublico(x.id,x), monto:revMoneyNumber(x.monto),
@@ -663,8 +668,13 @@ app.get("/rev/compra/estado", revAuth, async (req, res) => {
 app.get("/rev/avisos", revAuth, async (req, res) => {
   try {
     // ✅ Sin where+orderBy combinado (evita necesitar índice compuesto en Firestore)
+    // R185 · ?periodo=YYYY-MM: archivo por mes y año (fecha original del aviso, hora de Honduras). Sin periodo: igual que antes.
+    const rangoAv = require("./lib_portal_socios").rangoMesHonduras(String(req.query.periodo || ""));
+    const consultaAv = rangoAv
+      ? db.collection("avisos").where("createdAt", ">=", rangoAv.desde).where("createdAt", "<", rangoAv.hasta).orderBy("createdAt", "desc").limit(200)
+      : db.collection("avisos").orderBy("createdAt", "desc").limit(20);
     const [snap, live] = await Promise.all([
-      db.collection("avisos").orderBy("createdAt", "desc").limit(20).get(),
+      consultaAv.get(),
       revLiveProfile(req.rev),
     ]);
     const socioNorm = normVendedor(live?.nombre_norm || req.rev?.nombre_norm || req.rev?.nombre || "");
@@ -677,7 +687,7 @@ app.get("/rev/avisos", revAuth, async (req, res) => {
         return { id: d.id, texto: a.texto || "", autor: a.autor || "Admin", ts, activo: a.activo !== false, tipo:a.tipo||"aviso", imagenUrl:a.imagenUrl||"", promocionId:a.promocionId||"", destinatarios:Array.isArray(a.destinatarios)?a.destinatarios:[], leido:leidos.has(String(d.id)) };
       })
       .filter((a) => a.activo && (!a.destinatarios.length || a.destinatarios.map(normVendedor).includes(socioNorm)))
-      .slice(0, 10);
+      .slice(0, rangoAv ? 200 : 10);
     res.set("Cache-Control", "no-store");
     res.json(lista);
   } catch (e) { console.error("rev/avisos", e); res.status(500).json({ error: "server" }); }
