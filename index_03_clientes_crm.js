@@ -248,7 +248,10 @@ function platformConfigLocal(plataforma = "") {
   return {};
 }
 
-function requiereClaveLocal(plataforma = "") {
+function requiereClaveLocal(plataforma = "", servicio = null) {
+  // R188 · ChatGPT con contraseña; Gemini/Duolingo según modalidad del SERVICIO (correo propio del cliente = sin contraseña).
+  const porModalidad = require("./lib_entrega_plataforma").claveSegunModalidad(plataforma, servicio || {});
+  if (porModalidad !== null) return porModalidad;
   const cfg = platformConfigLocal(plataforma);
   if (Object.prototype.hasOwnProperty.call(cfg, "requiereClave")) return cfg.requiereClave === true;
   const p = normalizarPlataforma(plataforma);
@@ -880,7 +883,7 @@ function normalizarCompraLocal(servicio = {}, titular = "", anterior = {}) {
       correo: requiereCorreoLocal(plat)
         ? normalizeIdentByPlatformLocal(plat, raw.correo ?? correoTop ?? previo.correo ?? servicio.correo ?? anterior.correo ?? "")
         : "",
-      clave: requiereClaveLocal(plat) ? String(raw.clave ?? raw.password ?? raw.pass ?? claveTop ?? previo.clave ?? servicio.clave ?? anterior.clave ?? "").trim() : "",
+      clave: requiereClaveLocal(plat, { ...anterior, ...servicio }) ? String(raw.clave ?? raw.password ?? raw.pass ?? claveTop ?? previo.clave ?? servicio.clave ?? anterior.clave ?? "").trim() : "",
       pin: requierePinLocal(plat) ? String(raw.pinPerfil ?? raw.pin_perfil ?? raw.perfilPin ?? raw.pin ?? pinTop ?? previo.pin ?? "").trim() : ""
     };
   });
@@ -931,7 +934,7 @@ function validarCompraLocal(compra = {}) {
   perfiles.forEach((p, index) => {
     if (!String(p.nombre || "").trim()) throw new Error(`Falta el nombre del perfil ${index + 1}.`);
     if (requiereCorreoLocal(plat) && !validateIdentByPlatformLocal(plat, p.correo || "")) throw new Error(`${getIdentLabelLocal(plat)} inválido en ${p.nombre || `perfil ${index + 1}`}.`);
-    if (requiereClaveLocal(plat) && !String(p.clave || "").trim()) throw new Error(`Falta la clave de ${p.nombre || `perfil ${index + 1}`}.`);
+    if (requiereClaveLocal(plat, compra) && !String(p.clave || "").trim()) throw new Error(`Falta la clave de ${p.nombre || `perfil ${index + 1}`}.`);
     if (requierePinLocal(plat) && !String(p.pin || "").trim()) throw new Error(`Falta el PIN individual de ${p.nombre || `perfil ${index + 1}`}.`);
   });
 }
@@ -1767,6 +1770,11 @@ async function addServicioTx(clientId, servicio = {}) {
   const precio = Number(compra.precio || 0);
   const fechaRenovacion = String(compra.fechaRenovacion || "");
   const sync = await sincronizarCompraInventarioSeguroLocal(null, compra, resultado.nombreTitular || "", { clienteId: clientId });
+  // R188 · Ficha Spotify por Telegram: si el correo ya es invitado de una familia, queda asignada sola (mismo dato que Web/APK).
+  let spotifyFamilia = null;
+  if (/spotify/i.test(String(plat || "")) && compra.correo) {
+    try { spotifyFamilia = (await require("./lib_spotify_familias").asignarServicio(db, { correo: compra.correo, clienteId: id, compraId: compra.compraId })).familia; } catch (_) { spotifyFamilia = null; }
+  }
 
   cacheInvalidatePrefix(`clientes:doc:${id}`);
   cacheInvalidatePrefix("renovaciones:");
@@ -1791,7 +1799,7 @@ async function addServicioTx(clientId, servicio = {}) {
     fechaRenovacion,
   });
 
-  return { ok: true, servicio: compra, servicioIndex: resultado.servicioIndex, totalPerfiles: compra.perfiles.length, sync, sorteo };
+  return { ok: true, servicio: compra, servicioIndex: resultado.servicioIndex, totalPerfiles: compra.perfiles.length, sync, sorteo, spotifyFamilia };
 }
 
 async function patchServicio(clientId, idx, patch = {}, compraId = "") {

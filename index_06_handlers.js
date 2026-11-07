@@ -4861,6 +4861,7 @@ bot.on("callback_query", async (q) => {
     if (!adminOk && !vendOk) return bot.sendMessage(chatId, "⛔ Acceso denegado");
     if (data.startsWith("bz:r:")) { await require("./index_36_socios_telegram").tryCallback(q,{vend}); return; }
     if (data.startsWith("baul:")) { await require("./index_37_baul_apks").tryCallback(q,{adminOk,superOk,vend}); return; } // R187 · Baúl de APKs + URLs TV (permisos en el módulo)
+    if (data.startsWith("spf:")) { await require("./index_38_spotify_familias").tryCallback(q,{adminOk,superOk,vend}); return; } // R188 · Spotify Familiar (permisos en el módulo)
 
     const neededPermission = callbackPermission(data);
     if (neededPermission === "self-service" && !vendOk) return bot.sendMessage(chatId, "⛔ Esta opción corresponde a su perfil de vendedor.");
@@ -7057,6 +7058,7 @@ bot.on("message", async (msg) => {
     // Oct-2026 · Buzón de dos vías: respuesta nativa o botón "Responder consulta #C…" (nunca por suposición).
     if ((adminOk || vendOk) && await require("./index_36_socios_telegram").tryMensaje(msg,{adminOk,superOk,vend})) return;
     if ((adminOk || vendOk) && await require("./index_37_baul_apks").tryMensaje(msg,{adminOk,superOk,vend})) return; // R187 · /baul, /urltv
+    if ((adminOk || vendOk) && await require("./index_38_spotify_familias").tryMensaje(msg,{adminOk,superOk,vend})) return; // R188 · /spotify
 
     // Si hay wizard activo y mandan un comando que no sea menu/start, avisar
     if (wizard.has(String(chatId)) && text.startsWith("/")) {
