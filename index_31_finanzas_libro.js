@@ -459,6 +459,69 @@ function iniciarCosteoAutomatico() {
   setInterval(() => correrCosteoBot(), 10 * 60 * 1000);
 }
 
+// ---------------------------------------------------------------- R192 · Cierre del ciclo desde Telegram (MISMO estado que APK/Web)
+// Mismo documento y misma transacción que Sublichat HQ (api/finanzas.js · guardar_cierre_ciclo): finanzas_ciclos/{cicloId} +
+// finanzas_config/libro_mayor. Idempotente por cicloId (cerrar dos veces devuelve el mismo cierre). No toca saldos ni movimientos:
+// los bancos conservan lo que dicen sus movimientos y el ciclo nuevo arranca el día siguiente al cierre.
+function ultimoDiaMesAnterior(hoy) { const [y, m] = hoy.split("-").map(Number); const d = new Date(Date.UTC(y, m - 1, 0)); return d.toISOString().slice(0, 10); }
+async function cierresRegistrados() {
+  try { return (await db.collection("finanzas_ciclos").orderBy("cerradoAt", "desc").limit(6).get()).docs.map((d) => ({ id: d.id, ...(d.data() || {}) })); } catch (_) { return []; }
+}
+function fechaSugeridaCierre(libro, hoy) { const fin = ultimoDiaMesAnterior(hoy); return libro.cicloInicio <= fin ? fin : hoy; }
+async function cerrarCicloBot({ fechaFin, fechaInicio = "", actor = {}, nota = "" }) {
+  const hoy = hoyYmd();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(fechaFin || "")) || fechaFin > hoy) throw new Error("La fecha de cierre no puede ser futura.");
+  const now = new Date().toISOString();
+  return db.runTransaction(async (tx) => {
+    const { methods, libro, movimientos } = await estadoLibro(tx);
+    if (fechaFin < libro.cicloInicio) throw new Error("La fecha de cierre es anterior al inicio del ciclo.");
+    const cicloRef = db.collection("finanzas_ciclos").doc(libro.cicloId);
+    const ya = await tx.get(cicloRef);
+    if (ya.exists && ya.data()?.estado === "cerrado") return { duplicado: true, cierre: { id: cicloRef.id, ...(ya.data() || {}) } };
+    const hastaFin = movimientos.filter((m) => { const f = R.movementYmd(m); return f && f <= fechaFin; });
+    const inicioCierre = /^\d{4}-\d{2}-\d{2}$/.test(fechaInicio) && fechaInicio >= libro.cicloInicio && fechaInicio <= fechaFin ? fechaInicio : libro.cicloInicio;
+    const totales = R.cycleTotals(hastaFin, inicioCierre, fechaFin);
+    const saldos = R.bankBalances(hastaFin, libro, methods);
+    const cierre = {
+      cicloId: libro.cicloId, estado: "cerrado", fechaInicio: inicioCierre, fechaFin, ...totales,
+      saldoRetenido: saldos.total, saldosBancos: saldos.bancos.filter((b) => b.activado).map((b) => ({ bancoId: b.id, banco: b.nombre, inicial: b.base, ingresos: b.ingresos, egresosOperativos: b.egresosOperativos, planilla: b.planilla, ajustes: b.ajustes, final: b.saldo, movimientos: b.movimientos })), // mismos campos que HQ
+      nota: String(nota || "").slice(0, 300), cerradoPor: actor.usuario || "sublicuentas", rol: "telegram", cerradoAt: now, origenCanal: "tg",
+    };
+    tx.set(cicloRef, cierre);
+    const nuevoInicio = R.addDaysYmd(fechaFin, 1);
+    const bases = {};
+    for (const b of saldos.bancos) if (b.activado) bases[b.id] = { saldo: b.saldo, desde: nuevoInicio, origen: `cierre ${libro.cicloId}` };
+    tx.set(LIBRO(), { bases, cicloInicio: nuevoInicio, cicloId: `ciclo_${nuevoInicio}`, ultimoCierreId: libro.cicloId, ultimoCierreFin: fechaFin, updatedAt: now }, { merge: false });
+    tx.set(db.collection("auditoria_eventos").doc(), { tipo: "finanzas_cierre_ciclo", cicloId: libro.cicloId, fechaInicio: libro.cicloInicio, fechaFin, resultado: totales.resultado, saldoRetenido: saldos.total, cerradoPor: actor.usuario || "", rol: "telegram", origen: "tg", createdAt: now });
+    return { duplicado: false, cierre: { id: cicloRef.id, ...cierre }, nuevoCiclo: { id: `ciclo_${nuevoInicio}`, inicio: nuevoInicio } };
+  });
+}
+async function panelCierreCiclo(chatId) {
+  const [{ libro }, cierres] = await Promise.all([estadoLibro(), cierresRegistrados()]);
+  const hoy = hoyYmd(), sug = fechaSugeridaCierre(libro, hoy), dias = R.daysBetweenYmd(libro.cicloInicio, hoy) + 1;
+  const mesAnteriorAbierto = libro.cicloInicio <= ultimoDiaMesAnterior(hoy);
+  const txt = [
+    "🔒 *CIERRE DEL CICLO FINANCIERO*", "",
+    `Ciclo vigente: *ABIERTO* desde ${ymdToDmy(libro.cicloInicio)} (día ${dias}).`,
+    cierres.length ? `Último cierre registrado: ${ymdToDmy(cierres[0].fechaInicio)} → ${ymdToDmy(cierres[0].fechaFin)} · por ${cierres[0].cerradoPor || "—"}${cierres[0].origenCanal ? ` (${cierres[0].origenCanal})` : ""}` : "Último cierre registrado: *ninguno*.",
+    "", ...(mesAnteriorAbierto ? [`⚠️ No hay cierre registrado al ${ymdToDmy(ultimoDiaMesAnterior(hoy))}. El «🧾 Cierre de caja» es solo un reporte: no cierra el ciclo.`, ""] : []),
+    "Cerrar congela el periodo; los bancos conservan su saldo y el ciclo nuevo empieza el día siguiente. Lo mismo se ve en la APK y en Sublichat Web.",
+  ].join("\n");
+  const kb = [[{ text: `🔒 Cerrar hasta ${ymdToDmy(sug)}`, callback_data: `fl:cc:pre:${sug}` }]];
+  if (sug !== hoy) kb.push([{ text: `Cerrar hasta hoy ${ymdToDmy(hoy)}`, callback_data: `fl:cc:pre:${hoy}` }]);
+  kb.push([{ text: "⬅️ Ciclo", callback_data: "fl:menu" }]);
+  return upsertPanel(chatId, txt, kb);
+}
+async function previaCierreCiclo(chatId, fechaFin) {
+  const { libro, movimientos, methods } = await estadoLibro();
+  const hasta = movimientos.filter((m) => { const f = R.movementYmd(m); return f && f <= fechaFin; });
+  const t = R.cycleTotals(hasta, libro.cicloInicio, fechaFin), sal = R.bankBalances(hasta, libro, methods);
+  const txt = [`🔒 *¿Cerrar el ciclo ${ymdToDmy(libro.cicloInicio)} → ${ymdToDmy(fechaFin)}?*`, "",
+    `💵 Ingresos: ${lps(t.ingresos)}`, `🧾 Egresos operativos: −${lps(t.egresosOperativos)}`, `👥 Planilla: −${lps(t.planilla)}`, `= Resultado: *${lps(t.resultado)}*`,
+    `🏦 Saldo retenido en bancos: ${lps(sal.total)}`, "", `El ciclo nuevo empezará el ${ymdToDmy(R.addDaysYmd(fechaFin, 1))}. No se borra ni se cambia ningún movimiento.`].join("\n");
+  return upsertPanel(chatId, txt, [[{ text: "✅ Confirmar cierre", callback_data: `fl:cc:ok:${fechaFin}` }], [{ text: "Cancelar", callback_data: "fl:cc" }]]);
+}
+
 async function menuLibro(chatId) {
   const [{ libro, totales: t, saldos }, sinBanco, cart] = await Promise.all([estadoLibro(), movimientosSinBanco().catch(() => []), carteraResumen().catch(() => ({ clientes: 0, vendedores: 0 }))]);
   const bancos = saldos.bancos.filter((b) => b.activado);
@@ -476,6 +539,7 @@ async function menuLibro(chatId) {
     [{ text: "🏷 Movimientos sin banco", callback_data: "fl:sb:list:0" }, { text: "🗓 Ajustar fecha de pago", callback_data: "fl:fd:list:0" }],
     [{ text: "🏢 Empresa (tablero, Binance, inventario)", callback_data: "fl:emp" }],
     [{ text: "📊 Estados financieros", callback_data: "fl:ef" }, { text: "🧮 Cuadre TG vs APK", callback_data: "fl:cuadre" }],
+    [{ text: "🔒 Cierre del ciclo", callback_data: "fl:cc" }], // R192
     [{ text: "🔄 Actualizar", callback_data: "fl:menu" }, { text: "🏠 Inicio", callback_data: "go:inicio" }],
   ]);
 }
@@ -828,6 +892,13 @@ async function handleCallback(chatId, userId, data) {
   try {
     if (data === "fl:emp" || data.startsWith("fl:emp:")) return require("./index_33_empresa_tg").callback(chatId, userId, data); // R140 · 🏢 Empresa en Telegram
     if (data === "fl:menu") return menuLibro(chatId);
+    if (data === "fl:cc") return panelCierreCiclo(chatId); // R192
+    if (data.startsWith("fl:cc:pre:")) { const f = data.slice(10); if (!/^\d{4}-\d{2}-\d{2}$/.test(f)) return; return previaCierreCiclo(chatId, f); }
+    if (data.startsWith("fl:cc:ok:")) {
+      const f = data.slice(9); if (!/^\d{4}-\d{2}-\d{2}$/.test(f)) return;
+      const r = await cerrarCicloBot({ fechaFin: f, actor: await actorDe(userId) });
+      return upsertPanel(chatId, r.duplicado ? `ℹ️ Ese ciclo ya estaba cerrado (${ymdToDmy(r.cierre.fechaInicio)} → ${ymdToDmy(r.cierre.fechaFin)}). No se cerró dos veces.` : `✅ *Ciclo cerrado* ${ymdToDmy(r.cierre.fechaInicio)} → ${ymdToDmy(r.cierre.fechaFin)}.\nResultado: ${lps(r.cierre.resultado)} · Bancos: ${lps(r.cierre.saldoRetenido)}\nCiclo nuevo desde ${ymdToDmy(r.nuevoCiclo.inicio)} (igual en APK y Web).`, [[{ text: "⬅️ Ciclo", callback_data: "fl:menu" }]]);
+    }
     if (data === "fl:ef" || data.startsWith("fl:ef:")) return require("./index_32_estados_financieros").panelEstados(chatId, data.slice(6)); // R134
     if (data.startsWith("fl:efx:")) return require("./index_32_estados_financieros").enviarExcelEstados(chatId, data.slice(7)); // R134
     if (data === "fl:cuadre") return cuadreTgApkR132(chatId);
@@ -1071,4 +1142,4 @@ async function handleText(chatId, userId, text, p) {
   return bot.sendMessage(chatId, "Use los botones del panel o toque ❌ Cancelar.");
 }
 
-module.exports = { leerMovimientosDesde: async (desde) => (await movQuery(desde).get()).docs.map((d) => ({ id: d.id, ...(d.data() || {}) })), fechaCampos, correrCosteoBot, iniciarCosteoAutomatico, cuadreTgApkR132, repararFechasR132, descuadresFechaR132, corregirMovimientoTg, motivoBloqueoAnular, anularMovimientoTg, newOpId, actorDe, unidadesSocio, pagoSocioDisponible, pagosSociosSinFicha, vincularFichaSocio, iniciarCuentaCompleta, iniciarPagoCompra, registrarOperacionPago, registrarAbonoTg, carteraResumen, registrarSaldoInicial, registrarAjuste, bancoDesdeBoton, movimientosSinBanco, configurar, esLibroUser, iniciarPagoRenovacion, handleCallback, handleText, menuLibro, estadoLibro, loadMethods, registrarCobroRenovacion, confirmarPagoPlanilla, usuarioCanonico, usuarioLabel, ajustarFechaMovimiento };
+module.exports = { cerrarCicloBot, panelCierreCiclo, fechaSugeridaCierre, leerMovimientosDesde: async (desde) => (await movQuery(desde).get()).docs.map((d) => ({ id: d.id, ...(d.data() || {}) })), fechaCampos, correrCosteoBot, iniciarCosteoAutomatico, cuadreTgApkR132, repararFechasR132, descuadresFechaR132, corregirMovimientoTg, motivoBloqueoAnular, anularMovimientoTg, newOpId, actorDe, unidadesSocio, pagoSocioDisponible, pagosSociosSinFicha, vincularFichaSocio, iniciarCuentaCompleta, iniciarPagoCompra, registrarOperacionPago, registrarAbonoTg, carteraResumen, registrarSaldoInicial, registrarAjuste, bancoDesdeBoton, movimientosSinBanco, configurar, esLibroUser, iniciarPagoRenovacion, handleCallback, handleText, menuLibro, estadoLibro, loadMethods, registrarCobroRenovacion, confirmarPagoPlanilla, usuarioCanonico, usuarioLabel, ajustarFechaMovimiento };

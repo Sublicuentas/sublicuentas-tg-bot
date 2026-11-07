@@ -644,12 +644,15 @@ function resumenFinanzasTextoPorFecha(fecha, list = []) {
 function resumenBancosMesTexto(monthKey, list = []) { const label = monthLabelFromKeyLocal(monthKey); return resumenBancosRangoTexto(label, label, list).replace(`— ${label} al ${label}`, `— ${label}`); }
 function resumenTopPlataformasTexto(monthKey, list = []) { return resumenTopPlataformasGenerico(monthLabelFromKeyLocal(monthKey), list); }
 
+// R192 · El «Cierre de caja» de Telegram es un REPORTE: nunca cerró el ciclo financiero (por eso la APK seguía con el ciclo
+// abierto desde el 01/10 aunque se pidió el reporte el 31/10). Se aclara aquí y el cierre real está en 💼 Finanzas → 🔒 Cierre del ciclo.
+const NOTA_CIERRE_CAJA_R192 = "\n\nℹ️ Esto es un reporte del periodo: NO cierra el ciclo financiero. Para cerrarlo: 💼 Finanzas → 🔒 Cierre del ciclo.";
 function cierreCajaTexto(fecha, list = []) {
   let ingresos = 0, egresos = 0;
   for (const m of Array.isArray(list) ? list : []) { const monto = Number(m.monto || 0); if (String(m.tipo||"").toLowerCase() === "egreso") egresos += monto; else ingresos += monto; }
   const utilidad = ingresos - egresos;
   const color = utilidad < 0 ? "🔴" : utilidad === 0 ? "🟡" : "🟢";
-  return `🧾 CIERRE DE CAJA\n(${String(fecha || "")})\n\n💰 Entradas: ${moneyLps(ingresos)}\n💸 Salidas: ${moneyLps(egresos)}\n📦 Caja final: ${utilidad >= 0 ? "+" : ""}${moneyLps(utilidad)} ${color}\n🧮 Movimientos: ${Array.isArray(list) ? list.length : 0}`;
+  return `🧾 CIERRE DE CAJA\n(${String(fecha || "")})\n\n💰 Entradas: ${moneyLps(ingresos)}\n💸 Salidas: ${moneyLps(egresos)}\n📦 Caja final: ${utilidad >= 0 ? "+" : ""}${moneyLps(utilidad)} ${color}\n🧮 Movimientos: ${Array.isArray(list) ? list.length : 0}${NOTA_CIERRE_CAJA_R192}`;
 }
 
 function cierreCajaTextoRango(fechaInicio, fechaFin, list = []) {
@@ -657,7 +660,7 @@ function cierreCajaTextoRango(fechaInicio, fechaFin, list = []) {
   for (const m of Array.isArray(list) ? list : []) { const monto = Number(m.monto || 0); if (String(m.tipo||"").toLowerCase() === "egreso") egresos += monto; else ingresos += monto; }
   const utilidad = ingresos - egresos;
   const color = utilidad < 0 ? "🔴" : utilidad === 0 ? "🟡" : "🟢";
-  return `🧾 CIERRE DE CAJA\n(${String(fechaInicio || "")} al ${String(fechaFin || "")})\n\n💰 Entradas: ${moneyLps(ingresos)}\n💸 Salidas: ${moneyLps(egresos)}\n📦 Caja final: ${utilidad >= 0 ? "+" : ""}${moneyLps(utilidad)} ${color}\n🧮 Movimientos: ${Array.isArray(list) ? list.length : 0}`;
+  return `🧾 CIERRE DE CAJA\n(${String(fechaInicio || "")} al ${String(fechaFin || "")})\n\n💰 Entradas: ${moneyLps(ingresos)}\n💸 Salidas: ${moneyLps(egresos)}\n📦 Caja final: ${utilidad >= 0 ? "+" : ""}${moneyLps(utilidad)} ${color}\n🧮 Movimientos: ${Array.isArray(list) ? list.length : 0}${NOTA_CIERRE_CAJA_R192}`;
 }
 
 async function resumenFinancieroPorMonthKey(monthKey) {

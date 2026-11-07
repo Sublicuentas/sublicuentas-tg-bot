@@ -72,6 +72,8 @@ async function verDispositivo(chatId, plat, disp, ctx) {
   const v = B.vistaPlataforma(await B.leerBaul(db), plat, { incluirInactivos: editor });
   const d = (v.dispositivos || []).find((x) => x.id === disp);
   const rows = [];
+  // R192 · mensaje listo para el cliente (el mismo texto que copia la APK y la Web), para reenviarlo por WhatsApp
+  if (d) d.enlaces.filter((e) => e.activo !== false).forEach((e, i) => rows.push([{ text: `📋 Mensaje para el cliente${d.enlaces.length > 1 ? ` · opción ${i + 1} (${e.app})` : ''}`, callback_data: `baul:msg:${plat}:${e.id}` }]));
   if (editor && d) for (const e of d.enlaces) rows.push([
     { text: `✏️ ${e.app}`, callback_data: `baul:e:${e.id}` },
     { text: e.activo === false ? "▶️ Activar" : "⏸️ Desactivar", callback_data: `baul:a:${e.activo === false ? 1 : 0}:${e.id}` },
@@ -105,6 +107,10 @@ async function tryCallback(q, ctx = {}) {
     if (p[1] === "p") return await menuDispositivos(chatId, p[2], ctx), true;
     if (p[1] === "d") return await verDispositivo(chatId, p[2], p[3], ctx), true;
     if (p[1] === "u") return await menuUrls(chatId, ctx), true;
+    if (p[1] === "msg") { // R192 · texto plano, fácil de copiar o reenviar (no se envía solo al cliente)
+      const v = B.vistaPlataforma(await B.leerBaul(db), p[2]); const e = v.dispositivos.flatMap((x) => x.enlaces).find((x) => x.id === p[3]);
+      await bot.sendMessage(chatId, e ? e.mensaje : "Ese enlace ya no está disponible."); return true;
+    }
     if (p[1] === "a") { await B.activarEnlace(db, p[3], p[2] === "1", u); await bot.sendMessage(chatId, p[2] === "1" ? "✅ Enlace activado." : "⏸️ Enlace desactivado (ya no se ofrece)."); return true; }
     if (p[1] === "x") { await enviar(chatId, `¿Eliminar el enlace <b>${esc(p[2])}</b>? No se puede deshacer.`, [[{ text: "🗑️ Sí, eliminar", callback_data: `baul:xs:${p[2]}` }]]); return true; }
     if (p[1] === "xs") { await B.eliminarEnlace(db, p[2], u); await bot.sendMessage(chatId, "🗑️ Enlace eliminado (queda en auditoría)."); return true; }

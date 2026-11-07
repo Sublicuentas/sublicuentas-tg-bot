@@ -50,6 +50,34 @@ const SEMILLA = Object.freeze({
 });
 const AVISO_INSTALACION = "Para APK externas: instale Downloader si corresponde, active el permiso de instalar desde esa fuente y use solo estos enlaces. Si no instala por falta de espacio, libere espacio borrando a mano una app que no use (Sublichat no borra nada).";
 
+// R192 · Mensaje listo para el CLIENTE (WhatsApp), armado en el servidor desde el MISMO registro que ven Web, APK y bot.
+// Pasos según cómo se instala; código y enlace solo cuando corresponden; en iPhone nunca se habla de APK ni Downloader.
+const NOMBRE_DISP_CLIENTE = Object.freeze({ android_tv: "Android TV / TV Box", fire_tv: "Fire TV / Fire Stick", android_movil: "Celular o tableta Android", smart_tv: "Smart TV Samsung o LG", iphone: "iPhone / iPad", pc: "PC / Laptop" });
+function pasosInstalacion(e, app) {
+  const espacio = "Si no instala por falta de espacio, libere espacio borrando a mano una app que no use.";
+  if (e.codigo && ["android_tv", "fire_tv", "android_movil"].includes(e.dispositivo)) return [
+    "Instale la app «Downloader» desde la tienda de su equipo.", "Active el permiso para instalar apps desde Downloader.",
+    `En Downloader escriba el código ${e.codigo} y toque Ir.`, `Instale ${app} y ábrala.`, espacio];
+  if (e.metodo === "app_store") return ["Abra el enlace de App Store.", `Instale ${app}.`, "Solicite sus datos de acceso."];
+  if (e.metodo === "play_store") return [`Abra Google Play (o el enlace) y busque ${app}.`, "Instálela y ábrala."];
+  if (e.metodo === "tv_store") return ["Abra la tienda de aplicaciones de su TV.", `Busque ${app} e instálela.`];
+  if (e.metodo === "web") return ["Abra el enlace en su navegador.", "Ingrese con sus datos de acceso."];
+  if (e.metodo === "downloader") return ["Instale la app «Downloader» desde la tienda de su equipo.", "Active el permiso para instalar apps desde Downloader.", "En Downloader pegue el enlace y toque Ir.", `Instale ${app} y ábrala.`, espacio];
+  return ["Abra el enlace en su equipo.", "Permita instalar desde esta fuente si se lo pide.", `Instale ${app} y ábrala.`, espacio];
+}
+const METODO_CLIENTE = Object.freeze({ apk: "Descarga directa", downloader: "Con Downloader", play_store: "Google Play", app_store: "App Store", tv_store: "Tienda del TV", web: "Página web" });
+function mensajeCliente(e = {}, { plataforma = "", app = "" } = {}) {
+  const nombreApp = app || e.app || e.appId || "la aplicación";
+  const usaCodigo = !!e.codigo && ["android_tv", "fire_tv", "android_movil"].includes(e.dispositivo);
+  const lineas = [`SUBLICUENTAS | Instalación de ${plataforma || "su servicio"}`, `Dispositivo: ${NOMBRE_DISP_CLIENTE[e.dispositivo] || e.dispositivo || "—"}`, `Aplicación: ${nombreApp}`, `Instalación: ${usaCodigo ? "Con Downloader" : (METODO_CLIENTE[e.metodo] || e.metodo || "—")}`];
+  if (usaCodigo) lineas.push(`Código Downloader: ${e.codigo}`);
+  else if (e.url) lineas.push(`Enlace: ${e.url}`);
+  lineas.push("", "Pasos:", ...pasosInstalacion(e, nombreApp).map((p, i) => `${i + 1}. ${p}`));
+  if (e.costoExterno && e.costoExterno.texto) lineas.push("", `Importante: ${e.costoExterno.texto}`);
+  lineas.push("", "Soporte: escríbanos si necesita ayuda con la instalación.");
+  return lineas.join("\n");
+}
+
 const COL = "configuracion_tv_digital", DOC = "baul_apks";
 const clean = (v, n = 200) => String(v == null ? "" : v).trim().slice(0, n);
 const idOk = (v) => /^[a-z0-9-]{2,40}$/.test(String(v || ""));
@@ -84,7 +112,8 @@ function vistaPlataforma(baul, plataformaId, { incluirInactivos = false } = {}) 
   const apps = new Map(baul.apps.map((a) => [a.id, a.nombre]));
   const enl = baul.enlaces.filter((e) => (incluirInactivos || e.activo !== false) && (e.plataformas || []).includes(plataformaId)).sort((a, b) => (a.prioridad || 99) - (b.prioridad || 99));
   const porDisp = {};
-  for (const e of enl) (porDisp[e.dispositivo] = porDisp[e.dispositivo] || []).push({ ...e, app: apps.get(e.appId) || e.appId, metodoTxt: METODOS[e.metodo] || e.metodo, dispositivoTxt: DISPOSITIVOS[e.dispositivo] || e.dispositivo, compartidaCon: (e.plataformas || []).filter((p) => p !== plataformaId) });
+  const pNombre = (PLATAFORMAS.find((x) => x.id === plataformaId) || {}).nombre || plataformaId;
+  for (const e of enl) (porDisp[e.dispositivo] = porDisp[e.dispositivo] || []).push({ ...e, mensaje: mensajeCliente(e, { plataforma: pNombre, app: apps.get(e.appId) || e.appId }), app: apps.get(e.appId) || e.appId, metodoTxt: METODOS[e.metodo] || e.metodo, dispositivoTxt: DISPOSITIVOS[e.dispositivo] || e.dispositivo, compartidaCon: (e.plataformas || []).filter((p) => p !== plataformaId) });
   const p = PLATAFORMAS.find((x) => x.id === plataformaId);
   return { plataforma: plataformaId, nombre: p ? p.nombre : plataformaId, dispositivos: Object.keys(DISPOSITIVOS).filter((k) => porDisp[k]).map((k) => ({ id: k, nombre: DISPOSITIVOS[k], enlaces: porDisp[k] })), aviso: AVISO_INSTALACION };
 }
@@ -150,4 +179,4 @@ async function eliminarEnlace(db, id, usuario = "") {
   }, "eliminar_enlace");
 }
 
-module.exports = { PLATAFORMAS, DISPOSITIVOS, METODOS, SEMILLA, AVISO_INSTALACION, validarUrlDescarga, validarCodigo, leerBaul, vistaPlataforma, guardarEnlace, activarEnlace, eliminarEnlace, _limpiarCache: () => { cache = { at: 0, data: null }; } };
+module.exports = { mensajeCliente, pasosInstalacion, PLATAFORMAS, DISPOSITIVOS, METODOS, SEMILLA, AVISO_INSTALACION, validarUrlDescarga, validarCodigo, leerBaul, vistaPlataforma, guardarEnlace, activarEnlace, eliminarEnlace, _limpiarCache: () => { cache = { at: 0, data: null }; } };
