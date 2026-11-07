@@ -1,0 +1,219 @@
+diff --git a/index_03_clientes_crm.js b/index_03_clientes_crm.js
+index ad7e74d..ec489c2 100644
+--- a/index_03_clientes_crm.js
++++ b/index_03_clientes_crm.js
+@@ -1,3 +1,4 @@
++const MOTOR_RENOVACION = require("./lib_renovacion_motor"); // R186 · motor único de fechas
+ /* ✅ SUBLICUENTAS TG BOT — PARTE 3/6 OPTIMIZADA v5
+    CLIENTES / CRM / WIZARD / TXT / RENOVACIONES / HISTORIAL REAL
+    -----------------------------------------------
+@@ -498,11 +499,17 @@ function addDaysDMY(baseDmy = "", days = 0) {
+ //   · Se cuenta SIEMPRE desde la fecha de vencimiento (si vencía el 1 y renueva el 4, se cuenta desde el 1).
+ //     Solo si el servicio no tiene fecha válida se usa hoy.
+ //   · 1 mes = 30 días exactos (2 meses = 60, 3 = 90, 6 = 180, 12 = 360). "+31 días" = 31 días.
+-function sumarDuracionRenovacionLocal(fechaAnterior = "", { dias = 0, meses = 0 } = {}) {
+-  const base = isFechaDMY(fechaAnterior) ? fechaAnterior : hoyDMY();
++// R186 (07/11/2026) · Motor único (lib_renovacion_motor.js = api/_renovacion-motor.js de Sublichat):
++//   · 1 mes = 30 días · +N días = N días · 2+ meses = meses CALENDARIO (04/11 + 3 m = 04/02) con día ancla.
++function calcRenovacionLocal(fechaAnterior = "", { dias = 0, meses = 0, diaAncla } = {}) {
++  const valida = isFechaDMY(fechaAnterior);
++  const base = valida ? fechaAnterior : hoyDMY();
+   const m = Number(meses || 0);
+-  const total = m > 0 ? m * 30 /* 1 mes = 30 días */ : Number(dias || 0);
+-  return addDaysDMY(base, total);
++  const r = MOTOR_RENOVACION.sumarPeriodo(base, m > 0 ? { unidad: "meses", cantidad: m, diaAncla: valida ? diaAncla : undefined } : { unidad: "dias", cantidad: Number(dias || 0) });
++  return { fechaNueva: r.fechaNueva, diaAncla: r.diaAncla, regla: r.regla };
++}
++function sumarDuracionRenovacionLocal(fechaAnterior = "", { dias = 0, meses = 0, diaAncla } = {}) {
++  return calcRenovacionLocal(fechaAnterior, { dias, meses, diaAncla }).fechaNueva;
+ }
+ 
+ function mesesEntreDMYLocal(inicio = "", fin = "") {
+@@ -1678,6 +1685,8 @@ async function mutarServiciosClienteTx(clientId, mutador, extra = null) { // R10
+     const doc = await tx.get(ref);
+     if (!doc.exists) throw new Error("Cliente no encontrado.");
+     const lecturaExtra = extra && typeof extra.leer === "function" ? await extra.leer(tx) : null; // lecturas antes de escribir
++    // R186 · Mismo cobro reenviado (doble toque / reintento): el pago ya existe → no se vuelve a mover ninguna fecha.
++    if (lecturaExtra && lecturaExtra.yaExiste === true) return { duplicadoPago: true, pagoOperacion: { duplicado: true }, cliente: doc.data() || {}, servicios: Array.isArray((doc.data() || {}).servicios) ? doc.data().servicios : [] };
+     const cliente = doc.data() || {};
+     // Migración progresiva: al tocar cualquier ficha antigua aseguramos IDs
+     // persistentes para todas sus compras y perfiles, sin cambiar sus datos.
+@@ -2133,9 +2142,10 @@ async function renovarServicioTx(clientId, idx, { dias = 0, meses = 0, fechaExac
+ 
+     const anterior = servicios[actualIdx] || {};
+     const fechaAnterior = String(anterior.fechaRenovacion || "");
++    const calc = fechaExacta ? null : calcRenovacionLocal(fechaAnterior, { dias, meses, diaAncla: anterior.diaAncla });
+     const fechaNueva = fechaExacta
+       ? String(fechaExacta || "").trim()
+-      : sumarDuracionRenovacionLocal(fechaAnterior, { dias, meses });
++      : calc.fechaNueva;
+ 
+     if (!isFechaDMY(fechaNueva)) throw new Error("Fecha inválida.");
+ 
+@@ -2152,6 +2162,7 @@ async function renovarServicioTx(clientId, idx, { dias = 0, meses = 0, fechaExac
+     const siguiente = {
+       ...anterior,
+       fechaRenovacion: fechaNueva,
++      diaAncla: calc ? calc.diaAncla : Number(String(fechaNueva).split("/")[0]) || null, // R186
+       mesesContratados,
+       ultimaRenovacionAt: renovadoAt,
+       ultimaRenovacionFechaAnterior: fechaAnterior,
+@@ -2244,9 +2255,10 @@ async function renovarTodosServiciosTx(clientId, { dias = 0, meses = 0, fechaExa
+     const siguientes = servicios.map((s, index) => {
+       const fechaAnterior = String(s?.fechaRenovacion || "");
+       const base = isFechaDMY(fechaAnterior) ? fechaAnterior : hoyDMY();
++      const calcT = fechaExacta ? null : calcRenovacionLocal(fechaAnterior, { dias, meses, diaAncla: s?.diaAncla });
+       const fechaNueva = fechaExacta
+         ? String(fechaExacta || "").trim()
+-        : sumarDuracionRenovacionLocal(fechaAnterior, { dias, meses });
++        : calcT.fechaNueva;
+ 
+       if (!isFechaDMY(fechaNueva)) throw new Error("Fecha inválida.");
+ 
+@@ -2267,6 +2279,7 @@ async function renovarTodosServiciosTx(clientId, { dias = 0, meses = 0, fechaExa
+       const siguiente = {
+         ...(s || {}),
+         fechaRenovacion: fechaNueva,
++        diaAncla: calcT ? calcT.diaAncla : Number(String(fechaNueva).split("/")[0]) || null, // R186
+         mesesContratados,
+         ultimaRenovacionAt: renovadoAt,
+         ultimaRenovacionFechaAnterior: fechaAnterior,
+diff --git a/index_06_handlers.js b/index_06_handlers.js
+index 1d9d22d..d000bd5 100644
+--- a/index_06_handlers.js
++++ b/index_06_handlers.js
+@@ -7844,24 +7844,33 @@ bot.on("message", async (msg) => {
+ 
+       if (p.mode === "cliRenovarFechaManualAll") {
+         // Acepta: dd/mm/yyyy | +40 | +3m | +90 — aplica a TODOS los servicios del cliente
+-        let fechaFinal = "", diasManualTodos = 0;
++        let fechaFinal = "", diasManualTodos = 0, mesesManualTodos = 0;
+         const tClean = t.trim();
+ 
+         if (isFechaDMY(tClean)) {
+           fechaFinal = tClean;
+         } else if (/^\+\d+m?$/i.test(tClean)) {
+-          // R163 · +3m = 3 × 30 días · +40 = 40 días — cada servicio desde SU fecha de vencimiento.
++          // R186 · +40 = 40 días · +1m = 30 días · +3m = 3 meses calendario — cada servicio desde SU fecha de vencimiento.
+           const n = parseInt(tClean.slice(1), 10);
+-          diasManualTodos = /m$/i.test(tClean) ? n * 30 : n;
+-          if (!(diasManualTodos > 0 && diasManualTodos <= 730)) return bot.sendMessage(chatId, "⚠️ Use entre +1 y +730 días (o +1m a +24m).");
++          const esMesT = /m$/i.test(tClean);
++          if (esMesT ? !(n >= 1 && n <= 24) : !(n >= 1 && n <= 730)) return bot.sendMessage(chatId, "⚠️ Use entre +1 y +730 días (o +1m a +24m).");
++          if (esMesT && n > 1) mesesManualTodos = n; else diasManualTodos = esMesT ? 30 : n;
+         } else {
+           return bot.sendMessage(chatId,
+-            "⚠️ Formato inválido.\n\nUse:\n• `dd/mm/yyyy` — fecha exacta\n• `+40` — suma 40 días desde el vencimiento\n• `+3m` — suma 3 meses (90 días) desde el vencimiento",
++            "⚠️ Formato inválido.\n\nUse:\n• `dd/mm/yyyy` — fecha exacta\n• `+40` — suma 40 días desde el vencimiento\n• `+3m` — suma 3 meses calendario desde el vencimiento (+1m = 30 días)",
+             { parse_mode: "Markdown" }
+           );
+         }
+ 
+         forceNextPanelAtBottom(chatId);
++        if (mesesManualTodos) { // R186 · meses calendario
++          pending.delete(String(chatId));
++          if (await finLibro.esLibroUser(userId)) return finLibro.iniciarPagoRenovacion(chatId, userId, { tipo: "todos", clientId: p.clientId, meses: mesesManualTodos, etiqueta: `todos los servicios +${mesesManualTodos} meses` });
++          try { await renovarTodosServiciosTx(p.clientId, { meses: mesesManualTodos }); }
++          catch (e) { logErr("renovar TODOS +meses", e?.stack || e?.message || e); return bot.sendMessage(chatId, `⚠️ No se pudo renovar: ${String(e?.message || "error desconocido").slice(0, 220)}`); }
++          await bot.sendMessage(chatId, `✅ Todos los servicios renovados +${mesesManualTodos} meses (calendario), cada uno desde su fecha de vencimiento.`);
++          return enviarFichaCliente(chatId, p.clientId);
++        }
+         if (diasManualTodos) {
+           pending.delete(String(chatId));
+           if (await finLibro.esLibroUser(userId)) return finLibro.iniciarPagoRenovacion(chatId, userId, { tipo: "todos", clientId: p.clientId, dias: diasManualTodos, etiqueta: `todos los servicios +${diasManualTodos} días` });
+@@ -7896,16 +7905,16 @@ bot.on("message", async (msg) => {
+         if (isFechaDMY(tClean)) {
+           fechaFinal = tClean;
+         } else if (/^\+\d+m?$/i.test(tClean)) {
+-          // R163 · +3m = 3 × 30 días · +40 = 40 días — desde la fecha de vencimiento de este servicio.
++          // R186 · +40 = 40 días · +1m = 30 días · +3m = 3 meses calendario — desde la fecha de vencimiento de este servicio.
+           const n = parseInt(tClean.slice(1), 10);
+-          const diasM = /m$/i.test(tClean) ? n * 30 : n;
+-          if (!(diasM > 0 && diasM <= 730)) return bot.sendMessage(chatId, "⚠️ Use entre +1 y +730 días (o +1m a +24m).");
++          const esMes = /m$/i.test(tClean);
++          if (esMes ? !(n >= 1 && n <= 24) : !(n >= 1 && n <= 730)) return bot.sendMessage(chatId, "⚠️ Use entre +1 y +730 días (o +1m a +24m).");
+           const cM = await getCliente(p.clientId);
+           const sM = (Array.isArray(cM?.servicios) ? cM.servicios : [])[p.idx] || {};
+-          fechaFinal = sumarDuracionRenovacionLocal(String(sM.fechaRenovacion || ""), { dias: diasM });
++          fechaFinal = sumarDuracionRenovacionLocal(String(sM.fechaRenovacion || ""), esMes ? { meses: n, diaAncla: sM.diaAncla } : { dias: n });
+         } else {
+           return bot.sendMessage(chatId,
+-            "⚠️ Formato inválido.\n\nUse:\n• `dd/mm/yyyy` — fecha exacta\n• `+40` — suma 40 días desde el vencimiento\n• `+3m` — suma 3 meses (90 días) desde el vencimiento",
++            "⚠️ Formato inválido.\n\nUse:\n• `dd/mm/yyyy` — fecha exacta\n• `+40` — suma 40 días desde el vencimiento\n• `+3m` — suma 3 meses calendario desde el vencimiento (+1m = 30 días)",
+             { parse_mode: "Markdown" }
+           );
+         }
+diff --git a/tests/r104-finanzas-libro.test.js b/tests/r104-finanzas-libro.test.js
+index 0ec1959..9997571 100644
+--- a/tests/r104-finanzas-libro.test.js
++++ b/tests/r104-finanzas-libro.test.js
+@@ -21,7 +21,7 @@ test("reglas del bot = reglas del servidor/APK (casos del PDF)", () => {
+ 
+ test("Telegram: renovar pide pago real a Sublicuentas/Relojes en todas las rutas; planilla y Excel conectados", () => {
+   const h = fs.readFileSync(path.join(__dirname, "..", "index_06_handlers.js"), "utf8");
+-  assert.equal((h.match(/finLibro\.iniciarPagoRenovacion\(/g) || []).length, 9, "+30, +31, todos +30, todos +31, fecha manual uno y todos, todos +N días (R163) + Oct-2026 duración uno y todos");
++  assert.equal((h.match(/finLibro\.iniciarPagoRenovacion\(/g) || []).length, 10, "+30, +31, todos +30, todos +31, fecha manual uno y todos, todos +N días (R163) + Oct-2026 duración uno y todos + R186 todos +N meses calendario");
+   assert.match(h, /finLibro\.iniciarPagoCompra\(/, "R106: compra nueva pide el pago");
+   assert.match(h, /if \(data\.startsWith\("fl:"\)\) return finLibro\.handleCallback/);
+   assert.match(h, /return finLibro\.handleText\(chatId, userId, t, p\)/);
+diff --git a/tests/r151-vendedores-renovar.test.js b/tests/r151-vendedores-renovar.test.js
+index 9ce55c5..5ecc1ef 100644
+--- a/tests/r151-vendedores-renovar.test.js
++++ b/tests/r151-vendedores-renovar.test.js
+@@ -34,17 +34,17 @@ test("renovar: +31 días, 1, 2, 3, 6 y 12 meses + Personalizado (igual que Web y
+   assert.deepEqual(JSON.parse(m[1]).map((x) => x[1]), ["+31 días", "+1 mes", "+2 meses", "+3 meses", "+6 meses", "+12 meses"]);
+   assert.match(c, /\{ text: "📅 Personalizado", callback_data: `cli:ren:manual:/);
+   // Regla R163: siempre desde el vencimiento (también si ya venció) · 1 mes = 30 días.
+-  const src = c.slice(c.indexOf("function sumarDuracionRenovacionLocal"), c.indexOf("function mesesEntreDMYLocal"));
++  const src = c.slice(c.indexOf("function calcRenovacionLocal"), c.indexOf("function mesesEntreDMYLocal")); // R186: motor único
+   const hoy = "15/10/2026";
+   const parse = (d) => { const [dd, mm, yy] = d.split("/").map(Number); return new Date(yy, mm - 1, dd, 12); };
+-  const fn = new Function("hoyDMY", "isFechaDMY", "parseDMYtoTS", "parseDMYtoDate", "addDaysDMY", `${src}; return sumarDuracionRenovacionLocal;`)(
++  const fn = new Function("hoyDMY", "isFechaDMY", "parseDMYtoTS", "parseDMYtoDate", "addDaysDMY", "MOTOR_RENOVACION", `${src}; return sumarDuracionRenovacionLocal;`)(
+     () => hoy, (d) => /^\d{2}\/\d{2}\/\d{4}$/.test(d || ""), (d) => parse(d).getTime(), (d) => parse(d),
+-    (b, n) => { const x = parse(b); x.setDate(x.getDate() + n); return `${String(x.getDate()).padStart(2, "0")}/${String(x.getMonth() + 1).padStart(2, "0")}/${x.getFullYear()}`; });
++    (b, n) => { const x = parse(b); x.setDate(x.getDate() + n); return `${String(x.getDate()).padStart(2, "0")}/${String(x.getMonth() + 1).padStart(2, "0")}/${x.getFullYear()}`; }, require("../lib_renovacion_motor"));
+   assert.equal(fn("20/10/2026", { dias: 31 }), "20/11/2026", "vigente: desde el vencimiento");
+   assert.equal(fn("01/10/2026", { dias: 31 }), "01/11/2026", "vencido: también desde el vencimiento");
+   assert.equal(fn("31/10/2026", { meses: 1 }), "30/11/2026", "1 mes = 30 días");
+   assert.equal(fn("01/10/2026", { meses: 1 }), "31/10/2026", "1 mes = 30 días aunque octubre tenga 31");
+-  assert.equal(fn("20/10/2026", { meses: 12 }), "15/10/2027", "12 meses = 360 días");
++  assert.equal(fn("20/10/2026", { meses: 12 }), "20/10/2027", "R186: 12 meses = meses calendario");
+ });
+ 
+ test("moneda: L pegado al número", () => {
+diff --git a/tests/r163-renovacion-30-dias.test.js b/tests/r163-renovacion-30-dias.test.js
+index 9a1f4bb..d2565c6 100644
+--- a/tests/r163-renovacion-30-dias.test.js
++++ b/tests/r163-renovacion-30-dias.test.js
+@@ -1,4 +1,5 @@
+ // R163 · Renovación en el bot: 1 mes = 30 días, +31 días = 31, siempre desde la fecha de vencimiento.
++// R186 (07/11/2026): 2+ meses = meses calendario (04/11 + 3 m = 04/02), regla aprobada por Sublicuentas.
+ const test = require("node:test");
+ const assert = require("node:assert/strict");
+ const fs = require("node:fs");
+@@ -6,17 +7,18 @@ const path = require("node:path");
+ 
+ const src = fs.readFileSync(path.join(__dirname, "..", "index_03_clientes_crm.js"), "utf8");
+ const pick = (n) => { const i = src.indexOf(`function ${n}(`); return src.slice(i, src.indexOf("\n}\n", i) + 3); };
+-const f = new Function("isFechaDMY", "parseDMYtoDate", "hoyDMY",
+-  `${pick("addDaysDMY")}\n${pick("sumarDuracionRenovacionLocal")}\nreturn sumarDuracionRenovacionLocal;`)(
++const f = new Function("isFechaDMY", "parseDMYtoDate", "hoyDMY", "MOTOR_RENOVACION",
++  `${pick("addDaysDMY")}\n${pick("calcRenovacionLocal")}\n${pick("sumarDuracionRenovacionLocal")}\nreturn sumarDuracionRenovacionLocal;`)(
+   (s) => /^\d{2}\/\d{2}\/\d{4}$/.test(String(s || "")),
+   (s) => { const m = String(s || "").match(/^(\d{2})\/(\d{2})\/(\d{4})$/); return m ? new Date(+m[3], +m[2] - 1, +m[1], 12) : null; },
+-  () => "04/11/2026");
++  () => "04/11/2026", require("../lib_renovacion_motor"));
+ 
+-test("1 mes = 30 días (no mes calendario)", () => {
++test("1 mes = 30 días (no mes calendario); 2+ meses = calendario (R186)", () => {
+   assert.equal(f("04/11/2026", { meses: 1 }), "04/12/2026");
+   assert.equal(f("01/10/2026", { meses: 1 }), "31/10/2026");
+-  assert.equal(f("01/01/2027", { meses: 2 }), "02/03/2027");
+-  assert.equal(f("01/01/2027", { meses: 12 }), "27/12/2027");
++  assert.equal(f("01/01/2027", { meses: 2 }), "01/03/2027");
++  assert.equal(f("01/01/2027", { meses: 12 }), "01/01/2028");
++  assert.equal(f("04/11/2026", { meses: 3 }), "04/02/2027");
+ });
+ test("+31 días = 31 días", () => { assert.equal(f("04/11/2026", { dias: 31 }), "05/12/2026"); });
+ test("vencía el 1 y renueva el 4: se cuenta desde el 1", () => {
