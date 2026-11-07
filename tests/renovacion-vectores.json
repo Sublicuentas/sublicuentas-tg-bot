@@ -1,0 +1,21 @@
+{
+  "_nota": "R186 · Vectores compartidos Sublichat HQ ↔ bot. Si cambia una regla, cambia aquí y en ambos motores.",
+  "casos": [
+    { "id": "R02", "fecha": "04/11/2026", "periodo": { "unidad": "dias", "cantidad": 30 }, "esperado": "04/12/2026" },
+    { "id": "R03", "fecha": "04/11/2026", "periodo": { "unidad": "dias", "cantidad": 31 }, "esperado": "05/12/2026" },
+    { "id": "1MES", "fecha": "04/11/2026", "periodo": { "unidad": "meses", "cantidad": 1 }, "esperado": "04/12/2026", "regla": "1mes_30dias" },
+    { "id": "1MES-ENE", "fecha": "31/01/2026", "periodo": { "unidad": "meses", "cantidad": 1 }, "esperado": "02/03/2026", "regla": "1mes_30dias" },
+    { "id": "R01", "fecha": "04/11/2026", "periodo": { "unidad": "meses", "cantidad": 3 }, "esperado": "04/02/2027", "regla": "meses_calendario" },
+    { "id": "2M", "fecha": "04/11/2026", "periodo": { "unidad": "meses", "cantidad": 2 }, "esperado": "04/01/2027" },
+    { "id": "6M", "fecha": "04/11/2026", "periodo": { "unidad": "meses", "cantidad": 6 }, "esperado": "04/05/2027" },
+    { "id": "12M", "fecha": "04/11/2026", "periodo": { "unidad": "meses", "cantidad": 12 }, "esperado": "04/11/2027" },
+    { "id": "FIN-MES", "fecha": "30/11/2026", "periodo": { "unidad": "meses", "cantidad": 3 }, "esperado": "28/02/2027", "diaAncla": 30 },
+    { "id": "ANCLA-VUELVE", "fecha": "28/02/2027", "periodo": { "unidad": "meses", "cantidad": 3, "diaAncla": 30 }, "esperado": "30/05/2027", "diaAncla": 30 },
+    { "id": "31-2M", "fecha": "31/12/2026", "periodo": { "unidad": "meses", "cantidad": 2 }, "esperado": "28/02/2027", "diaAncla": 31 },
+    { "id": "31-VUELVE", "fecha": "28/02/2027", "periodo": { "unidad": "meses", "cantidad": 2, "diaAncla": 31 }, "esperado": "30/04/2027" },
+    { "id": "ANCLA-VIEJA", "fecha": "15/03/2027", "periodo": { "unidad": "meses", "cantidad": 2, "diaAncla": 31 }, "esperado": "15/05/2027", "diaAncla": 15 },
+    { "id": "BISIESTO", "fecha": "29/02/2028", "periodo": { "unidad": "meses", "cantidad": 12 }, "esperado": "28/02/2029", "diaAncla": 29 },
+    { "id": "YMD", "fecha": "2026-11-04", "periodo": { "unidad": "meses", "cantidad": 3 }, "esperado": "04/02/2027" },
+    { "id": "DIAS-40", "fecha": "04/11/2026", "periodo": { "unidad": "dias", "cantidad": 40 }, "esperado": "14/12/2026" }
+  ]
+}
