@@ -1,3 +1,4 @@
+const MOTOR_RENOVACION = require("./lib_renovacion_motor"); // R186 · motor único de fechas
 /* ✅ SUBLICUENTAS TG BOT — PARTE 3/6 OPTIMIZADA v5
    CLIENTES / CRM / WIZARD / TXT / RENOVACIONES / HISTORIAL REAL
    -----------------------------------------------
@@ -498,11 +499,17 @@ function addDaysDMY(baseDmy = "", days = 0) {
 //   · Se cuenta SIEMPRE desde la fecha de vencimiento (si vencía el 1 y renueva el 4, se cuenta desde el 1).
 //     Solo si el servicio no tiene fecha válida se usa hoy.
 //   · 1 mes = 30 días exactos (2 meses = 60, 3 = 90, 6 = 180, 12 = 360). "+31 días" = 31 días.
-function sumarDuracionRenovacionLocal(fechaAnterior = "", { dias = 0, meses = 0 } = {}) {
-  const base = isFechaDMY(fechaAnterior) ? fechaAnterior : hoyDMY();
+// R186 (07/11/2026) · Motor único (lib_renovacion_motor.js = api/_renovacion-motor.js de Sublichat):
+//   · 1 mes = 30 días · +N días = N días · 2+ meses = meses CALENDARIO (04/11 + 3 m = 04/02) con día ancla.
+function calcRenovacionLocal(fechaAnterior = "", { dias = 0, meses = 0, diaAncla } = {}) {
+  const valida = isFechaDMY(fechaAnterior);
+  const base = valida ? fechaAnterior : hoyDMY();
   const m = Number(meses || 0);
-  const total = m > 0 ? m * 30 /* 1 mes = 30 días */ : Number(dias || 0);
-  return addDaysDMY(base, total);
+  const r = MOTOR_RENOVACION.sumarPeriodo(base, m > 0 ? { unidad: "meses", cantidad: m, diaAncla: valida ? diaAncla : undefined } : { unidad: "dias", cantidad: Number(dias || 0) });
+  return { fechaNueva: r.fechaNueva, diaAncla: r.diaAncla, regla: r.regla };
+}
+function sumarDuracionRenovacionLocal(fechaAnterior = "", { dias = 0, meses = 0, diaAncla } = {}) {
+  return calcRenovacionLocal(fechaAnterior, { dias, meses, diaAncla }).fechaNueva;
 }
 
 function mesesEntreDMYLocal(inicio = "", fin = "") {
@@ -1678,6 +1685,8 @@ async function mutarServiciosClienteTx(clientId, mutador, extra = null) { // R10
     const doc = await tx.get(ref);
     if (!doc.exists) throw new Error("Cliente no encontrado.");
     const lecturaExtra = extra && typeof extra.leer === "function" ? await extra.leer(tx) : null; // lecturas antes de escribir
+    // R186 · Mismo cobro reenviado (doble toque / reintento): el pago ya existe → no se vuelve a mover ninguna fecha.
+    if (lecturaExtra && lecturaExtra.yaExiste === true) return { duplicadoPago: true, pagoOperacion: { duplicado: true }, cliente: doc.data() || {}, servicios: Array.isArray((doc.data() || {}).servicios) ? doc.data().servicios : [] };
     const cliente = doc.data() || {};
     // Migración progresiva: al tocar cualquier ficha antigua aseguramos IDs
     // persistentes para todas sus compras y perfiles, sin cambiar sus datos.
@@ -2133,9 +2142,10 @@ async function renovarServicioTx(clientId, idx, { dias = 0, meses = 0, fechaExac
 
     const anterior = servicios[actualIdx] || {};
     const fechaAnterior = String(anterior.fechaRenovacion || "");
+    const calc = fechaExacta ? null : calcRenovacionLocal(fechaAnterior, { dias, meses, diaAncla: anterior.diaAncla });
     const fechaNueva = fechaExacta
       ? String(fechaExacta || "").trim()
-      : sumarDuracionRenovacionLocal(fechaAnterior, { dias, meses });
+      : calc.fechaNueva;
 
     if (!isFechaDMY(fechaNueva)) throw new Error("Fecha inválida.");
 
@@ -2152,6 +2162,7 @@ async function renovarServicioTx(clientId, idx, { dias = 0, meses = 0, fechaExac
     const siguiente = {
       ...anterior,
       fechaRenovacion: fechaNueva,
+      diaAncla: calc ? calc.diaAncla : Number(String(fechaNueva).split("/")[0]) || null, // R186
       mesesContratados,
       ultimaRenovacionAt: renovadoAt,
       ultimaRenovacionFechaAnterior: fechaAnterior,
@@ -2244,9 +2255,10 @@ async function renovarTodosServiciosTx(clientId, { dias = 0, meses = 0, fechaExa
     const siguientes = servicios.map((s, index) => {
       const fechaAnterior = String(s?.fechaRenovacion || "");
       const base = isFechaDMY(fechaAnterior) ? fechaAnterior : hoyDMY();
+      const calcT = fechaExacta ? null : calcRenovacionLocal(fechaAnterior, { dias, meses, diaAncla: s?.diaAncla });
       const fechaNueva = fechaExacta
         ? String(fechaExacta || "").trim()
-        : sumarDuracionRenovacionLocal(fechaAnterior, { dias, meses });
+        : calcT.fechaNueva;
 
       if (!isFechaDMY(fechaNueva)) throw new Error("Fecha inválida.");
 
@@ -2267,6 +2279,7 @@ async function renovarTodosServiciosTx(clientId, { dias = 0, meses = 0, fechaExa
       const siguiente = {
         ...(s || {}),
         fechaRenovacion: fechaNueva,
+        diaAncla: calcT ? calcT.diaAncla : Number(String(fechaNueva).split("/")[0]) || null, // R186
         mesesContratados,
         ultimaRenovacionAt: renovadoAt,
         ultimaRenovacionFechaAnterior: fechaAnterior,

@@ -7844,24 +7844,33 @@ bot.on("message", async (msg) => {
 
       if (p.mode === "cliRenovarFechaManualAll") {
         // Acepta: dd/mm/yyyy | +40 | +3m | +90 — aplica a TODOS los servicios del cliente
-        let fechaFinal = "", diasManualTodos = 0;
+        let fechaFinal = "", diasManualTodos = 0, mesesManualTodos = 0;
         const tClean = t.trim();
 
         if (isFechaDMY(tClean)) {
           fechaFinal = tClean;
         } else if (/^\+\d+m?$/i.test(tClean)) {
-          // R163 · +3m = 3 × 30 días · +40 = 40 días — cada servicio desde SU fecha de vencimiento.
+          // R186 · +40 = 40 días · +1m = 30 días · +3m = 3 meses calendario — cada servicio desde SU fecha de vencimiento.
           const n = parseInt(tClean.slice(1), 10);
-          diasManualTodos = /m$/i.test(tClean) ? n * 30 : n;
-          if (!(diasManualTodos > 0 && diasManualTodos <= 730)) return bot.sendMessage(chatId, "⚠️ Use entre +1 y +730 días (o +1m a +24m).");
+          const esMesT = /m$/i.test(tClean);
+          if (esMesT ? !(n >= 1 && n <= 24) : !(n >= 1 && n <= 730)) return bot.sendMessage(chatId, "⚠️ Use entre +1 y +730 días (o +1m a +24m).");
+          if (esMesT && n > 1) mesesManualTodos = n; else diasManualTodos = esMesT ? 30 : n;
         } else {
           return bot.sendMessage(chatId,
-            "⚠️ Formato inválido.\n\nUse:\n• `dd/mm/yyyy` — fecha exacta\n• `+40` — suma 40 días desde el vencimiento\n• `+3m` — suma 3 meses (90 días) desde el vencimiento",
+            "⚠️ Formato inválido.\n\nUse:\n• `dd/mm/yyyy` — fecha exacta\n• `+40` — suma 40 días desde el vencimiento\n• `+3m` — suma 3 meses calendario desde el vencimiento (+1m = 30 días)",
             { parse_mode: "Markdown" }
           );
         }
 
         forceNextPanelAtBottom(chatId);
+        if (mesesManualTodos) { // R186 · meses calendario
+          pending.delete(String(chatId));
+          if (await finLibro.esLibroUser(userId)) return finLibro.iniciarPagoRenovacion(chatId, userId, { tipo: "todos", clientId: p.clientId, meses: mesesManualTodos, etiqueta: `todos los servicios +${mesesManualTodos} meses` });
+          try { await renovarTodosServiciosTx(p.clientId, { meses: mesesManualTodos }); }
+          catch (e) { logErr("renovar TODOS +meses", e?.stack || e?.message || e); return bot.sendMessage(chatId, `⚠️ No se pudo renovar: ${String(e?.message || "error desconocido").slice(0, 220)}`); }
+          await bot.sendMessage(chatId, `✅ Todos los servicios renovados +${mesesManualTodos} meses (calendario), cada uno desde su fecha de vencimiento.`);
+          return enviarFichaCliente(chatId, p.clientId);
+        }
         if (diasManualTodos) {
           pending.delete(String(chatId));
           if (await finLibro.esLibroUser(userId)) return finLibro.iniciarPagoRenovacion(chatId, userId, { tipo: "todos", clientId: p.clientId, dias: diasManualTodos, etiqueta: `todos los servicios +${diasManualTodos} días` });
@@ -7896,16 +7905,16 @@ bot.on("message", async (msg) => {
         if (isFechaDMY(tClean)) {
           fechaFinal = tClean;
         } else if (/^\+\d+m?$/i.test(tClean)) {
-          // R163 · +3m = 3 × 30 días · +40 = 40 días — desde la fecha de vencimiento de este servicio.
+          // R186 · +40 = 40 días · +1m = 30 días · +3m = 3 meses calendario — desde la fecha de vencimiento de este servicio.
           const n = parseInt(tClean.slice(1), 10);
-          const diasM = /m$/i.test(tClean) ? n * 30 : n;
-          if (!(diasM > 0 && diasM <= 730)) return bot.sendMessage(chatId, "⚠️ Use entre +1 y +730 días (o +1m a +24m).");
+          const esMes = /m$/i.test(tClean);
+          if (esMes ? !(n >= 1 && n <= 24) : !(n >= 1 && n <= 730)) return bot.sendMessage(chatId, "⚠️ Use entre +1 y +730 días (o +1m a +24m).");
           const cM = await getCliente(p.clientId);
           const sM = (Array.isArray(cM?.servicios) ? cM.servicios : [])[p.idx] || {};
-          fechaFinal = sumarDuracionRenovacionLocal(String(sM.fechaRenovacion || ""), { dias: diasM });
+          fechaFinal = sumarDuracionRenovacionLocal(String(sM.fechaRenovacion || ""), esMes ? { meses: n, diaAncla: sM.diaAncla } : { dias: n });
         } else {
           return bot.sendMessage(chatId,
-            "⚠️ Formato inválido.\n\nUse:\n• `dd/mm/yyyy` — fecha exacta\n• `+40` — suma 40 días desde el vencimiento\n• `+3m` — suma 3 meses (90 días) desde el vencimiento",
+            "⚠️ Formato inválido.\n\nUse:\n• `dd/mm/yyyy` — fecha exacta\n• `+40` — suma 40 días desde el vencimiento\n• `+3m` — suma 3 meses calendario desde el vencimiento (+1m = 30 días)",
             { parse_mode: "Markdown" }
           );
         }
