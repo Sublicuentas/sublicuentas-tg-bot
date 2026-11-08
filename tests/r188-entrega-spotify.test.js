@@ -11,11 +11,12 @@ function cargar() {
   const db = new FakeDb(); const enviados = [];
   const stub = (file, exports) => { require.cache[require.resolve(path.join(B, file))] = { id: file, filename: file, loaded: true, exports }; };
   for (const k of Object.keys(require.cache)) if (/index_38_spotify|lib_spotify_familias/.test(k)) delete require.cache[k];
-  stub("index_01_core", { db, bot: { sendMessage: async (chatId, text, opts) => { enviados.push({ chatId, text, opts }); } } });
-  return { db, enviados, M: require("../index_38_spotify_familias"), S: require("../lib_spotify_familias") };
+  const borrados = [];
+  stub("index_01_core", { db, bot: { sendMessage: async (chatId, text, opts) => { enviados.push({ chatId, text, opts }); }, deleteMessage: async (chatId, id) => { borrados.push(id); } } });
+  return { db, enviados, borrados, M: require("../index_38_spotify_familias"), S: require("../lib_spotify_familias") };
 }
 const q = (data) => ({ data, from: { id: 9, username: "op" }, message: { chat: { id: 9 } } });
-const m = (text) => ({ text, chat: { id: 9 }, from: { id: 9, username: "op" } });
+let msgId = 100; const m = (text) => ({ text, message_id: ++msgId, chat: { id: 9 }, from: { id: 9, username: "op" } });
 const botones = (e) => (e.opts?.reply_markup?.inline_keyboard || []).flat();
 
 test("libs del bot = copia fiel de Sublichat HQ", () => {
@@ -84,11 +85,11 @@ test("R196b · /spotifyf abre Spotify Familiar; /spotify NO (queda para el inven
   assert.match(enviados.at(-1).text, /Spotify Familiar/);
 });
 
-test("R196b · parser: en «varias» cada línea es una cuenta; en «una» los de abajo son invitados; contraseñas ignoradas", () => {
+test("R196b/c · parser: en «varias» cada línea es una cuenta (con su clave al lado); en «una» los de abajo son invitados", () => {
   const { M } = cargar();
   const v = M.parsearCuentas("sandyc@ejemplo.com\nmusic4@ejemplo.com clave123\n\njonny@ejemplo.com\nmadre4@ejemplo.com: inv1@ejemplo.com, inv2@ejemplo.com", "b");
-  assert.deepEqual(v.cuentas.map((c) => [c.madre, c.invitados]), [["sandyc@ejemplo.com", []], ["music4@ejemplo.com", []], ["jonny@ejemplo.com", []], ["madre4@ejemplo.com", ["inv1@ejemplo.com", "inv2@ejemplo.com"]]]);
-  assert.equal(v.avisos.length, 1); assert.doesNotMatch(v.avisos.join(), /clave123/);
+  assert.deepEqual(v.cuentas.map((c) => [c.madre, c.clave, c.invitados]), [["sandyc@ejemplo.com", "", []], ["music4@ejemplo.com", "clave123", []], ["jonny@ejemplo.com", "", []], ["madre4@ejemplo.com", "", ["inv1@ejemplo.com", "inv2@ejemplo.com"]]]);
+  assert.equal(v.avisos.length, 0);
   const u = M.parsearCuentas("madre@ejemplo.com\ni1@ejemplo.com\n\ni2@ejemplo.com", "c");
   assert.deepEqual(u.cuentas.map((c) => [c.madre, c.invitados]), [["madre@ejemplo.com", ["i1@ejemplo.com", "i2@ejemplo.com"]]]);
 });
@@ -134,4 +135,49 @@ test("R196b · Agregar invitado: se ELIGE la ficha de una lista (sin escribir), 
   await M.tryCallback(q(`spf:f:l:${f.id}`), ctx);
   assert.match(enviados.at(-1).text, /Cuenta SP-001<\/b> · 2\/5/);
   assert.equal(await M.tryMensaje(m("hola"), ctx), false, "al tocar Listo ya no captura mensajes");
+});
+
+test("R196c · clave de la cuenta madre: se pega al añadir, no se muestra en la revisión, se borra el mensaje; Ver/Cambiar clave", async () => {
+  const { M, S, db, enviados, borrados } = cargar();
+  const ctx = { adminOk: true };
+  await M.tryCallback(q("spf:b"), ctx);
+  await M.tryMensaje(m("madre1@ejemplo.com Secreta#1\nmadre2@ejemplo.com"), ctx);
+  const rev = enviados.at(-1);
+  assert.doesNotMatch(rev.text, /Secreta/); assert.match(rev.text, /madre1@ejemplo\.com<\/b> — .*🔑 clave/);
+  assert.equal(borrados.length, 1, "el mensaje con la clave se borra del chat");
+  await M.tryCallback(q(botones(rev)[0].callback_data), ctx);
+  assert.match(enviados.at(-1).text, /1 clave\(s\) guardada\(s\)/);
+  const [f1] = await S.listarFamilias(db);
+  assert.equal(f1.tieneClave, true); assert.equal(f1.madreClave, undefined, "la clave no sale en los listados");
+  await M.tryCallback(q(`spf:f:l:${f1.id}`), ctx);
+  assert.match(enviados.at(-1).text, /Clave: 🔒 guardada/); assert.doesNotMatch(enviados.at(-1).text, /Secreta/);
+  await M.tryCallback(q(`spf:kv:${f1.id}`), ctx);
+  assert.match(enviados.at(-1).text, /<code>Secreta#1<\/code>/);
+  await M.tryCallback(q(`spf:kc:${f1.id}`), ctx); await M.tryMensaje(m("Nueva#2"), ctx);
+  assert.match(enviados.at(-1).text, /Clave cambiada · SP-001 \(borré su mensaje\)/);
+  assert.equal((await S.leerClaveMadre(db, f1.id)).madreClave, "Nueva#2");
+});
+
+test("R196c · editar correo madre conserva invitados y fichas; eliminar solo vacía; el correo se puede reutilizar", async () => {
+  const { M, S, db, enviados } = cargar();
+  await db.collection("clientes").doc("ana").set({ nombre: "Ana", servicios: [{ compraId: "c1", plataforma: "spotify", correo: "ana@ejemplo.com", fechaRenovacion: "04/12/2026", precio: 120 }] });
+  const f = await S.crearFamilia(db, { madreCorreo: "vieja@ejemplo.com" });
+  await S.vincularInvitado(db, { familiaId: f.id, correo: "ana@ejemplo.com", clienteId: "ana", compraId: "c1" });
+  const ctx = { adminOk: true };
+  await M.tryCallback(q(`spf:em:${f.id}`), ctx); await M.tryMensaje(m("nueva@ejemplo.com"), ctx);
+  assert.match(enviados.at(-1).text, /vieja@ejemplo\.com → <b>nueva@ejemplo\.com<\/b>/);
+  const l = await S.leerFamilia(db, f.id);
+  assert.equal(l.madreCorreo, "nueva@ejemplo.com"); assert.equal(l.ocupados, 1);
+  const sv = (await db.collection("clientes").doc("ana").get()).data().servicios[0];
+  assert.deepEqual([sv.spotifyMadreCorreo, sv.fechaRenovacion, sv.precio], ["nueva@ejemplo.com", "04/12/2026", 120]);
+  assert.equal((await S.resolverCorreo(db, "vieja@ejemplo.com")), null);
+  await M.tryCallback(q(`spf:del:${f.id}`), ctx);
+  assert.match(enviados.at(-1).text, /tiene 1 invitado\(s\)/);
+  await S.desvincular(db, { correo: "ana@ejemplo.com" });
+  await M.tryCallback(q(`spf:del:${f.id}`), ctx);
+  await M.tryCallback(q(botones(enviados.at(-1))[0].callback_data), ctx);
+  assert.match(enviados.at(-1).text, /Cuenta SP-001 eliminada/);
+  assert.equal((await S.leerFamilia(db, f.id)).estado, "inactiva", "no se borra el documento");
+  await M.tryCallback(q("spf:l"), ctx); assert.match(enviados.at(-1).text, /No hay cuentas familiares/);
+  const g = await S.crearFamilia(db, { madreCorreo: "nueva@ejemplo.com" }); assert.equal(g.codigo, "SP-002");
 });
