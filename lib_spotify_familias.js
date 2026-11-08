@@ -16,6 +16,9 @@
 //   5 espacios por CORREO (posición 1–5), con estado Disponible / Invitación pendiente / Ocupado / Pendiente de retirada,
 //   el cliente y el vencimiento LEÍDOS de su ficha (no se guarda otra fecha). Corregir correo conserva cliente, ficha,
 //   posición e historial. Vincular dos veces lo mismo es idempotente. Liberar exige confirmar que se retiró en Spotify.
+// R196c · Cuenta madre como en Netflix Premium (pedido del 08/11/2026): clave de la cuenta madre (solo la madre; nunca la de
+//   los clientes), editar el correo madre y eliminar la cuenta. La clave NO sale en vista()/listados (solo «tieneClave»):
+//   se lee aparte con leerClaveMadre(). Auditoría sin el valor. Eliminar = desactivar (estado «inactiva»), solo sin invitados.
 // CommonJS a propósito.
 
 const CAPACIDAD = 5;
@@ -54,7 +57,7 @@ async function auditar(db, accion, usuario, datos) {
 }
 function vista(id, f) {
   const a = activos(f);
-  return { id, codigo: f.codigo || "", madreCorreo: f.madreCorreo || "", estado: f.estado || "activa", capacidad: Number(f.capacidad || CAPACIDAD), ocupados: a.length, libres: Math.max(0, Number(f.capacidad || CAPACIDAD) - a.length),
+  return { id, codigo: f.codigo || "", madreCorreo: f.madreCorreo || "", tieneClave: !!f.madreClave, estado: f.estado || "activa", capacidad: Number(f.capacidad || CAPACIDAD), ocupados: a.length, libres: Math.max(0, Number(f.capacidad || CAPACIDAD) - a.length),
     miembros: conPosiciones(f).map((m) => ({ id: m.id, correo: m.correo, estado: m.estado, posicion: m.estado === "activo" ? Number(m.posicion || 0) : 0, estadoInvitacion: m.estadoInvitacion === "pendiente" ? "pendiente" : "aceptada", retiroPendiente: !!m.retiroPendiente, historialCorreos: (m.historialCorreos || []).slice(-10), clienteId: m.clienteId || "", compraId: m.compraId || "", clienteNombre: m.clienteNombre || "", vinculadoAt: m.vinculadoAt || "", desvinculadoAt: m.desvinculadoAt || "" })),
     version: Number(f.version || 1), updatedAt: f.updatedAt || "" };
 }
@@ -327,6 +330,75 @@ async function liberarEspacio(db, { correo, confirmoRetiro = false, usuario = ""
   if (confirmoRetiro !== true) throw new Error("Confirme que el correo ya fue retirado de la familia en Spotify.");
   return desvincular(db, { correo, usuario });
 }
+// ---------------------------------------------------------------- R196c · cuenta madre: clave, editar correo, eliminar
+async function guardarClaveMadre(db, { familiaId, clave, usuario = "" } = {}) {
+  const v = String(clave == null ? "" : clave).trim();
+  if (!v || v.length > 120 || /\s/.test(v)) throw new Error("Escriba la clave sin espacios (máx. 120).");
+  const ref = db.collection(COL).doc(String(familiaId || "")); let res = null;
+  await db.runTransaction(async (tx) => {
+    const s = await tx.get(ref); if (!s.exists) throw new Error("Esa cuenta no existe.");
+    const f = s.data() || {}; if (f.estado === "inactiva") throw new Error("Esa cuenta está eliminada.");
+    const ahora = ahoraIso();
+    tx.set(ref, { ...f, madreClave: v, madreClaveAt: ahora, madreClavePor: String(usuario || "").slice(0, 60), version: Number(f.version || 1) + 1, updatedAt: ahora });
+    res = { familiaId: ref.id, codigo: f.codigo, tenia: !!f.madreClave };
+  });
+  await auditar(db, res.tenia ? "cambiar_clave_madre" : "guardar_clave_madre", usuario, { familiaId: res.familiaId, codigo: res.codigo }); // sin el valor
+  return res;
+}
+async function leerClaveMadre(db, familiaId) {
+  const s = await db.collection(COL).doc(String(familiaId || "")).get();
+  if (!s.exists) throw new Error("Esa cuenta no existe.");
+  const f = s.data() || {};
+  return { codigo: f.codigo || "", madreCorreo: f.madreCorreo || "", madreClave: f.madreClave || "" };
+}
+// Cambia el correo madre: misma cuenta, mismos invitados y posiciones; el índice viejo queda inactivo; las fichas vinculadas
+// actualizan solo la referencia «spotifyMadreCorreo» (no cobros ni fechas).
+async function cambiarCorreoMadre(db, { familiaId, correoNuevo, usuario = "" } = {}) {
+  const b = correoValido(correoNuevo); if (!b) throw new Error("Correo madre nuevo inválido.");
+  const ref = db.collection(COL).doc(String(familiaId || "")); let res = null;
+  await db.runTransaction(async (tx) => {
+    const s = await tx.get(ref); if (!s.exists) throw new Error("Esa cuenta no existe.");
+    const f = s.data() || {}; if (f.estado === "inactiva") throw new Error("Esa cuenta está eliminada.");
+    const a = normCorreo(f.madreCorreo); if (a === b) throw new Error("Es el mismo correo.");
+    const idxA = db.collection(IDX).doc(idxId(a)), idxB = db.collection(IDX).doc(idxId(b));
+    const sb = await tx.get(idxB); const d = sb.exists ? sb.data() || {} : null;
+    if (d && d.activo !== false) throw new Error(d.tipo === "madre" ? "Ese correo ya es madre de otra cuenta." : "Ese correo está activo como invitado: desvincúlelo primero.");
+    const sa = await tx.get(idxA);
+    const fichas = [...new Set(activos(f).map((m) => m.clienteId).filter(Boolean))].map((id) => db.collection("clientes").doc(id));
+    const snaps = await Promise.all(fichas.map((r) => tx.get(r)));
+    const ahora = ahoraIso();
+    tx.set(ref, { ...f, madreCorreo: b, madreCorreoNorm: b, historialMadre: [...(f.historialMadre || []), { antes: a, despues: b, por: String(usuario || "").slice(0, 60), at: ahora }].slice(-20), version: Number(f.version || 1) + 1, updatedAt: ahora });
+    if (sa.exists) tx.set(idxA, { ...(sa.data() || {}), activo: false, reemplazadoPor: b, updatedAt: ahora });
+    tx.set(idxB, { tipo: "madre", familiaId: ref.id, activo: true, createdAt: ahora });
+    snaps.forEach((sc, i) => {
+      if (!sc.exists) return; const c = sc.data() || {};
+      const servicios = Array.isArray(c.servicios) ? c.servicios.map((x) => ({ ...x })) : []; let tocado = false;
+      servicios.forEach((sv) => { if (String(sv.spotifyFamiliaId || "") === ref.id) { sv.spotifyMadreCorreo = b; tocado = true; } });
+      if (tocado) tx.update(fichas[i], { servicios });
+    });
+    res = { familiaId: ref.id, codigo: f.codigo, antes: a, despues: b };
+  });
+  await auditar(db, "cambiar_correo_madre", usuario, res);
+  return res;
+}
+// Eliminar = desactivar (no se borra el documento ni el historial). Solo sin invitados activos.
+async function eliminarCuenta(db, { familiaId, usuario = "", confirmo = false } = {}) {
+  if (confirmo !== true) throw new Error("Confirme la eliminación.");
+  const ref = db.collection(COL).doc(String(familiaId || "")); let res = null;
+  await db.runTransaction(async (tx) => {
+    const s = await tx.get(ref); if (!s.exists) throw new Error("Esa cuenta no existe.");
+    const f = s.data() || {}; if (f.estado === "inactiva") { res = { familiaId: ref.id, codigo: f.codigo, yaEstaba: true }; return; }
+    const n = activos(f).length;
+    if (n) throw new Error(`Tiene ${n} invitado(s): muévalos o desvincúlelos primero (no se pierde ningún cliente).`);
+    const idx = db.collection(IDX).doc(idxId(normCorreo(f.madreCorreo))); const si = await tx.get(idx);
+    const ahora = ahoraIso();
+    tx.set(ref, { ...f, estado: "inactiva", eliminadaAt: ahora, eliminadaPor: String(usuario || "").slice(0, 60), version: Number(f.version || 1) + 1, updatedAt: ahora });
+    if (si.exists) tx.set(idx, { ...(si.data() || {}), activo: false, updatedAt: ahora });
+    res = { familiaId: ref.id, codigo: f.codigo, madreCorreo: f.madreCorreo };
+  });
+  if (!res.yaEstaba) await auditar(db, "eliminar_cuenta", usuario, res);
+  return res;
+}
 // Fechas de ficha: "dd/mm/aaaa" (formato de Sublichat) o ISO → "aaaa-mm-dd".
 function ymdDe(v) { const t = String(v || "").trim(); let m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})/.exec(t); if (m) return `${m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}`; m = /^(\d{4})-(\d{2})-(\d{2})/.exec(t); return m ? `${m[1]}-${m[2]}-${m[3]}` : ""; }
 function estadoEspacio(m) {
@@ -337,7 +409,7 @@ function estadoEspacio(m) {
 }
 // Panel de Control Maestro: exactamente `capacidad` espacios por familia; cliente y vencimiento leídos de la ficha ACTUAL.
 async function panelFamilias(db, { hoy = "" } = {}) {
-  const fams = (await db.collection(COL).get()).docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
+  const fams = (await db.collection(COL).get()).docs.map((d) => ({ id: d.id, ...(d.data() || {}) })).filter((f) => f.estado !== "inactiva"); // R196c
   const ids = [...new Set(fams.flatMap((f) => activos(f).map((m) => m.clienteId).filter(Boolean)))];
   const fichas = new Map();
   await Promise.all(ids.map(async (id) => { try { const s = await db.collection("clientes").doc(id).get(); if (s.exists) fichas.set(id, s.data() || {}); } catch (_) {} }));
@@ -354,9 +426,9 @@ async function panelFamilias(db, { hoy = "" } = {}) {
         vence, vencido: !!(vence && hoy && vence < hoy), fichaEncontrada: !!sv, sinFicha: !m.clienteId, historialCorreos: (m.historialCorreos || []).slice(-5), vinculadoAt: m.vinculadoAt || "" };
     });
     const ocupados = espacios.filter((e) => e.estado !== "disponible").length;
-    return { id: f.id, codigo: f.codigo || "", madreCorreo: f.madreCorreo || "", estado: f.estado || "activa", capacidad: cap, ocupados, libres: cap - ocupados, espacios };
+    return { id: f.id, codigo: f.codigo || "", madreCorreo: f.madreCorreo || "", tieneClave: !!f.madreClave, estado: f.estado || "activa", capacidad: cap, ocupados, libres: cap - ocupados, espacios };
   });
   return out.sort((a, b) => String(a.codigo).localeCompare(String(b.codigo)));
 }
 
-module.exports = { cambiarCorreo, vincularFicha, marcarMiembro, liberarEspacio, panelFamilias, estadoEspacio, conPosiciones, CAPACIDAD, normCorreo, correoValido, crearFamilia, listarFamilias, leerFamilia, resolverCorreo, buscarServiciosSpotify, vincularInvitado, moverInvitado, desvincular, asignarServicio, esPlataformaSpotify };
+module.exports = { guardarClaveMadre, leerClaveMadre, cambiarCorreoMadre, eliminarCuenta, cambiarCorreo, vincularFicha, marcarMiembro, liberarEspacio, panelFamilias, estadoEspacio, conPosiciones, CAPACIDAD, normCorreo, correoValido, crearFamilia, listarFamilias, leerFamilia, resolverCorreo, buscarServiciosSpotify, vincularInvitado, moverInvitado, desvincular, asignarServicio, esPlataformaSpotify };
