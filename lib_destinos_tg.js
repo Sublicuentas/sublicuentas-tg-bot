@@ -20,17 +20,25 @@ function destinoInfo(destinoRaw) {
   }
   return info;
 }
-async function getDestinoChatIds(destinoRaw) {
+// R195 · CAUSA RAÍZ (comprobantes de Sublicuentas que no llegaban): este archivo solo leía SUBLICUENTAS_CHAT_ID / RELOJES_CHAT_ID,
+// pero el resto del sistema (Tickets, Sala de Juntas, accesos) usa TELEGRAM_CHAT_ID_SUBLICUENTAS / TELEGRAM_CHAT_ID_RELOJES.
+// Sin la variable "vieja", Sublicuentas caía al PRIMER id de SUPER_ADMIN (otra persona/chat si no es el primero) y Relojes a un
+// id fijo en el código. Ahora: 1) TELEGRAM_CHAT_ID_<DESTINO> (la misma de Tickets) 2) <DESTINO>_CHAT_ID 3) SUPER_ADMIN (solo
+// Sublicuentas) 4) respaldo histórico. La fuente usada queda registrada en cada comprobante y se ve en el diagnóstico.
+const ENV_CANONICO = { sublicuentas: ["TELEGRAM_CHAT_ID_SUBLICUENTAS"], relojes: ["TELEGRAM_CHAT_ID_RELOJES"], geisell: ["TELEGRAM_CHAT_ID_GEISELL", "TELEGRAM_CHAT_ID_GEISSEL"] };
+const primero = (v) => String(v || "").split(/[,\s]+/).map((x) => x.trim()).filter(Boolean)[0] || "";
+function resolverDestino(destinoRaw, env = process.env) {
   const info = destinoInfo(destinoRaw);
-  const envIds = String(process.env[info.env] || "").split(",").map((s) => s.trim()).filter(Boolean);
-  if (envIds.length) return [envIds[0]]; // destinatario específico: nunca abanicar un comprobante a varios chats
-  if (info.key === "sublicuentas") {
-    const superIds = String(process.env.SUPER_ADMIN || "").split(",").map((s) => s.trim()).filter(Boolean);
-    if (superIds.length) return [superIds[0]];
-  }
-  if (info.fallback) return [info.fallback];
+  for (const k of [...(ENV_CANONICO[info.key] || []), info.env]) { const id = primero(env[k]); if (id) return { info, chatId: id, fuente: k }; }
+  if (info.key === "sublicuentas") { const id = primero(env.SUPER_ADMIN); if (id) return { info, chatId: id, fuente: "SUPER_ADMIN (primer id)" }; }
+  if (info.fallback) return { info, chatId: info.fallback, fuente: "respaldo fijo en el código" };
   const err = new Error(`destino_sin_chat_id:${info.key}`);
   err.status = 503; err.publicError = "destino_sin_configurar";
   throw err;
 }
-module.exports = { destinoInfo, getDestinoChatIds };
+async function getDestinoChatIds(destinoRaw) {
+  return [resolverDestino(destinoRaw).chatId]; // destinatario específico: nunca abanicar un comprobante a varios chats
+}
+// Para registros y pantallas: nunca el id completo.
+function enmascararChat(id) { const s = String(id || ""); return s.length <= 4 ? "••••" : `••••${s.slice(-4)}`; }
+module.exports = { destinoInfo, getDestinoChatIds, resolverDestino, enmascararChat, ENV_CANONICO };

@@ -804,6 +804,7 @@ function cleanTg(v, max = 300) {
   return (v == null ? "" : String(v)).replace(/[\*_`\[\]]/g, "").trim().slice(0, max);
 }
 const { destinoInfo, getDestinoChatIds } = require("./lib_destinos_tg"); // Oct-2026 · compartido con el bot
+const VTG = require("./lib_voucher_tg"); // R195 · comprobantes con entrega verificable a Telegram
 function parsePanelImage(imagen) {
   if (!imagen) return null;
   const m = String(imagen).match(/^data:(image\/(?:jpe?g|png|webp));base64,(.+)$/);
@@ -1051,7 +1052,9 @@ app.post("/rev/renovacion", revAuth, async (req, res) => {
       boletosCreados: renovacionesFecha.reduce((sum,item)=>sum+Math.max(0,Number(item?.sorteo?.creados)||0),0),
       createdAt: new Date(),
     };
-    const ref = await db.collection("renovaciones").add(doc);
+    const ref = db.collection("renovaciones").doc(); // R195 · mismo outbox verificable que las compras
+    doc.notificacion = VTG.notificacionInicial(ref.id, destino.key === "relojes" ? "relojes" : "sublicuentas");
+    await ref.set(doc);
 
     const cap = [
       `🧾 *RENOVACIÓN RECIBIDA*`,
@@ -1067,10 +1070,10 @@ app.post("/rev/renovacion", revAuth, async (req, res) => {
       (imagenUrl || imagenObj.buffer) ? `📎 Comprobante adjunto` : `⚠️ Sin comprobante`,
       `🆔 Ref: ${ref.id.slice(-6)}`,
     ].filter(Boolean).join("\n");
-    const ids = await getDestinoChatIds(destino.key);
-    await Promise.all(ids.map((id) => sendTelegramImageSmart(id, imagenObj, cap)));
+    let notifR = { n: doc.notificacion };
+    try { notifR = await VTG.entregarVoucher(db, ref.id, { coleccion: "renovaciones", foto: imagenObj, caption: cap }); } catch (e) { console.error("rev/renovacion voucher_tg", ref.id, e?.message || e); }
 
-    res.json({ ok: true, id: ref.id, imagenUrl, renovado: doc.renovado, renovadosCantidad:doc.renovadosCantidad, nuevaFecha: doc.nuevaFecha, destino: destino.key, destinoLabel: destino.label, verificacionFicha: verificacion.ok === true, operacionDiaKey: doc.operacionDiaKey });
+    res.json({ ok: true, notificacion: VTG.estadoPublico(notifR.n), id: ref.id, imagenUrl, renovado: doc.renovado, renovadosCantidad:doc.renovadosCantidad, nuevaFecha: doc.nuevaFecha, destino: destino.key, destinoLabel: destino.label, verificacionFicha: verificacion.ok === true, operacionDiaKey: doc.operacionDiaKey });
   } catch (e) {
     console.error("rev/renovacion", e);
     res.status(e.status || 500).json({ error: e.publicError || "server", detail: e.message });
@@ -1137,10 +1140,11 @@ app.post("/rev/compra", revAuth, async (req, res) => {
       const existente = await requestRef.get();
       if (existente.exists) {
         const d = existente.data() || {};
-        return res.json({ ok:true, id:existente.id, duplicate:true, estado:d.estado||"pendiente", destino:d.destino||"", destinoLabel:d.destinoLabel||"", totalCombo:Number(d.totalCombo||0), descuentoCombo:Number(d.descuentoCombo||0) });
+        return res.json({ ok:true, id:existente.id, duplicate:true, estado:d.estado||"pendiente", destino:d.destino||"", destinoLabel:d.destinoLabel||"", totalCombo:Number(d.totalCombo||0), descuentoCombo:Number(d.descuentoCombo||0), notificacion: VTG.estadoPublico(d.notificacion) });
       }
     }
-    const destino = destinoInfo(b.destino);
+    // R195 · Pedido v2: el socio DEBE elegir a quién va el comprobante (SUBLICUENTAS | RELOJES). Nunca se asume.
+    const destino = destinoInfo(VTG.destinoVoucher(b.destino, { requerido: Number(b.version) === 2 }));
     // El navegador nunca decide el precio final. Se vuelve a consultar la
     // tarifa del socio autenticado para impedir valores viejos o manipulados.
     const catalogoSocio = await obtenerCatalogoSocio(db, live);
@@ -1365,6 +1369,10 @@ app.post("/rev/compra", revAuth, async (req, res) => {
       createdAt: new Date(),
       estadoUpdatedAt: new Date(),
     };
+    // R195 · Outbox durable: el aviso a Telegram nace en la MISMA escritura del pedido (si el envío falla, queda pendiente).
+    const compraIdPrevisto = requestDocId || db.collection("compras").doc().id;
+    doc.notificacion = VTG.notificacionInicial(compraIdPrevisto, destino.key);
+    if (imagenObj.bucketName && imagenObj.url) doc.comprobanteRef = { bucket: imagenObj.bucketName, carpeta: "compras" };
     let ref;
     if (requestRef && bancoR108) {
       // R108: pedido + venta + ingreso del socio en UNA transacción (o todo, o nada); el requestId evita duplicados.
@@ -1382,7 +1390,7 @@ app.post("/rev/compra", revAuth, async (req, res) => {
           auditoria: { accion: "compra_socio", targetType: "compra", targetId: ref.id, detalle: `Socio ${socio} compró ${productos.map((p) => `${p.servicio}${(p.cantidad || 1) > 1 ? ` x${p.cantidad}` : ""} (L${p.precioCatalogo})`).join(" + ")} · subtotal L${subtotalCatalogo} − desc L${descuentoCombo} = L${totalCombo} en ${bancoR108.nombre}`, after: { subtotal: subtotalCatalogo, descuento: descuentoCombo, total: totalCombo, banco: bancoR108.nombre } } });
         return {};
       });
-      if (r.dup) { const d = r.dup; return res.json({ ok:true, id:ref.id, duplicate:true, estado:d.estado||"pendiente", destino:d.destino||"", destinoLabel:d.destinoLabel||"", totalCombo:Number(d.totalCombo||0), descuentoCombo:Number(d.descuentoCombo||0) }); }
+      if (r.dup) { const d = r.dup; return res.json({ ok:true, id:ref.id, duplicate:true, estado:d.estado||"pendiente", destino:d.destino||"", destinoLabel:d.destinoLabel||"", totalCombo:Number(d.totalCombo||0), descuentoCombo:Number(d.descuentoCombo||0), notificacion: VTG.estadoPublico(d.notificacion) }); }
     } else if (requestRef) {
       ref = requestRef;
       try {
@@ -1395,18 +1403,19 @@ app.post("/rev/compra", revAuth, async (req, res) => {
             tx.set(ref, doc);
             return null;
           });
-          if (dupTx) { const d = dupTx; return res.json({ ok:true, id:ref.id, duplicate:true, estado:d.estado||"pendiente", destino:d.destino||"", destinoLabel:d.destinoLabel||"", totalCombo:Number(d.totalCombo||0), descuentoCombo:Number(d.descuentoCombo||0) }); }
+          if (dupTx) { const d = dupTx; return res.json({ ok:true, id:ref.id, duplicate:true, estado:d.estado||"pendiente", destino:d.destino||"", destinoLabel:d.destinoLabel||"", totalCombo:Number(d.totalCombo||0), descuentoCombo:Number(d.descuentoCombo||0), notificacion: VTG.estadoPublico(d.notificacion) }); }
         } else await ref.create(doc);
       } catch (createErr) {
         if (createErr?.code === 6 || createErr?.code === "already-exists" || /already exists/i.test(String(createErr?.message || ""))) {
           const existente = await ref.get();
           const d = existente.data() || {};
-          return res.json({ ok:true, id:ref.id, duplicate:true, estado:d.estado||"pendiente", destino:d.destino||"", destinoLabel:d.destinoLabel||"", totalCombo:Number(d.totalCombo||0), descuentoCombo:Number(d.descuentoCombo||0) });
+          return res.json({ ok:true, id:ref.id, duplicate:true, estado:d.estado||"pendiente", destino:d.destino||"", destinoLabel:d.destinoLabel||"", totalCombo:Number(d.totalCombo||0), descuentoCombo:Number(d.descuentoCombo||0), notificacion: VTG.estadoPublico(d.notificacion) });
         }
         throw createErr;
       }
     } else {
-      ref = await db.collection("compras").add(doc);
+      ref = db.collection("compras").doc(compraIdPrevisto);
+      await ref.set(doc);
     }
 
     const productoLineas = v2 ? CS.lineasTelegram(productos, CS.nombreCompleto(clientePrincipal)) : productos.flatMap((p, i) => {
@@ -1452,8 +1461,10 @@ app.post("/rev/compra", revAuth, async (req, res) => {
     ].filter((x) => x !== "");
     const cap = capLineas.join("\n").slice(0, 950);
 
-    const ids = await getDestinoChatIds(destino.key);
-    await Promise.all(ids.map((id) => sendTelegramImageSmart(id, imagenObj, cap)));
+    // R195 · Entrega verificable: "enviado" solo con message_id de Telegram. Si falla, el pedido y el voucher quedan y se reintenta.
+    let notif = { n: doc.notificacion };
+    try { notif = await VTG.entregarVoucher(db, ref.id, { coleccion: "compras", foto: imagenObj, caption: cap }); }
+    catch (e) { console.error("rev/compra voucher_tg", ref.id, e?.message || e); }
 
     // Fase 2 · push SOLO al vendedor que eligió el socio (Sublicuentas o Relojes): pedido nuevo, plata esperando entrega.
     // Sin datos de entrega en el aviso.
@@ -1465,7 +1476,7 @@ app.post("/rev/compra", revAuth, async (req, res) => {
       data: { tipo: "pedido", ir: "inicio", id: ref.id },
     });
 
-    res.json({ ok: true, id: ref.id, ref: ref.id.slice(-6).toUpperCase(), imagenUrl, destino: destino.key, destinoLabel: destino.label, subtotalCatalogo, totalCombo, descuentoCombo, estado: "pendiente", comprobante: !!(imagenUrl || imagenObj.buffer) });
+    res.json({ ok: true, id: ref.id, ref: ref.id.slice(-6).toUpperCase(), imagenUrl, destino: destino.key, destinoLabel: destino.label, subtotalCatalogo, totalCombo, descuentoCombo, estado: "pendiente", comprobante: !!(imagenUrl || imagenObj.buffer), notificacion: VTG.estadoPublico(notif.n) });
   } catch (e) {
     console.error("rev/compra", e);
     res.status(e.status || 500).json({ error: e.publicError || "server", detail: e.detail || e.message });
@@ -1679,6 +1690,7 @@ app.get("/rev/admin/compras", revAdminAuth, adminAnyPermission(["socios.compras.
         detalleEstado: r.detalleEstado || "",
         estadoUpdatedAt: r.estadoUpdatedAt || r.updatedAt || r.createdAt || "",
         estadoHistorial: Array.isArray(r.estadoHistorial) ? r.estadoHistorial.slice(-15) : [],
+        notificacion: r.notificacion ? { estado: r.notificacion.estado, intentos: r.notificacion.intentos || 0, lastError: r.notificacion.lastError || "", entregadoAt: r.notificacion.entregadoAt || null, fuente: r.notificacion.fuente || "" } : null, // R195
         ts,
       };
     });
@@ -1686,6 +1698,47 @@ app.get("/rev/admin/compras", revAdminAuth, adminAnyPermission(["socios.compras.
     const visible = isFullAdmin(req) ? lista : lista.filter((x) => revNormKey(x.destino) === profile);
     res.json(visible);
   } catch (e) { console.error("rev/admin/compras", e); res.status(500).json({ error: "server" }); }
+});
+
+// ── R195 · ADMIN: comprobantes que NO constan como entregados en Telegram (incluye pedidos anteriores sin registro) ──
+app.get("/rev/admin/comprobantes-telegram", revAdminAuth, adminAnyPermission(["socios.compras.read","socios.compras.own.read"]), async (req, res) => {
+  try {
+    const desdeMs = Date.parse(String(req.query.desde || "")) || (Date.now() - 45 * 86400000);
+    const filas = [];
+    for (const coleccion of ["compras", "renovaciones"]) {
+      const snap = await db.collection(coleccion).orderBy("createdAt", "desc").limit(Math.min(Number(req.query.limit) || 400, 1000)).get();
+      snap.docs.forEach((d) => { const f = VTG.filaReporte(d.id, d.data() || {}, coleccion); if (Date.parse(f.fecha || 0) >= desdeMs && f.estado !== "enviado") filas.push(f); });
+    }
+    const profile = adminScopeProfile(req);
+    const visibles = isFullAdmin(req) ? filas : filas.filter((x) => x.destino.toLowerCase() === profile);
+    res.set("Cache-Control", "no-store");
+    res.json({ ok: true, desde: new Date(desdeMs).toISOString(), total: visibles.length, porEstado: visibles.reduce((a, x) => ((a[x.estado] = (a[x.estado] || 0) + 1), a), {}), items: visibles.sort((a, b) => String(b.fecha).localeCompare(String(a.fecha))) });
+  } catch (e) { console.error("rev/admin/comprobantes-telegram", e); res.status(500).json({ error: "server" }); }
+});
+// Diagnóstico de rutas (sin token ni ids completos): fuente de cada chat y si el bot puede escribir ahí.
+app.get("/rev/admin/comprobantes-telegram/diagnostico", revAdminAuth, async (req, res) => {
+  try { if (!isFullAdmin(req)) return res.status(403).json({ error: "solo_admin_general" }); res.set("Cache-Control", "no-store"); res.json({ ok: true, ...(await VTG.diagnostico()) }); }
+  catch (e) { console.error("rev/admin/comprobantes-telegram/diagnostico", e); res.status(500).json({ error: "server" }); }
+});
+// Reenvío VERIFICADO: el admin confirma que revisó el chat y no llegó. Nunca reenvía uno con message_id.
+app.post("/rev/admin/comprobantes-telegram/:id/reenviar", revAdminAuth, adminAnyPermission(["socios.compras.write","socios.compras.own.write"]), async (req, res) => {
+  try {
+    const coleccion = req.body?.coleccion === "renovaciones" ? "renovaciones" : "compras";
+    if (req.body?.confirmoNoLlego !== true) return res.status(400).json({ error: "confirmar_no_llego", detail: "Revise el chat del destino y confirme que el comprobante no llegó." });
+    const ref = db.collection(coleccion).doc(String(req.params.id || ""));
+    const snap = await ref.get(); if (!snap.exists) return res.status(404).json({ error: "no_existe" });
+    const d = snap.data() || {};
+    const destinoK = VTG.destinoVoucher((d.notificacion && d.notificacion.destino) || d.destino || "sublicuentas", { requerido: false });
+    if (!isFullAdmin(req) && destinoK !== adminScopeProfile(req)) return res.status(403).json({ error: "fuera_de_su_destino" });
+    if (d.notificacion && d.notificacion.estado === "enviado" && d.notificacion.telegramMessageId) return res.status(409).json({ error: "ya_entregado", entregadoAt: d.notificacion.entregadoAt });
+    if (!d.notificacion) await ref.set({ notificacion: { ...VTG.notificacionInicial(ref.id, destinoK), origen: "reenvio_admin_pedido_anterior" } }, { merge: true });
+    else await ref.set({ notificacion: { ...d.notificacion, estado: "pendiente", leaseHasta: null } }, { merge: true });
+    const actor = `admin:${req.admin?.usuario || req.rev?.usuario || req.rev?.nombre_norm || "panel"}`;
+    let foto = null;
+    if (d.comprobanteRef && d.imagenUrl) { try { const m = /\/o\/([^?]+)|\.com\/[^/]+\/([^?]+)/.exec(d.imagenUrl); const p = m && decodeURIComponent(m[1] || m[2]); if (p) { const [buf] = await admin.storage().bucket(d.comprobanteRef.bucket).file(p).download(); foto = { buffer: buf, contentType: "image/jpeg", filename: "comprobante.jpg" }; } } catch (_) {} }
+    const r = await VTG.entregarVoucher(db, ref.id, { coleccion, actor, forzar: true, foto });
+    res.json({ ok: r.estado === "enviado", estado: r.estado, publico: VTG.estadoPublico(r.n), error: r.estado === "enviado" ? "" : (r.n && r.n.lastError) || "" });
+  } catch (e) { console.error("rev/admin/comprobantes-telegram reenviar", e); res.status(e.status || 500).json({ error: e.publicError || "server" }); }
 });
 
 // ── ADMIN: cambiar estado de un pedido y avisar al socio ──
@@ -2006,6 +2059,9 @@ require("./index_13_gamificacion")(app);
 function iniciarTareasPanel() {
   if (iniciarTareasPanel.hecho) return; iniciarTareasPanel.hecho = true;
   r121RellenarNombresCompraSocio();
+  // R195 · reintentos de comprobantes no entregados (solo errores definitivos de Telegram, con espera creciente)
+  const barrer = () => VTG.barrerPendientes(db).catch((e) => console.error("R195 barrer comprobantes", e?.message || e));
+  setTimeout(barrer, 30000); setInterval(barrer, 120000).unref?.();
   try { require("./index_31_finanzas_libro").iniciarCosteoAutomatico(); } catch (e) { console.error("R137 costeo", e?.message || e); } // R137
 }
 // R161 · `node server_api.js` (servicio aparte, como hasta hoy) escucha el puerto. Si index.js lo carga con

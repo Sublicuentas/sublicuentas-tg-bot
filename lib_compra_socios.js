@@ -186,6 +186,7 @@ function pedidoPublico(id, x = {}) {
     monto: Number(x.monto) || 0, montoAutomatico: x.montoAutomatico !== false, banco: x.banco || "", comentario: x.comentario || "",
     comprobante: !!(x.imagenUrl || x.imagenData), createdAt: x.createdAt, estadoUpdatedAt: x.estadoUpdatedAt || x.updatedAt || x.createdAt,
     estadoHistorial: Array.isArray(x.estadoHistorial) ? x.estadoHistorial.slice(-10) : [],
+    notificacion: require("./lib_voucher_tg").estadoPublico(x.notificacion), // R195 · Recibido / Pendiente de envío / Error de envío (real)
   };
 }
 
