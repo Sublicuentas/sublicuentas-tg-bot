@@ -55,7 +55,7 @@ test("S04 por bot: «Vincular existente» encuentra la ficha, pide familia y con
   assert.match(enviados.at(-1).text, /Vinculada la ficha de Ana · SP-001 1\/5/);
   const cliente = (await db.collection("clientes").doc("ana").get()).data();
   assert.equal(cliente.servicios.length, 1); assert.equal(cliente.servicios[0].spotifyFamiliaCodigo, "SP-001");
-  assert.equal(botones(enviados.at(-1)).map((x) => x.text).join(), "✅ Listo", "ya no se ofrece de nuevo");
+  assert.deepEqual(botones(enviados.at(-1)).map((x) => x.text), ["✍️ Escribir correo(s)", "🔎 Buscar", "✅ Listo"], "ya no se ofrece de nuevo; escribir va aparte");
 });
 
 test("permisos: un vendedor sin módulo no ve ni escribe; sexto invitado bloqueado también por bot", async () => {
@@ -122,13 +122,15 @@ test("R196b · Agregar invitado: se ELIGE la ficha de una lista (sin escribir), 
   const ctx = { adminOk: true };
   await M.tryCallback(q(`spf:f:a:${f.id}`), ctx);
   let b = botones(enviados.at(-1));
-  assert.deepEqual(b.map((x) => x.text), ["music4@ejemplo.com · Daniela Prueba", "jony@ejemplo.com · Jony Prueba", "✅ Listo"], "solo fichas Spotify sin cuenta");
+  assert.deepEqual(b.map((x) => x.text), ["music4@ejemplo.com · Daniela Prueba", "jony@ejemplo.com · Jony Prueba", "✍️ Escribir correo(s)", "🔎 Buscar", "✅ Listo"], "solo fichas Spotify sin cuenta; escribir/buscar aparte");
   await M.tryCallback(q(b[0].callback_data), ctx);
   assert.match(enviados.at(-1).text, /Vinculada la ficha de Daniela Prueba · SP-001 1\/5[\s\S]*1\. music4@ejemplo\.com · Daniela Prueba[\s\S]*5\. — libre/);
-  b = botones(enviados.at(-1)); assert.deepEqual(b.map((x) => x.text), ["jony@ejemplo.com · Jony Prueba", "✅ Listo"]);
-  await M.tryMensaje(m("jon"), ctx);
+  b = botones(enviados.at(-1)); assert.deepEqual(b.map((x) => x.text), ["jony@ejemplo.com · Jony Prueba", "✍️ Escribir correo(s)", "🔎 Buscar", "✅ Listo"]);
+  assert.equal(await M.tryMensaje(m("Menu"), ctx), false, "la lista sola no captura texto");
+  await M.tryCallback(q(`spf:f:a:${f.id}`), ctx);
+  await M.tryCallback(q("spf:pe:b"), ctx); await M.tryMensaje(m("jon"), ctx);
   assert.equal(botones(enviados.at(-1))[0].text, "jony@ejemplo.com · Jony Prueba");
-  await M.tryMensaje(m("nuevo@ejemplo.com"), ctx);
+  await M.tryCallback(q("spf:pe:c"), ctx); await M.tryMensaje(m("nuevo@ejemplo.com"), ctx);
   assert.match(enviados.at(-1).text, /✅ nuevo@ejemplo\.com · sin ficha/);
   const dani = (await db.collection("clientes").doc("dani").get()).data().servicios[0];
   assert.deepEqual([dani.fechaRenovacion, dani.precio, dani.spotifyFamiliaCodigo], ["04/12/2026", 120, "SP-001"]);
@@ -189,7 +191,8 @@ test("R196d · Agregar invitado: varios correos sueltos de una vez (con y sin fi
   const f = await S.crearFamilia(db, { madreCorreo: "sandyc@ejemplo.com" });
   const ctx = { adminOk: true };
   await M.tryCallback(q(`spf:f:a:${f.id}`), ctx);
-  assert.deepEqual(botones(enviados.at(-1)).map((x) => x.text), ["jony@ejemplo.com · Jony Prueba", "✅ Listo"], "la ficha del correo madre no se ofrece como invitado");
+  assert.deepEqual(botones(enviados.at(-1)).map((x) => x.text), ["jony@ejemplo.com · Jony Prueba", "✍️ Escribir correo(s)", "🔎 Buscar", "✅ Listo"], "la ficha del correo madre no se ofrece como invitado");
+  await M.tryCallback(q("spf:pe:c"), ctx);
   await M.tryMensaje(m("suelto1@ejemplo.com\nJONY@ejemplo.com, suelto2@ejemplo.com\nsandyc@ejemplo.com"), ctx);
   const t = enviados.at(-1).text;
   assert.match(t, /✅ suelto1@ejemplo\.com · sin ficha/); assert.match(t, /✅ jony@ejemplo\.com · ficha de Jony Prueba/); assert.match(t, /✅ suelto2@ejemplo\.com/); assert.match(t, /⛔ sandyc@ejemplo\.com/);
@@ -198,4 +201,29 @@ test("R196d · Agregar invitado: varios correos sueltos de una vez (con y sin fi
   assert.match(enviados.at(-1).text, /Cliente de la cuenta madre: Alexey Prueba · vence 25\/11\/2026/);
   const [p] = await S.panelFamilias(db, { hoy: "2026-11-08" });
   assert.equal(p.madreClientes[0].cliente, "Alexey Prueba"); assert.equal(p.ocupados, 3, "el cliente de la madre no ocupa espacio");
+});
+
+test("R196e · una cuenta eliminada ya no tapa la ficha que usaba ese correo", async () => {
+  const { M, S, db, enviados } = cargar();
+  await db.collection("clientes").doc("alexey").set({ nombre: "Alexey Prueba", servicios: [{ compraId: "c7", plataforma: "Spotify", correo: "sandyc@ejemplo.com" }] });
+  const mala = await S.crearFamilia(db, { madreCorreo: "sandyc@ejemplo.com" });
+  await S.eliminarCuenta(db, { familiaId: mala.id, confirmo: true });
+  const f = await S.crearFamilia(db, { madreCorreo: "otra@ejemplo.com" });
+  await M.tryCallback(q(`spf:f:a:${f.id}`), { adminOk: true });
+  assert.equal(botones(enviados.at(-1))[0].text, "sandyc@ejemplo.com · Alexey Prueba");
+});
+
+test("R196f · Bodega: /spotifyf deja las cuentas en inventario «spotifyfamiliar»; abrirla en Bodega lleva a la vista de la cuenta", async () => {
+  const { M, S, db, enviados } = cargar();
+  const f = await S.crearFamilia(db, { madreCorreo: "principal@ejemplo.com" });
+  await db.collection("inventario").doc(S.idBodega(f.id)).delete(); // cuenta vieja sin reflejo
+  await M.tryMensaje(m("/spotifyf"), { adminOk: true });
+  const inv = (await db.collection("inventario").doc(S.idBodega(f.id)).get()).data();
+  assert.deepEqual([inv.plataforma, inv.correo, inv.capacidad, inv.origen], ["spotifyfamiliar", "principal@ejemplo.com", 5, "spotify_familia"]);
+  await M.verCuenta(9, f.id);
+  assert.match(enviados.at(-1).text, /Cuenta SP-001/);
+  const core = fs.readFileSync(path.join(B, "index_01_core.js"), "utf8");
+  assert.match(core, /spotifyfamiliar: \{ key: "spotifyfamiliar", nombre: "Spotify Familiar", categoria: "musica",.*capacidadDefault: 5/);
+  assert.match(fs.readFileSync(path.join(B, "index_04_inventario_correos.js"), "utf8"), /data\.origen === "spotify_familia" && data\.familiaId\) return require\("\.\/index_38_spotify_familias"\)\.verCuenta/);
+  assert.match(fs.readFileSync(path.join(B, "index_03_clientes_crm.js"), "utf8"), /PLATAFORMAS_ALIAS_OCULTAS_LOCAL = new Set\(\[.*"spotifyfamiliar"\]\)/);
 });
