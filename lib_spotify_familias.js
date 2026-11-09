@@ -19,6 +19,8 @@
 // R196c · Cuenta madre como en Netflix Premium (pedido del 08/11/2026): clave de la cuenta madre (solo la madre; nunca la de
 //   los clientes), editar el correo madre y eliminar la cuenta. La clave NO sale en vista()/listados (solo «tieneClave»):
 //   se lee aparte con leerClaveMadre(). Auditoría sin el valor. Eliminar = desactivar (estado «inactiva»), solo sin invitados.
+// R196d · Cliente de la cuenta madre: si una ficha tiene Spotify con el MISMO correo de la madre (cuenta completa vendida),
+//   se muestra como «cliente de la cuenta madre» (leído en vivo de la ficha, sin escribir nada y SIN ocupar uno de los 5 espacios).
 // CommonJS a propósito.
 
 const CAPACIDAD = 5;
@@ -399,6 +401,23 @@ async function eliminarCuenta(db, { familiaId, usuario = "", confirmo = false } 
   if (!res.yaEstaba) await auditar(db, "eliminar_cuenta", usuario, res);
   return res;
 }
+// R196d · Fichas con Spotify cuyo correo es el de una madre → { correoMadre: [{ clienteId, cliente, compraId, vence }] }.
+function fichasPorCorreo(docsClientes = []) {
+  const mapa = new Map();
+  for (const d of docsClientes) {
+    const c = d.data || {};
+    (Array.isArray(c.servicios) ? c.servicios : []).forEach((sv) => {
+      if (!sv || !esPlataformaSpotify(sv.plataforma)) return;
+      const correo = normCorreo(sv.correo || (sv.perfiles && sv.perfiles[0] && sv.perfiles[0].correo)); if (!correo) return;
+      (mapa.get(correo) || mapa.set(correo, []).get(correo)).push({ clienteId: d.id, cliente: String(c.nombrePerfil || c.nombre || "").slice(0, 80), compraId: String(sv.compraId || ""), vence: ymdDe(sv.fechaRenovacion || sv.vence) });
+    });
+  }
+  return mapa;
+}
+async function clientesDeMadre(db, madreCorreo, { hoy = "" } = {}) {
+  const docs = (await db.collection("clientes").get()).docs.map((d) => ({ id: d.id, data: d.data() || {} }));
+  return (fichasPorCorreo(docs).get(normCorreo(madreCorreo)) || []).map((x) => ({ ...x, vencido: !!(x.vence && hoy && x.vence < hoy) }));
+}
 // Fechas de ficha: "dd/mm/aaaa" (formato de Sublichat) o ISO → "aaaa-mm-dd".
 function ymdDe(v) { const t = String(v || "").trim(); let m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})/.exec(t); if (m) return `${m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}`; m = /^(\d{4})-(\d{2})-(\d{2})/.exec(t); return m ? `${m[1]}-${m[2]}-${m[3]}` : ""; }
 function estadoEspacio(m) {
@@ -410,9 +429,9 @@ function estadoEspacio(m) {
 // Panel de Control Maestro: exactamente `capacidad` espacios por familia; cliente y vencimiento leídos de la ficha ACTUAL.
 async function panelFamilias(db, { hoy = "" } = {}) {
   const fams = (await db.collection(COL).get()).docs.map((d) => ({ id: d.id, ...(d.data() || {}) })).filter((f) => f.estado !== "inactiva"); // R196c
-  const ids = [...new Set(fams.flatMap((f) => activos(f).map((m) => m.clienteId).filter(Boolean)))];
-  const fichas = new Map();
-  await Promise.all(ids.map(async (id) => { try { const s = await db.collection("clientes").doc(id).get(); if (s.exists) fichas.set(id, s.data() || {}); } catch (_) {} }));
+  // R196d · una sola lectura de clientes: fichas de los invitados y clientes de la cuenta madre
+  const docs = (await db.collection("clientes").get()).docs.map((d) => ({ id: d.id, data: d.data() || {} }));
+  const fichas = new Map(docs.map((d) => [d.id, d.data])); const porCorreo = fichasPorCorreo(docs);
   const out = fams.map((f) => {
     const cap = Number(f.capacidad || CAPACIDAD);
     const ms = conPosiciones(f).filter((m) => m.estado === "activo");
@@ -426,9 +445,9 @@ async function panelFamilias(db, { hoy = "" } = {}) {
         vence, vencido: !!(vence && hoy && vence < hoy), fichaEncontrada: !!sv, sinFicha: !m.clienteId, historialCorreos: (m.historialCorreos || []).slice(-5), vinculadoAt: m.vinculadoAt || "" };
     });
     const ocupados = espacios.filter((e) => e.estado !== "disponible").length;
-    return { id: f.id, codigo: f.codigo || "", madreCorreo: f.madreCorreo || "", tieneClave: !!f.madreClave, estado: f.estado || "activa", capacidad: cap, ocupados, libres: cap - ocupados, espacios };
+    return { id: f.id, codigo: f.codigo || "", madreCorreo: f.madreCorreo || "", tieneClave: !!f.madreClave, madreClientes: (porCorreo.get(normCorreo(f.madreCorreo)) || []).map((x) => ({ ...x, vencido: !!(x.vence && hoy && x.vence < hoy) })), estado: f.estado || "activa", capacidad: cap, ocupados, libres: cap - ocupados, espacios };
   });
   return out.sort((a, b) => String(a.codigo).localeCompare(String(b.codigo)));
 }
 
-module.exports = { guardarClaveMadre, leerClaveMadre, cambiarCorreoMadre, eliminarCuenta, cambiarCorreo, vincularFicha, marcarMiembro, liberarEspacio, panelFamilias, estadoEspacio, conPosiciones, CAPACIDAD, normCorreo, correoValido, crearFamilia, listarFamilias, leerFamilia, resolverCorreo, buscarServiciosSpotify, vincularInvitado, moverInvitado, desvincular, asignarServicio, esPlataformaSpotify };
+module.exports = { clientesDeMadre, fichasPorCorreo, guardarClaveMadre, leerClaveMadre, cambiarCorreoMadre, eliminarCuenta, cambiarCorreo, vincularFicha, marcarMiembro, liberarEspacio, panelFamilias, estadoEspacio, conPosiciones, CAPACIDAD, normCorreo, correoValido, crearFamilia, listarFamilias, leerFamilia, resolverCorreo, buscarServiciosSpotify, vincularInvitado, moverInvitado, desvincular, asignarServicio, esPlataformaSpotify };
