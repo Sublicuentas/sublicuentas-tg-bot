@@ -1,6 +1,9 @@
 "use strict";
 /* SUBLICUENTAS · Bot · R188 · Spotify Familiar (PDF «Sublichat 5 puntos», bloque 01) — registro rápido desde Telegram.
    /spotifyf → ➕ Añadir cuenta · 📥 Añadir varias cuentas (en bloque) · 👤 Agregar invitado · 🔍 Ver cuentas.
+   R196f · Bodega: las cuentas quedan solas en Inventario › MÚSICA › «Spotify Familiar» (abrir una lleva a esta vista).
+   R196e · Escribir correos o buscar es una opción APARTE de la lista (botones «✍️ Escribir correo(s)» y «🔎 Buscar»):
+   la lista sola no captura mensajes (así «Menu» u otro texto no se confunde). Cuentas eliminadas ya no tapan fichas.
    R196d · «Agregar invitado» acepta uno o VARIOS correos sueltos escritos (con o sin ficha). La ficha que usa el correo
    madre (cuenta completa vendida) se muestra como «Cliente de la cuenta madre» y no ocupa espacio.
    R196c · Cuenta madre como Netflix Premium: clave (oculta; «👁 Ver clave» la muestra), editar correo madre y eliminar
@@ -45,6 +48,7 @@ function textoFamilia(f) { // R196 · siempre 5 renglones, en su posición
   return [`🎵 <b>Cuenta ${esc(f.codigo)}</b> · ${f.ocupados}/${cap}`, `Madre: ${esc(f.madreCorreo)}`, ...(f.madreClientes || []).map((x) => `👤 Cliente de la cuenta madre: ${esc(x.cliente || x.clienteId)}${x.vence ? ` · vence ${x.vence.split("-").reverse().join("/")}${x.vencido ? " 🔴" : ""}` : ""}`), `Clave: ${f.tieneClave ? "🔒 guardada" : "— sin guardar"}`, "", ...filas].join("\n");
 }
 async function menu(chatId) {
+  try { await S.sincronizarTodo(db); } catch (_) {} // R196f · Bodega › Spotify Familiar al día
   return enviar(chatId, "🎵 <b>Spotify Familiar</b>\nCada cuenta = 1 correo madre + hasta 5 invitados.", [
     [{ text: "➕ Añadir cuenta", callback_data: "spf:c" }, { text: "📥 Añadir varias", callback_data: "spf:b" }],
     [{ text: "👤 Agregar invitado a una cuenta", callback_data: "spf:a" }],
@@ -192,7 +196,7 @@ async function guardarAlta(plan, usuario) {
 const POR_PAGINA = 8;
 async function opcionesFichas(filtro = "") {
   const ocupados = new Set();
-  for (const f of await S.listarFamilias(db)) { ocupados.add(S.normCorreo(f.madreCorreo)); f.miembros.filter((m) => m.estado === "activo").forEach((m) => ocupados.add(S.normCorreo(m.correo))); }
+  for (const f of (await S.listarFamilias(db)).filter((x) => x.estado !== "inactiva")) { ocupados.add(S.normCorreo(f.madreCorreo)); f.miembros.filter((m) => m.estado === "activo").forEach((m) => ocupados.add(S.normCorreo(m.correo))); }
   const t = S.normCorreo(filtro); const out = [];
   for (const [correo, fs] of await indiceFichas()) {
     if (ocupados.has(correo)) continue;
@@ -208,12 +212,25 @@ async function mostrarSelector(chatId, st, encabezado = "") {
   const rows = f.libres > 0 ? st.opciones.slice(ini, ini + POR_PAGINA).map((o, j) => [{ text: corto(`${o.correo} · ${o.clienteNombre || "sin nombre"}`, 60), callback_data: `spf:pi:${ini + j}` }]) : [];
   const nav = []; if (st.pagina > 0) nav.push({ text: "‹ Anterior", callback_data: "spf:pp:-1" }); if (st.pagina < pags - 1) nav.push({ text: "Siguiente ›", callback_data: "spf:pp:1" });
   if (nav.length && f.libres > 0) rows.push(nav);
+  if (f.libres > 0) rows.push([{ text: "✍️ Escribir correo(s)", callback_data: "spf:pe:c" }, { text: st.filtro ? "✖️ Quitar búsqueda" : "🔎 Buscar", callback_data: st.filtro ? "spf:pe:x" : "spf:pe:b" }]);
   rows.push([{ text: "✅ Listo", callback_data: `spf:f:l:${f.id}` }]);
-  const guia = f.libres <= 0 ? "Cuenta llena (5/5)." : tot ? `Toque la ficha para vincularla (${tot} sin cuenta${st.filtro ? ` con «${esc(st.filtro)}»` : ""}). También puede escribir parte del correo o nombre para buscar, o el correo completo de un invitado nuevo.` : `No hay fichas Spotify sin cuenta${st.filtro ? ` con «${esc(st.filtro)}»` : ""}. Escriba el correo del invitado (o parte de él para buscar).`;
+  const guia = f.libres <= 0 ? "Cuenta llena (5/5)." : st.entrada === "correos" ? "✍️ Escriba el correo (o varios, uno por línea) para vincular a esta cuenta. Si tiene ficha Spotify se vincula esa misma." : st.entrada === "buscar" ? "🔎 Escriba parte del correo o del nombre del cliente." : tot ? `Lista: fichas Spotify sin cuenta (${tot}${st.filtro ? ` con «${esc(st.filtro)}»` : ""}). Toque una para vincularla.\nPara un correo que no está en la lista: «✍️ Escribir correo(s)».` : `No hay fichas Spotify sin cuenta${st.filtro ? ` con «${esc(st.filtro)}»` : ""}. Use «✍️ Escribir correo(s)».`;
   espera.set(String(chatId), st);
   return enviar(chatId, `${encabezado ? encabezado + "\n\n" : ""}${textoFamilia(f)}\n\n${guia}`, rows);
 }
 
+// Vista de una cuenta con todos sus botones (también se abre desde Bodega › Spotify Familiar).
+async function verCuenta(chatId, familiaId, fam = null) {
+  const f = fam || await S.leerFamilia(db, familiaId);
+  try { f.madreClientes = await S.clientesDeMadre(db, f.madreCorreo, { hoy: new Date(Date.now() - 6 * 3600000).toISOString().slice(0, 10) }); } catch (_) {}
+  const rows = f.miembros.filter((m) => m.estado === "activo").map((m) => [{ text: `↔️ Mover ${m.correo}`, callback_data: `spf:mv:${m.id}` }, { text: "Desvincular", callback_data: `spf:d:${m.id}` }]);
+  rows.push([{ text: "👁 Ver clave", callback_data: `spf:kv:${f.id}` }, { text: f.tieneClave ? "🔑 Cambiar clave" : "🔑 Guardar clave", callback_data: `spf:kc:${f.id}` }]); // R196c
+  rows.push([{ text: "✏️ Editar correo", callback_data: `spf:em:${f.id}` }, { text: "🗑 Eliminar cuenta", callback_data: `spf:del:${f.id}` }]);
+  if (f.libres > 0) rows.push([{ text: "👤 Agregar invitado", callback_data: `spf:f:a:${f.id}` }]);
+  if (f.estado === "inactiva") return enviar(chatId, `${esc(f.codigo)} está eliminada.`);
+  espera.set(String(chatId), { paso: "ver", familiaId: f.id, miembros: f.miembros, at: Date.now() });
+  return enviar(chatId, textoFamilia(f), rows);
+}
 async function borrarMensaje(msg) { try { if (typeof bot.deleteMessage !== "function" || !msg?.message_id) return false; await bot.deleteMessage(msg.chat.id, msg.message_id); return true; } catch (_) { return false; } }
 async function elegirFamilia(chatId, accion) {
   const fs = (await S.listarFamilias(db)).filter((f) => f.estado !== "inactiva" && (accion === "l" || f.libres > 0));
@@ -258,6 +275,15 @@ async function tryCallback(q, ctx = {}) {
       await enviar(chatId, r.yaEstaba ? `${esc(r.codigo)} ya estaba eliminada.` : `✅ Cuenta ${esc(r.codigo)} eliminada (${esc(r.madreCorreo)}).`, [[{ text: "🔍 Ver cuentas", callback_data: "spf:l" }]]); return true;
     }
     if (p[1] === "v") return await elegirFamilia(chatId, "a"), true; // R196b · «Vincular existente» = elegir ficha
+    if (p[1] === "pe") { // R196e · escribir correo(s) / buscar / quitar búsqueda: opción aparte de la lista
+      const st = espera.get(k);
+      if (!st || st.paso !== "agregar_correo") { await bot.sendMessage(chatId, "Vuelva a tocar «👤 Agregar invitado» (/spotifyf)."); return true; }
+      st.at = Date.now();
+      if (p[2] === "x") { st.filtro = ""; st.entrada = ""; st.opciones = await opcionesFichas(); st.pagina = 0; await mostrarSelector(chatId, st); return true; }
+      st.entrada = p[2] === "c" ? "correos" : "buscar";
+      const f = await S.leerFamilia(db, st.familiaId); espera.set(k, st);
+      await enviar(chatId, st.entrada === "correos" ? `✍️ <b>${esc(f.codigo)}</b> (${f.ocupados}/${f.capacidad}) · escriba el correo a vincular. Puede mandar varios, uno por línea. /cancelar para salir.` : "🔎 Escriba parte del correo o del nombre del cliente.", [[{ text: "⬅️ Volver a la lista", callback_data: "spf:pe:x" }]]); return true;
+    }
     if (p[1] === "pp" || p[1] === "pi") { // R196b · selector de fichas
       const st = espera.get(k);
       if (!st || st.paso !== "agregar_correo" || !st.opciones) { await bot.sendMessage(chatId, "Vuelva a tocar «👤 Agregar invitado» (/spotifyf)."); return true; }
@@ -272,15 +298,7 @@ async function tryCallback(q, ctx = {}) {
     if (p[1] === "a" || p[1] === "l") return await elegirFamilia(chatId, p[1]), true;
     if (p[1] === "f") {
       const f = await S.leerFamilia(db, p[3]);
-      if (p[2] === "l") {
-        try { f.madreClientes = await S.clientesDeMadre(db, f.madreCorreo, { hoy: new Date(Date.now() - 6 * 3600000).toISOString().slice(0, 10) }); } catch (_) {}
-        const rows = f.miembros.filter((m) => m.estado === "activo").map((m) => [{ text: `↔️ Mover ${m.correo}`, callback_data: `spf:mv:${m.id}` }, { text: "Desvincular", callback_data: `spf:d:${m.id}` }]);
-        rows.push([{ text: "👁 Ver clave", callback_data: `spf:kv:${f.id}` }, { text: f.tieneClave ? "🔑 Cambiar clave" : "🔑 Guardar clave", callback_data: `spf:kc:${f.id}` }]); // R196c
-        rows.push([{ text: "✏️ Editar correo", callback_data: `spf:em:${f.id}` }, { text: "🗑 Eliminar cuenta", callback_data: `spf:del:${f.id}` }]);
-        if (f.libres > 0) rows.push([{ text: "👤 Agregar invitado", callback_data: `spf:f:a:${f.id}` }]);
-        espera.set(k, { paso: "ver", familiaId: f.id, miembros: f.miembros, at: Date.now() });
-        await enviar(chatId, textoFamilia(f), rows); return true;
-      }
+      if (p[2] === "l") return await verCuenta(chatId, f.id, f), true;
       const st = { paso: "agregar_correo", familiaId: f.id, opciones: await opcionesFichas(), pagina: 0, filtro: "", at: Date.now() };
       await mostrarSelector(chatId, st); return true;
     }
@@ -318,6 +336,7 @@ async function tryMensaje(msg, ctx = {}) {
   const st = espera.get(k); if (!st) return false;
   if (Date.now() - st.at > ESPERA_MS) { espera.delete(k); return false; }
   if (/^\/cancelar\b/i.test(text)) { espera.delete(k); await bot.sendMessage(chatId, "Cancelado."); return true; }
+  if (/^(menu|menú|inicio|start)$/i.test(text)) { espera.delete(k); return false; } // R196e · palabras del bot: suelta Spotify
   if (text.startsWith("/") || !["madre", "alta", "revision", "agregar_correo", "vincular_correo", "clave", "correo_madre"].includes(st.paso)) return false;
   if (!puede(ctx)) { espera.delete(k); return false; }
   const u = usuarioDe(msg.from);
@@ -340,9 +359,12 @@ async function tryMensaje(msg, ctx = {}) {
       return true;
     }
     if (st.paso === "madre") { const f = await S.crearFamilia(db, { madreCorreo: text, usuario: u }); espera.delete(k); await enviar(chatId, `✅ Familia creada\n${textoFamilia(f)}`); return true; }
-    if (st.paso === "agregar_correo") { // R196b/d · correos completos (uno o varios) = agregar; texto sin correo = buscar en las fichas
+    if (st.paso === "agregar_correo") { // R196e · solo después de tocar «✍️ Escribir correo(s)» o «🔎 Buscar»
+      if (!st.entrada) return false; // la lista no captura texto (p. ej. «Menu» sigue funcionando)
       st.at = Date.now();
-      const correos = [...new Set((text.match(RE_MAIL) || []).map(S.normCorreo))];
+      const correos = st.entrada === "correos" ? [...new Set((text.match(RE_MAIL) || []).map(S.normCorreo))] : [];
+      if (st.entrada === "correos" && !correos.length) { await enviar(chatId, "Eso no es un correo. Escriba el correo completo (ej. cliente@gmail.com) o toque «⬅️ Volver a la lista».", [[{ text: "⬅️ Volver a la lista", callback_data: "spf:pe:x" }]]); return true; }
+      st.entrada = "";
       if (!correos.length) { st.filtro = text.slice(0, 40); st.opciones = await opcionesFichas(st.filtro); st.pagina = 0; await mostrarSelector(chatId, st); return true; }
       const todas = await opcionesFichas(); const lineas = [];
       for (const c of correos) {
@@ -372,4 +394,4 @@ async function tryMensaje(msg, ctx = {}) {
   return false;
 }
 
-module.exports = { tryCallback, tryMensaje, puede, textoFamilia, parsearCuentas, planearAlta };
+module.exports = { verCuenta, tryCallback, tryMensaje, puede, textoFamilia, parsearCuentas, planearAlta };

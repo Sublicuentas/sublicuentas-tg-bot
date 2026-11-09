@@ -21,6 +21,10 @@
 //   se lee aparte con leerClaveMadre(). Auditoría sin el valor. Eliminar = desactivar (estado «inactiva»), solo sin invitados.
 // R196d · Cliente de la cuenta madre: si una ficha tiene Spotify con el MISMO correo de la madre (cuenta completa vendida),
 //   se muestra como «cliente de la cuenta madre» (leído en vivo de la ficha, sin escribir nada y SIN ocupar uno de los 5 espacios).
+// R196f · Bodega: cada cuenta madre se refleja SOLA en `inventario` como plataforma aparte «spotifyfamiliar»
+//   (doc `spotifyfamiliar__fam_<id>`, origen "spotify_familia"): correo madre, clave, 5 cupos y los invitados. Se actualiza
+//   después de cada cambio; eliminar la cuenta quita el reflejo (los datos siguen en spotify_familias). Lo de Finanzas
+//   (pago mensual y renovación de la cuenta principal) vive en fin_spotify_cuentas/{familiaId} y también se refleja aquí.
 // CommonJS a propósito.
 
 const CAPACIDAD = 5;
@@ -401,6 +405,31 @@ async function eliminarCuenta(db, { familiaId, usuario = "", confirmo = false } 
   if (!res.yaEstaba) await auditar(db, "eliminar_cuenta", usuario, res);
   return res;
 }
+// ---------------------------------------------------------------- R196f · reflejo en Bodega (inventario)
+const INV = "inventario", PLAT_BODEGA = "spotifyfamiliar";
+const idBodega = (familiaId) => `${PLAT_BODEGA}__fam_${String(familiaId || "").replace(/[^A-Za-z0-9_-]/g, "_")}`;
+async function sincronizarBodega(db, familiaId) {
+  if (!familiaId) return null;
+  const fref = db.collection(COL).doc(String(familiaId)), iref = db.collection(INV).doc(idBodega(familiaId));
+  const [sf, sfin] = await Promise.all([fref.get(), db.collection("fin_spotify_cuentas").doc(String(familiaId)).get().catch(() => null)]);
+  if (!sf.exists || (sf.data() || {}).estado === "inactiva") { try { await iref.delete(); } catch (_) {} return { borrado: true }; }
+  const f = sf.data() || {}, fin = sfin && sfin.exists ? sfin.data() || {} : {};
+  const cap = Number(f.capacidad || CAPACIDAD), ms = conPosiciones(f).filter((m) => m.estado === "activo").sort((a, b) => Number(a.posicion) - Number(b.posicion));
+  const clientes = ms.map((m) => ({ nombre: String(m.clienteNombre || m.correo || "").slice(0, 80), correo: m.correo, slot: Number(m.posicion) || 0, ...(m.clienteId ? { clienteId: m.clienteId } : {}), ...(m.compraId ? { compraId: m.compraId } : {}) }));
+  const ocupados = clientes.length, disponibles = Math.max(0, cap - ocupados);
+  const doc = { plataforma: PLAT_BODEGA, correo: f.madreCorreo || "", clave: f.madreClave || "", capacidad: cap, total: cap, ocupados, disponibles, disp: disponibles, clientes,
+    estado: disponibles ? "activa" : "llena", origen: "spotify_familia", familiaId: fref.id, codigo: f.codigo || "", accountId: idBodega(familiaId),
+    costoMensualHnl: fin.costoMensualHnl ?? null, proximaRenovacion: fin.proximaRenovacion || "", ultimoPago: fin.ultimoPago || "", updatedAt: ahoraIso() };
+  await iref.set(doc, { merge: true });
+  return { id: iref.id, ocupados, disponibles };
+}
+async function sincronizarTodo(db) {
+  const fams = (await db.collection(COL).get()).docs; let n = 0;
+  for (const d of fams) { try { await sincronizarBodega(db, d.id); n++; } catch (_) {} }
+  return { familias: n };
+}
+const conBodega = (fn, ids) => async (db, args = {}) => { const r = await fn(db, args); try { for (const id of new Set(ids(r || {}, args).filter(Boolean))) await sincronizarBodega(db, id); } catch (_) {} return r; };
+
 // R196d · Fichas con Spotify cuyo correo es el de una madre → { correoMadre: [{ clienteId, cliente, compraId, vence }] }.
 function fichasPorCorreo(docsClientes = []) {
   const mapa = new Map();
@@ -450,4 +479,10 @@ async function panelFamilias(db, { hoy = "" } = {}) {
   return out.sort((a, b) => String(a.codigo).localeCompare(String(b.codigo)));
 }
 
-module.exports = { clientesDeMadre, fichasPorCorreo, guardarClaveMadre, leerClaveMadre, cambiarCorreoMadre, eliminarCuenta, cambiarCorreo, vincularFicha, marcarMiembro, liberarEspacio, panelFamilias, estadoEspacio, conPosiciones, CAPACIDAD, normCorreo, correoValido, crearFamilia, listarFamilias, leerFamilia, resolverCorreo, buscarServiciosSpotify, vincularInvitado, moverInvitado, desvincular, asignarServicio, esPlataformaSpotify };
+const _id = (r) => [r.id || r.familiaId || (r.familia && r.familia.id)];
+module.exports = { sincronizarBodega, sincronizarTodo, idBodega, PLAT_BODEGA,
+  crearFamilia: conBodega(crearFamilia, _id), vincularInvitado: conBodega(vincularInvitado, _id), moverInvitado: conBodega(moverInvitado, (r) => [r.origen && r.origen.id, r.destino && r.destino.id]),
+  desvincular: conBodega(desvincular, _id), asignarServicio: conBodega(asignarServicio, _id), cambiarCorreo: conBodega(cambiarCorreo, _id), vincularFicha: conBodega(vincularFicha, _id),
+  marcarMiembro: conBodega(marcarMiembro, _id), liberarEspacio: conBodega(liberarEspacio, _id), guardarClaveMadre: conBodega(guardarClaveMadre, _id),
+  cambiarCorreoMadre: conBodega(cambiarCorreoMadre, _id), eliminarCuenta: conBodega(eliminarCuenta, (r, a) => [r.familiaId || a.familiaId]),
+  clientesDeMadre, fichasPorCorreo, leerClaveMadre, panelFamilias, estadoEspacio, conPosiciones, CAPACIDAD, normCorreo, correoValido, listarFamilias, leerFamilia, resolverCorreo, buscarServiciosSpotify, esPlataformaSpotify };

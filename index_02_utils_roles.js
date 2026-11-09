@@ -138,7 +138,7 @@ function normalizarPlataforma(v = "") {
     "prime": "primevideo", "prime video": "primevideo", "primevideo": "primevideo",
     "paramount": "paramount", "paramount plus": "paramount", "paramount+": "paramount",
     "crunchyroll": "crunchyroll", "vix": "vix", "apple tv": "appletv", "appletv": "appletv",
-    "universal": "universal", "universal plus": "universal", "universal+": "universal", "spotify": "spotify", "youtube": "youtube",
+    "universal": "universal", "universal plus": "universal", "universal+": "universal", "spotify": "spotify", "spotify familiar": "spotifyfamiliar", "spotify family": "spotifyfamiliar", "spotifyfamiliar": "spotifyfamiliar", "youtube": "youtube",
     "youtube premium": "youtube", "deezer": "deezer", "office": "office", "microsoft": "office", "microsoft 365": "office", "office 365": "office", "m365": "office", "office 2021": "office2021", "office2021": "office2021",
     "stella": "stellatv1", "stella tv": "stellatv1", "stellatv": "stellatv1",
     "stella tv 1": "stellatv1", "stellatv 1": "stellatv1", "stellatv1": "stellatv1",

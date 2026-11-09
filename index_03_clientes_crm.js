@@ -95,7 +95,7 @@ const TV_DIGITAL_BRANDS_LOCAL = {
 const TV_DIGITAL_KEYS_LOCAL = new Set(Object.values(TV_DIGITAL_BRANDS_LOCAL).flatMap((marca) => marca.keys));
 // Claves que solo existen para LEER registros viejos. Nunca se ofrecen como botón:
 // evoutouch4 era un "Nanotech 1" duplicado que aparecía suelto fuera de TV Digital.
-const PLATAFORMAS_ALIAS_OCULTAS_LOCAL = new Set(["iptv1", "iptv3", "iptv4", "evoutouch4"]);
+const PLATAFORMAS_ALIAS_OCULTAS_LOCAL = new Set(["iptv1", "iptv3", "iptv4", "evoutouch4", "spotifyfamiliar"]); // R196f · Spotify Familiar es solo Bodega (cuentas madre de /spotifyf); al cliente se le vende «Spotify»
 const TV_DIGITAL_URLS_LOCAL = {
   latintv: "http://latgt.com:8080",
   latintv2: "http://enlatv.com",

@@ -733,6 +733,8 @@ async function mostrarPanelCorreo(chatId, plataforma = "", acceso = "") {
   if (!found) return bot.sendMessage(chatId, "⚠️ Esa cuenta no existe en inventario.");
 
   const data = found.data || {};
+  // R196f · cuenta madre de Spotify Familiar: se administra en /spotifyf (clave, correo, invitados, eliminar)
+  if (data.origen === "spotify_familia" && data.familiaId) return require("./index_38_spotify_familias").verCuenta(chatId, data.familiaId);
   const ident = getStoredIdent(data) || String(acceso || "");
   setMailPanelContext(chatId, { docId: found.id, plataforma: plat, acceso: ident });
   const clave = String(data.clave || "").trim();
