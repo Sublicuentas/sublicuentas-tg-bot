@@ -114,7 +114,7 @@ function humanPlataformaFallback(key = "") {
     netflix: "Netflix Premium", vipnetflix: "Netflix VIP", disneyp: "Disney Premium",
     disneys: "Disney Premium sin ESPN", hbomax: "HBO Max", primevideo: "Prime Video",
     paramount: "Paramount+", crunchyroll: "Crunchyroll", vix: "Vix",
-    appletv: "Apple TV", universal: "Universal+", spotify: "Spotify",
+    appletv: "Apple TV", universal: "Universal+", spotify: "Spotify", spotifyfamiliar: "Spotify Familiar",
     youtube: "YouTube", deezer: "Deezer", stellatv1: "Stella TV (1)",
     stellatv2: "Stella TV (2)", stellatv3: "Stella TV (3)", oleadatv1: "OleadaTV (1)",
     oleadatv3: "OleadaTV (3)", latintv1: "LatinTV (1)", latintv2: "LatinTV (2)",

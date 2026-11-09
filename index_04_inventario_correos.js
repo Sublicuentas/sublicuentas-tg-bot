@@ -56,7 +56,7 @@ function humanPlatSafe(key = "") {
     vix: "Vix",
     appletv: "Apple TV",
     universal: "Universal+",
-    spotify: "Spotify",
+    spotify: "Spotify", spotifyfamiliar: "Spotify Familiar",
     office: "Office",
     office2021: "Office 2021",
     office365: "Office 365",
@@ -524,6 +524,8 @@ async function moverCuentaInventarioPlataforma(docId = "", nuevaPlataforma = "")
 async function getInventarioRowsByPlataforma(plataforma = "") {
   const plat = normalizarPlataforma(plataforma);
   let rows = [];
+  // R196g · Spotify Familiar: antes de mostrar Bodega se reflejan las cuentas de /spotifyf (siempre al día)
+  if (plat === "spotifyfamiliar") { try { await require("./lib_spotify_familias").sincronizarTodo(db); } catch (e) { logErr("spotifyfamiliar.sync", e); } }
 
   try {
     const snap = await db.collection("inventario").where("plataforma", "==", plat).get();
@@ -577,7 +579,7 @@ async function enviarInventarioPlataforma(chatId, plataforma = "", page = 0) {
           { text: `🟢 Disponibles (${disponibles.length})`, callback_data: `invf:${plat}:disponibles:0` },
           { text: `🔴 Llenas (${llenas.length})`, callback_data: `invf:${plat}:llenas:0` },
         ],
-        [{ text: "➕ Nueva cuenta", callback_data: `inv:new:plat:${plat}` }],
+        [plat === "spotifyfamiliar" ? { text: "➕ Nueva cuenta (/spotifyf)", callback_data: "spf:c" } : { text: "➕ Nueva cuenta", callback_data: `inv:new:plat:${plat}` }], // R196g
         [
           { text: "⬅️ Volver Inventario", callback_data: "menu:inventario" },
           { text: "🏠 Inicio", callback_data: "go:inicio" },

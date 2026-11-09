@@ -218,7 +218,7 @@ function humanPlataforma(key = "") {
   const map = {
     netflix:"Netflix Premium", vipnetflix:"Netflix VIP", disneyp:"Disney Premium", disneys:"Disney Premium sin ESPN",
     hbomax:"HBO Max", primevideo:"Prime Video", paramount:"Paramount+", crunchyroll:"Crunchyroll",
-    vix:"Vix", appletv:"Apple TV", universal:"Universal+", spotify:"Spotify", youtube:"YouTube", office:"Microsoft 365",
+    vix:"Vix", appletv:"Apple TV", universal:"Universal+", spotify:"Spotify", spotifyfamiliar:"Spotify Familiar", youtube:"YouTube", office:"Microsoft 365",
     deezer:"Deezer", canva:"Canva", gemini:"Gemini Pro", chatgpt:"ChatGPT", duolingo:"Duolingo", office2021:"Office 2021",
     stellatv1:"Stella TV (1 dispositivo)", stellatv2:"Stella TV (2 dispositivos)", stellatv3:"Stella TV (3 dispositivos)",
     oleadatv1:"Oleada TV (1 dispositivo)", oleadatv3:"Oleada TV (3 dispositivos)",
@@ -227,7 +227,7 @@ function humanPlataforma(key = "") {
     icomplay1:"ICOMPLAY (1 pantalla)", icomplay2:"ICOMPLAY (2 pantallas)", icomplay3:"ICOMPLAY (3 pantallas)", icomplay5:"ICOMPLAY (5 pantallas)", icomplay7:"ICOMPLAY (7 pantallas)",
     iptv1:"IPTV anterior (1)", iptv3:"IPTV anterior (3)", iptv4:"IPTV anterior (4)",
   };
-  return map[k] || String(key || "");
+  return map[k] || (PLATAFORMAS && !Array.isArray(PLATAFORMAS) && PLATAFORMAS[k] && PLATAFORMAS[k].nombre) || String(key || ""); // R196g · nombre del catálogo si falta aquí
 }
 
 function iconPlataforma(key = "") {
