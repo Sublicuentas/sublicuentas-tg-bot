@@ -227,3 +227,13 @@ test("R196f · Bodega: /spotifyf deja las cuentas en inventario «spotifyfamilia
   assert.match(fs.readFileSync(path.join(B, "index_04_inventario_correos.js"), "utf8"), /data\.origen === "spotify_familia" && data\.familiaId\) return require\("\.\/index_38_spotify_familias"\)\.verCuenta/);
   assert.match(fs.readFileSync(path.join(B, "index_03_clientes_crm.js"), "utf8"), /PLATAFORMAS_ALIAS_OCULTAS_LOCAL = new Set\(\[.*"spotifyfamiliar"\]\)/);
 });
+
+test("R196g · nombre «Spotify Familiar» en los botones de Bodega; Bodega sincroniza al abrirla; «Nueva cuenta» lleva a /spotifyf", () => {
+  const crm = fs.readFileSync(path.join(B, "index_03_clientes_crm.js"), "utf8");
+  assert.match(crm, /spotify:"Spotify", spotifyfamiliar:"Spotify Familiar"/);
+  assert.match(crm, /PLATAFORMAS\[k\]\.nombre\) \|\| String\(key/);
+  const inv = fs.readFileSync(path.join(B, "index_04_inventario_correos.js"), "utf8");
+  assert.match(inv, /if \(plat === "spotifyfamiliar"\) \{ try \{ await require\("\.\/lib_spotify_familias"\)\.sincronizarTodo\(db\)/);
+  assert.match(inv, /plat === "spotifyfamiliar" \? \{ text: "➕ Nueva cuenta \(\/spotifyf\)", callback_data: "spf:c" \}/);
+  for (const f of ["index_02_utils_roles.js", "index_06_handlers.js", "index_04_inventario_correos.js"]) assert.match(fs.readFileSync(path.join(B, f), "utf8"), /spotifyfamiliar: "Spotify Familiar"/, f);
+});
