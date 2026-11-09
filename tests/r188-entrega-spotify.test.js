@@ -129,7 +129,7 @@ test("R196b · Agregar invitado: se ELIGE la ficha de una lista (sin escribir), 
   await M.tryMensaje(m("jon"), ctx);
   assert.equal(botones(enviados.at(-1))[0].text, "jony@ejemplo.com · Jony Prueba");
   await M.tryMensaje(m("nuevo@ejemplo.com"), ctx);
-  assert.match(enviados.at(-1).text, /Invitado agregado \(sin ficha/);
+  assert.match(enviados.at(-1).text, /✅ nuevo@ejemplo\.com · sin ficha/);
   const dani = (await db.collection("clientes").doc("dani").get()).data().servicios[0];
   assert.deepEqual([dani.fechaRenovacion, dani.precio, dani.spotifyFamiliaCodigo], ["04/12/2026", 120, "SP-001"]);
   await M.tryCallback(q(`spf:f:l:${f.id}`), ctx);
@@ -180,4 +180,22 @@ test("R196c · editar correo madre conserva invitados y fichas; eliminar solo va
   assert.equal((await S.leerFamilia(db, f.id)).estado, "inactiva", "no se borra el documento");
   await M.tryCallback(q("spf:l"), ctx); assert.match(enviados.at(-1).text, /No hay cuentas familiares/);
   const g = await S.crearFamilia(db, { madreCorreo: "nueva@ejemplo.com" }); assert.equal(g.codigo, "SP-002");
+});
+
+test("R196d · Agregar invitado: varios correos sueltos de una vez (con y sin ficha); la ficha con el correo madre sale como cliente de la cuenta madre", async () => {
+  const { M, S, db, enviados } = cargar();
+  await db.collection("clientes").doc("alexey").set({ nombre: "Alexey Prueba", servicios: [{ compraId: "c7", plataforma: "Spotify", correo: "sandyc@ejemplo.com", fechaRenovacion: "25/11/2026", precio: 100 }] });
+  await db.collection("clientes").doc("jony").set({ nombre: "Jony Prueba", servicios: [{ compraId: "c2", plataforma: "spotify", correo: "jony@ejemplo.com", fechaRenovacion: "01/12/2026" }] });
+  const f = await S.crearFamilia(db, { madreCorreo: "sandyc@ejemplo.com" });
+  const ctx = { adminOk: true };
+  await M.tryCallback(q(`spf:f:a:${f.id}`), ctx);
+  assert.deepEqual(botones(enviados.at(-1)).map((x) => x.text), ["jony@ejemplo.com · Jony Prueba", "✅ Listo"], "la ficha del correo madre no se ofrece como invitado");
+  await M.tryMensaje(m("suelto1@ejemplo.com\nJONY@ejemplo.com, suelto2@ejemplo.com\nsandyc@ejemplo.com"), ctx);
+  const t = enviados.at(-1).text;
+  assert.match(t, /✅ suelto1@ejemplo\.com · sin ficha/); assert.match(t, /✅ jony@ejemplo\.com · ficha de Jony Prueba/); assert.match(t, /✅ suelto2@ejemplo\.com/); assert.match(t, /⛔ sandyc@ejemplo\.com/);
+  assert.equal((await S.leerFamilia(db, f.id)).ocupados, 3);
+  await M.tryCallback(q(`spf:f:l:${f.id}`), ctx);
+  assert.match(enviados.at(-1).text, /Cliente de la cuenta madre: Alexey Prueba · vence 25\/11\/2026/);
+  const [p] = await S.panelFamilias(db, { hoy: "2026-11-08" });
+  assert.equal(p.madreClientes[0].cliente, "Alexey Prueba"); assert.equal(p.ocupados, 3, "el cliente de la madre no ocupa espacio");
 });
