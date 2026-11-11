@@ -79,7 +79,7 @@ app.use(express.json({ limit: "15mb" }));
 app.use("/rev/admin", createAdminAuditMiddleware({ db, source: "Panel Socios API" }));
 
 // keepalive / health (para que Render lo mantenga vivo)
-const PANEL_API_VERSION = "socios-20260928-admin-acl-v3";
+const PANEL_API_VERSION = require("./server_api_version"); // R196i (antes socios-20260928-admin-acl-v3)
 app.get("/", (_req, res) => res.type("text/plain").send(`Sublicuentas Panel API OK ${PANEL_API_VERSION}`));
 app.get("/rev/ping", (_req, res) => res.json({ v: PANEL_API_VERSION, ticketsBridge: true, telegramOutbox: true, gemini: !!process.env.GEMINI_API_KEY, anthropic: !!process.env.ANTHROPIC_API_KEY, storageBuckets: STORAGE_BUCKET_CANDIDATES }));
 app.get("/health", (_req, res) => res.json({ ok: true, version: PANEL_API_VERSION, ts: Date.now() }));

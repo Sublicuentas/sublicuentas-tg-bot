@@ -132,7 +132,7 @@ app.use(express.json({ limit: PANEL_UNIFICADA ? "15mb" : "1mb" })); // el panel 
 if (!PANEL_UNIFICADA) app.use("/rev/admin", createAdminAuditMiddleware({ db, source: "Bot API / Panel Admin" }));
 
 // Healthcheck (público, lo usa Render para keepalive)
-app.get("/health", (_req, res) => res.json(getCoreHealth ? getCoreHealth() : { ok: true }));
+app.get("/health", (_req, res) => res.json({ ...(getCoreHealth ? getCoreHealth() : { ok: true }), version: require("./server_api_version") })); // R196i
 app.get("/", (_req, res) => res.send("Sublicuentas API OK"));
 // R161 · Panel API montada aquí (antes de las rutas /rev de este archivo): las versiones de server_api.js son las
 // vigentes (perfil vivo del socio, permisos, entregas, buzón). /health y / siguen siendo los de este proceso.

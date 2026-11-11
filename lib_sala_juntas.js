@@ -189,6 +189,20 @@ async function tryVincular(msg, deps) {
 }
 
 let timer = null;
+// R196i · La Sala (Sublichat Web) muestra el estado REAL de Telegram sin pedir variables en Vercel: el bot publica
+//   · sala_config/telegram { botUsername } (getMe) → botón «Vincular Telegram» sin TELEGRAM_BOT_USERNAME en Vercel;
+//   · sala_telegram/{fundadora} { estado: listo|bloqueado, fuente: "render" } verificado con getChat (sin guardar el chat id).
+async function publicarEstado({ db, bot, env = process.env, ahora = Date.now() } = {}) {
+  const out = { bot: "", fundadoras: {} }; const iso = new Date(ahora).toISOString();
+  try { const me = await bot.getMe(); out.bot = String(me?.username || ""); if (out.bot) await db.collection("sala_config").doc("telegram").set({ botUsername: out.bot, actualizadoAt: iso }, { merge: true }); } catch (_) {}
+  for (const u of Object.keys(NOMBRE_F)) {
+    const chat = chatDe(u, env); if (!chat) continue;
+    let estado = "listo", error = "";
+    try { await bot.getChat(chat); } catch (e) { if (errorDefinitivo(e)) { estado = "bloqueado"; error = String(e?.message || e).slice(0, 160); } else continue; }
+    try { await db.collection(C.TG).doc(u).set({ usuario: u, estado, fuente: "render", verificadoAt: iso, ...(error ? { error } : { error: "" }) }, { merge: true }); out.fundadoras[u] = estado; } catch (_) {}
+  }
+  return out;
+}
 function iniciar({ db, bot, env = process.env, cadaMs = 30000, log = console } = {}) {
   if (timer || String(env.SALA_JUNTAS_ENABLED ?? "1") === "0") return;
   let ocupado = false;
@@ -199,8 +213,10 @@ function iniciar({ db, bot, env = process.env, cadaMs = 30000, log = console } =
     ocupado = false;
   };
   timer = setInterval(tick, cadaMs); timer.unref?.();
+  const pub = () => publicarEstado({ db, bot, env }).then((r) => log.log(`[Sala de Juntas] Telegram publicado: @${r.bot || "?"} ${JSON.stringify(r.fundadoras)}`)).catch((e) => log.error("[Sala de Juntas] publicar", e?.message || e));
+  setTimeout(pub, 5000).unref?.(); setInterval(pub, 30 * 60000).unref?.(); // R196i
   setTimeout(tick, 8000).unref?.();
   log.log("🎥 Sala de Juntas: avisos de Telegram activos");
 }
 
-module.exports = { iniciar, procesarPendientes, handleCallback, mensaje, chatDe, chatDeDb, vincular, tryVincular, urlSala, TOLERANCIA_MS };
+module.exports = { publicarEstado, iniciar, procesarPendientes, handleCallback, mensaje, chatDe, chatDeDb, vincular, tryVincular, urlSala, TOLERANCIA_MS };

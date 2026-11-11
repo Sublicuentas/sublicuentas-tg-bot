@@ -143,7 +143,13 @@ async function barrerPendientes(db, opts = {}) {
 async function diagnostico({ token = process.env.BOT_TOKEN, env = process.env, fetchFn = fetch } = {}) {
   const out = { bot: null, destinos: [] };
   if (!token) out.bot = { ok: false, error: "BOT_TOKEN no configurado en este servicio" };
-  else { const me = await llamarTelegramGet(fetchFn, token, "getMe", {}); out.bot = me.ok ? { ok: true, usuario: me.result?.username || "" } : { ok: false, error: me.description }; }
+  else {
+    const me = await llamarTelegramGet(fetchFn, token, "getMe", {}); out.bot = me.ok ? { ok: true, usuario: me.result?.username || "" } : { ok: false, error: me.description };
+    // R196i · webhook: si quedó un webhook puesto, el bot por polling deja de recibir (409) aunque los envíos sigan.
+    const wh = await llamarTelegramGet(fetchFn, token, "getWebhookInfo", {});
+    if (wh.ok) { const w = wh.result || {}; out.webhook = { activo: !!w.url, pendientes: Number(w.pending_update_count || 0), ultimoError: String(w.last_error_message || "").slice(0, 200), ultimoErrorAt: w.last_error_date ? new Date(w.last_error_date * 1000).toISOString() : "" }; }
+  }
+  out.servicio = { version: require("./server_api_version"), unificado: String(env.UNIFICAR_PANEL_API || "") === "1", arrancoAt: new Date(Date.now() - Math.round(process.uptime() * 1000)).toISOString() };
   for (const k of Object.keys(DESTINOS_VOUCHER)) {
     try {
       const r = resolverDestino(k, env);
