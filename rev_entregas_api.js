@@ -34,7 +34,8 @@ function registrar(app, d) {
   };
   // Quién lo hizo: la sesión admin del Panel API + (si llega por el puente de Sublichat) el usuario real de Sublichat.
   const actorDe = (req) => ({ admin: L.clean(req.admin?.nombre || req.admin?.usuario || "Admin", 80), delegado: L.clean(req.headers?.["x-sublichat-actor"] || "", 80) });
-  const actorTxt = (a) => a.delegado ? `${a.delegado} (vía ${a.admin})` : a.admin;
+  // R196l · nunca el nombre de la persona: «naara (vía Sublicuentas)» se guarda y se ve como «Sublicuentas».
+  const actorTxt = (a) => { const P = require("./lib_nombres_publicos").publico; const d = P(a.delegado), ad = P(a.admin); return d && d !== ad ? `${d} (vía ${ad})` : ad; };
   const enAmbito = (req, compra) => isFullAdmin(req) || revNormKey(compra.destino || "sublicuentas") === adminScopeProfile(req);
 
   async function socioPorNorm(socioNorm) {

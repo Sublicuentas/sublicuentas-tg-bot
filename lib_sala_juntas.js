@@ -14,7 +14,7 @@
    ============================================================================================================ */
 
 const C = { R: "sala_reuniones", I: "sala_invitaciones", A: "sala_avisos", AUD: "auditoria_eventos", TG: "sala_telegram", TGTOK: "sala_tg_tokens" };
-const NOMBRE_F = { naara: "Naara", libni: "Libni", geisell: "Geisell" };
+const NOMBRE_F = { naara: "Sublicuentas", libni: "Relojes", geisell: "Geisell" }; // R196l: nunca el nombre de la persona
 // R182 · invitados (cualquier usuario con el módulo Sala de Juntas): nombre legible a partir de su usuario
 const NOMBRE = new Proxy(NOMBRE_F, { get: (o, k) => o[k] || String(k || "").split(/[\s._-]+/).filter(Boolean).map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ") });
 const MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
@@ -46,7 +46,9 @@ function urlSala(reunionId, env = process.env) {
 }
 
 // Texto y botones de cada aviso (HTML de Telegram).
-function mensaje(aviso, r, inv, env = process.env) {
+// R196l · todo aviso de la Sala pasa por nombres públicos (ej. un título que mencione a una persona).
+function mensaje(aviso, r, inv, env = process.env) { const m = mensajeBase(aviso, r, inv, env); return m && m.texto ? { ...m, texto: require("./lib_nombres_publicos").publico(m.texto) } : m; }
+function mensajeBase(aviso, r, inv, env = process.env) {
   const { fecha, hora } = fechaHN(r.inicioMs);
   const titulo = esc(r.titulo || "Reunión");
   const part = (r.participantes || []).map((u) => NOMBRE[u] || u).join(", ");
@@ -67,7 +69,7 @@ function mensaje(aviso, r, inv, env = process.env) {
   if (cuando[aviso.tipo]) return { texto: `⏰ <b>Recordatorio · Sala de Juntas</b>\n\n«${titulo}» empieza <b>${cuando[aviso.tipo]}</b>.\n${esc(fecha)} · ${esc(hora)} (Honduras)${pendiente ? "\n\nTodavía no ha confirmado su asistencia." : ""}`, teclado: kb(true) };
   if (aviso.tipo === "inicio") return { texto: `🟢 <b>«${titulo}» empieza ahora.</b>\nEntre a la antesala de la Sala de Juntas para revisar su micrófono.`, teclado: kb(false) };
   if (aviso.tipo === "solicitud") return { texto: `🔔 <b>Solicitud de acceso · Sala de Juntas</b>\n\n<b>${esc(aviso.solicitanteNombre || NOMBRE[aviso.solicitante])}</b> pide entrar a «${titulo}», que ya empezó.\nAcepte o rechace desde Sublichat (vence en 2 minutos).`, teclado: kb(false) };
-  if (aviso.tipo === "cancelacion") return { texto: `❌ <b>Reunión cancelada</b>\n\nNaara canceló «${titulo}» del ${esc(fecha)} · ${esc(hora)}.`, teclado: { inline_keyboard: [] } };
+  if (aviso.tipo === "cancelacion") return { texto: `❌ <b>Reunión cancelada</b>\n\nSublicuentas canceló «${titulo}» del ${esc(fecha)} · ${esc(hora)}.`, teclado: { inline_keyboard: [] } };
   return null;
 }
 
