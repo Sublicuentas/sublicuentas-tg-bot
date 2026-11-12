@@ -25,6 +25,14 @@
 //   (doc `spotifyfamiliar__fam_<id>`, origen "spotify_familia"): correo madre, clave, 5 cupos y los invitados. Se actualiza
 //   después de cada cambio; eliminar la cuenta quita el reflejo (los datos siguen en spotify_familias). Lo de Finanzas
 //   (pago mensual y renovación de la cuenta principal) vive en fin_spotify_cuentas/{familiaId} y también se refleja aquí.
+// R196m · PDF «Correcciones Spotify y entrega APK» (12/11/2026):
+//   · Quitar Spotify / «No renovó» → retirarPorBaja(): el espacio queda «Retiro en Spotify pendiente» con fecha y motivo
+//     (Sublichat NO puede retirar a nadie en Spotify: no hay integración). El cupo NO se declara libre hasta que alguien
+//     confirma «Ya lo retiré en Spotify» (liberarEspacio). Idempotente: repetir la baja no duplica nada.
+//   · Si el cliente vuelve a tener su Spotify con ese correo (ficha guardada otra vez), la marca automática se quita sola.
+//   · Alta directa por correo: agregarPorCorreo() → 1 correo + Agregar; vincula la ficha si hay UNA coincidencia exacta,
+//     pide elegir solo entre las coincidencias si hay varias, y si no hay ninguna queda «pendiente de vincular» (no crea
+//     cliente, venta ni renovación).
 // CommonJS a propósito.
 
 const CAPACIDAD = 5;
@@ -64,7 +72,7 @@ async function auditar(db, accion, usuario, datos) {
 function vista(id, f) {
   const a = activos(f);
   return { id, codigo: f.codigo || "", madreCorreo: f.madreCorreo || "", tieneClave: !!f.madreClave, estado: f.estado || "activa", capacidad: Number(f.capacidad || CAPACIDAD), ocupados: a.length, libres: Math.max(0, Number(f.capacidad || CAPACIDAD) - a.length),
-    miembros: conPosiciones(f).map((m) => ({ id: m.id, correo: m.correo, estado: m.estado, posicion: m.estado === "activo" ? Number(m.posicion || 0) : 0, estadoInvitacion: m.estadoInvitacion === "pendiente" ? "pendiente" : "aceptada", retiroPendiente: !!m.retiroPendiente, historialCorreos: (m.historialCorreos || []).slice(-10), clienteId: m.clienteId || "", compraId: m.compraId || "", clienteNombre: m.clienteNombre || "", vinculadoAt: m.vinculadoAt || "", desvinculadoAt: m.desvinculadoAt || "" })),
+    miembros: conPosiciones(f).map((m) => ({ id: m.id, correo: m.correo, estado: m.estado, posicion: m.estado === "activo" ? Number(m.posicion || 0) : 0, estadoInvitacion: m.estadoInvitacion === "pendiente" ? "pendiente" : "aceptada", retiroPendiente: !!m.retiroPendiente, retiroAuto: m.retiroAuto ? { motivo: m.retiroAuto.motivo || "", at: m.retiroAuto.at || "" } : null, historialCorreos: (m.historialCorreos || []).slice(-10), clienteId: m.clienteId || "", compraId: m.compraId || "", clienteNombre: m.clienteNombre || "", vinculadoAt: m.vinculadoAt || "", desvinculadoAt: m.desvinculadoAt || "" })),
     version: Number(f.version || 1), updatedAt: f.updatedAt || "" };
 }
 
@@ -204,7 +212,7 @@ async function moverInvitado(db, { correo, destinoId, usuario = "" } = {}) {
   return res;
 }
 
-async function desvincular(db, { correo, usuario = "" } = {}) {
+async function desvincular(db, { correo, usuario = "", motivo = "", confirmoRetiro = false } = {}) {
   const c = correoValido(correo); if (!c) throw new Error("Correo inválido.");
   const idx = db.collection(IDX).doc(idxId(c));
   let res = null;
@@ -214,7 +222,7 @@ async function desvincular(db, { correo, usuario = "" } = {}) {
     const fref = db.collection(COL).doc(d.familiaId); const sf = await tx.get(fref); const f = sf.data() || {};
     const ahora = ahoraIso();
     const viejo = (f.miembros || []).find((m) => m.correoNorm === c && m.estado === "activo") || {};
-    const miembros = (f.miembros || []).map((m) => m.correoNorm === c && m.estado === "activo" ? { ...m, estado: "desvinculado", desvinculadoAt: ahora, desvinculadoPor: String(usuario || "").slice(0, 60) } : m);
+    const miembros = (f.miembros || []).map((m) => m.correoNorm === c && m.estado === "activo" ? { ...m, estado: "desvinculado", desvinculadoAt: ahora, desvinculadoPor: String(usuario || "").slice(0, 60), desvinculadoMotivo: String(motivo || (m.retiroAuto && m.retiroAuto.motivo) || "manual").slice(0, 40), ...(confirmoRetiro ? { retiroSpotifyConfirmadoAt: ahora } : {}) } : m);
     const cref = viejo.clienteId ? db.collection("clientes").doc(viejo.clienteId) : null;
     const sc = cref ? await tx.get(cref) : null;
     tx.set(fref, { ...f, miembros, version: Number(f.version || 1) + 1, updatedAt: ahora });
@@ -224,7 +232,7 @@ async function desvincular(db, { correo, usuario = "" } = {}) {
     const fichaActiva = !!(sc && sc.exists && (sc.data().servicios || []).some((x) => esPlataformaSpotify(x.plataforma) && String(x.compraId || "") === String(viejo.compraId || "")));
     res = { familiaId: fref.id, codigo: f.codigo, correo: c, ocupados: activos({ miembros }).length, advertencia: fichaActiva ? "El cliente sigue con su ficha Spotify activa: revise si debe moverlo a otra familia." : "" };
   });
-  await auditar(db, "desvincular", usuario, { correo: c, familiaId: res.familiaId, codigo: res.codigo });
+  await auditar(db, "desvincular", usuario, { correo: c, familiaId: res.familiaId, codigo: res.codigo, motivo: String(motivo || "manual").slice(0, 40), retiroSpotifyConfirmado: !!confirmoRetiro });
   return res;
 }
 
@@ -238,11 +246,70 @@ async function asignarServicio(db, { correo, clienteId, compraId, usuario = "" }
     const [sf, sc] = [await tx.get(fref), await tx.get(cref)];
     if (!sf.exists) return;
     const f = sf.data() || {};
-    const miembros = (f.miembros || []).map((m) => m.correoNorm === c && m.estado === "activo" && (!m.clienteId || !m.compraId) ? { ...m, clienteId: String(clienteId || ""), compraId: String(compraId || ""), clienteNombre: sc.exists ? String((sc.data() || {}).nombrePerfil || (sc.data() || {}).nombre || "").slice(0, 80) : m.clienteNombre || "" } : m);
+    const miembros = (f.miembros || []).map((m) => {
+      if (!(m.correoNorm === c && m.estado === "activo")) return m;
+      // R196m · el cliente volvió a tener su Spotify con este correo: se quita la marca AUTOMÁTICA de retiro (no la manual)
+      const volvio = !!(m.retiroPendiente && m.retiroAuto);
+      if (!volvio && m.clienteId && m.compraId) return m;
+      const n = { ...m, clienteId: String(clienteId || m.clienteId || ""), compraId: String(compraId || m.compraId || ""), clienteNombre: sc.exists ? String((sc.data() || {}).nombrePerfil || (sc.data() || {}).nombre || "").slice(0, 80) : m.clienteNombre || "" };
+      if (volvio) { n.retiroPendiente = false; n.retiroCancelado = { ...m.retiroAuto, canceladoAt: ahoraIso(), porque: "servicio_vigente" }; delete n.retiroAuto; }
+      return n;
+    });
     tx.set(fref, { ...f, miembros, updatedAt: ahoraIso() });
     if (sc.exists) { const sv = marcarServicio(sc.data() || {}, String(compraId || ""), c, { id: fref.id, codigo: f.codigo, madreCorreo: f.madreCorreo }); if (sv) tx.set(cref, { servicios: sv }, { merge: true }); }
   });
   return { familia: { id: r.familiaId, codigo: r.codigo, madreCorreo: r.madreCorreo, posicion: r.posicion, capacidad: r.capacidad } };
+}
+
+// R196m · Baja del servicio (quitar Spotify / «No renovó») → el espacio queda «Retiro en Spotify pendiente».
+// No se libera el cupo: Sublichat no puede comprobar que Spotify retiró al miembro. Solo actúa si el invitado es de ESA ficha.
+async function retirarPorBaja(db, { correo, clienteId = "", compraId = "", motivo = "no_renovo", usuario = "" } = {}) {
+  const c = correoValido(correo); if (!c) return { omitido: "sin_correo" };
+  const idx = db.collection(IDX).doc(idxId(c)); let res = null;
+  await db.runTransaction(async (tx) => {
+    const si = await tx.get(idx); const d = si.exists ? si.data() || {} : null;
+    if (!d || d.activo === false || d.tipo !== "invitado") { res = { omitido: "no_es_invitado" }; return; }
+    const fref = db.collection(COL).doc(d.familiaId); const sf = await tx.get(fref); if (!sf.exists) { res = { omitido: "sin_familia" }; return; }
+    const f = sf.data() || {};
+    const m = activos(f).find((x) => x.correoNorm === c);
+    if (!m) { res = { omitido: "no_es_invitado" }; return; }
+    // Otra ficha / otra compra con el mismo correo: no se toca (evita retirar a quien sí sigue pagando).
+    if ((m.clienteId && clienteId && m.clienteId !== String(clienteId)) || (m.compraId && compraId && m.compraId !== String(compraId))) { res = { omitido: "otra_ficha", familiaId: fref.id, codigo: f.codigo }; return; }
+    if (m.retiroPendiente && m.retiroAuto) { res = { yaEstaba: true, familiaId: fref.id, codigo: f.codigo, correo: c, estado: "retiro_pendiente" }; return; }
+    const ahora = ahoraIso(), mot = String(motivo || "no_renovo").slice(0, 40);
+    const miembros = conPosiciones(f).map((x) => x.id === m.id ? { ...x, retiroPendiente: true, retiroMarcadoAt: ahora, retiroMarcadoPor: String(usuario || "sistema").slice(0, 60), retiroAuto: { motivo: mot, at: ahora, por: String(usuario || "sistema").slice(0, 60), clienteId: String(clienteId || x.clienteId || ""), compraId: String(compraId || x.compraId || "") } } : x);
+    tx.set(fref, { ...f, miembros, version: Number(f.version || 1) + 1, updatedAt: ahora });
+    res = { familiaId: fref.id, codigo: f.codigo, correo: c, motivo: mot, estado: "retiro_pendiente", posicion: Number((miembros.find((x) => x.id === m.id) || {}).posicion || 0) };
+  });
+  if (res && res.estado && !res.yaEstaba) await auditar(db, "retiro_pendiente_por_baja", usuario || "sistema", { familiaId: res.familiaId, codigo: res.codigo, correo: res.correo, motivo: res.motivo, clienteId: String(clienteId || ""), compraId: String(compraId || "") });
+  return res;
+}
+// R196m · Fichas Spotify cuyo correo es EXACTAMENTE este (normalizado). Para el alta directa por correo.
+function fichasExactas(docs, c) {
+  const out = [];
+  for (const d of docs) {
+    const cli = d.data || {};
+    (Array.isArray(cli.servicios) ? cli.servicios : []).forEach((sv) => {
+      if (!sv || !esPlataformaSpotify(sv.plataforma) || /famil/i.test(String(sv.plataforma || ""))) return;
+      const correo = normCorreo(sv.correo || (sv.perfiles && sv.perfiles[0] && sv.perfiles[0].correo));
+      if (correo === c) out.push({ clienteId: d.id, clienteNombre: String(cli.nombrePerfil || cli.nombre || "").slice(0, 80), compraId: String(sv.compraId || ""), vence: ymdDe(sv.fechaRenovacion || sv.vence) });
+    });
+  }
+  return out;
+}
+async function agregarPorCorreo(db, { familiaId, correo, posicion = 0, clienteId = "", compraId = "", usuario = "" } = {}) {
+  const c = correoValido(correo); if (!c) throw new Error("Escriba un correo válido (ej. cliente@gmail.com).");
+  let ficha = null;
+  if (clienteId) ficha = { clienteId: String(clienteId), compraId: String(compraId || "") };
+  else {
+    const docs = (await db.collection("clientes").get()).docs.map((d) => ({ id: d.id, data: d.data() || {} }));
+    const opciones = fichasExactas(docs, c);
+    if (opciones.length > 1) return { requiereElegir: true, correo: c, opciones: opciones.slice(0, 10) };
+    ficha = opciones[0] || null;
+  }
+  const familia = await vincularInvitado(db, { familiaId, correo: c, clienteId: ficha ? ficha.clienteId : "", compraId: ficha ? ficha.compraId : "", usuario, posicion });
+  return { familia, ficha, pendienteVincular: !ficha,
+    aviso: ficha ? "" : "No hay una ficha Spotify con ese correo: el espacio queda ocupado y «pendiente de vincular». No se creó cliente, venta ni renovación." };
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -334,7 +401,7 @@ async function marcarMiembro(db, { correo, estadoInvitacion, retiroPendiente, us
 // Liberar el espacio SOLO con confirmación de que el miembro ya fue retirado en Spotify.
 async function liberarEspacio(db, { correo, confirmoRetiro = false, usuario = "" } = {}) {
   if (confirmoRetiro !== true) throw new Error("Confirme que el correo ya fue retirado de la familia en Spotify.");
-  return desvincular(db, { correo, usuario });
+  return desvincular(db, { correo, usuario, confirmoRetiro: true });
 }
 // ---------------------------------------------------------------- R196c · cuenta madre: clave, editar correo, eliminar
 async function guardarClaveMadre(db, { familiaId, clave, usuario = "" } = {}) {
@@ -470,7 +537,7 @@ async function panelFamilias(db, { hoy = "" } = {}) {
       const ficha = m.clienteId ? fichas.get(m.clienteId) : null;
       const sv = ficha ? (ficha.servicios || []).find((x) => esPlataformaSpotify(x.plataforma) && (m.compraId ? String(x.compraId || "") === m.compraId : normCorreo(x.correo) === m.correoNorm)) : null;
       const vence = sv ? ymdDe(sv.fechaRenovacion || sv.vence) : "";
-      return { posicion: i + 1, estado: estadoEspacio(m), correo: m.correo, clienteId: m.clienteId || "", compraId: m.compraId || "", cliente: ficha ? String(ficha.nombrePerfil || ficha.nombre || m.clienteNombre || "").slice(0, 80) : (m.clienteNombre || ""),
+      return { posicion: i + 1, estado: estadoEspacio(m), retiroMotivo: m.retiroPendiente && m.retiroAuto ? String(m.retiroAuto.motivo || "") : "", retiroAt: m.retiroPendiente ? String((m.retiroAuto && m.retiroAuto.at) || m.retiroMarcadoAt || "") : "", correo: m.correo, clienteId: m.clienteId || "", compraId: m.compraId || "", cliente: ficha ? String(ficha.nombrePerfil || ficha.nombre || m.clienteNombre || "").slice(0, 80) : (m.clienteNombre || ""),
         vence, vencido: !!(vence && hoy && vence < hoy), fichaEncontrada: !!sv, sinFicha: !m.clienteId, historialCorreos: (m.historialCorreos || []).slice(-5), vinculadoAt: m.vinculadoAt || "" };
     });
     const ocupados = espacios.filter((e) => e.estado !== "disponible").length;
@@ -484,5 +551,5 @@ module.exports = { sincronizarBodega, sincronizarTodo, idBodega, PLAT_BODEGA,
   crearFamilia: conBodega(crearFamilia, _id), vincularInvitado: conBodega(vincularInvitado, _id), moverInvitado: conBodega(moverInvitado, (r) => [r.origen && r.origen.id, r.destino && r.destino.id]),
   desvincular: conBodega(desvincular, _id), asignarServicio: conBodega(asignarServicio, _id), cambiarCorreo: conBodega(cambiarCorreo, _id), vincularFicha: conBodega(vincularFicha, _id),
   marcarMiembro: conBodega(marcarMiembro, _id), liberarEspacio: conBodega(liberarEspacio, _id), guardarClaveMadre: conBodega(guardarClaveMadre, _id),
-  cambiarCorreoMadre: conBodega(cambiarCorreoMadre, _id), eliminarCuenta: conBodega(eliminarCuenta, (r, a) => [r.familiaId || a.familiaId]),
+  cambiarCorreoMadre: conBodega(cambiarCorreoMadre, _id), retirarPorBaja: conBodega(retirarPorBaja, _id), agregarPorCorreo: conBodega(agregarPorCorreo, (r) => [r.familia && r.familia.id]), fichasExactas, eliminarCuenta: conBodega(eliminarCuenta, (r, a) => [r.familiaId || a.familiaId]),
   clientesDeMadre, fichasPorCorreo, leerClaveMadre, panelFamilias, estadoEspacio, conPosiciones, CAPACIDAD, normCorreo, correoValido, listarFamilias, leerFamilia, resolverCorreo, buscarServiciosSpotify, esPlataformaSpotify };

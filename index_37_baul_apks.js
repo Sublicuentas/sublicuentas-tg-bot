@@ -109,7 +109,7 @@ async function tryCallback(q, ctx = {}) {
     if (p[1] === "u") return await menuUrls(chatId, ctx), true;
     if (p[1] === "msg") { // R192 · texto plano, fácil de copiar o reenviar (no se envía solo al cliente)
       const v = B.vistaPlataforma(await B.leerBaul(db), p[2]); const e = v.dispositivos.flatMap((x) => x.enlaces).find((x) => x.id === p[3]);
-      await bot.sendMessage(chatId, e ? e.mensaje : "Ese enlace ya no está disponible."); return true;
+      await bot.sendMessage(chatId, e ? (e.mensaje || `⚠️ No configurado: ${e.faltante || "faltan datos"}. Complete el enlace o el código en el Baúl antes de entregarlo.`) : "Ese enlace ya no está disponible."); return true; // R196m
     }
     if (p[1] === "a") { await B.activarEnlace(db, p[3], p[2] === "1", u); await bot.sendMessage(chatId, p[2] === "1" ? "✅ Enlace activado." : "⏸️ Enlace desactivado (ya no se ofrece)."); return true; }
     if (p[1] === "x") { await enviar(chatId, `¿Eliminar el enlace <b>${esc(p[2])}</b>? No se puede deshacer.`, [[{ text: "🗑️ Sí, eliminar", callback_data: `baul:xs:${p[2]}` }]]); return true; }

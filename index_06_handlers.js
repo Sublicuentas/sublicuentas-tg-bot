@@ -6590,13 +6590,13 @@ Revise que el correo exista en inventario con esa plataforma o coloque la clave 
           const ctx = pending.get(String(chatId));
           const idx = Number(ctx?.idx);
           const auditAntes=await actividadClienteServicioLocal(clientId,idx,ctx?.compraId||"");
-          const result = await eliminarServicioTx(clientId, idx, ctx?.compraId || "", { actor:{userId:String(userId||""),name:q.from?.first_name||q.from?.username||"",source:"Telegram"} });
+          const result = await eliminarServicioTx(clientId, idx, ctx?.compraId || "", { motivo:"no_renovo", actor:{userId:String(userId||""),name:q.from?.first_name||q.from?.username||"",source:"Telegram"} });
           pending.delete(String(chatId));
           await registrarActividadTelegramLocal(userId,chatId,'no_renovo_eliminar',{...auditAntes,campo:'servicio',motivo:'No renovó'},`Marcó NO RENOVÓ y eliminó ${auditAntes.plataforma||'el servicio'}${auditAntes.cliente?` de ${auditAntes.cliente}`:''}${auditAntes.cuenta?` · cuenta ${auditAntes.cuenta}`:''}.`);
           await bot.sendMessage(chatId,
             `✅ *Servicio eliminado correctamente*\n\n` +
             `📦 ${escMD(humanPlatAlertLocal(result.eliminado?.plataforma || "-"))} — ${escMD(result.eliminado?.correo || "-")}\n` +
-            `_Slot liberado en inventario._`,
+            `_Slot liberado en inventario._` + (result.spotifyRetiro && (result.spotifyRetiro.estado === "retiro_pendiente" || result.spotifyRetiro.yaEstaba) ? `\n\n🎵 Spotify Familiar ${escMD(result.spotifyRetiro.codigo || "")}: *Retiro en Spotify pendiente*. Quítelo en Spotify y confírmelo en Control Maestro.` : result.spotifyRetiro && result.spotifyRetiro.pendienteRevision ? `\n\n⚠️ Spotify Familiar: no se pudo marcar el retiro; revíselo en Control Maestro.` : ""),
             { parse_mode: "Markdown" }
           );
           return enviarFichaCliente(chatId, clientId);

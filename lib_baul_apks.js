@@ -11,7 +11,7 @@
 // CommonJS a propósito (igual que _tv-digital.js).
 
 const PLATAFORMAS = Object.freeze([
-  { id: "liontv", nombre: "Lion TV" }, { id: "icomplay", nombre: "ICOMPLAY" }, { id: "latintv", nombre: "Latin TV" },
+  { id: "liontv", nombre: "Lion TV" }, { id: "icomplay", nombre: "Icomplay" }, { id: "latintv", nombre: "Latin TV" },
   { id: "oleada", nombre: "Oleada TV" }, { id: "stellatv", nombre: "Stella TV" }, { id: "evoutouch", nombre: "Nanotech" },
 ]);
 const DISPOSITIVOS = Object.freeze({
@@ -50,31 +50,38 @@ const SEMILLA = Object.freeze({
 });
 const AVISO_INSTALACION = "Para APK externas: instale Downloader si corresponde, active el permiso de instalar desde esa fuente y use solo estos enlaces. Si no instala por falta de espacio, libere espacio borrando a mano una app que no use (Sublichat no borra nada).";
 
-// R192 · Mensaje listo para el CLIENTE (WhatsApp), armado en el servidor desde el MISMO registro que ven Web, APK y bot.
-// Pasos según cómo se instala; código y enlace solo cuando corresponden; en iPhone nunca se habla de APK ni Downloader.
-const NOMBRE_DISP_CLIENTE = Object.freeze({ android_tv: "Android TV / TV Box", fire_tv: "Fire TV / Fire Stick", android_movil: "Celular o tableta Android", smart_tv: "Smart TV Samsung o LG", iphone: "iPhone / iPad", pc: "PC / Laptop" });
-function pasosInstalacion(e, app) {
-  const espacio = "Si no instala por falta de espacio, libere espacio borrando a mano una app que no use.";
-  if (e.codigo && ["android_tv", "fire_tv", "android_movil"].includes(e.dispositivo)) return [
-    "Instale la app «Downloader» desde la tienda de su equipo.", "Active el permiso para instalar apps desde Downloader.",
-    `En Downloader escriba el código ${e.codigo} y toque Ir.`, `Instale ${app} y ábrala.`, espacio];
-  if (e.metodo === "app_store") return ["Abra el enlace de App Store.", `Instale ${app}.`, "Solicite sus datos de acceso."];
-  if (e.metodo === "play_store") return [`Abra Google Play (o el enlace) y busque ${app}.`, "Instálela y ábrala."];
-  if (e.metodo === "tv_store") return ["Abra la tienda de aplicaciones de su TV.", `Busque ${app} e instálela.`];
-  if (e.metodo === "web") return ["Abra el enlace en su navegador.", "Ingrese con sus datos de acceso."];
-  if (e.metodo === "downloader") return ["Instale la app «Downloader» desde la tienda de su equipo.", "Active el permiso para instalar apps desde Downloader.", "En Downloader pegue el enlace y toque Ir.", `Instale ${app} y ábrala.`, espacio];
-  return ["Abra el enlace en su equipo.", "Permita instalar desde esta fuente si se lo pide.", `Instale ${app} y ábrala.`, espacio];
+// R196m · PDF «Correcciones Spotify y entrega APK» (12/11/2026): mensaje CORTO para WhatsApp, de UN solo dispositivo, con
+// pasos numerados y *negritas* de WhatsApp (los asteriscos se copian). Solo usa el enlace / código Downloader YA guardados
+// para esa plataforma; si falta lo necesario NO se arma mensaje: se devuelve `faltante` («No configurado») y la APK bloquea
+// la copia. Nunca se sugiere desactivar protecciones del equipo: solo «autorizar esta fuente de confianza» si lo pide.
+// (R192: mismo registro para Web, APK y bot.)
+const TITULO_DISP = Object.freeze({ android_tv: "Android TV", fire_tv: "Fire TV", android_movil: "celular Android", smart_tv: "Smart TV", iphone: "iPhone", pc: "PC" });
+const EQUIPO = Object.freeze({ android_tv: "su televisor", fire_tv: "su Fire TV", android_movil: "su celular" });
+const DATOS = "Ingrese los datos de acceso proporcionados.";
+const conCodigo = (e) => !!e.codigo && ["android_tv", "fire_tv", "android_movil"].includes(e.dispositivo);
+// Qué falta para poder entregar este enlace (texto para el administrador). "" = completo.
+function faltanteDe(e = {}) {
+  if (conCodigo(e) || e.metodo === "tv_store" || e.metodo === "play_store") return "";
+  if (!e.url) return e.metodo === "downloader" ? "Código Downloader o enlace no configurado" : "Enlace no configurado";
+  return "";
 }
-const METODO_CLIENTE = Object.freeze({ apk: "Descarga directa", downloader: "Con Downloader", play_store: "Google Play", app_store: "App Store", tv_store: "Tienda del TV", web: "Página web" });
+function pasosInstalacion(e = {}, app = "la aplicación") {
+  const tv = ["android_tv", "fire_tv"].includes(e.dispositivo);
+  if (conCodigo(e)) return [`Abra *Downloader* en ${EQUIPO[e.dispositivo]}.`, "Permita que Downloader instale aplicaciones si el sistema lo solicita.",
+    `Introduzca el código *${e.codigo}* en la casilla principal.`, "Presione *Go*.", "Cuando termine la descarga, pulse *Instalar* y luego *Abrir*.", DATOS];
+  if (e.metodo === "app_store") return [`Abra la *App Store* aquí: ${e.url}`, `Presione *Obtener* para instalar ${app}.`, "Ábrala.", DATOS];
+  if (e.metodo === "play_store") return [e.url ? `Abra *Google Play* aquí: ${e.url}` : `Abra *Google Play* y busque *${app}*.`, "Presione *Instalar* y luego *Abrir*.", DATOS];
+  if (e.metodo === "tv_store") return ["Abra la tienda de aplicaciones de su TV.", `Busque *${app}* y presione *Instalar*.`, "Ábrala.", DATOS];
+  if (e.metodo === "web") return [`Abra este enlace en su navegador: ${e.url}`, DATOS];
+  if (tv) return [`Abra *Downloader* en ${EQUIPO[e.dispositivo]}.`, "Permita que Downloader instale aplicaciones si el sistema lo solicita.",
+    `Escriba este enlace en la casilla principal: ${e.url}`, "Presione *Go*.", "Cuando termine la descarga, pulse *Instalar* y luego *Abrir*.", DATOS];
+  return [`*Descargue* la app aquí: ${e.url}`, "Abra el archivo descargado.", "Si Android solicita permiso de instalación, *autorícelo* para esta fuente de confianza.", "Presione *Instalar* y luego *Abrir*.", DATOS];
+}
 function mensajeCliente(e = {}, { plataforma = "", app = "" } = {}) {
+  if (faltanteDe(e)) return "";
   const nombreApp = app || e.app || e.appId || "la aplicación";
-  const usaCodigo = !!e.codigo && ["android_tv", "fire_tv", "android_movil"].includes(e.dispositivo);
-  const lineas = [`SUBLICUENTAS | Instalación de ${plataforma || "su servicio"}`, `Dispositivo: ${NOMBRE_DISP_CLIENTE[e.dispositivo] || e.dispositivo || "—"}`, `Aplicación: ${nombreApp}`, `Instalación: ${usaCodigo ? "Con Downloader" : (METODO_CLIENTE[e.metodo] || e.metodo || "—")}`];
-  if (usaCodigo) lineas.push(`Código Downloader: ${e.codigo}`);
-  else if (e.url) lineas.push(`Enlace: ${e.url}`);
-  lineas.push("", "Pasos:", ...pasosInstalacion(e, nombreApp).map((p, i) => `${i + 1}. ${p}`));
-  if (e.costoExterno && e.costoExterno.texto) lineas.push("", `Importante: ${e.costoExterno.texto}`);
-  lineas.push("", "Soporte: escríbanos si necesita ayuda con la instalación.");
+  const lineas = [`*Instalación en ${TITULO_DISP[e.dispositivo] || "su equipo"} - ${plataforma || nombreApp}*`, "", ...pasosInstalacion(e, nombreApp).map((p, i) => `${i + 1}. ${p}`)];
+  if (e.costoExterno && e.costoExterno.texto) lineas.push("", `*Importante:* ${e.costoExterno.texto}`);
   return lineas.join("\n");
 }
 
@@ -113,7 +120,7 @@ function vistaPlataforma(baul, plataformaId, { incluirInactivos = false } = {}) 
   const enl = baul.enlaces.filter((e) => (incluirInactivos || e.activo !== false) && (e.plataformas || []).includes(plataformaId)).sort((a, b) => (a.prioridad || 99) - (b.prioridad || 99));
   const porDisp = {};
   const pNombre = (PLATAFORMAS.find((x) => x.id === plataformaId) || {}).nombre || plataformaId;
-  for (const e of enl) (porDisp[e.dispositivo] = porDisp[e.dispositivo] || []).push({ ...e, mensaje: mensajeCliente(e, { plataforma: pNombre, app: apps.get(e.appId) || e.appId }), app: apps.get(e.appId) || e.appId, metodoTxt: METODOS[e.metodo] || e.metodo, dispositivoTxt: DISPOSITIVOS[e.dispositivo] || e.dispositivo, compartidaCon: (e.plataformas || []).filter((p) => p !== plataformaId) });
+  for (const e of enl) (porDisp[e.dispositivo] = porDisp[e.dispositivo] || []).push({ ...e, mensaje: mensajeCliente(e, { plataforma: pNombre, app: apps.get(e.appId) || e.appId }), faltante: faltanteDe(e), app: apps.get(e.appId) || e.appId, metodoTxt: METODOS[e.metodo] || e.metodo, dispositivoTxt: DISPOSITIVOS[e.dispositivo] || e.dispositivo, compartidaCon: (e.plataformas || []).filter((p) => p !== plataformaId) });
   const p = PLATAFORMAS.find((x) => x.id === plataformaId);
   return { plataforma: plataformaId, nombre: p ? p.nombre : plataformaId, dispositivos: Object.keys(DISPOSITIVOS).filter((k) => porDisp[k]).map((k) => ({ id: k, nombre: DISPOSITIVOS[k], enlaces: porDisp[k] })), aviso: AVISO_INSTALACION };
 }
@@ -179,4 +186,4 @@ async function eliminarEnlace(db, id, usuario = "") {
   }, "eliminar_enlace");
 }
 
-module.exports = { mensajeCliente, pasosInstalacion, PLATAFORMAS, DISPOSITIVOS, METODOS, SEMILLA, AVISO_INSTALACION, validarUrlDescarga, validarCodigo, leerBaul, vistaPlataforma, guardarEnlace, activarEnlace, eliminarEnlace, _limpiarCache: () => { cache = { at: 0, data: null }; } };
+module.exports = { mensajeCliente, pasosInstalacion, faltanteDe, PLATAFORMAS, DISPOSITIVOS, METODOS, SEMILLA, AVISO_INSTALACION, validarUrlDescarga, validarCodigo, leerBaul, vistaPlataforma, guardarEnlace, activarEnlace, eliminarEnlace, _limpiarCache: () => { cache = { at: 0, data: null }; } };

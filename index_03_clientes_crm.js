@@ -2121,6 +2121,12 @@ async function eliminarServicioTx(clientId, idx, compraId = "", options = {}) {
   const sync = await sincronizarCompraInventarioSeguroLocal(eliminado, null, resultado.nombreTitular || "", { clienteId: clientId });
   cacheInvalidatePrefix(`clientes:doc:${id}`);
   cacheInvalidatePrefix("renovaciones:");
+  // R196m · Spotify Familiar: la baja deja el espacio en «Retiro en Spotify pendiente» (mismo motor que la web).
+  let spotifyRetiro = null;
+  if (/spotify/i.test(String(eliminado?.plataforma || ""))) {
+    try { spotifyRetiro = await require("./lib_spotify_familias").retirarPorBaja(db, { correo: eliminado.correo || (eliminado.perfiles && eliminado.perfiles[0] && eliminado.perfiles[0].correo) || "", clienteId: id, compraId: String(eliminado.compraId || compraId || ""), motivo: options.motivo === "no_renovo" ? "no_renovo" : "quitar_servicio", usuario: String(actor?.name || actor?.userId || "telegram").slice(0, 60) }); }
+    catch (e) { spotifyRetiro = { pendienteRevision: true, error: String(e?.message || e).slice(0, 160) }; }
+  }
 
   await registrarEventoHistorial(id, {
     tipo: "servicio_eliminado",
@@ -2134,7 +2140,7 @@ async function eliminarServicioTx(clientId, idx, compraId = "", options = {}) {
     papeleraId: resultado.papeleraId,
   });
 
-  return { ok: true, eliminado, servicioIndex: resultado.actualIdx, nombreCliente: resultado.nombreTitular || "", sync, papeleraId: resultado.papeleraId };
+  return { ok: true, eliminado, servicioIndex: resultado.actualIdx, nombreCliente: resultado.nombreTitular || "", sync, papeleraId: resultado.papeleraId, ...(spotifyRetiro ? { spotifyRetiro } : {}) };
 }
 
 async function renovarServicioTx(clientId, idx, { dias = 0, meses = 0, fechaExacta = "", compraId = "", operationId = "", pagoExtra = null } = {}) {
