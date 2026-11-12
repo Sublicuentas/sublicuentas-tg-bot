@@ -28,7 +28,7 @@ test("invitación: una sola vez aunque corran dos instancias; texto con fecha de
   assert.equal(a.enviados + b.enviados, 2);
   assert.deepEqual(bot.env.map((x) => x.chat).sort(), ["200", "300"]);
   const m = bot.env.find((x) => x.chat === "200");
-  assert.match(m.texto, /lunes 9 de noviembre de 2026/); assert.match(m.texto, /7:00 p\. m\./); assert.match(m.texto, /Naara, Libni, Geisell/);
+  assert.match(m.texto, /lunes 9 de noviembre de 2026/); assert.match(m.texto, /7:00 p\. m\./); assert.match(m.texto, /Sublicuentas, Relojes, Geisell/);
   const kb = m.op.reply_markup.inline_keyboard;
   assert.deepEqual(kb[0].map((x) => x.callback_data), ["sj:r:reu123456_libni:a", "sj:r:reu123456_libni:n"]);
   assert.equal(kb[1][0].url, "https://sublichat.capuchino.lat/?sala=reu123456");
@@ -75,7 +75,7 @@ test("RSVP por Telegram: solo el chat de esa cuenta; actualiza solo su invitaci�
   const inv = db.todos("sala_invitaciones");
   assert.equal(inv.find((x) => x.usuario === "libni").estado, "aceptada"); assert.equal(inv.find((x) => x.usuario === "libni").canal, "telegram");
   assert.equal(inv.find((x) => x.usuario === "geisell").estado, "pendiente");
-  assert.ok(bot.env.some((x) => x.chat === "100" && /Libni confirmó/.test(x.texto)));
+  assert.ok(bot.env.some((x) => x.chat === "100" && /Relojes confirmó/.test(x.texto)));
   const antes = bot.env.length;
   await S.handleCallback(q(200, "sj:r:reu123456_libni:a"), { db, bot, env: ENV, ahora: T0 }); // repetido: idempotente
   assert.ok(!bot.env.slice(antes).some((x) => x.chat === "100"), "no avisa dos veces a Naara");

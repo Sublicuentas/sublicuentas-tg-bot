@@ -116,8 +116,8 @@ test("si Telegram no acepta la foto, va como documento; reporte lista los anteri
 test("diagnóstico: fuente y chat enmascarado, si el bot alcanza el chat; nunca el token", async () => {
   const f = fakeTg((m) => (m === "getMe" ? { body: { ok: true, result: { username: "SubliBotPrueba" } } } : m === "getChat" ? { body: { ok: true, result: { type: "private", first_name: "Persona", last_name: "Ficticia", username: "persona_prueba" } } } : OK));
   const d = await V.diagnostico({ token: TOKEN, env: ENV, fetchFn: f });
-  // R196k: dice A QUIÉN le llega (nombre del chat), sin el id completo.
-  assert.deepEqual([d.destinos[0].nombre, d.destinos[0].usuario], ["Persona Ficticia", "@persona_prueba"]);
+  // R196l: nunca el nombre de la persona del chat (regla del negocio).
+  assert.doesNotMatch(JSON.stringify(d), /Persona|Ficticia|persona_prueba/);
   assert.equal(d.bot.usuario, "SubliBotPrueba");
   assert.deepEqual(d.destinos.map((x) => [x.destino, x.fuente, x.chatRef, x.alcanzable]), [["SUBLICUENTAS", "TELEGRAM_CHAT_ID_SUBLICUENTAS", "••••2333", true], ["RELOJES", "TELEGRAM_CHAT_ID_RELOJES", "••••5666", true]]);
   assert.doesNotMatch(JSON.stringify(d), /token-ficticio|1001111222333|444555666/);

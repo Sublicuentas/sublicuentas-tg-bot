@@ -70,7 +70,7 @@ test("Publicar: el socio correcto ve la entrega; otro socio recibe acceso denega
     assert.equal(ap.j.url, "https://sublichat.ejemplo.test/c/tokJuanTitular", "portal del titular, resuelto en vivo");
     const audit = Object.values(db.dump(`entregas_socios/${id}/versiones`)).map((v) => v.accion);
     assert.ok(audit.includes("abrir_portal"), "abrir portal queda auditado");
-    assert.match(Object.values(db.dump(`entregas_socios/${id}/versiones`)).find((v) => v.accion === "publicar").actor, /naara \(vía Admin\)/);
+    assert.match(Object.values(db.dump(`entregas_socios/${id}/versiones`)).find((v) => v.accion === "publicar").actor, /Sublicuentas \(vía Admin\)/);
   } finally { s.close(); }
 });
 
@@ -229,7 +229,7 @@ test("Buzón: consulta web → equipo por Telegram → respuesta → el socio re
     assert.equal(hilo.estado, "esperando_socio"); assert.equal(hilo.mensajes.length, 2); assert.ok(!JSON.stringify(hilo).includes("Nota interna"));
     assert.equal(hilo.mensajes[1].nombre, "Sublicuentas", "el socio ve el equipo, no el usuario interno");
     const adm = (await api("GET", "/rev/admin/consultas", { admin: true })).j.items.find((x) => x.id === id);
-    assert.match(adm.mensajes.find((m) => m.texto === "Ya le cambiamos el perfil").nombre, /naara \(vía Admin\)/, "auditoría: quién respondió");
+    assert.match(adm.mensajes.find((m) => m.texto === "Ya le cambiamos el perfil").nombre, /Sublicuentas \(vía Admin\)/, "auditoría: quién respondió");
     // respuesta desde Telegram (misma lógica que usa el bot): dos veces el mismo message_id → un solo mensaje
     const { crearBuzon } = require("../lib_buzon_core");
     const bz = crearBuzon({ db, getDestinoChatIds: async () => ["900001"] });
