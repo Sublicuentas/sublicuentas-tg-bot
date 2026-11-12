@@ -154,7 +154,9 @@ async function diagnostico({ token = process.env.BOT_TOKEN, env = process.env, f
     try {
       const r = resolverDestino(k, env);
       const fila = { destino: DESTINOS_VOUCHER[k], fuente: r.fuente, chatRef: enmascararChat(r.chatId) };
-      if (token) { const c = await llamarTelegramGet(fetchFn, token, "getChat", { chat_id: r.chatId }); fila.alcanzable = !!c.ok; fila.tipo = c.ok ? c.result?.type || "" : ""; if (!c.ok) fila.error = c.description; }
+      if (token) { const c = await llamarTelegramGet(fetchFn, token, "getChat", { chat_id: r.chatId }); fila.alcanzable = !!c.ok; fila.tipo = c.ok ? c.result?.type || "" : "";
+        // R196k · A QUIÉN le llega (nombre del chat según Telegram), para comprobar que es el chat correcto sin mostrar el id.
+        if (c.ok) { const x = c.result || {}; fila.nombre = String(x.title || [x.first_name, x.last_name].filter(Boolean).join(" ") || "").slice(0, 60); fila.usuario = x.username ? "@" + String(x.username).slice(0, 40) : ""; } if (!c.ok) fila.error = c.description; }
       out.destinos.push(fila);
     } catch (e) { out.destinos.push({ destino: DESTINOS_VOUCHER[k], fuente: "", alcanzable: false, error: "Sin chat configurado" }); }
   }
