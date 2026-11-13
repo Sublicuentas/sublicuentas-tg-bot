@@ -20,11 +20,11 @@ test("Baúl: mensaje corto de UN dispositivo, *negritas*, sin enlace/código →
   assert.match(R("index_37_baul_apks.js"), /No configurado: \$\{e\.faltante/);
 });
 
-test("Spotify Familiar: copia fiel de la web y «No renovó» desde Telegram deja «Retiro en Spotify pendiente»", () => {
+test("Spotify Familiar: copia fiel de la web y «No renovó» desde Telegram libera el espacio (R196o)", () => {
   const web = path.join(__dirname, "..", "..", "hq-gh", "api", "_spotify-familias.js");
   if (fs.existsSync(web)) assert.equal(R("lib_spotify_familias.js").split("\n").slice(1).join("\n"), fs.readFileSync(web, "utf8").split("\n").slice(1).join("\n"));
   assert.match(R("lib_spotify_familias.js"), /async function retirarPorBaja/);
   assert.match(R("index_03_clientes_crm.js"), /require\("\.\/lib_spotify_familias"\)\.retirarPorBaja\(db/);
   assert.match(R("index_06_handlers.js"), /motivo:"no_renovo"/);
-  assert.match(R("index_06_handlers.js"), /Retiro en Spotify pendiente/);
+  assert.match(R("index_06_handlers.js"), /espacio liberado \(\$\{result\.spotifyRetiro\.ocupados\}/); // R196o
 });
