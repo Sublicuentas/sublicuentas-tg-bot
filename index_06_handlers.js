@@ -4596,6 +4596,7 @@ COMANDOS_SIN_SLASH.forEach(({ texto, accion, permiso }) => {
 // ATAJOS INVENTARIO
 // ===============================
 PLATFORM_KEYS.forEach((p) => {
+  if (p === "spotify" || p === "spotifyfamiliar") return; // R196o · /spotify lo atiende index_38 (antes respondía dos veces 0/0)
   const safeP = escapeRegex(String(p));
   bot.onText(new RegExp(`^\\/${safeP}(?:@\\w+)?(?:\\s+.*)?$`, "i"), async (msg) => {
     if (!hasRuntimeLock()) return;
@@ -6596,7 +6597,7 @@ Revise que el correo exista en inventario con esa plataforma o coloque la clave 
           await bot.sendMessage(chatId,
             `✅ *Servicio eliminado correctamente*\n\n` +
             `📦 ${escMD(humanPlatAlertLocal(result.eliminado?.plataforma || "-"))} — ${escMD(result.eliminado?.correo || "-")}\n` +
-            `_Slot liberado en inventario._` + (result.spotifyRetiro && (result.spotifyRetiro.estado === "retiro_pendiente" || result.spotifyRetiro.yaEstaba) ? `\n\n🎵 Spotify Familiar ${escMD(result.spotifyRetiro.codigo || "")}: *Retiro en Spotify pendiente*. Quítelo en Spotify y confírmelo en Control Maestro.` : result.spotifyRetiro && result.spotifyRetiro.pendienteRevision ? `\n\n⚠️ Spotify Familiar: no se pudo marcar el retiro; revíselo en Control Maestro.` : ""),
+            `_Slot liberado en inventario._` + (result.spotifyRetiro && result.spotifyRetiro.estado === "liberado" ? `\n\n🎵 Spotify Familiar ${escMD(result.spotifyRetiro.codigo || "")}: espacio liberado (${result.spotifyRetiro.ocupados}/${result.spotifyRetiro.capacidad || 5}). Falta quitar el correo en la app de Spotify.` : result.spotifyRetiro && result.spotifyRetiro.pendienteRevision ? `\n\n⚠️ Spotify Familiar: no se pudo liberar el espacio; revíselo en /spotify.` : ""),
             { parse_mode: "Markdown" }
           );
           return enviarFichaCliente(chatId, clientId);

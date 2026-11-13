@@ -33,6 +33,12 @@
 //   · Alta directa por correo: agregarPorCorreo() → 1 correo + Agregar; vincula la ficha si hay UNA coincidencia exacta,
 //     pide elegir solo entre las coincidencias si hay varias, y si no hay ninguna queda «pendiente de vincular» (no crea
 //     cliente, venta ni renovación).
+// R196o · PDF «Spotify Familiar · lógica estricta» (12/11/2026), sustituye lo anterior donde choque:
+//   · Una cuenta madre + 5 correos invitados. El correo se escribe dentro de la madre (agregarPorCorreo); sin listas de fichas.
+//   · «No renovó» / quitar Spotify → retirarPorBaja() LIBERA el espacio en la misma transacción (5/5 → 4/5) y anota
+//     «Falta quitar en Spotify» (pendientesSpotify, no ocupa espacio); confirmarRetiroExterno() borra esa nota.
+//   · Sin «Mover» ni «Desvincular» en ninguna pantalla (Web, APK, bot): las acciones del servidor quedan cerradas.
+//   · Crear/administrar cuentas madre: solo Sublicuentas (esAdministradorMadres), verificado en el servidor y en el bot.
 // CommonJS a propósito.
 
 const CAPACIDAD = 5;
@@ -64,6 +70,11 @@ function primeraLibre(f, pedida) {
   for (let i = 1; i <= cap; i++) if (!usadas.has(i)) return i;
   return 0;
 }
+// R196o · Solo el usuario administrativo Sublicuentas crea o administra cuentas madre (Web/APK por rol; el bot usa su super admin).
+function esAdministradorMadres(user = {}) {
+  const rol = String(user.role || "").toLowerCase(), u = String(user.usuario || "").toLowerCase();
+  return ["admin", "administrador", "sublicuentas", "owner"].includes(rol) || ["sublicuentas", "naara"].includes(u);
+}
 function esPlataformaSpotify(p) { return /spotify/i.test(String(p || "")); }
 
 async function auditar(db, accion, usuario, datos) {
@@ -73,6 +84,7 @@ function vista(id, f) {
   const a = activos(f);
   return { id, codigo: f.codigo || "", madreCorreo: f.madreCorreo || "", tieneClave: !!f.madreClave, estado: f.estado || "activa", capacidad: Number(f.capacidad || CAPACIDAD), ocupados: a.length, libres: Math.max(0, Number(f.capacidad || CAPACIDAD) - a.length),
     miembros: conPosiciones(f).map((m) => ({ id: m.id, correo: m.correo, estado: m.estado, posicion: m.estado === "activo" ? Number(m.posicion || 0) : 0, estadoInvitacion: m.estadoInvitacion === "pendiente" ? "pendiente" : "aceptada", retiroPendiente: !!m.retiroPendiente, retiroAuto: m.retiroAuto ? { motivo: m.retiroAuto.motivo || "", at: m.retiroAuto.at || "" } : null, historialCorreos: (m.historialCorreos || []).slice(-10), clienteId: m.clienteId || "", compraId: m.compraId || "", clienteNombre: m.clienteNombre || "", vinculadoAt: m.vinculadoAt || "", desvinculadoAt: m.desvinculadoAt || "" })),
+    pendientesSpotify: (f.pendientesSpotify || []).map((p) => ({ correo: p.correo, motivo: p.motivo || "", at: p.at || "", clienteNombre: p.clienteNombre || "" })),
     version: Number(f.version || 1), updatedAt: f.updatedAt || "" };
 }
 
@@ -85,7 +97,7 @@ async function crearFamilia(db, { madreCorreo, usuario = "", nota = "" } = {}) {
     const [si, sc] = [await tx.get(idx), await tx.get(cont)];
     const d = si.exists ? si.data() || {} : null;
     if (d && d.activo !== false && d.tipo === "madre") throw new Error("Ese correo ya es madre de una familia activa.");
-    if (d && d.activo !== false && d.tipo === "invitado") throw new Error("Ese correo está activo como invitado en otra familia: desvincúlelo primero.");
+    if (d && d.activo !== false && d.tipo === "invitado") throw new Error("Ese correo está como invitado en otra cuenta: no puede ser correo madre.");
     const n = Number((sc.exists ? sc.data() || {} : {}).n || 0) + 1;
     const ahora = ahoraIso();
     const fam = { codigo: `SP-${String(n).padStart(3, "0")}`, madreCorreo: madre, madreCorreoNorm: madre, capacidad: CAPACIDAD, estado: "activa", miembros: [], nota: String(nota || "").slice(0, 200), version: 1, createdAt: ahora, updatedAt: ahora, creadoPor: String(usuario || "").slice(0, 60) };
@@ -165,14 +177,18 @@ async function vincularInvitado(db, { familiaId, correo, clienteId = "", compraI
       if ((!clienteId || ya.clienteId === String(clienteId)) && (!compraId || ya.compraId === String(compraId))) { out = { ...vista(fref.id, f), idempotente: true }; return; }
       throw new Error("Ese correo ya está en esta familia con otra ficha: use «Vincular ficha» para corregirla.");
     }
-    if (d && d.activo !== false) throw new Error(d.tipo === "madre" ? "Ese correo es madre de otra familia." : "Ese correo ya está activo en otra familia: use «Mover».");
+    if (d && d.activo !== false) { // R196o · error legible con la cuenta donde ya está (sin ofrecer mover)
+      const so = d.familiaId ? await tx.get(db.collection(COL).doc(String(d.familiaId))) : null; const cod = so && so.exists ? (so.data() || {}).codigo || "" : "";
+      throw new Error(d.tipo === "madre" ? `Ese correo es el correo madre de ${cod || "otra cuenta"}: no puede ser invitado.` : `Ese correo ya está como invitado en ${cod || "otra cuenta"}. Un correo solo puede estar en una cuenta.`);
+    }
     if (c === f.madreCorreoNorm) throw new Error("La madre no ocupa un espacio de invitado.");
-    if (activos(f).length >= Number(f.capacidad || CAPACIDAD)) throw new Error(`La familia ${f.codigo} ya tiene ${CAPACIDAD} invitados: no hay espacios libres.`);
+    if (activos(f).length >= Number(f.capacidad || CAPACIDAD)) throw new Error(`La cuenta ${f.codigo} está llena (${CAPACIDAD} de ${CAPACIDAD}): no se agregó nada.`);
     const sc = cref ? await tx.get(cref) : null;
     const ahora = ahoraIso();
     const miembro = { id: `m_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`, correo: c, correoNorm: c, estado: "activo", posicion: primeraLibre(f, Number(posicion) || 0), estadoInvitacion: pendiente ? "pendiente" : "aceptada", retiroPendiente: false, clienteId: String(clienteId || ""), compraId: String(compraId || ""), clienteNombre: sc && sc.exists ? String((sc.data() || {}).nombrePerfil || (sc.data() || {}).nombre || "").slice(0, 80) : "", vinculadoAt: ahora, vinculadoPor: String(usuario || "").slice(0, 60) };
     const miembros = [...(f.miembros || []), miembro];
-    tx.set(fref, { ...f, miembros, version: Number(f.version || 1) + 1, updatedAt: ahora });
+    const pendientesSpotify = (f.pendientesSpotify || []).filter((p) => p.correo !== c); // R196o · volvió a esta misma cuenta: ya no hay que quitarlo
+    tx.set(fref, { ...f, miembros, pendientesSpotify, version: Number(f.version || 1) + 1, updatedAt: ahora });
     tx.set(idx, { tipo: "invitado", familiaId: fref.id, activo: true, updatedAt: ahora });
     if (sc && sc.exists) { const sv = marcarServicio(sc.data() || {}, String(compraId || ""), c, { id: fref.id, codigo: f.codigo, madreCorreo: f.madreCorreo }); if (sv) tx.set(cref, { servicios: sv }, { merge: true }); }
     out = vista(fref.id, { ...f, miembros });
@@ -261,27 +277,49 @@ async function asignarServicio(db, { correo, clienteId, compraId, usuario = "" }
   return { familia: { id: r.familiaId, codigo: r.codigo, madreCorreo: r.madreCorreo, posicion: r.posicion, capacidad: r.capacidad } };
 }
 
-// R196m · Baja del servicio (quitar Spotify / «No renovó») → el espacio queda «Retiro en Spotify pendiente».
-// No se libera el cupo: Sublichat no puede comprobar que Spotify retiró al miembro. Solo actúa si el invitado es de ESA ficha.
+// R196o · Baja del servicio (quitar Spotify / «No renovó») → se LIBERA el espacio de ESE invitado (decisión del propietario,
+// PDF «Lógica estricta» 12/11/2026): la relación activa madre-invitado se cierra en la misma transacción y los recuentos bajan
+// en todas las vistas. Como Sublichat no puede sacar a nadie de Spotify, queda anotado en la familia «Falta quitar en Spotify»
+// (pendientesSpotify), que NO ocupa espacio. Solo actúa si el invitado es de ESA ficha/compra. Idempotente.
 async function retirarPorBaja(db, { correo, clienteId = "", compraId = "", motivo = "no_renovo", usuario = "" } = {}) {
   const c = correoValido(correo); if (!c) return { omitido: "sin_correo" };
   const idx = db.collection(IDX).doc(idxId(c)); let res = null;
   await db.runTransaction(async (tx) => {
     const si = await tx.get(idx); const d = si.exists ? si.data() || {} : null;
-    if (!d || d.activo === false || d.tipo !== "invitado") { res = { omitido: "no_es_invitado" }; return; }
+    if (!d || d.tipo !== "invitado" || !d.familiaId) { res = { omitido: "no_es_invitado" }; return; }
     const fref = db.collection(COL).doc(d.familiaId); const sf = await tx.get(fref); if (!sf.exists) { res = { omitido: "sin_familia" }; return; }
     const f = sf.data() || {};
-    const m = activos(f).find((x) => x.correoNorm === c);
-    if (!m) { res = { omitido: "no_es_invitado" }; return; }
-    // Otra ficha / otra compra con el mismo correo: no se toca (evita retirar a quien sí sigue pagando).
+    const m = d.activo === false ? null : activos(f).find((x) => x.correoNorm === c);
+    if (!m) { // ya se liberó antes (repetir la baja no duplica nada)
+      const ya = (f.pendientesSpotify || []).some((p) => p.correo === c);
+      res = ya ? { yaEstaba: true, familiaId: fref.id, codigo: f.codigo, correo: c, estado: "liberado", ocupados: activos(f).length, capacidad: Number(f.capacidad || CAPACIDAD), retiroExternoPendiente: true } : { omitido: "no_es_invitado" };
+      return;
+    }
+    // Otra ficha / otra compra con el mismo correo: no se toca (evita sacar a quien sí sigue pagando).
     if ((m.clienteId && clienteId && m.clienteId !== String(clienteId)) || (m.compraId && compraId && m.compraId !== String(compraId))) { res = { omitido: "otra_ficha", familiaId: fref.id, codigo: f.codigo }; return; }
-    if (m.retiroPendiente && m.retiroAuto) { res = { yaEstaba: true, familiaId: fref.id, codigo: f.codigo, correo: c, estado: "retiro_pendiente" }; return; }
-    const ahora = ahoraIso(), mot = String(motivo || "no_renovo").slice(0, 40);
-    const miembros = conPosiciones(f).map((x) => x.id === m.id ? { ...x, retiroPendiente: true, retiroMarcadoAt: ahora, retiroMarcadoPor: String(usuario || "sistema").slice(0, 60), retiroAuto: { motivo: mot, at: ahora, por: String(usuario || "sistema").slice(0, 60), clienteId: String(clienteId || x.clienteId || ""), compraId: String(compraId || x.compraId || "") } } : x);
-    tx.set(fref, { ...f, miembros, version: Number(f.version || 1) + 1, updatedAt: ahora });
-    res = { familiaId: fref.id, codigo: f.codigo, correo: c, motivo: mot, estado: "retiro_pendiente", posicion: Number((miembros.find((x) => x.id === m.id) || {}).posicion || 0) };
+    const ahora = ahoraIso(), mot = String(motivo || "no_renovo").slice(0, 40), por = String(usuario || "sistema").slice(0, 60);
+    const miembros = conPosiciones(f).map((x) => x.id === m.id ? { ...x, estado: "desvinculado", desvinculadoAt: ahora, desvinculadoPor: por, desvinculadoMotivo: mot, retiroPendiente: false } : x);
+    const pendientesSpotify = [...(f.pendientesSpotify || []).filter((p) => p.correo !== c), { correo: c, motivo: mot, at: ahora, por, clienteId: String(clienteId || m.clienteId || ""), compraId: String(compraId || m.compraId || ""), clienteNombre: String(m.clienteNombre || "").slice(0, 80) }].slice(-30);
+    tx.set(fref, { ...f, miembros, pendientesSpotify, version: Number(f.version || 1) + 1, updatedAt: ahora });
+    tx.set(idx, { ...d, activo: false, updatedAt: ahora });
+    res = { familiaId: fref.id, codigo: f.codigo, correo: c, motivo: mot, estado: "liberado", ocupados: activos({ miembros }).length, capacidad: Number(f.capacidad || CAPACIDAD), retiroExternoPendiente: true };
   });
-  if (res && res.estado && !res.yaEstaba) await auditar(db, "retiro_pendiente_por_baja", usuario || "sistema", { familiaId: res.familiaId, codigo: res.codigo, correo: res.correo, motivo: res.motivo, clienteId: String(clienteId || ""), compraId: String(compraId || "") });
+  if (res && res.estado === "liberado" && !res.yaEstaba) await auditar(db, "liberado_por_baja", usuario || "sistema", { familiaId: res.familiaId, codigo: res.codigo, correo: res.correo, motivo: res.motivo, clienteId: String(clienteId || ""), compraId: String(compraId || "") });
+  return res;
+}
+// R196o · «Ya lo quité en Spotify»: solo borra la nota pendiente (el espacio ya estaba libre). No toca invitados ni fichas.
+async function confirmarRetiroExterno(db, { familiaId, correo, usuario = "" } = {}) {
+  const c = correoValido(correo); if (!c) throw new Error("Correo inválido.");
+  const fref = db.collection(COL).doc(String(familiaId || "")); let res = null;
+  await db.runTransaction(async (tx) => {
+    const sf = await tx.get(fref); if (!sf.exists) throw new Error("Esa familia no existe.");
+    const f = sf.data() || {}; const antes = f.pendientesSpotify || [];
+    if (!antes.some((p) => p.correo === c)) { res = { familiaId: fref.id, codigo: f.codigo, correo: c, yaEstaba: true }; return; }
+    const ahora = ahoraIso();
+    tx.set(fref, { ...f, pendientesSpotify: antes.filter((p) => p.correo !== c), version: Number(f.version || 1) + 1, updatedAt: ahora });
+    res = { familiaId: fref.id, codigo: f.codigo, correo: c };
+  });
+  if (!res.yaEstaba) await auditar(db, "confirmo_retiro_en_spotify", usuario, res);
   return res;
 }
 // R196m · Fichas Spotify cuyo correo es EXACTAMENTE este (normalizado). Para el alta directa por correo.
@@ -304,12 +342,17 @@ async function agregarPorCorreo(db, { familiaId, correo, posicion = 0, clienteId
   else {
     const docs = (await db.collection("clientes").get()).docs.map((d) => ({ id: d.id, data: d.data() || {} }));
     const opciones = fichasExactas(docs, c);
-    if (opciones.length > 1) return { requiereElegir: true, correo: c, opciones: opciones.slice(0, 10) };
-    ficha = opciones[0] || null;
+    // R196o · sin listas de fichas: con UNA coincidencia se vincula; con varias el espacio se ocupa sin elegir y la ficha correcta
+    // se vincula sola cuando se guarde o renueve (asignarServicio). El correo nunca decide solo entre fichas ambiguas.
+    ficha = opciones.length === 1 ? opciones[0] : null;
+    if (opciones.length > 1) {
+      const familia = await vincularInvitado(db, { familiaId, correo: c, usuario, posicion });
+      return { familia, ficha: null, pendienteVincular: true, varias: opciones.length, aviso: `Hay ${opciones.length} fichas con ese correo: se vincula sola cuando se guarde o renueve la ficha correcta. No se creó cliente, venta ni renovación.` };
+    }
   }
   const familia = await vincularInvitado(db, { familiaId, correo: c, clienteId: ficha ? ficha.clienteId : "", compraId: ficha ? ficha.compraId : "", usuario, posicion });
   return { familia, ficha, pendienteVincular: !ficha,
-    aviso: ficha ? "" : "No hay una ficha Spotify con ese correo: el espacio queda ocupado y «pendiente de vincular». No se creó cliente, venta ni renovación." };
+    aviso: ficha ? "" : "Sin ficha Spotify con ese correo todavía: el espacio queda ocupado y se vincula solo cuando se registre. No se creó cliente, venta ni renovación." };
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -399,8 +442,13 @@ async function marcarMiembro(db, { correo, estadoInvitacion, retiroPendiente, us
   return res;
 }
 // Liberar el espacio SOLO con confirmación de que el miembro ya fue retirado en Spotify.
+// R196o · Ya no hay «desvincular» manual: solo se usa para los espacios que quedaron «Retiro en Spotify pendiente» con R196m.
 async function liberarEspacio(db, { correo, confirmoRetiro = false, usuario = "" } = {}) {
   if (confirmoRetiro !== true) throw new Error("Confirme que el correo ya fue retirado de la familia en Spotify.");
+  const r = await resolverCorreo(db, correo);
+  if (!r || r.tipo !== "invitado") throw new Error("Ese correo no está activo como invitado.");
+  const f = await leerFamilia(db, r.familiaId); const m = f.miembros.find((x) => x.estado === "activo" && x.correo === correoValido(correo));
+  if (!m || !m.retiroPendiente) throw new Error("Los espacios se liberan solos con «No renovó» o al quitar el servicio en la ficha.");
   return desvincular(db, { correo, usuario, confirmoRetiro: true });
 }
 // ---------------------------------------------------------------- R196c · cuenta madre: clave, editar correo, eliminar
@@ -435,7 +483,7 @@ async function cambiarCorreoMadre(db, { familiaId, correoNuevo, usuario = "" } =
     const a = normCorreo(f.madreCorreo); if (a === b) throw new Error("Es el mismo correo.");
     const idxA = db.collection(IDX).doc(idxId(a)), idxB = db.collection(IDX).doc(idxId(b));
     const sb = await tx.get(idxB); const d = sb.exists ? sb.data() || {} : null;
-    if (d && d.activo !== false) throw new Error(d.tipo === "madre" ? "Ese correo ya es madre de otra cuenta." : "Ese correo está activo como invitado: desvincúlelo primero.");
+    if (d && d.activo !== false) throw new Error(d.tipo === "madre" ? "Ese correo ya es madre de otra cuenta." : "Ese correo está como invitado en una cuenta: no puede ser correo madre.");
     const sa = await tx.get(idxA);
     const fichas = [...new Set(activos(f).map((m) => m.clienteId).filter(Boolean))].map((id) => db.collection("clientes").doc(id));
     const snaps = await Promise.all(fichas.map((r) => tx.get(r)));
@@ -462,7 +510,7 @@ async function eliminarCuenta(db, { familiaId, usuario = "", confirmo = false } 
     const s = await tx.get(ref); if (!s.exists) throw new Error("Esa cuenta no existe.");
     const f = s.data() || {}; if (f.estado === "inactiva") { res = { familiaId: ref.id, codigo: f.codigo, yaEstaba: true }; return; }
     const n = activos(f).length;
-    if (n) throw new Error(`Tiene ${n} invitado(s): muévalos o desvincúlelos primero (no se pierde ningún cliente).`);
+    if (n) throw new Error(`Tiene ${n} invitado(s): solo se elimina una cuenta vacía (no se pierde ningún cliente).`);
     const idx = db.collection(IDX).doc(idxId(normCorreo(f.madreCorreo))); const si = await tx.get(idx);
     const ahora = ahoraIso();
     tx.set(ref, { ...f, estado: "inactiva", eliminadaAt: ahora, eliminadaPor: String(usuario || "").slice(0, 60), version: Number(f.version || 1) + 1, updatedAt: ahora });
@@ -541,7 +589,7 @@ async function panelFamilias(db, { hoy = "" } = {}) {
         vence, vencido: !!(vence && hoy && vence < hoy), fichaEncontrada: !!sv, sinFicha: !m.clienteId, historialCorreos: (m.historialCorreos || []).slice(-5), vinculadoAt: m.vinculadoAt || "" };
     });
     const ocupados = espacios.filter((e) => e.estado !== "disponible").length;
-    return { id: f.id, codigo: f.codigo || "", madreCorreo: f.madreCorreo || "", tieneClave: !!f.madreClave, madreClientes: (porCorreo.get(normCorreo(f.madreCorreo)) || []).map((x) => ({ ...x, vencido: !!(x.vence && hoy && x.vence < hoy) })), estado: f.estado || "activa", capacidad: cap, ocupados, libres: cap - ocupados, espacios };
+    return { id: f.id, codigo: f.codigo || "", madreCorreo: f.madreCorreo || "", tieneClave: !!f.madreClave, pendientesSpotify: (f.pendientesSpotify || []).map((p) => ({ correo: p.correo, motivo: p.motivo || "", at: p.at || "", clienteNombre: p.clienteNombre || "" })), madreClientes: (porCorreo.get(normCorreo(f.madreCorreo)) || []).map((x) => ({ ...x, vencido: !!(x.vence && hoy && x.vence < hoy) })), estado: f.estado || "activa", capacidad: cap, ocupados, libres: cap - ocupados, espacios };
   });
   return out.sort((a, b) => String(a.codigo).localeCompare(String(b.codigo)));
 }
@@ -551,5 +599,5 @@ module.exports = { sincronizarBodega, sincronizarTodo, idBodega, PLAT_BODEGA,
   crearFamilia: conBodega(crearFamilia, _id), vincularInvitado: conBodega(vincularInvitado, _id), moverInvitado: conBodega(moverInvitado, (r) => [r.origen && r.origen.id, r.destino && r.destino.id]),
   desvincular: conBodega(desvincular, _id), asignarServicio: conBodega(asignarServicio, _id), cambiarCorreo: conBodega(cambiarCorreo, _id), vincularFicha: conBodega(vincularFicha, _id),
   marcarMiembro: conBodega(marcarMiembro, _id), liberarEspacio: conBodega(liberarEspacio, _id), guardarClaveMadre: conBodega(guardarClaveMadre, _id),
-  cambiarCorreoMadre: conBodega(cambiarCorreoMadre, _id), retirarPorBaja: conBodega(retirarPorBaja, _id), agregarPorCorreo: conBodega(agregarPorCorreo, (r) => [r.familia && r.familia.id]), fichasExactas, eliminarCuenta: conBodega(eliminarCuenta, (r, a) => [r.familiaId || a.familiaId]),
+  cambiarCorreoMadre: conBodega(cambiarCorreoMadre, _id), retirarPorBaja: conBodega(retirarPorBaja, _id), confirmarRetiroExterno, esAdministradorMadres, agregarPorCorreo: conBodega(agregarPorCorreo, (r) => [r.familia && r.familia.id]), fichasExactas, eliminarCuenta: conBodega(eliminarCuenta, (r, a) => [r.familiaId || a.familiaId]),
   clientesDeMadre, fichasPorCorreo, leerClaveMadre, panelFamilias, estadoEspacio, conPosiciones, CAPACIDAD, normCorreo, correoValido, listarFamilias, leerFamilia, resolverCorreo, buscarServiciosSpotify, esPlataformaSpotify };

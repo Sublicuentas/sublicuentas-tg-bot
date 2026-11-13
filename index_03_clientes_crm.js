@@ -1390,6 +1390,7 @@ function renderFichaClienteMarkdown(c = {}) {
       txt += `\n\n${i + 1}) ${iconPlataforma(s.plataforma || "")} *${escMD(humanPlataforma(s.plataforma || ""))}* — ${uso}\n`;
       txt += `🧾 *Vendedor responsable:* ${escMD(vendedorEfectivoServicio(s, c).vendedor || "-")}\n`;
       txt += renderCredencialesServicioLocal(s, true, "");
+      if (/spotify/i.test(String(s.plataforma || "")) && s.spotifyMadreCorreo) txt += `🎵 *Cuenta madre:* ${escMD(s.spotifyMadreCorreo)}${s.spotifyFamiliaCodigo ? ` · ${escMD(s.spotifyFamiliaCodigo)}` : ""}\n`; // R196o · la pone el servidor al vincular el correo
       txt += `💵 *Precio:* ${escMD(`L${Number(s.precio || 0).toFixed(2)}`)}\n`;
       txt += `📅 *Renovación:* ${escMD(fechaDMYLocal(s.fechaRenovacion || "") || "-")} — ${est.emoji} ${escMD(est.texto)}`;
     });
@@ -2768,7 +2769,8 @@ async function wizardNext(chatId, rawText = "") {
         } catch (e) { logErr("R106 pago compra wizard", e); }
       }, 600);
 
-      return bot.sendMessage(chatId, "✅ *Compra guardada correctamente*\n\nTiene un solo precio y una sola fecha. Si esta compra incluye a otra persona (por ejemplo, una promoción 2x1), añádala como perfil aquí:", {
+      const spMadre = guardado && guardado.spotifyFamilia ? `🎵 Cuenta madre: ${escMD(guardado.spotifyFamilia.madreCorreo || "")} · ${escMD(guardado.spotifyFamilia.codigo || "")}\n\n` : ""; // R196o · se reconoce sola por el correo
+      return bot.sendMessage(chatId, "✅ *Compra guardada correctamente*\n\n" + spMadre + "Tiene un solo precio y una sola fecha. Si esta compra incluye a otra persona (por ejemplo, una promoción 2x1), añádala como perfil aquí:", {
         parse_mode: "Markdown",
         reply_markup: { inline_keyboard: [
           [{ text: "👥 Añadir otro perfil a esta compra", callback_data: `cli:prof:add:${clientId}:${guardado.servicioIndex}` }],

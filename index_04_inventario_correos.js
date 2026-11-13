@@ -560,8 +560,16 @@ async function getInventarioRowsByPlataforma(plataforma = "") {
   return rows;
 }
 
+// R196o · Spotify en Bodega/inventario = las cuentas madre de Spotify Familiar (antes salía «Disponibles: 0 / Llenas: 0»
+// porque las familias viven en spotify_familias y en Bodega como «spotifyfamiliar», nunca como «spotify»).
+async function abrirSpotifyFamiliar(chatId) {
+  let superOk = false;
+  try { superOk = !!(await require("./index_02_utils_roles").isSuperAdmin(chatId)); } catch (_) {}
+  return require("./index_38_spotify_familias").lista(chatId, { adminOk: true, superOk });
+}
 async function enviarInventarioPlataforma(chatId, plataforma = "", page = 0) {
   const plat = normalizarPlataforma(plataforma);
+  if (plat === "spotify" || plat === "spotifyfamiliar") return abrirSpotifyFamiliar(chatId); // R196o
 
   try {
     const rows = await getInventarioRowsByPlataforma(plat);
@@ -579,7 +587,7 @@ async function enviarInventarioPlataforma(chatId, plataforma = "", page = 0) {
           { text: `🟢 Disponibles (${disponibles.length})`, callback_data: `invf:${plat}:disponibles:0` },
           { text: `🔴 Llenas (${llenas.length})`, callback_data: `invf:${plat}:llenas:0` },
         ],
-        [plat === "spotifyfamiliar" ? { text: "➕ Nueva cuenta (/spotifyf)", callback_data: "spf:c" } : { text: "➕ Nueva cuenta", callback_data: `inv:new:plat:${plat}` }], // R196g
+        [{ text: "➕ Nueva cuenta", callback_data: `inv:new:plat:${plat}` }],
         [
           { text: "⬅️ Volver Inventario", callback_data: "menu:inventario" },
           { text: "🏠 Inicio", callback_data: "go:inicio" },
@@ -594,6 +602,7 @@ async function enviarInventarioPlataforma(chatId, plataforma = "", page = 0) {
 
 async function enviarInventarioPlataformaEstado(chatId, plataforma = "", filtro = "disponibles", page = 0) {
   const plat = normalizarPlataforma(plataforma);
+  if (plat === "spotify" || plat === "spotifyfamiliar") return abrirSpotifyFamiliar(chatId); // R196o
   const pageSize = 10;
   const filtroNorm = String(filtro || "").toLowerCase() === "llenas" ? "llenas" : "disponibles";
 
@@ -735,7 +744,7 @@ async function mostrarPanelCorreo(chatId, plataforma = "", acceso = "") {
   if (!found) return bot.sendMessage(chatId, "⚠️ Esa cuenta no existe en inventario.");
 
   const data = found.data || {};
-  // R196f · cuenta madre de Spotify Familiar: se administra en /spotifyf (clave, correo, invitados, eliminar)
+  // R196f/R196o · cuenta madre de Spotify Familiar: se abre la vista simple de /spotify (madre + 5 correos)
   if (data.origen === "spotify_familia" && data.familiaId) return require("./index_38_spotify_familias").verCuenta(chatId, data.familiaId);
   const ident = getStoredIdent(data) || String(acceso || "");
   setMailPanelContext(chatId, { docId: found.id, plataforma: plat, acceso: ident });
