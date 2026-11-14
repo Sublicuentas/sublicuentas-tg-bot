@@ -30,10 +30,27 @@ function chatDe(usuario, env = process.env) {
   if (usuario === "geisell") return String(env.TELEGRAM_CHAT_ID_GEISELL || env.TELEGRAM_CHAT_ID_GEISSEL || "").split(/[,\s]+/)[0].trim();
   return "";
 }
+// R196s · CAUSA RAÍZ «Geisell: PENDIENTE · sin vincular»: la Sala solo conocía TELEGRAM_CHAT_ID_GEISELL (no existe en Render;
+// el log «Telegram publicado» solo trae naara y libni) o un /start sj_. Geisell ya vinculó Telegram en el Panel de Socios
+// (/start v_<token>, revendedores.telegramVinculo). Se REUTILIZA ese vínculo auténtico (mismo bot, misma regla que los avisos
+// de entregas: telegramId salvo «desvinculado») solo para la fundadora socia; identidad fija geisell/geissel, nunca por parecido
+// de nombre ni para otros usuarios. Si hay 0 o más de 1 socio con ese nombre, no se usa nada.
+const SOCIO_DE_FUNDADORA = { geisell: ["geisell", "geissel"] };
+async function chatPanelSocios(db, usuario) {
+  const alias = SOCIO_DE_FUNDADORA[usuario]; if (!alias || !db) return "";
+  const docs = new Map();
+  for (const a of alias) { try { const q = await db.collection("revendedores").where("nombre_norm", "==", a).limit(3).get(); q.docs.forEach((d) => docs.set(d.id, d.data() || {})); } catch (_) {} }
+  const vivos = [...docs.values()].filter((x) => x.activo !== false);
+  if (vivos.length !== 1) return "";
+  const v = vivos[0].telegramVinculo || {};
+  if (v.estado === "desvinculado") return "";
+  return String(vivos[0].telegramId || "").replace(/[^0-9-]/g, "");
+}
 // R182 · chat de cualquier usuario: fundadoras por variable (como hasta hoy); los demás, vinculados con /start sj_<token>
 async function chatDeDb(db, usuario, env = process.env) {
   const e = chatDe(usuario, env); if (e) return e;
-  try { const s = await db.collection(C.TG).doc(String(usuario)).get(); const d = s.exists ? s.data() : null; return d && d.estado === "listo" && d.chatId ? String(d.chatId) : ""; } catch (_) { return ""; }
+  try { const s = await db.collection(C.TG).doc(String(usuario)).get(); const d = s.exists ? s.data() : null; if (d && d.estado === "listo" && d.chatId) return String(d.chatId); } catch (_) {}
+  return chatPanelSocios(db, usuario); // R196s
 }
 function fechaHN(ms) {
   const d = new Date(Number(ms) - 6 * 3600e3), h = d.getUTCHours(), m = d.getUTCMinutes();
@@ -198,10 +215,11 @@ async function publicarEstado({ db, bot, env = process.env, ahora = Date.now() }
   const out = { bot: "", fundadoras: {} }; const iso = new Date(ahora).toISOString();
   try { const me = await bot.getMe(); out.bot = String(me?.username || ""); if (out.bot) await db.collection("sala_config").doc("telegram").set({ botUsername: out.bot, actualizadoAt: iso }, { merge: true }); } catch (_) {}
   for (const u of Object.keys(NOMBRE_F)) {
-    const chat = chatDe(u, env); if (!chat) continue;
+    const porEnv = chatDe(u, env); const chat = porEnv || await chatPanelSocios(db, u); if (!chat) continue; // R196s: también el vínculo del Panel de Socios
+    const fuente = porEnv ? "render" : "panel_socios";
     let estado = "listo", error = "";
     try { await bot.getChat(chat); } catch (e) { if (errorDefinitivo(e)) { estado = "bloqueado"; error = String(e?.message || e).slice(0, 160); } else continue; }
-    try { await db.collection(C.TG).doc(u).set({ usuario: u, estado, fuente: "render", verificadoAt: iso, ...(error ? { error } : { error: "" }) }, { merge: true }); out.fundadoras[u] = estado; } catch (_) {}
+    try { await db.collection(C.TG).doc(u).set({ usuario: u, estado, fuente, verificadoAt: iso, ...(error ? { error } : { error: "" }) }, { merge: true }); out.fundadoras[u] = fuente === "render" ? estado : `${estado}(${fuente})`; } catch (_) {}
   }
   return out;
 }
@@ -221,4 +239,4 @@ function iniciar({ db, bot, env = process.env, cadaMs = 30000, log = console } =
   log.log("🎥 Sala de Juntas: avisos de Telegram activos");
 }
 
-module.exports = { publicarEstado, iniciar, procesarPendientes, handleCallback, mensaje, chatDe, chatDeDb, vincular, tryVincular, urlSala, TOLERANCIA_MS };
+module.exports = { publicarEstado, iniciar, procesarPendientes, handleCallback, mensaje, chatDe, chatDeDb, chatPanelSocios, vincular, tryVincular, urlSala, TOLERANCIA_MS };
