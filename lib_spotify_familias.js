@@ -39,6 +39,8 @@
 //     «Falta quitar en Spotify» (pendientesSpotify, no ocupa espacio); confirmarRetiroExterno() borra esa nota.
 //   · Sin «Mover» ni «Desvincular» en ninguna pantalla (Web, APK, bot): las acciones del servidor quedan cerradas.
 //   · Crear/administrar cuentas madre: solo Sublicuentas (esAdministradorMadres), verificado en el servidor y en el bot.
+// R196p · PDF «Eliminar correos y Control Maestro» (13/11/2026): eliminarCorreo() en Telegram, Bodega web y APK (solo
+//   Sublicuentas); Control Maestro queda SOLO de consulta (madre + 5 correos).
 // CommonJS a propósito.
 
 const CAPACIDAD = 5;
@@ -305,6 +307,33 @@ async function retirarPorBaja(db, { correo, clienteId = "", compraId = "", motiv
     res = { familiaId: fref.id, codigo: f.codigo, correo: c, motivo: mot, estado: "liberado", ocupados: activos({ miembros }).length, capacidad: Number(f.capacidad || CAPACIDAD), retiroExternoPendiente: true };
   });
   if (res && res.estado === "liberado" && !res.yaEstaba) await auditar(db, "liberado_por_baja", usuario || "sistema", { familiaId: res.familiaId, codigo: res.codigo, correo: res.correo, motivo: res.motivo, clienteId: String(clienteId || ""), compraId: String(compraId || "") });
+  return res;
+}
+// R196p · «Eliminar correo» (Telegram, Bodega web, APK): quita SOLO la asignación de ese correo en ESA familia y libera el
+// espacio, en una transacción (aunque esté 5/5). Conserva madre, demás invitados, cliente, ficha, ventas e historial (el
+// miembro queda «desvinculado» con motivo; solo se quita la marca de familia del servicio). Correo inexistente o ya
+// eliminado → advertencia sin error y sin descontar dos veces. Como Sublichat no revoca la invitación en Spotify, anota
+// «Falta quitar en la app de Spotify» (pendientesSpotify, no ocupa espacio). No crea compras ni ventas.
+async function eliminarCorreo(db, { familiaId, correo, usuario = "", motivo = "manual" } = {}) {
+  const c = correoValido(correo); if (!c) throw new Error("Correo inválido.");
+  const fref = db.collection(COL).doc(String(familiaId || "")), idx = db.collection(IDX).doc(idxId(c)); let res = null;
+  await db.runTransaction(async (tx) => {
+    const sf = await tx.get(fref); if (!sf.exists) throw new Error("Esa familia no existe.");
+    const si = await tx.get(idx); const d = si.exists ? si.data() || {} : null;
+    const f = sf.data() || {}; const cap = Number(f.capacidad || CAPACIDAD);
+    const m = activos(f).find((x) => x.correoNorm === c);
+    if (!m) { res = { familiaId: fref.id, codigo: f.codigo, correo: c, yaEstaba: true, ocupados: activos(f).length, capacidad: cap, aviso: `${c} no está en ${f.codigo}: no se cambió nada.` }; return; }
+    const cref = m.clienteId ? db.collection("clientes").doc(String(m.clienteId)) : null;
+    const sc = cref ? await tx.get(cref) : null;
+    const ahora = ahoraIso(), por = String(usuario || "").slice(0, 60), mot = String(motivo || "manual").slice(0, 40);
+    const miembros = conPosiciones(f).map((x) => x.id === m.id ? { ...x, estado: "desvinculado", desvinculadoAt: ahora, desvinculadoPor: por, desvinculadoMotivo: mot, retiroPendiente: false } : x);
+    const pendientesSpotify = [...(f.pendientesSpotify || []).filter((p) => p.correo !== c), { correo: c, motivo: mot, at: ahora, por, clienteId: String(m.clienteId || ""), compraId: String(m.compraId || ""), clienteNombre: String(m.clienteNombre || "").slice(0, 80) }].slice(-30);
+    tx.set(fref, { ...f, miembros, pendientesSpotify, version: Number(f.version || 1) + 1, updatedAt: ahora });
+    if (d && d.familiaId === fref.id) tx.set(idx, { ...d, activo: false, updatedAt: ahora });
+    if (sc && sc.exists) { const sv = marcarServicio(sc.data() || {}, String(m.compraId || ""), c, null); if (sv) tx.set(cref, { servicios: sv }, { merge: true }); }
+    res = { familiaId: fref.id, codigo: f.codigo, correo: c, motivo: mot, ocupados: activos({ miembros }).length, capacidad: cap, retiroExternoPendiente: true };
+  });
+  if (!res.yaEstaba) await auditar(db, "eliminar_correo", usuario, { familiaId: res.familiaId, codigo: res.codigo, correo: res.correo, motivo: res.motivo });
   return res;
 }
 // R196o · «Ya lo quité en Spotify»: solo borra la nota pendiente (el espacio ya estaba libre). No toca invitados ni fichas.
@@ -599,5 +628,5 @@ module.exports = { sincronizarBodega, sincronizarTodo, idBodega, PLAT_BODEGA,
   crearFamilia: conBodega(crearFamilia, _id), vincularInvitado: conBodega(vincularInvitado, _id), moverInvitado: conBodega(moverInvitado, (r) => [r.origen && r.origen.id, r.destino && r.destino.id]),
   desvincular: conBodega(desvincular, _id), asignarServicio: conBodega(asignarServicio, _id), cambiarCorreo: conBodega(cambiarCorreo, _id), vincularFicha: conBodega(vincularFicha, _id),
   marcarMiembro: conBodega(marcarMiembro, _id), liberarEspacio: conBodega(liberarEspacio, _id), guardarClaveMadre: conBodega(guardarClaveMadre, _id),
-  cambiarCorreoMadre: conBodega(cambiarCorreoMadre, _id), retirarPorBaja: conBodega(retirarPorBaja, _id), confirmarRetiroExterno, esAdministradorMadres, agregarPorCorreo: conBodega(agregarPorCorreo, (r) => [r.familia && r.familia.id]), fichasExactas, eliminarCuenta: conBodega(eliminarCuenta, (r, a) => [r.familiaId || a.familiaId]),
+  cambiarCorreoMadre: conBodega(cambiarCorreoMadre, _id), retirarPorBaja: conBodega(retirarPorBaja, _id), eliminarCorreo: conBodega(eliminarCorreo, _id), confirmarRetiroExterno, esAdministradorMadres, agregarPorCorreo: conBodega(agregarPorCorreo, (r) => [r.familia && r.familia.id]), fichasExactas, eliminarCuenta: conBodega(eliminarCuenta, (r, a) => [r.familiaId || a.familiaId]),
   clientesDeMadre, fichasPorCorreo, leerClaveMadre, panelFamilias, estadoEspacio, conPosiciones, CAPACIDAD, normCorreo, correoValido, listarFamilias, leerFamilia, resolverCorreo, buscarServiciosSpotify, esPlataformaSpotify };

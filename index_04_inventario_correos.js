@@ -745,7 +745,7 @@ async function mostrarPanelCorreo(chatId, plataforma = "", acceso = "") {
 
   const data = found.data || {};
   // R196f/R196o · cuenta madre de Spotify Familiar: se abre la vista simple de /spotify (madre + 5 correos)
-  if (data.origen === "spotify_familia" && data.familiaId) return require("./index_38_spotify_familias").verCuenta(chatId, data.familiaId);
+  if (data.origen === "spotify_familia" && data.familiaId) { let superOk = false; try { superOk = !!(await require("./index_02_utils_roles").isSuperAdmin(chatId)); } catch (_) {} return require("./index_38_spotify_familias").verCuenta(chatId, data.familiaId, null, { adminOk: true, superOk }); } // R196p
   const ident = getStoredIdent(data) || String(acceso || "");
   setMailPanelContext(chatId, { docId: found.id, plataforma: plat, acceso: ident });
   const clave = String(data.clave || "").trim();

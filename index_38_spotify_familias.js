@@ -9,6 +9,8 @@
        transacción). Si hay UNA ficha Spotify con ese correo se vincula sola; si no, el espacio queda ocupado sin ficha y se
        vincula solo cuando se guarde o renueve la ficha. Nunca se muestra una lista de fichas ni se crea cliente.
      «No renovó» NO está aquí: se usa el de la ficha/renovaciones, que libera el espacio solo (lib · retirarPorBaja).
+   R196p · [🗑 Eliminar correo] (solo Sublicuentas, también con 5/5): elige 1–5 de ESA familia → «¿Eliminar X de la familia
+     SP-00X?» [Confirmar] [Cancelar] → lib.eliminarCorreo (misma función que Web/APK) → «Correo eliminado… 4/5».
    Permisos (en el bot, no solo ocultando botones): ver y añadir correo = administradores o vendedor con módulo Spotify
    (Relojes/Geisell); crear cuenta madre = solo Sublicuentas (super admin). No se muestra la clave de la madre.
    Lo llama index_06_handlers.js (mensajes y botones «spf:») e index_04 (Bodega). */
@@ -22,7 +24,7 @@ const norm = (v) => String(v || "").toLowerCase().normalize("NFD").replace(/[̀-
 const esc = (s) => String(s == null ? "" : s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
 const usuarioDe = (from = {}) => `tg:${from.id || ""}${from.username ? "@" + from.username : ""}`.slice(0, 60);
 const RE_MAIL = /[^\s@:;,|<>()"'=]+@[^\s@:;,|<>()"'=]+\.[a-z0-9-]{2,24}/gi;
-const MOTIVO = { no_renovo: "No renovó", quitar_servicio: "Se quitó Spotify" };
+const MOTIVO = { no_renovo: "No renovó", quitar_servicio: "Se quitó Spotify", manual: "Eliminado" };
 
 function puede({ adminOk = false, vend = null } = {}) {
   if (adminOk) return true;
@@ -65,12 +67,13 @@ async function lista(chatId, ctx = {}) {
     [...fs.slice(0, 60).map((f) => [{ text: `${f.codigo} · ${f.ocupados}/${f.capacidad}`, callback_data: `spf:f:${f.id}` }]), ...crear]);
 }
 // Vista de una cuenta (también se abre desde Bodega › Spotify Familiar).
-async function verCuenta(chatId, familiaId, fam = null) {
+async function verCuenta(chatId, familiaId, fam = null, ctx = {}) {
   const f = fam || await S.leerFamilia(db, familiaId);
   if (f.estado === "inactiva") return enviar(chatId, `${esc(f.codigo)} está eliminada.`, [[{ text: "⬅️ Volver", callback_data: "spf:l" }]]);
   espera.delete(String(chatId));
   const rows = [];
   if (f.libres > 0) rows.push([{ text: "➕ Añadir correo invitado", callback_data: `spf:a:${f.id}` }]);
+  if (f.ocupados > 0 && puedeCrear(ctx)) rows.push([{ text: "🗑 Eliminar correo", callback_data: `spf:e:${f.id}` }]); // R196p · también con 5/5
   rows.push([{ text: "⬅️ Volver", callback_data: "spf:l" }]);
   return enviar(chatId, textoFamilia(f) + (f.libres > 0 ? "" : "\n\nCuenta llena (5/5)."), rows);
 }
@@ -83,12 +86,12 @@ async function tryCallback(q, ctx = {}) {
   const u = usuarioDe(q.from);
   try {
     if (p[1] === "l" || p[1] === "m") return await lista(chatId, ctx), true;
-    if (p[1] === "f") return await verCuenta(chatId, p[2] === "l" ? p[3] : p[2]), true; // «spf:f:l:id» de mensajes viejos
-    if (p[1] === "x") { const st = espera.get(k); espera.delete(k); if (st && st.familiaId) return await verCuenta(chatId, st.familiaId), true; await bot.sendMessage(chatId, "Cancelado. No se guardó nada."); return true; }
+    if (p[1] === "f") return await verCuenta(chatId, p[2] === "l" ? p[3] : p[2], null, ctx), true; // «spf:f:l:id» de mensajes viejos
+    if (p[1] === "x") { const st = espera.get(k); espera.delete(k); if (st && st.familiaId) return await verCuenta(chatId, st.familiaId, null, ctx), true; await bot.sendMessage(chatId, "Cancelado. No se guardó nada."); return true; }
     if (p[1] === "a") { // Agregar correo · SP-00X
       const f = await S.leerFamilia(db, p[2]);
       if (f.estado === "inactiva") { await enviar(chatId, `${esc(f.codigo)} está eliminada.`); return true; }
-      if (f.libres <= 0) return await verCuenta(chatId, f.id, f), true;
+      if (f.libres <= 0) return await verCuenta(chatId, f.id, f, ctx), true;
       espera.set(k, { paso: "correo_invitado", familiaId: f.id, at: Date.now() });
       await enviar(chatId, `<b>Agregar correo · ${esc(f.codigo)}</b> (${f.ocupados}/${f.capacidad})\nIngrese el correo del invitado:`, [[{ text: "✖️ Cancelar", callback_data: "spf:x" }]]); return true;
     }
@@ -104,13 +107,39 @@ async function tryCallback(q, ctx = {}) {
       if (st.tipo === "madre") {
         if (!puedeCrear(ctx)) { await bot.sendMessage(chatId, "⛔ Solo Sublicuentas puede crear cuentas madre."); return true; }
         const f = await S.crearFamilia(db, { madreCorreo: st.correo, usuario: u });
-        await enviar(chatId, `✅ Cuenta creada: <b>${esc(f.codigo)}</b>`); return await verCuenta(chatId, f.id), true;
+        await enviar(chatId, `✅ Cuenta creada: <b>${esc(f.codigo)}</b>`); return await verCuenta(chatId, f.id, null, ctx), true;
       }
       const r = await S.agregarPorCorreo(db, { familiaId: st.familiaId, correo: st.correo, usuario: u }); // mismo servidor que Web/APK
       const fam = r.familia;
       const nota = r.varias ? `\nHay ${r.varias} fichas con ese correo: se vincula sola cuando se guarde o renueve la ficha correcta.` : r.pendienteVincular ? "\nSin ficha Spotify con ese correo todavía: se vincula sola cuando se registre." : r.ficha ? `\nFicha: ${esc(r.ficha.clienteNombre || r.ficha.clienteId)}` : "";
       await enviar(chatId, fam.idempotente ? `▫️ ${esc(st.correo)} ya estaba en ${esc(fam.codigo)}: no se duplicó.` : `✅ ${esc(st.correo)} agregado a <b>${esc(fam.codigo)}</b> · ${fam.ocupados}/${fam.capacidad}${nota}`);
-      return await verCuenta(chatId, fam.id), true;
+      return await verCuenta(chatId, fam.id, null, ctx), true;
+    }
+    // R196p · Eliminar correo: los invitados de ESA familia (1–5) → «¿Eliminar X de la familia SP-00X?» → Confirmar/Cancelar.
+    if (p[1] === "e" || p[1] === "ep" || p[1] === "eok") {
+      if (!puedeCrear(ctx)) { await bot.sendMessage(chatId, "⛔ Solo Sublicuentas puede eliminar correos de Spotify Familiar."); return true; }
+      if (p[1] === "e") {
+        const f = await S.leerFamilia(db, p[2]); espera.delete(k);
+        const act = f.miembros.filter((x) => x.estado === "activo").sort((a, b) => Number(a.posicion) - Number(b.posicion));
+        if (!act.length) return await verCuenta(chatId, f.id, f, ctx), true;
+        await enviar(chatId, `<b>Eliminar correo · ${esc(f.codigo)}</b> (${f.ocupados}/${f.capacidad})\n¿Cuál correo se retira?`,
+          [...act.map((x) => [{ text: `${x.posicion}. ${x.correo}`, callback_data: `spf:ep:${f.id}:${x.posicion}` }]), [{ text: "✖️ Cancelar", callback_data: `spf:f:${f.id}` }]]);
+        return true;
+      }
+      if (p[1] === "ep") {
+        const f = await S.leerFamilia(db, p[2]); const m = f.miembros.find((x) => x.estado === "activo" && String(x.posicion) === String(p[3]));
+        if (!m) { await enviar(chatId, "Ese espacio ya está libre: no se cambió nada."); return await verCuenta(chatId, f.id, f, ctx), true; }
+        const tok = Date.now().toString(36);
+        espera.set(k, { paso: "eliminar", familiaId: f.id, correo: m.correo, tok, at: Date.now() });
+        await enviar(chatId, `¿Eliminar ${esc(m.correo)} de la familia ${esc(f.codigo)}?`, [[{ text: "✅ Confirmar", callback_data: `spf:eok:${tok}` }, { text: "✖️ Cancelar", callback_data: `spf:f:${f.id}` }]]);
+        return true;
+      }
+      const st = espera.get(k); // eok
+      if (!st || st.paso !== "eliminar" || st.tok !== p[2]) { await bot.sendMessage(chatId, "Eso ya se hizo o venció. Vuelva a abrir /spotify."); return true; }
+      espera.delete(k);
+      const r = await S.eliminarCorreo(db, { familiaId: st.familiaId, correo: st.correo, usuario: u, motivo: "manual" }); // misma función que Web/APK
+      await enviar(chatId, r.yaEstaba ? `▫️ ${esc(r.aviso)}` : `✅ Correo eliminado de ${esc(r.codigo)}. Espacios ocupados: ${r.ocupados}/${r.capacidad}\nFalta quitarlo en la app de Spotify (Sublichat no puede hacerlo).`);
+      return await verCuenta(chatId, st.familiaId, null, ctx), true;
     }
     // Botones de mensajes viejos (Mover, Desvincular, lista de fichas, clave, editar, eliminar…): ya no existen.
     await enviar(chatId, "Esa opción ya no existe. Los espacios se liberan solos con «No renovó» en la ficha.", [[{ text: "🎵 Ver familias", callback_data: "spf:l" }]]);
