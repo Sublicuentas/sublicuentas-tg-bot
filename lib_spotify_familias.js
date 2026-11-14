@@ -605,6 +605,7 @@ async function panelFamilias(db, { hoy = "" } = {}) {
   // R196d · una sola lectura de clientes: fichas de los invitados y clientes de la cuenta madre
   const docs = (await db.collection("clientes").get()).docs.map((d) => ({ id: d.id, data: d.data() || {} }));
   const fichas = new Map(docs.map((d) => [d.id, d.data])); const porCorreo = fichasPorCorreo(docs);
+  const revs = await revisionesFamilias(db); // R196r
   const out = fams.map((f) => {
     const cap = Number(f.capacidad || CAPACIDAD);
     const ms = conPosiciones(f).filter((m) => m.estado === "activo");
@@ -618,9 +619,91 @@ async function panelFamilias(db, { hoy = "" } = {}) {
         vence, vencido: !!(vence && hoy && vence < hoy), fichaEncontrada: !!sv, sinFicha: !m.clienteId, historialCorreos: (m.historialCorreos || []).slice(-5), vinculadoAt: m.vinculadoAt || "" };
     });
     const ocupados = espacios.filter((e) => e.estado !== "disponible").length;
-    return { id: f.id, codigo: f.codigo || "", madreCorreo: f.madreCorreo || "", tieneClave: !!f.madreClave, pendientesSpotify: (f.pendientesSpotify || []).map((p) => ({ correo: p.correo, motivo: p.motivo || "", at: p.at || "", clienteNombre: p.clienteNombre || "" })), madreClientes: (porCorreo.get(normCorreo(f.madreCorreo)) || []).map((x) => ({ ...x, vencido: !!(x.vence && hoy && x.vence < hoy) })), estado: f.estado || "activa", capacidad: cap, ocupados, libres: cap - ocupados, espacios };
+    const huella = huellaFamilia(f); // R196r
+    return { id: f.id, codigo: f.codigo || "", madreCorreo: f.madreCorreo || "", huella, revision: estadoRevision(revs.get(f.id), huella), tieneClave: !!f.madreClave, pendientesSpotify: (f.pendientesSpotify || []).map((p) => ({ correo: p.correo, motivo: p.motivo || "", at: p.at || "", clienteNombre: p.clienteNombre || "" })), madreClientes: (porCorreo.get(normCorreo(f.madreCorreo)) || []).map((x) => ({ ...x, vencido: !!(x.vence && hoy && x.vence < hoy) })), estado: f.estado || "activa", capacidad: cap, ocupados, libres: cap - ocupados, espacios };
   });
   return out.sort((a, b) => String(a.codigo).localeCompare(String(b.codigo)));
+}
+
+// ─── R196r · Control Maestro › Spotify Familiar: conciliación y revisión (PDF 14/11/2026) ───────────────────────────────
+// Solo LEE la fuente operativa (spotify_familias + spotify_indice, la misma de Telegram/Web/APK) y guarda el estado de
+// revisión en spotify_familias_revisiones/{familiaId} (propio de Control Maestro). No agrega, mueve ni quita invitados.
+const REV = "spotify_familias_revisiones";
+// Huella de lo revisado: madre + capacidad + los 5 espacios (posición:correo). Si cambia, la revisión queda desactualizada.
+function huellaFamilia(f) {
+  const cap = Number(f.capacidad || CAPACIDAD);
+  const ms = conPosiciones(f).filter((m) => m.estado === "activo").map((m) => `${Number(m.posicion) || 0}:${m.correoNorm || normCorreo(m.correo)}`).sort();
+  const txt = `${normCorreo(f.madreCorreo)}|${cap}|${ms.join(",")}`;
+  let h = 5381; for (let i = 0; i < txt.length; i++) h = ((h << 5) + h + txt.charCodeAt(i)) >>> 0;
+  return `h${h.toString(36)}${ms.length}`;
+}
+// Resultado por correo: coincide · otra_familia · falta_en_origen (índice de Telegram) · duplicado · no_verificable.
+// «falta_en_cm»: el índice dice que el correo es de esta familia pero la familia no lo tiene activo.
+// Datos secundarios (PIN, teléfono, fecha, ficha) NUNCA convierten un correo encontrado en «no está».
+async function verificarFamilia(db, familiaId) {
+  const sf = await db.collection(COL).doc(String(familiaId || "")).get();
+  if (!sf.exists) throw new Error("Esa familia no existe.");
+  const f = { id: sf.id, ...(sf.data() || {}) }; const cap = Number(f.capacidad || CAPACIDAD);
+  const ms = conPosiciones(f).filter((m) => m.estado === "activo");
+  let todas = [];
+  try { todas = (await db.collection(COL).get()).docs.map((d) => ({ id: d.id, ...(d.data() || {}) })).filter((x) => x.estado !== "inactiva"); } catch (_) { todas = null; }
+  const espacios = [];
+  for (let i = 0; i < cap; i++) {
+    const m = ms.find((x) => Number(x.posicion) === i + 1);
+    if (!m) { espacios.push({ posicion: i + 1, libre: true, resultado: "libre" }); continue; }
+    const c = m.correoNorm || normCorreo(m.correo);
+    let resultado = "coincide", detalle = "", cliente = "";
+    try {
+      const si = await db.collection(IDX).doc(idxId(c)).get(); const d = si.exists ? si.data() || {} : null;
+      if (!d || d.activo === false || d.tipo !== "invitado") { resultado = "falta_en_origen"; detalle = "El índice que usa Telegram no lo tiene activo."; }
+      else if (String(d.familiaId) !== f.id) { const o = (todas || []).find((x) => x.id === String(d.familiaId)); resultado = "otra_familia"; detalle = `Telegram lo tiene en ${o ? o.codigo : "otra familia"}.`; }
+      if (todas) { const otras = todas.filter((x) => x.id !== f.id && conPosiciones(x).some((y) => y.estado === "activo" && (y.correoNorm || normCorreo(y.correo)) === c)); if (otras.length) { resultado = "duplicado"; detalle = `También está activo en ${otras.map((x) => x.codigo).join(", ")}.`; } }
+      if (m.clienteId) { // cliente relacionado SOLO si la ficha tiene ese Spotify con ese correo
+        const cd = await db.collection("clientes").doc(String(m.clienteId)).get(); const cl = cd.exists ? cd.data() || {} : null;
+        const sv = cl ? (cl.servicios || []).find((x) => esPlataformaSpotify(x.plataforma) && (m.compraId ? String(x.compraId || "") === m.compraId : normCorreo(x.correo) === c)) : null;
+        if (sv) cliente = String(cl.nombrePerfil || cl.nombre || "").slice(0, 80);
+      }
+    } catch (e) { resultado = "no_verificable"; detalle = "No se pudo verificar: reintente."; }
+    espacios.push({ posicion: i + 1, correo: c, resultado, detalle, cliente, retiroPendiente: !!m.retiroPendiente });
+  }
+  let sobrantes = [];
+  try { sobrantes = (await db.collection(IDX).where("familiaId", "==", f.id).get()).docs.map((d) => ({ correo: d.id, ...(d.data() || {}) }))
+    .filter((d) => d.activo !== false && d.tipo === "invitado" && !ms.some((m) => (m.correoNorm || normCorreo(m.correo)) === normCorreo(d.correo))).map((d) => ({ correo: normCorreo(d.correo), resultado: "falta_en_cm", detalle: "Telegram lo tiene en esta familia, pero la familia no lo muestra." })); } catch (_) {}
+  const bodega = await db.collection("inventario").doc(idBodega(f.id)).get().then((d) => (d.exists ? d.data() || {} : null)).catch(() => null);
+  const avisos = [];
+  if (ms.length > cap) avisos.push(`Capacidad: ${ms.length} invitados activos de ${cap}.`);
+  if (bodega && Number(bodega.ocupados) !== ms.length) avisos.push(`Bodega dice ${Number(bodega.ocupados) || 0} ocupados; la familia tiene ${ms.length}.`);
+  const ok = espacios.every((e) => e.resultado === "libre" || e.resultado === "coincide") && !sobrantes.length && !avisos.length;
+  return { familiaId: f.id, codigo: f.codigo || "", madreCorreo: f.madreCorreo || "", capacidad: cap, ocupados: ms.length, huella: huellaFamilia(f), version: Number(f.version || 1), verificadoAt: new Date().toISOString(), espacios, sobrantes, avisos, ok };
+}
+// Marcar revisada (solo si TODO coincide y nada cambió desde la verificación que vio el revisor) o registrar incidencia (con nota).
+async function guardarRevisionFamilia(db, { familiaId, resultado, nota = "", huella = "", usuario = "" } = {}) {
+  const r = String(resultado || "");
+  if (!["revisada", "incidencia"].includes(r)) throw new Error("Resultado inválido.");
+  const v = await verificarFamilia(db, familiaId);
+  if (r === "revisada") {
+    if (huella && huella !== v.huella) throw new Error("La familia cambió desde que la verificó. Verifique otra vez.");
+    if (!v.ok) throw new Error("No se puede marcar revisada: hay diferencias. Registre una incidencia o reintente la sincronización.");
+  }
+  const n = String(nota || "").trim().slice(0, 500);
+  if (r === "incidencia" && n.length < 4) throw new Error("Escriba qué encontró (mínimo 4 letras).");
+  const ref = db.collection(REV).doc(v.familiaId); const at = new Date().toISOString(), por = String(usuario || "").slice(0, 80);
+  const prev = await ref.get().then((d) => (d.exists ? d.data() || {} : {})).catch(() => ({}));
+  const entrada = { resultado: r, huella: v.huella, version: v.version, ocupados: v.ocupados, nota: n, por, at };
+  const doc = { familiaId: v.familiaId, codigo: v.codigo, estado: r, huella: v.huella, version: v.version, ocupados: v.ocupados, nota: n, por, at, historial: [...(Array.isArray(prev.historial) ? prev.historial : []), entrada].slice(-50) };
+  await ref.set(doc);
+  await auditar(db, r === "revisada" ? "cm_familia_revisada" : "cm_familia_incidencia", usuario, { familiaId: v.familiaId, codigo: v.codigo, huella: v.huella, nota: n });
+  return { revision: doc, verificacion: v };
+}
+// Estado de revisión que ve Control Maestro: sin_revisar · revisada · desactualizada (cambió después) · con_incidencia.
+function estadoRevision(rev, huellaActual) {
+  if (!rev || !rev.estado) return { codigo: "sin_revisar", texto: "Sin revisar" };
+  if (rev.estado === "incidencia") return { codigo: "con_incidencia", texto: "Con incidencia", nota: rev.nota || "", por: rev.por || "", at: rev.at || "" };
+  if (rev.huella !== huellaActual) return { codigo: "desactualizada", texto: "Pendiente de revisar · cambió después de la revisión", por: rev.por || "", at: rev.at || "" };
+  return { codigo: "revisada", texto: "Revisada", por: rev.por || "", at: rev.at || "" };
+}
+async function revisionesFamilias(db) {
+  try { return new Map((await db.collection(REV).get()).docs.map((d) => [d.id, d.data() || {}])); } catch (_) { return new Map(); }
 }
 
 const _id = (r) => [r.id || r.familiaId || (r.familia && r.familia.id)];
@@ -629,4 +712,4 @@ module.exports = { sincronizarBodega, sincronizarTodo, idBodega, PLAT_BODEGA,
   desvincular: conBodega(desvincular, _id), asignarServicio: conBodega(asignarServicio, _id), cambiarCorreo: conBodega(cambiarCorreo, _id), vincularFicha: conBodega(vincularFicha, _id),
   marcarMiembro: conBodega(marcarMiembro, _id), liberarEspacio: conBodega(liberarEspacio, _id), guardarClaveMadre: conBodega(guardarClaveMadre, _id),
   cambiarCorreoMadre: conBodega(cambiarCorreoMadre, _id), retirarPorBaja: conBodega(retirarPorBaja, _id), eliminarCorreo: conBodega(eliminarCorreo, _id), confirmarRetiroExterno, esAdministradorMadres, agregarPorCorreo: conBodega(agregarPorCorreo, (r) => [r.familia && r.familia.id]), fichasExactas, eliminarCuenta: conBodega(eliminarCuenta, (r, a) => [r.familiaId || a.familiaId]),
-  clientesDeMadre, fichasPorCorreo, leerClaveMadre, panelFamilias, estadoEspacio, conPosiciones, CAPACIDAD, normCorreo, correoValido, listarFamilias, leerFamilia, resolverCorreo, buscarServiciosSpotify, esPlataformaSpotify };
+  clientesDeMadre, fichasPorCorreo, leerClaveMadre, panelFamilias, verificarFamilia, guardarRevisionFamilia, huellaFamilia, estadoRevision /* R196r */, estadoEspacio, conPosiciones, CAPACIDAD, normCorreo, correoValido, listarFamilias, leerFamilia, resolverCorreo, buscarServiciosSpotify, esPlataformaSpotify };
