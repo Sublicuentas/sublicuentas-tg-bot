@@ -5957,6 +5957,9 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
         const titulo = { per: "👤 PERFILES", tv: "📺 TV DIGITAL", mus: "🎵 MÚSICA", sof: "💻 SOFTWARE", cc: "🔐 CUENTAS COMPLETAS\n_Correo + clave + precio (sin PIN ni perfiles)_" }[code] || "📌 *Seleccione una categoría*";
         return upsertPanel(chatId, code === "menu" ? "📌 *Seleccione una categoría*" : `*${titulo}*\nSeleccione plataforma:`, kb);
       }
+      if (data.startsWith("ccsel:set:") || data.startsWith("ccv:")) { // R196q · Cambiar plataforma → cuenta completa de LA MISMA compra
+        return require("./index_39_cuenta_completa").tryCallback(q, { auditar: (accion, detalle, texto) => registrarActividadTelegramLocal(userId, chatId, accion, detalle, texto) });
+      }
       if (data.startsWith("ccsel:")) { // R118: cuenta completa → correo → clave → precio → pago
         const [, mode, plat, cId] = data.split(":");
         let clientId = cId || (mode === "wiz" ? (wizard.get(String(chatId)) || {}).clientId : null);
@@ -7059,6 +7062,7 @@ bot.on("message", async (msg) => {
     // Oct-2026 · Buzón de dos vías: respuesta nativa o botón "Responder consulta #C…" (nunca por suposición).
     if ((adminOk || vendOk) && await require("./index_36_socios_telegram").tryMensaje(msg,{adminOk,superOk,vend})) return;
     if ((adminOk || vendOk) && await require("./index_37_baul_apks").tryMensaje(msg,{adminOk,superOk,vend})) return; // R187 · /baul, /urltv
+    if ((adminOk || vendOk) && await require("./index_39_cuenta_completa").tryMensaje(msg)) return; // R196q · búsqueda/clave al cambiar a cuenta completa
     if ((adminOk || vendOk) && await require("./index_38_spotify_familias").tryMensaje(msg,{adminOk,superOk,vend})) return; // R188 · /spotify
 
     // Si hay wizard activo y mandan un comando que no sea menu/start, avisar

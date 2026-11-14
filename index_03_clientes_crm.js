@@ -548,6 +548,9 @@ function getEstadoServicio(fechaRenovacion = "") {
   return { emoji: "🟢", texto: "Activo", orden: 3 };
 }
 
+// R196q · modalidad comercial GUARDADA en la compra (tipoVenta); no se infiere por «1 perfil».
+function esCuentaCompletaLocal(s = {}) { try { return require("./lib_catalogo_categorias").clasificarServicio(s).tipoVenta === "cuenta_completa"; } catch (_) { return false; } }
+const lineaCuentasCompletasLocal = (r, md = false) => (r.cuentasCompletas ? (md ? `\n🔐 *Cuentas completas:* ${escMD(String(r.cuentasCompletas))}` : `\nCuentas completas: ${r.cuentasCompletas}`) : "");
 function resumenGeneralCliente(servicios = []) {
   const rows = Array.isArray(servicios) ? servicios : [];
   let total = 0, proxima = "", proximaTS = Infinity;
@@ -566,7 +569,9 @@ function resumenGeneralCliente(servicios = []) {
     total, proxima: proxima || "Sin fecha",
     estadoEmoji: worst.emoji, estadoTexto: rows.length ? worst.texto : "Sin servicios",
     activos: rows.length,
-    perfiles: rows.reduce((sum, s) => sum + cantidadPerfilesServicioLocal(s), 0),
+    // R196q · una cuenta completa NO suma como «perfil»: se cuenta aparte (la modalidad guardada en la compra manda).
+    perfiles: rows.filter((s) => !esCuentaCompletaLocal(s)).reduce((sum, s) => sum + cantidadPerfilesServicioLocal(s), 0),
+    cuentasCompletas: rows.filter((s) => esCuentaCompletaLocal(s)).length,
   };
 }
 
@@ -667,7 +672,8 @@ function kbTvDigitalPlanesWiz(mode = "wiz", brand = "", clientId = null, idx = n
 const R118_CAT = { per: "perfiles", tv: "tv_digital", mus: "musica", sof: "software", cc: "cuentas_completas" };
 function kbCategoriasWiz(mode, clientId = null, idx = null) {
   const cat = require("./lib_catalogo_categorias");
-  const items = Object.entries(R118_CAT).filter(([code]) => !(code === "cc" && mode === "set")).map(([code, k]) => ({ text: `${cat.CATEGORIAS[k].emoji} ${cat.CATEGORIAS[k].label}`, callback_data: appendCallbackContextLocal(`platcat:${mode}:${code}`, clientId, idx) }));
+  // R196q · «Cambiar plataforma» (mode set) ya incluye 🔐 Cuentas completas: convierte LA MISMA compra (index_39), sin venta nueva.
+  const items = Object.entries(R118_CAT).map(([code, k]) => ({ text: `${cat.CATEGORIAS[k].emoji} ${cat.CATEGORIAS[k].label}`, callback_data: appendCallbackContextLocal(`platcat:${mode}:${code}`, clientId, idx) }));
   const rows = []; for (let i = 0; i < items.length; i += 2) rows.push(items.slice(i, i + 2));
   return rows;
 }
@@ -1056,7 +1062,7 @@ async function generarHistorialTXT(clientId) {
   txt += `Total mensual actual: L${Number(resumen.total || 0).toFixed(2)}\n`;
   txt += `Proxima renovacion: ${resumen.proxima}\n`;
   txt += `Compras activas: ${servicios.length}\n`;
-  txt += `Perfiles activos: ${resumen.perfiles}\n\n`;
+  txt += `Perfiles activos: ${resumen.perfiles}${lineaCuentasCompletasLocal(resumen)}\n\n`;
 
   txt += "============================\n";
   txt += "COMPRAS / SERVICIOS ACTUALES\n";
@@ -1342,7 +1348,7 @@ function clienteResumenTXT(c = {}) {
   let txt = "CRM CLIENTE\n";
   txt += `Nombre: ${nombre}\nTelefono: ${telefono}\nVendedor: ${vendedor}\n`;
   txt += `Estado general: ${resumen.estadoTexto}\nTotal mensual: L${Number(resumen.total || 0).toFixed(2)}\n`;
-  txt += `Proxima renovacion: ${resumen.proxima}\nCompras activas: ${servicios.length}\nPerfiles activos: ${resumen.perfiles}\n\nCOMPRAS / SERVICIOS\n`;
+  txt += `Proxima renovacion: ${resumen.proxima}\nCompras activas: ${servicios.length}\nPerfiles activos: ${resumen.perfiles}${lineaCuentasCompletasLocal(resumen)}\n\nCOMPRAS / SERVICIOS\n`;
 
   if (!servicios.length) {
     txt += "(sin servicios)\n";
@@ -1375,7 +1381,7 @@ function renderFichaClienteMarkdown(c = {}) {
   txt += `📊 *Estado general:* ${resumen.estadoEmoji} ${escMD(resumen.estadoTexto)}\n`;
   txt += `💰 *Total mensual:* ${escMD(`L${Number(resumen.total || 0).toFixed(2)}`)}\n`;
   txt += `📅 *Próxima renovación:* ${escMD(resumen.proxima)}\n`;
-  txt += `🛒 *Compras activas:* ${escMD(String(servicios.length))}\n👥 *Perfiles activos:* ${escMD(String(resumen.perfiles))}\n\n*COMPRAS / SERVICIOS*\n`;
+  txt += `🛒 *Compras activas:* ${escMD(String(servicios.length))}\n👥 *Perfiles activos:* ${escMD(String(resumen.perfiles))}${lineaCuentasCompletasLocal(resumen, true)}\n\n*COMPRAS / SERVICIOS*\n`;
 
   if (!servicios.length) {
     txt += `\n_Sin servicios registrados._`;
@@ -1384,7 +1390,9 @@ function renderFichaClienteMarkdown(c = {}) {
       const est = getEstadoServicio(s.fechaRenovacion || "");
       const benef = etiquetaBeneficiarioServicioLocal(s);
       const perfilReal = nombrePerfilRealServicioLocal(s, nombre);
-      const uso = benef.esTercero
+      const uso = esCuentaCompletaLocal(s) // R196q
+        ? `🔐 *CUENTA COMPLETA* · ${escMD(benef.esTercero ? benef.texto : (perfilReal || nombre))}`
+        : benef.esTercero
         ? `🔑 ${escMD(benef.texto)}`
         : `👤 ${escMD(perfilReal || nombre)}`;
       txt += `\n\n${i + 1}) ${iconPlataforma(s.plataforma || "")} *${escMD(humanPlataforma(s.plataforma || ""))}* — ${uso}\n`;
@@ -1524,13 +1532,14 @@ async function menuServicio(chatId, clientId, selector) {
   let txt =
     `🧩 *SERVICIO #${idx + 1}*\n\n` +
     `${iconPlataforma(s.plataforma || "")} *Plataforma:* ${escMD(humanPlataforma(s.plataforma || ""))}\n` +
+    (esCuentaCompletaLocal(s) ? `🔐 *Tipo de venta:* CUENTA COMPLETA (exclusiva)\n` : "") + // R196q
     (benef.esTercero
       ? `🔑 *Tercero:* ${escMD(s.beneficiarioNombre || s.beneficiario || perfilReal || "Tercero")}\n`
-      : `👤 *Perfil:* ${escMD(perfilReal)}\n`);
+      : esCuentaCompletaLocal(s) ? `👤 *Cliente:* ${escMD(perfilReal)}\n` : `👤 *Perfil:* ${escMD(perfilReal)}\n`);
 
   txt += renderCredencialesServicioLocal(s, true, "");
   txt += `🧾 *Vendedor responsable:* ${escMD(vendedorEfectivoServicio(s, c).vendedor || "-")}\n`;
-  txt += `🛒 *Compra:* ${cantidadPerfilesServicioLocal(s, c.nombrePerfil || "")} perfil(es) · un solo precio\n`;
+  txt += esCuentaCompletaLocal(s) ? `🛒 *Compra:* cuenta completa · un solo precio\n` : `🛒 *Compra:* ${cantidadPerfilesServicioLocal(s, c.nombrePerfil || "")} perfil(es) · un solo precio\n`; // R196q
   txt += `💰 *Precio:* ${escMD(`L${Number(s.precio || 0).toFixed(2)}`)}\n`;
   txt += `📅 *Renovación:* ${escMD(fechaDMYLocal(s.fechaRenovacion || "") || "-")}\n`;
   if (TV_DIGITAL_KEYS_LOCAL.has(normalizarPlataforma(s.plataforma || ""))) {
@@ -3057,6 +3066,7 @@ async function asegurarClienteWizard(st = {}) {
 
 module.exports = {
   asegurarClienteWizard, // R142
+  mutarServiciosClienteTx, // R196q · convertir a cuenta completa en la misma transacción de la ficha
   // 🐛 FIX (ago-2026): iconPlataforma() se usaba en index_06_handlers.js
   // (botones "Mis renovaciones de hoy" / "en 3 días" y el aviso diario de
   // las 7 AM) pero nunca estuvo exportada aquí — cada vez que se llamaba
