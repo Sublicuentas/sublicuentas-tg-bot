@@ -48,7 +48,7 @@ test("T01/T02 · /spotify muestra las madres reales con 4/5 (ya no 0/0) y la cue
   for (const n of [1, 2, 3, 4]) assert.match(v, new RegExp(`${n}\\. invitado${n}@ejemplo\\.test`));
   assert.match(v, /5\. — LIBRE/);
   assert.doesNotMatch(v, /Clave|clave/);
-  assert.deepEqual(botones(enviados.at(-1)).map((b) => b.text), ["➕ Añadir correo invitado", "⬅️ Volver"]);
+  assert.deepEqual(botones(enviados.at(-1)).map((b) => b.text), ["➕ Añadir correo invitado", "🗑 Eliminar correo", "⬅️ Volver"]); // R196p
   // Bodega (inventario) refleja lo mismo: 4 ocupados
   const inv = (await db.collection("inventario").doc(S.idBodega(f1.id)).get()).data();
   assert.deepEqual([inv.ocupados, inv.disponibles], [4, 1]);

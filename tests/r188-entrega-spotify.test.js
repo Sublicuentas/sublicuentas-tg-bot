@@ -62,7 +62,7 @@ test("R196f · Bodega: /spotifyf deja las cuentas en inventario «spotifyfamilia
   assert.match(enviados.at(-1).text, /Cuenta SP-001/);
   const core = fs.readFileSync(path.join(B, "index_01_core.js"), "utf8");
   assert.match(core, /spotifyfamiliar: \{ key: "spotifyfamiliar", nombre: "Spotify Familiar", categoria: "musica",.*capacidadDefault: 5/);
-  assert.match(fs.readFileSync(path.join(B, "index_04_inventario_correos.js"), "utf8"), /data\.origen === "spotify_familia" && data\.familiaId\) return require\("\.\/index_38_spotify_familias"\)\.verCuenta/);
+  assert.match(fs.readFileSync(path.join(B, "index_04_inventario_correos.js"), "utf8"), /data\.origen === "spotify_familia" && data\.familiaId\) \{[^\n]*return require\("\.\/index_38_spotify_familias"\)\.verCuenta\(chatId, data\.familiaId, null, \{ adminOk: true, superOk \}\)/);
   assert.match(fs.readFileSync(path.join(B, "index_03_clientes_crm.js"), "utf8"), /PLATAFORMAS_ALIAS_OCULTAS_LOCAL = new Set\(\[.*"spotifyfamiliar"\]\)/);
 });
 
