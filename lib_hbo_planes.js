@@ -18,6 +18,7 @@ function planDeCuenta(d = {}) { const p = String(d.planHbo || "").toLowerCase();
 function etiquetaPlan(d = {}) {
   if (!esHbo(d)) return "";
   const p = planDeCuenta(d); const occ = ocupadosDe(d);
+  if (p && Array.isArray(d.clientes) && d.clientes.some((c) => c && (c.cuentaCompleta === true || c.tipoVenta === "cuenta_completa"))) return `${p.corto} · cuenta completa`; // R196v
   return p ? `${p.corto} ${occ}/${p.capacidad}` : `HBO ${occ}/${Math.max(1, Number(d.capacidad || 5))} · plan sin definir`;
 }
 function resumenCuenta(d = {}) {
@@ -52,10 +53,60 @@ async function cambiarPlan(db, { inventarioId, plan, usuario = "", origen = "web
 // Resumen de todas las cuentas HBO (para Bodega / Control Maestro / bot): cuántas por plan y cuáles quedan por definir.
 async function resumenHbo(db) {
   const snap = await db.collection("inventario").where("plataforma", "==", PLAT_HBO).get();
-  const cuentas = snap.docs.map((x) => ({ id: x.id, correo: (x.data() || {}).correo || "", estado: (x.data() || {}).estado || "", ...resumenCuenta(x.data() || {}) }))
+  const cuentas = snap.docs.map((x) => ({ id: x.id, correo: (x.data() || {}).correo || "", estado: (x.data() || {}).estado || "", completa: vendidaCompleta(x.data() || {}), vendibles: cuposVendibles(x.data() || {}), ...resumenCuenta(x.data() || {}) }))
     .filter((c) => !/eliminad|baja/i.test(c.estado));
   const cuenta = (p) => cuentas.filter((c) => c.plan === p);
-  return { cuentas, platinum: { cuentas: cuenta("platinum").length, libres: cuenta("platinum").reduce((a, c) => a + c.libres, 0) }, standard: { cuentas: cuenta("standard").length, libres: cuenta("standard").reduce((a, c) => a + c.libres, 0) }, sinPlan: cuenta("").length };
+  const contadores = contadoresHbo(snap.docs.map((x) => x.data() || {})); // R196v · compartidas / exclusivas por plan
+  return { contadores, cuentas, platinum: { cuentas: cuenta("platinum").length, libres: cuenta("platinum").reduce((a, c) => a + c.libres, 0) }, standard: { cuentas: cuenta("standard").length, libres: cuenta("standard").reduce((a, c) => a + c.libres, 0) }, sinPlan: cuenta("").length };
 }
 
-module.exports = { PLAT_HBO, PLANES, planDeCuenta, etiquetaPlan, resumenCuenta, planPorCapacidad, cambiarPlan, resumenHbo };
+// ── R196v · Fase 3 (PDF «Netflix Hogar y HBO Standard/Platinum» · 03) — plan y MODALIDAD en la VENTA ──
+// · Opciones de venta: «hbomax_standard» / «hbomax_platinum» (por perfil o cuenta completa). Se guardan como plataforma
+//   «hbomax» + `planHbo`; la modalidad es el `tipoVenta` que ya existe (perfil | cuenta_completa).
+// · Una cuenta vendida COMPLETA deja 0 cupos para terceros (el perfil lleva `cuentaCompleta: true`).
+// · Una cuenta con perfiles de otros clientes no se puede vender completa. Standard y Platinum nunca se mezclan.
+// · Ventas «HBO Max» antiguas sin plan: se respetan tal cual; solo toman plan si su cuenta de Bodega ya lo tiene (verificable).
+const OPCIONES_VENTA = Object.freeze([
+  { id: "hbomax_standard", plan: "standard", label: "HBO Standard · 3 perfiles", labelCompleta: "HBO Standard · cuenta completa" },
+  { id: "hbomax_platinum", plan: "platinum", label: "HBO Platinum · 5 perfiles", labelCompleta: "HBO Platinum · cuenta completa" },
+]);
+function planDesdePlataforma(v = "") { const t = String(v || "").toLowerCase().replace(/[^a-z]/g, ""); if (!/^hbo/.test(t)) return ""; if (/platinum$/.test(t)) return "platinum"; if (/standard$/.test(t)) return "standard"; return ""; }
+function esPlataformaHbo(v = "") { return /^hbo/.test(String(v || "").toLowerCase().replace(/[^a-z]/g, "")) || String(v || "").toLowerCase().trim() === "max"; }
+function planValido(v = "") { const p = String(v || "").toLowerCase(); return PLANES[p] ? p : ""; }
+const esCompleta = (c = {}) => c && (c.cuentaCompleta === true || c.tipoVenta === "cuenta_completa");
+function vendidaCompleta(d = {}) { return Array.isArray(d.clientes) && d.clientes.some(esCompleta); }
+// Cupos que quedan para VENDER a terceros (compartida). Completa vendida = 0, sin importar la capacidad nominal.
+function cuposVendibles(d = {}) {
+  if (vendidaCompleta(d)) return 0;
+  const p = planDeCuenta(d); const cap = p ? p.capacidad : Math.max(0, Number(d.capacidad || 0));
+  return Math.max(0, cap - ocupadosDe(d));
+}
+// ¿Se puede poner esta venta en esta cuenta? Devuelve "" si sí, o el motivo. `mismaVenta` = la venta ya estaba en la cuenta.
+function validarAsignacion(d = {}, { plan = "", completa = false, compraId = "" } = {}) {
+  if (!esHbo(d)) return "";
+  const pc = planDeCuenta(d); const pv = planValido(plan);
+  if (pv && !pc) return "Esa cuenta HBO no tiene plan definido en Bodega (Standard o Platinum). Defínalo antes de vender en ella.";
+  if (pv && pc && pc.id !== pv) return `Esa cuenta es ${pc.nombre} y la venta es ${PLANES[pv].nombre}: no se mezclan.`;
+  const otros = (Array.isArray(d.clientes) ? d.clientes : []).filter((c) => !compraId || String(c.compraId || "") !== String(compraId));
+  const yaEsta = otros.length !== (Array.isArray(d.clientes) ? d.clientes.length : 0);
+  if (completa && otros.length) return `Esa cuenta tiene ${otros.length} perfil(es) de otros clientes: no se puede vender como cuenta completa sin resolverlos primero.`;
+  if (!completa && otros.some(esCompleta)) return "Esa cuenta ya está vendida como cuenta completa: no tiene perfiles para terceros.";
+  if (!completa && !yaEsta && pc && otros.length >= pc.capacidad) return `Esa cuenta ${pc.corto} ya está llena (${otros.length}/${pc.capacidad}).`;
+  return "";
+}
+// Contadores separados para Bodega: compartidas y exclusivas por plan.
+function contadoresHbo(cuentas = []) {
+  const base = () => ({ cuentas: 0, compartidas: 0, libres: 0, completas: 0, completasLibres: 0 });
+  const out = { standard: base(), platinum: base(), sinPlan: 0 };
+  cuentas.forEach((d) => {
+    if (!esHbo(d) || /eliminad|baja/i.test(String(d.estado || ""))) return;
+    const p = planDeCuenta(d); if (!p) { out.sinPlan += 1; return; }
+    const o = out[p.id]; o.cuentas += 1;
+    if (vendidaCompleta(d)) o.completas += 1;
+    else { o.compartidas += 1; o.libres += cuposVendibles(d); if (ocupadosDe(d) === 0) o.completasLibres += 1; }
+  });
+  return out;
+}
+
+module.exports = { PLAT_HBO, PLANES, planDeCuenta, etiquetaPlan, resumenCuenta, planPorCapacidad, cambiarPlan, resumenHbo,
+  OPCIONES_VENTA, planDesdePlataforma, esPlataformaHbo, planValido, vendidaCompleta, cuposVendibles, validarAsignacion, contadoresHbo };
