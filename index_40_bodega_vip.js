@@ -192,3 +192,31 @@ async function tryMensajeTodo(msg, ctx = {}) {
   return _tryMensajeVip(msg, ctx);
 }
 module.exports = { tryCallback: tryCallbackTodo, tryMensaje: tryMensajeTodo, inicio, botonesCuenta, verHogar };
+
+/* ── R196u Fase 3 · HBO Platinum 5 / Standard 3 desde el panel de la cuenta ── */
+const P = require("./lib_hbo_planes");
+const _botonesFase2 = botonesCuenta;
+function botonesCuentaTodo(plat, docId) {
+  if (plat === "hbomax") return [[{ text: "📦 Plan HBO (Platinum 5 / Standard 3)", callback_data: `hog:hp:${tok(docId)}` }]];
+  return _botonesFase2(plat, docId);
+}
+async function planCallback(q, ctx) {
+  const chatId = q.message?.chat?.id; const p = String(q.data || "").split(":");
+  const docId = TOKENS.get(p[2]); if (!docId) { await upsertPanel(chatId, "⚠️ Ese botón venció. Abra otra vez la cuenta.", []); return true; }
+  try {
+    if (p[1] === "hps") {
+      if (!ctx.superOk) { await upsertPanel(chatId, "⛔ Solo Sublicuentas cambia el plan HBO.", []); return true; }
+      const usuario = `tg:${q.from?.id || ""}${q.from?.username ? "@" + q.from.username : ""}`;
+      try { const r = await P.cambiarPlan(db, { inventarioId: docId, plan: p[3], usuario, origen: "tg" }); await upsertPanel(chatId, `✅ Plan: *${esc(r.etiqueta)}*`, []); }
+      catch (e) { await upsertPanel(chatId, `⛔ ${esc(e.message)}`, []); }
+      return true;
+    }
+    const s = await db.collection("inventario").doc(docId).get(); const d = s.data() || {}; const r = P.resumenCuenta(d);
+    const kb = ctx.superOk ? [[{ text: "Platinum · 5 perfiles", callback_data: `hog:hps:${p[2]}:platinum` }, { text: "Standard · 3 perfiles", callback_data: `hog:hps:${p[2]}:standard` }], [{ text: "✖️ Cerrar", callback_data: "vipx:x" }]] : [[{ text: "✖️ Cerrar", callback_data: "vipx:x" }]];
+    await upsertPanel(chatId, `📦 *PLAN HBO MAX*\n📧 ${esc(d.correo || "")}\n\nActual: *${esc(r.etiqueta)}*\nLibres: ${r.libres}${r.sobreocupada ? "\n⚠️ Sobreocupada: revise antes de vender." : ""}\n\n_Bajar a Standard se bloquea si hay más de 3 ocupados; nunca se saca a un cliente._`, kb);
+  } catch (e) { await upsertPanel(chatId, `⚠️ ${esc(String(e?.message || e).slice(0, 200))}`, []); }
+  return true;
+}
+const _tryCallbackFase2 = module.exports.tryCallback;
+async function tryCallbackFase3(q, ctx = {}) { const d = String(q.data || ""); if (d.startsWith("hog:hp:") || d.startsWith("hog:hps:")) return planCallback(q, ctx); return _tryCallbackFase2(q, ctx); }
+module.exports = { ...module.exports, tryCallback: tryCallbackFase3, botonesCuenta: botonesCuentaTodo };

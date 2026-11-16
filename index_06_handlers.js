@@ -4670,6 +4670,7 @@ bot.onText(/\/addcorreo\s+(\S+)\s+(\S+)(?:\s+(\d+))?/i, async (msg, match) => {
     disp: capacidad,
     estado: "activa",
     clave: getAccessTypeLabelLocal(plat) === "Solo correo" ? "" : "Sin clave",
+    ...(plat === "hbomax" && require("./lib_hbo_planes").planPorCapacidad(capacidad) ? { planHbo: require("./lib_hbo_planes").planPorCapacidad(capacidad) } : {}), // R196u
     createdAt: admin.firestore.FieldValue.serverTimestamp(),
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
   });
@@ -7767,7 +7768,7 @@ bot.on("message", async (msg) => {
         const correoNorm = normalizeIdentByPlatformLocal(p.plat, p.correo);
         const ref = db.collection("inventario").doc(docIdInventarioLocal(correoNorm, p.plat));
         if (await cuentaInvLocal(p.plat, correoNorm)) return bot.sendMessage(chatId, "⚠️ Esa cuenta ya existe en inventario.");
-        await ref.set({ accountId: ref.id, plataforma: p.plat, correo: correoNorm, ident: correoNorm, clave: p.clave, capacidad: qty, ocupados: 0, disponibles: qty, disp: qty, estado: "activa", clientes: [], createdAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+        await ref.set({ ...(p.plat === "hbomax" && require("./lib_hbo_planes").planPorCapacidad(qty) ? { planHbo: require("./lib_hbo_planes").planPorCapacidad(qty) } : {}), /* R196u · HBO 5 = Platinum, 3 = Standard */ accountId: ref.id, plataforma: p.plat, correo: correoNorm, ident: correoNorm, clave: p.clave, capacidad: qty, ocupados: 0, disponibles: qty, disp: qty, estado: "activa", clientes: [], createdAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp() });
         await registrarActividadTelegramLocal(userId,chatId,'crear_cuenta_inventario',{inventarioId:ref.id,plataforma:humanPlataforma(p.plat),cuenta:correoNorm,campo:'cuenta de Bodega',cambio:`capacidad ${qty}`},`Creó la cuenta ${correoNorm} de ${humanPlataforma(p.plat)} en Bodega · capacidad ${qty}.`,'Bodega');
         await bot.sendMessage(chatId, `✅ Cuenta *${escMD(correoNorm)}* creada con ${qty} perfiles.`, { parse_mode: "Markdown" });
         pending.set(String(chatId), { mode: "invSubmenuCtx", plat: p.plat, correo: correoNorm });

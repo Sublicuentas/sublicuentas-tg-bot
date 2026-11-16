@@ -442,6 +442,7 @@ async function actualizarCapacidadCuenta(docId, valor) {
     const data = snap.data() || {};
     const ocupados = getClientesArray(data).length;
     if (capacidad < ocupados) throw new Error(`La cuenta tiene ${ocupados} clientes asociados. La capacidad no puede ser menor que ${ocupados}.`);
+    { const pl = require("./lib_hbo_planes").planDeCuenta(data); if (pl && capacidad !== pl.capacidad) throw new Error(`Esta cuenta es ${pl.nombre} (${pl.capacidad} perfiles): cambie el plan con «📦 Plan HBO» en vez de la capacidad.`); } // R196u
     const disponibles = capacidad - ocupados;
     const estadoActual = String(data.estado || "").trim().toLowerCase();
     const patch = {capacidad, ocupados, disponibles, disp:disponibles, updatedAt:admin.firestore.FieldValue.serverTimestamp()};
@@ -803,6 +804,7 @@ function extraHogarPin(plat, data = {}) {
   try {
     if (plat === "netflix") return `🏠 *${escMD(require("./lib_netflix_hogar").estadoHogar(data).texto || "Hogar sin asignar")}*\n`;
     if (plat === "vipnetflix") return `🔏 *PIN de perfil:* ${data.tienePin ? "configurado" : "Sin PIN"}\n`;
+    if (plat === "hbomax") return `📦 *Plan:* ${escMD(require("./lib_hbo_planes").etiquetaPlan(data))}\n`; // R196u
   } catch (_) {}
   return "";
 }
