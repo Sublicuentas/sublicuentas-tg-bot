@@ -147,8 +147,23 @@ async function asignar(db, { inventarioId, clienteId, compraId = "", nombre = ""
     if (est !== "disponible" && est !== "reservado") throw new Error(`Esa unidad ya está ${ETIQUETA_ESTADO[est].toLowerCase()}: elija otra.`);
     const clientes = [{ clienteId: String(clienteId), compraId: String(compraId || ""), nombre: limpio(nombre, 80), asignadoAt: iso, asignadoPor: usuario }];
     const hist = [...(Array.isArray(d.historialBodega) ? d.historialBodega : []), { tipo: "asignada", at: iso, por: usuario, origen, clienteId: String(clienteId), compraId: String(compraId || "") }].slice(-50);
+    // R196y · si Finanzas ya registró el costo de este correo (Excel VIP 4 col., «Sin asignación comercial»), se enlaza aquí.
+    // Solo se escribe en fin_vip_extras; no crea venta ni cambia el precio o la fecha del cliente.
+    const finRef = db.collection("fin_vip_extras").doc(ref.id);
+    const idCorreo = docIdVip(d.correo); const finCorreoRef = idCorreo !== ref.id ? db.collection("fin_vip_extras").doc(idCorreo) : null;
+    const fs1 = await tx.get(finRef); const fs2 = finCorreoRef ? await tx.get(finCorreoRef) : null;
+    const activo = (x) => x && x.exists && !["reemplazado", "vinculado"].includes(String((x.data() || {}).estadoSeguimiento || ""));
     tx.update(ref, { clientes, ocupados: 1, disponibles: 0, disp: 0, estadoBodega: "asignado", historialBodega: hist, updatedAt: iso });
-    return { ok: true, inventarioId: ref.id, correo: d.correo, estado: "asignado" };
+    let costo = null;
+    const base = activo(fs1) ? fs1.data() : activo(fs2) ? fs2.data() : null;
+    if (base) {
+      const vinculo = { clienteId: String(clienteId), compraId: String(compraId || ""), asignadoAt: iso, origen };
+      const h = [...(Array.isArray(base.historial) ? base.historial : []), { at: iso, por: usuario, origen: "bodega_asignar", inventarioId: ref.id, clienteId: String(clienteId) }].slice(-30);
+      tx.set(finRef, { ...base, cmId: ref.id, correo: normCorreo(d.correo), sinInventario: false, sinAsignacionComercial: false, vinculoComercial: vinculo, ...(activo(fs1) ? {} : { vinculadoDesde: idCorreo }), historial: h, actualizadoAt: iso, actualizadoPor: usuario });
+      if (!activo(fs1) && finCorreoRef) tx.set(finCorreoRef, { ...fs2.data(), estadoSeguimiento: "vinculado", vinculadoA: ref.id, actualizadoAt: iso, actualizadoPor: usuario });
+      costo = { costoMensualUsdt: base.costoMensualUsdt ?? null, proveedor: base.proveedor || "" };
+    }
+    return { ok: true, inventarioId: ref.id, correo: d.correo, estado: "asignado", costoFinanzas: costo };
   });
 }
 
