@@ -135,6 +135,7 @@ async function verHogar(chatId, docId, ctx, aviso = "") {
   const filas = H.perfilesConHogar(d);
   let txt = `🏠 *HOGAR · NETFLIX PREMIUM*\n📧 ${esc(d.correo || "")}\n\n*${esc(e.texto)}*\n\n` + filas.map((p) => `${p.hogar ? "🏠" : "▫️"} Perfil ${p.perfil} · ${esc(p.cliente)}`).join("\n");
   txt += `\n\n_Dato de seguimiento en Sublichat: no cambia nada en Netflix._`;
+  try { const r = await H.consultaHogar(db, { inventarioId: docId }); if (r && r.incidencia) txt += `\n\n⚠️ *Incidencia:* ${esc(r.incidencia)}`; } catch (_) {} // R196v · madre duplicada
   if (aviso) txt += `\n\n${aviso}`;
   const kb = [];
   if (ctx.superOk) {

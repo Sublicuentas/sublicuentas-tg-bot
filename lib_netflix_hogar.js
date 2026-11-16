@@ -93,4 +93,48 @@ async function hogaresPendientes(db) {
   return snap.docs.map((x) => ({ id: x.id, correo: (x.data() || {}).correo, ...estadoHogar(x.data() || {}) })).filter((x) => x.estado === "pendiente");
 }
 
-module.exports = { PLAT_HOGAR, estadoHogar, esHogar, perfilesConHogar, asignarHogar, quitarHogar, hogaresPendientes, claveCli };
+// ── R196v · Fuente única para leer el Hogar (PDF «Netflix Hogar y HBO Standard/Platinum» · 01/02) ──
+// Web, APK y Telegram consultan AQUÍ, por el ID del documento de la cuenta madre (no por texto del nombre), y siempre
+// contra Firestore en el momento (nada de copias en caché). Además revisa si la MISMA cuenta madre (plataforma + correo)
+// existe en más de un documento de Bodega: el bot abre `netflix__<correo>` y la Web/APK pueden abrir otra copia; si el Hogar
+// quedó en una y se mira la otra, una dice «Hogar» y la otra «sin asignar». Eso se informa como INCIDENCIA, sin inferir datos
+// ni copiar el Hogar de una copia a otra: la unión de copias la decide una persona.
+const normCorreo = (v) => String(v || "").trim().toLowerCase();
+async function copiasDeLaMadre(db, d = {}, id = "") {
+  const correo = normCorreo(d.correo); if (!correo) return [];
+  const snap = await db.collection("inventario").where("plataforma", "==", PLAT_HOGAR).get();
+  return snap.docs.filter((x) => x.id !== String(id) && normCorreo((x.data() || {}).correo) === correo)
+    .map((x) => { const dd = x.data() || {}; const e = estadoHogar(dd); return { id: x.id, ocupados: clientesDe(dd).length, capacidad: Number(dd.capacidad || 0) || null, estadoHogar: e.estado, hogar: e.estado === "sin_asignar" ? "" : e.texto }; });
+}
+async function consultaHogar(db, { inventarioId } = {}) {
+  const id = String(inventarioId || ""); if (!id) throw new Error("Falta la cuenta madre.");
+  const s = await db.collection("inventario").doc(id).get();
+  if (!s.exists) return { ok: false, error: "No encontré esa cuenta madre." };
+  const d = s.data() || {};
+  if (String(d.plataforma || "").toLowerCase() !== PLAT_HOGAR) return { ok: true, aplica: false, inventarioId: id };
+  const hogar = estadoHogar(d);
+  const copias = await copiasDeLaMadre(db, d, id);
+  const conHogar = copias.filter((c) => c.estadoHogar !== "sin_asignar");
+  let incidencia = "";
+  if (copias.length) {
+    incidencia = `Esta cuenta madre está ${copias.length + 1} veces en Bodega (mismo correo). `
+      + (hogar.estado === "sin_asignar" && conHogar.length ? `El Hogar está registrado en la otra copia (${conHogar.map((c) => c.hogar).join(" / ")}). ` : "")
+      + "Hay que unir las copias en una sola; no se copió ni se cambió nada.";
+  }
+  // `hogarDoc`: el campo tal como está guardado (IDs, sin claves ni PIN) para que la APK refresque su copia local.
+  const hogarDoc = d.hogar && d.hogar.clienteId ? { clienteId: String(d.hogar.clienteId), compraId: String(d.hogar.compraId || ""), perfilId: String(d.hogar.perfilId || ""), slot: d.hogar.slot || null, nombre: limpio(d.hogar.nombre), asignadoAt: d.hogar.asignadoAt || "" } : null;
+  return { ok: true, aplica: true, inventarioId: id, correo: String(d.correo || ""), hogar, hogarDoc, perfiles: perfilesConHogar(d), copias, incidencia, leidoAt: new Date().toISOString() };
+}
+// Informe de solo lectura para Sublicuentas: cuentas madre duplicadas y Hogares pendientes. Es la «lista de registros
+// ambiguos que requieren asignación humana»: no corrige nada por su cuenta.
+async function diagnosticoHogar(db) {
+  const snap = await db.collection("inventario").where("plataforma", "==", PLAT_HOGAR).get();
+  const grupos = new Map();
+  snap.docs.forEach((x) => { const d = x.data() || {}; const k = normCorreo(d.correo); if (!k) return; if (!grupos.has(k)) grupos.set(k, []); const e = estadoHogar(d); grupos.get(k).push({ id: x.id, ocupados: clientesDe(d).length, estadoHogar: e.estado, hogar: e.estado === "sin_asignar" ? "" : e.texto }); });
+  const duplicadas = [...grupos.entries()].filter(([, v]) => v.length > 1).map(([correo, copias]) => ({ correo, copias }));
+  const pendientes = snap.docs.map((x) => ({ id: x.id, correo: (x.data() || {}).correo || "", ...estadoHogar(x.data() || {}) })).filter((x) => x.estado === "pendiente").map(({ id, correo, texto }) => ({ id, correo, texto }));
+  const conHogar = snap.docs.filter((x) => estadoHogar(x.data() || {}).estado === "asignado").length;
+  return { ok: true, madres: snap.size, conHogar, duplicadas, pendientes, leidoAt: new Date().toISOString() };
+}
+
+module.exports = { PLAT_HOGAR, estadoHogar, esHogar, perfilesConHogar, asignarHogar, quitarHogar, hogaresPendientes, claveCli, consultaHogar, diagnosticoHogar };

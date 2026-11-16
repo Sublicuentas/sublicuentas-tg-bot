@@ -818,6 +818,9 @@ async function mostrarMenuClientesCorreo(chatId, plataforma = "", acceso = "") {
   const data = found.data || {};
   const ident = getStoredIdent(data) || String(acceso || "");
   const { capacidad, ocupados, disponibles, estado } = formatCuentaResumen(data, plat);
+  // R196v · misma consulta del Hogar que Web y APK; si la madre está duplicada en Bodega se avisa (no se infiere nada).
+  let incidenciaHogar = "";
+  if (plat === "netflix") { try { const r = await require("./lib_netflix_hogar").consultaHogar(db, { inventarioId: found.id }); if (r && r.incidencia) incidenciaHogar = `⚠️ *Incidencia:* ${escMD(r.incidencia)}\n`; } catch (_) {} }
 
   const txt =
     `👥 *CLIENTES DE LA CUENTA*\n\n` +
@@ -827,6 +830,7 @@ async function mostrarMenuClientesCorreo(chatId, plataforma = "", acceso = "") {
     `✅ *Disponibles:* ${disponibles}\n` +
     `📊 *Estado:* ${escMD(estado)}\n` +
     extraHogarPin(plat, data) + // R196u · Hogar (Netflix Premium) / PIN opcional (VIP)
+    incidenciaHogar + // R196v
     `\nSeleccione una acción:`;
   const extraKb = require("./index_40_bodega_vip").botonesCuenta(plat, found.id); // R196u
 
