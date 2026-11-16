@@ -204,3 +204,17 @@ test("Socios: AutoCAD = invitación al correo, Eleven Reader = acceso; productos
   const cad = C.CATALOGO_PROPIETARIOS.find((x) => x.id === "autocad"), er = C.CATALOGO_PROPIETARIOS.find((x) => x.id === "eleven_reader");
   assert.equal(cad.precio, null); assert.equal(er.precio, null); assert.equal(er.categoria, "🎵 Música");
 });
+
+/* ── R196v · Hogar: misma fuente que Web y APK; madre duplicada = incidencia ── */
+test("R196v · panel 🏠 Hogar en Telegram avisa si la madre está duplicada en Bodega (no copia el Hogar)", async () => {
+  const t = cargar();
+  const cs = [{ clienteId: "A", compraId: "cA", nombre: "Cliente A", slot: 1 }, { clienteId: "B", compraId: "cB", nombre: "Cliente B", slot: 2 }];
+  await t.db.collection("inventario").doc("netflix__madre_demo@ejemplo_com").set({ plataforma: "netflix", correo: "madre.demo@ejemplo.com", capacidad: 5, clientes: cs, hogar: { clienteId: "B", compraId: "cB", slot: 2, nombre: "Cliente B" } });
+  await t.db.collection("inventario").doc("webRandom").set({ plataforma: "netflix", correo: "madre.demo@ejemplo.com", capacidad: 5, clientes: cs });
+  await t.M.tryCallback(t.cb(t.M.botonesCuenta("netflix", "netflix__madre_demo@ejemplo_com")[0][0].callback_data), SUPER);
+  assert.match(t.ultimo().t, /\*Hogar: Cliente B · Perfil 2\*/); assert.match(t.ultimo().t, /Incidencia:\* Esta cuenta madre está 2 veces en Bodega/);
+  await t.M.tryCallback(t.cb(t.M.botonesCuenta("netflix", "webRandom")[0][0].callback_data), SUPER);
+  assert.match(t.ultimo().t, /Hogar sin asignar/); assert.match(t.ultimo().t, /El Hogar está registrado en la otra copia/);
+  assert.equal((await t.db.collection("inventario").doc("webRandom").get()).data().hogar, undefined);
+  assert.match(R("index_04_inventario_correos.js"), /incidenciaHogar \+ \/\/ R196v/);
+});
