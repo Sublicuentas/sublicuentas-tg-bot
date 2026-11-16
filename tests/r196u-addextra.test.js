@@ -139,3 +139,38 @@ test("el panel de la cuenta muestra la línea de Hogar / PIN y enruta hog:", () 
   assert.match(inv, /\.\.\.extraKb,/);
   assert.match(R("index_06_handlers.js"), /data\.startsWith\("vipx:"\) \|\| data\.startsWith\("hog:"\)/);
 });
+
+/* ── Fase 3 · HBO Platinum 5 / Standard 3 en Telegram ── */
+const P3 = require("../lib_hbo_planes");
+test("lib_hbo_planes.js es copia fiel de HQ api/_hbo-planes.js", () => {
+  const hq = path.join(__dirname, "..", "..", "hq-gh", "api", "_hbo-planes.js");
+  if (!fs.existsSync(hq)) return;
+  assert.equal(R("lib_hbo_planes.js").split("\n").slice(1).join("\n"), fs.readFileSync(hq, "utf8").split("\n").slice(1).join("\n"));
+});
+test("HBO-01/02 en el bot: 📦 Plan HBO → Standard con 4 ocupados BLOQUEA; Platinum queda 4/5; admin no-super solo ve", async () => {
+  const t = cargar();
+  const clientes = [1, 2, 3, 4].map((i) => ({ clienteId: "c" + i, nombre: "Cliente " + i, slot: i }));
+  await t.db.collection("inventario").doc("h1").set({ plataforma: "hbomax", correo: "hbo01@ejemplo.com", capacidad: 5, ocupados: 4, clientes });
+  const [[b]] = t.M.botonesCuenta("hbomax", "h1");
+  assert.match(b.text, /Plan HBO/);
+  await t.M.tryCallback(t.cb(b.callback_data), SUPER);
+  assert.match(t.ultimo().t, /HBO 4\/5 · plan sin definir/);
+  await t.M.tryCallback(t.cb(t.boton(/Standard · 3/)), SUPER);
+  assert.match(t.ultimo().t, /No se puede pasar a Standard/);
+  let d = (await t.db.collection("inventario").doc("h1").get()).data();
+  assert.equal(d.capacidad, 5); assert.equal(d.clientes.length, 4); assert.equal(d.planHbo, undefined);
+  await t.M.tryCallback(t.cb(b.callback_data), SUPER);
+  await t.M.tryCallback(t.cb(t.boton(/Platinum · 5/)), SUPER);
+  assert.match(t.ultimo().t, /Platinum 4\/5/);
+  d = (await t.db.collection("inventario").doc("h1").get()).data();
+  assert.equal(d.planHbo, "platinum"); assert.equal(d.historialPlan.length, 1);
+  await t.M.tryCallback(t.cb(b.callback_data), { adminOk: true, superOk: false });
+  assert.equal(t.ultimo().kb.flat().some((x) => /Platinum ·|Standard ·/.test(x.text)), false);
+  assert.match(t.M.botonesCuenta("netflix", "m1")[0][0].text, /Hogar/, "Netflix sigue con su botón de Hogar");
+});
+test("HBO en el bot: capacidad a mano bloqueada contra el plan; cuentas nuevas 5/3 nacen con plan", () => {
+  assert.match(R("index_04_inventario_correos.js"), /const pl = require\("\.\/lib_hbo_planes"\)\.planDeCuenta\(data\); if \(pl && capacidad !== pl\.capacidad\) throw/);
+  const h = R("index_06_handlers.js");
+  assert.equal((h.match(/require\("\.\/lib_hbo_planes"\)\.planPorCapacidad\(/g) || []).length, 4);
+  assert.equal(P3.planPorCapacidad(5), "platinum"); assert.equal(P3.planPorCapacidad(3), "standard");
+});
