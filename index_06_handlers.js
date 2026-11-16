@@ -4863,7 +4863,7 @@ bot.on("callback_query", async (q) => {
     if (data.startsWith("bz:r:")) { await require("./index_36_socios_telegram").tryCallback(q,{vend}); return; }
     if (data.startsWith("baul:")) { await require("./index_37_baul_apks").tryCallback(q,{adminOk,superOk,vend}); return; } // R187 · Baúl de APKs + URLs TV (permisos en el módulo)
     if (data.startsWith("spf:")) { await require("./index_38_spotify_familias").tryCallback(q,{adminOk,superOk,vend}); return; } // R188 · Spotify Familiar (permisos en el módulo)
-    if (data.startsWith("vipx:")) { await require("./index_40_bodega_vip").tryCallback(q,{adminOk,superOk}); return; } // R196u · /addextra Bodega VIP (solo Sublicuentas)
+    if (data.startsWith("vipx:") || data.startsWith("hog:")) { await require("./index_40_bodega_vip").tryCallback(q,{adminOk,superOk}); return; } // R196u · /addextra Bodega VIP (solo Sublicuentas)
 
     const neededPermission = callbackPermission(data);
     if (neededPermission === "self-service" && !vendOk) return bot.sendMessage(chatId, "⛔ Esta opción corresponde a su perfil de vendedor.");

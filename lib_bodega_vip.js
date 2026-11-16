@@ -166,4 +166,39 @@ async function marcarEstado(db, { inventarioId, estado, nota = "", usuario = "",
   });
 }
 
-module.exports = { PLAT, ESTADOS, ETIQUETA_ESTADO, PROVEEDORES, MAX_LINEAS, normCorreo, docIdVip, parsearLineas, estadoUnidad, previsualizar, importar, listar, asignar, marcarEstado, datosLote };
+// R196u Fase 2 · PIN de perfil OPCIONAL por acceso VIP (PDF 04). pin «» = quitar (vuelve a «Sin PIN»). Se guarda en la unidad
+// de Bodega Y en el servicio del cliente asignado (la ficha/entrega lo lee de ahí), en una sola transacción. El valor del PIN
+// nunca va a auditoría ni historial; solo quién y cuándo. No se toca el PIN de otra persona ni de otro acceso.
+async function guardarPin(db, { inventarioId, pin = "", usuario = "", origen = "web" } = {}) {
+  const valor = String(pin ?? "").trim();
+  if (valor && !/^\d{4}$/.test(valor)) throw new Error("El PIN de perfil de Netflix es de 4 números.");
+  const ref = db.collection("inventario").doc(String(inventarioId || ""));
+  const iso = new Date().toISOString();
+  return db.runTransaction(async (tx) => {
+    const s = await tx.get(ref); if (!s.exists) throw new Error("Esa unidad VIP ya no existe.");
+    const d = s.data() || {}; if (d.plataforma !== PLAT) throw new Error("Esa cuenta no es Netflix VIP.");
+    const c0 = Array.isArray(d.clientes) && d.clientes[0] ? d.clientes[0] : null;
+    let cliRef = null, cliData = null;
+    if (c0 && c0.clienteId) { cliRef = db.collection("clientes").doc(String(c0.clienteId)); const cs = await tx.get(cliRef); cliData = cs.exists ? (cs.data() || {}) : null; }
+    const hist = [...(Array.isArray(d.historialBodega) ? d.historialBodega : []), { tipo: valor ? "pin_configurado" : "pin_quitado", at: iso, por: usuario, origen }].slice(-50);
+    const clientes = c0 ? [{ ...c0, pin: valor }, ...d.clientes.slice(1)] : (Array.isArray(d.clientes) ? d.clientes : []);
+    tx.update(ref, { tienePin: !!valor, pin: valor, clientes, historialBodega: hist, updatedAt: iso });
+    let servicioActualizado = false;
+    if (cliRef && cliData && Array.isArray(cliData.servicios)) {
+      const correo = normCorreo(d.correo);
+      const servicios = cliData.servicios.map((sv) => {
+        const coincide = (c0.compraId && String(sv?.compraId || "") === String(c0.compraId)) || (!c0.compraId && String(sv?.plataforma || "").toLowerCase() === PLAT && normCorreo(sv?.correo) === correo);
+        if (!coincide) return sv;
+        servicioActualizado = true;
+        const out = { ...sv };
+        if (valor) { out.pinPerfil = valor; delete out.sinPinPerfil; } else { delete out.pinPerfil; out.sinPinPerfil = true; }
+        if (Array.isArray(out.perfiles) && out.perfiles[0]) out.perfiles = [{ ...out.perfiles[0], pinPerfil: valor }, ...out.perfiles.slice(1)];
+        return out;
+      });
+      if (servicioActualizado) tx.update(cliRef, { servicios, updatedAt: iso });
+    }
+    return { ok: true, tienePin: !!valor, etiqueta: valor ? "PIN configurado" : "Sin PIN", servicioActualizado };
+  });
+}
+
+module.exports = { guardarPin, PLAT, ESTADOS, ETIQUETA_ESTADO, PROVEEDORES, MAX_LINEAS, normCorreo, docIdVip, parsearLineas, estadoUnidad, previsualizar, importar, listar, asignar, marcarEstado, datosLote };

@@ -414,6 +414,8 @@ function renderCredencialesServicioLocal(servicio = {}, markdown = true, indent 
   }
   if (requiereClaveLocal(p)) out += `${indent}🔑 ${markdown ? "*Clave:*" : "Clave:"} ${esc(getClaveServicioLocal(individual, p) || "-")}\n`;
   if (requierePinLocal(p)) out += `${indent}🔐 ${markdown ? "*PIN:*" : "PIN:"} ${esc(getPinServicioLocal(individual, p) || "-")}\n`;
+  // R196u · Netflix VIP: PIN de perfil OPCIONAL — la línea solo aparece si el cliente lo tiene; nunca «PIN: -».
+  else if (String(p || "").toLowerCase().replace(/\s+/g, "") === "vipnetflix") { const pv = String(servicio.pinPerfil || individual.pinPerfil || "").trim(); if (pv) out += `${indent}🔏 ${markdown ? "*PIN de perfil:*" : "PIN de perfil:"} ${esc(pv)}\n`; }
   return out;
 }
 

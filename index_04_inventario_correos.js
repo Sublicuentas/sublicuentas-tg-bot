@@ -798,6 +798,14 @@ async function enviarSubmenuInventario(chatId, plataforma = "", acceso = "") {
   return mostrarPanelCorreo(chatId, plataforma, acceso);
 }
 
+// R196u · línea de Hogar / PIN VIP en el panel de la cuenta (datos de Bodega; nunca muestra el valor del PIN).
+function extraHogarPin(plat, data = {}) {
+  try {
+    if (plat === "netflix") return `🏠 *${escMD(require("./lib_netflix_hogar").estadoHogar(data).texto || "Hogar sin asignar")}*\n`;
+    if (plat === "vipnetflix") return `🔏 *PIN de perfil:* ${data.tienePin ? "configurado" : "Sin PIN"}\n`;
+  } catch (_) {}
+  return "";
+}
 async function mostrarMenuClientesCorreo(chatId, plataforma = "", acceso = "") {
   const plat = normalizarPlataforma(plataforma);
   const found = await buscarCorreoInventarioPorPlatCorreo(plat, acceso);
@@ -813,13 +821,16 @@ async function mostrarMenuClientesCorreo(chatId, plataforma = "", acceso = "") {
     `${getIdentIcon(plat)} *${escMD(getIdentLabel(plat))}:* ${escMD(ident)}\n` +
     `👥 *Ocupados:* ${ocupados}/${capacidad}\n` +
     `✅ *Disponibles:* ${disponibles}\n` +
-    `📊 *Estado:* ${escMD(estado)}\n\n` +
-    `Seleccione una acción:`;
+    `📊 *Estado:* ${escMD(estado)}\n` +
+    extraHogarPin(plat, data) + // R196u · Hogar (Netflix Premium) / PIN opcional (VIP)
+    `\nSeleccione una acción:`;
+  const extraKb = require("./index_40_bodega_vip").botonesCuenta(plat, found.id); // R196u
 
   return upsertPanel(
     chatId,
     txt,
     [
+      ...extraKb,
       [
         { text: "➕ Agregar cliente", callback_data: `mail_add_cliente|${plat}|${encodeURIComponent(ident)}` },
         { text: "➖ Quitar cliente", callback_data: `mail_del_cliente|${plat}|${encodeURIComponent(ident)}` },

@@ -118,3 +118,77 @@ async function tryMensaje(msg, ctx = {}) {
 }
 
 module.exports = { tryCallback, tryMensaje, inicio };
+
+/* ── R196u Fase 2 · Hogar Netflix Premium y PIN opcional VIP desde el panel de la cuenta (👥 Clientes de la cuenta) ── */
+const H = require("./lib_netflix_hogar");
+const TOKENS = new Map(); let tokSeq = 0; // callback_data ≤ 64 bytes: el ID del documento va en un token corto
+function tok(docId) { const t = (++tokSeq).toString(36); TOKENS.set(t, String(docId)); if (TOKENS.size > 500) TOKENS.delete(TOKENS.keys().next().value); return t; }
+function botonesCuenta(plat, docId) {
+  if (plat === "netflix") return [[{ text: "🏠 Hogar Netflix", callback_data: `hog:v:${tok(docId)}` }]];
+  if (plat === "vipnetflix") return [[{ text: "🔏 PIN de perfil (opcional)", callback_data: `hog:pin:${tok(docId)}` }]];
+  return [];
+}
+async function verHogar(chatId, docId, ctx, aviso = "") {
+  const s = await db.collection("inventario").doc(docId).get();
+  if (!s.exists) return upsertPanel(chatId, "⚠️ Esa cuenta ya no existe.", []);
+  const d = s.data() || {}; const e = H.estadoHogar(d); const t = tok(docId);
+  const filas = H.perfilesConHogar(d);
+  let txt = `🏠 *HOGAR · NETFLIX PREMIUM*\n📧 ${esc(d.correo || "")}\n\n*${esc(e.texto)}*\n\n` + filas.map((p) => `${p.hogar ? "🏠" : "▫️"} Perfil ${p.perfil} · ${esc(p.cliente)}`).join("\n");
+  txt += `\n\n_Dato de seguimiento en Sublichat: no cambia nada en Netflix._`;
+  if (aviso) txt += `\n\n${aviso}`;
+  const kb = [];
+  if (ctx.superOk) {
+    filas.filter((p) => p.clienteId && !p.hogar).forEach((p) => kb.push([{ text: `Marcar Hogar · Perfil ${p.perfil} · ${p.cliente}`.slice(0, 60), callback_data: `hog:a:${t}:${p.perfil}` }]));
+    if (e.estado !== "sin_asignar") kb.push([{ text: "🧹 Quitar Hogar", callback_data: `hog:q:${t}` }]);
+  }
+  kb.push([{ text: "✖️ Cerrar", callback_data: "vipx:x" }]);
+  return upsertPanel(chatId, txt, kb);
+}
+async function hogCallback(q, ctx) {
+  const data = String(q.data || ""); const chatId = q.message?.chat?.id; const p = data.split(":");
+  const docId = TOKENS.get(p[2]); if (!docId) { await upsertPanel(chatId, "⚠️ Ese botón venció. Abra otra vez la cuenta.", []); return true; }
+  const usuario = `tg:${q.from?.id || ""}${q.from?.username ? "@" + q.from.username : ""}`;
+  try {
+    if (p[1] === "v") { await verHogar(chatId, docId, ctx); return true; }
+    if (p[1] === "pin") {
+      const s = await db.collection("inventario").doc(docId).get(); const d = s.data() || {};
+      const kb = ctx.superOk ? [[{ text: d.tienePin ? "✏️ Cambiar PIN" : "➕ Poner PIN", callback_data: `hog:pe:${p[2]}` }], ...(d.tienePin ? [[{ text: "🚫 Quitar PIN (Sin PIN)", callback_data: `hog:pq:${p[2]}` }]] : []), [{ text: "✖️ Cerrar", callback_data: "vipx:x" }]] : [[{ text: "✖️ Cerrar", callback_data: "vipx:x" }]];
+      await upsertPanel(chatId, `🔏 *PIN DE PERFIL · NETFLIX VIP*\n📧 ${esc(d.correo || "")}\n\nEstado: *${d.tienePin ? "PIN configurado" : "Sin PIN"}*\n_Opcional: solo si el cliente lo pidió. Sublichat lo registra; el PIN se pone en Netflix a mano._`, kb);
+      return true;
+    }
+    if (!ctx.superOk) { await upsertPanel(chatId, "⛔ Solo Sublicuentas cambia Hogar o PIN VIP.", []); return true; }
+    if (p[1] === "a" || p[1] === "ar") {
+      const s = await db.collection("inventario").doc(docId).get(); const fila = H.perfilesConHogar(s.data() || {}).find((x) => String(x.perfil) === String(p[3]));
+      if (!fila || !fila.clienteId) { await verHogar(chatId, docId, ctx, "⚠️ Ese perfil cambió. Elija otra vez."); return true; }
+      try { await H.asignarHogar(db, { inventarioId: docId, clienteId: fila.clienteId, compraId: fila.compraId, confirmarReemplazo: p[1] === "ar", usuario, origen: "tg" }); }
+      catch (e) {
+        if (e.code !== "requiere_confirmacion") throw e;
+        await upsertPanel(chatId, `⚠️ ${esc(e.message)}`, [[{ text: `✅ Reemplazar por Perfil ${fila.perfil}`, callback_data: `hog:ar:${p[2]}:${p[3]}` }], [{ text: "✖️ Cancelar", callback_data: `hog:v:${p[2]}` }]]);
+        return true;
+      }
+      await verHogar(chatId, docId, ctx, "✅ Hogar guardado."); return true;
+    }
+    if (p[1] === "q") { await H.quitarHogar(db, { inventarioId: docId, usuario, origen: "tg" }); await verHogar(chatId, docId, ctx, "🧹 Hogar quitado."); return true; }
+    if (p[1] === "pq") { await V.guardarPin(db, { inventarioId: docId, pin: "", usuario, origen: "tg" }); await upsertPanel(chatId, "✅ Ahora: *Sin PIN*. La entrega ya no muestra línea de PIN.", []); return true; }
+    if (p[1] === "pe") { pending.set(k(chatId), { mode: "hogPinValor", docId, at: Date.now() }); await upsertPanel(chatId, "🔏 Escriba el PIN de perfil (4 números). Borro su mensaje al leerlo:", [[{ text: "✖️ Cancelar", callback_data: "vipx:x" }]]); return true; }
+  } catch (e) { await upsertPanel(chatId, `⚠️ ${esc(String(e?.message || e).slice(0, 200))}\nNo se guardó nada.`, []); return true; }
+  return true;
+}
+const _tryCallbackVip = tryCallback;
+async function tryCallbackTodo(q, ctx = {}) {
+  if (String(q.data || "").startsWith("hog:")) return hogCallback(q, ctx);
+  return _tryCallbackVip(q, ctx);
+}
+const _tryMensajeVip = tryMensaje;
+async function tryMensajeTodo(msg, ctx = {}) {
+  const chatId = msg?.chat?.id; const st = pending.get(k(chatId)); const t = String(msg?.text || "").trim();
+  if (st && st.mode === "hogPinValor" && t && !t.startsWith("/")) {
+    if (!ctx.superOk) return false;
+    await borrar(msg);
+    try { await V.guardarPin(db, { inventarioId: st.docId, pin: t, usuario: `tg:${msg.from?.id || ""}`, origen: "tg" }); pending.delete(k(chatId)); await upsertPanel(chatId, "✅ *PIN configurado.* La entrega lo incluirá; el valor no se muestra aquí.", []); }
+    catch (e) { await upsertPanel(chatId, `⚠️ ${esc(e.message)}\nEscríbalo otra vez:`, [[{ text: "✖️ Cancelar", callback_data: "vipx:x" }]]); }
+    return true;
+  }
+  return _tryMensajeVip(msg, ctx);
+}
+module.exports = { tryCallback: tryCallbackTodo, tryMensaje: tryMensajeTodo, inicio, botonesCuenta, verHogar };
