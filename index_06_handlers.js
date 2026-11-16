@@ -554,6 +554,8 @@ function cmAutoPlatformsForSheet(name = "") {
   if (n.includes("spotify")) return ["spotify"];
   if (n.includes("youtube")) return ["youtube"];
   if (n.includes("deezer")) return ["deezer"];
+  if (n.includes("eleven")) return ["elevenreader"]; // R196u
+  if (n.includes("autocad") || n.includes("autodesk")) return ["autocad"]; // R196u
   if (n.includes("canva")) return ["canva"];
   if (n.includes("gemini")) return ["gemini"];
   if (n.includes("chatgpt") || n.includes("openai")) return ["chatgpt"];
@@ -1215,6 +1217,7 @@ function humanPlatLabelSyncLocal(key = "") {
     spotify: "Spotify", spotifyfamiliar: "Spotify Familiar",
     youtube: "YouTube",
     deezer: "Deezer",
+    elevenreader: "Eleven Reader", autocad: "Autodesk AutoCAD", // R196u
     stellatv1: "Stella TV (1 dispositivo)",
     stellatv2: "Stella TV (2 dispositivos)",
     stellatv3: "Stella TV (3 dispositivos)",
@@ -1259,6 +1262,7 @@ function getTotalPorPlataformaLocal(plat = "") {
     spotify: 1,
     youtube: 1,
     deezer: 1,
+    elevenreader: 1, autocad: 1, // R196u
     stellatv1: 1,
     stellatv2: 2,
     stellatv3: 3,
@@ -2518,6 +2522,7 @@ function humanPlatAlertLocal(key = "") {
     spotify: "Spotify", spotifyfamiliar: "Spotify Familiar",
     youtube: "YouTube",
     deezer: "Deezer",
+    elevenreader: "Eleven Reader", autocad: "Autodesk AutoCAD", // R196u
     stellatv1: "Stella TV 1",
     stellatv2: "Stella TV 2",
     stellatv3: "Stella TV 3",

@@ -17,9 +17,9 @@ const PLATAFORMA_CATEGORIA = Object.freeze({
   netflix: "perfiles", vipnetflix: "perfiles", disneyp: "perfiles", disneys: "perfiles", hbomax: "perfiles", primevideo: "perfiles",
   crunchyroll: "perfiles", paramount: "perfiles", vix: "perfiles", appletv: "perfiles", universal: "perfiles",
   stellatv: "tv_digital", oleada: "tv_digital", latintv: "tv_digital", liontv: "tv_digital", evoutouch: "tv_digital", icomplay: "tv_digital", iptv: "tv_digital", tvdigital: "tv_digital",
-  spotify: "musica", youtube: "musica", deezer: "musica",
+  spotify: "musica", youtube: "musica", deezer: "musica", elevenreader: "musica", // R196u · Eleven Reader va en Música
   canva: "software", gemini: "software", chatgpt: "software", duolingo: "software", office: "software", office2021: "software", m365: "software",
-  adobeexpress: "software", windows10: "software", windows11: "software", eset: "software",
+  adobeexpress: "software", windows10: "software", windows11: "software", eset: "software", autocad: "software", // R196u · Autodesk AutoCAD
   viki: "cuentas_completas",
 });
 // Plataformas que se pueden vender como CUENTA COMPLETA (correo + clave + precio; sin PIN ni perfil).
@@ -46,6 +46,8 @@ function normPlataformaKey(v = "") {
   if (/^spotify/.test(t)) return "spotify";
   if (/^youtube/.test(t)) return "youtube";
   if (/^deezer/.test(t)) return "deezer";
+  if (/^eleven|elevenreader/.test(t)) return "elevenreader"; // R196u
+  if (/autocad|^autodesk/.test(t)) return "autocad"; // R196u
   if (/^canva/.test(t)) return "canva";
   if (/^gemini/.test(t)) return "gemini";
   if (/^chatgpt|^openai/.test(t)) return "chatgpt";

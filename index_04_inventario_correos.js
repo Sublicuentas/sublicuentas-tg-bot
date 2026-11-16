@@ -63,6 +63,7 @@ function humanPlatSafe(key = "") {
     microsoft365: "Microsoft 365",
     youtube: "YouTube",
     deezer: "Deezer",
+    elevenreader: "Eleven Reader", autocad: "Autodesk AutoCAD", // R196u
     stellatv1: "Stella TV (1 dispositivo)",
     stellatv2: "Stella TV (2 dispositivos)",
     stellatv3: "Stella TV (3 dispositivos)",
@@ -189,6 +190,7 @@ function getCapacidadCorreo(data = {}, plataforma = "") {
     spotify: 1,
     youtube: 1,
     deezer: 1,
+    elevenreader: 1, autocad: 1, // R196u
     office: 1,
     office2021: 1,
     office365: 1,

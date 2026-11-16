@@ -23,6 +23,7 @@ const PLATFORMS = [
   ["apple", "Apple TV", /\bapple\s*tv\b/], ["universal", "Universal+", /\buniversal\b/],
   ["spotify", "Spotify", /\bspotify\b/], ["youtube", "YouTube", /\byoutube\b/],
   ["deezer", "Deezer", /\bdeezer\b/], ["canva", "Canva", /\bcanva\b/],
+  ["eleven", "Eleven Reader", /\beleven\s*reader\b/], ["autocad", "Autodesk AutoCAD", /\b(?:autodesk\s*)?autocad\b/], // R196u
   ["gemini", "Gemini", /\bgemini\b/], ["chatgpt", "ChatGPT", /\bchatgpt\b/],
   ["duolingo", "Duolingo", /\bduolingo\b/], ["office", "Microsoft Office", /\boffice(?:2021|365)?\b/],
   ["stella", "Stella TV", /\bstella\s*tv\d?\b/], ["oleada", "Oleada TV", /\boleada\s*tv\d?\b/],

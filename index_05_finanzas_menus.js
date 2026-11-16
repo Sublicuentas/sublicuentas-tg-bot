@@ -59,7 +59,7 @@ function categoryOfPlat(key = "") {
   const c = String(meta.categoria || "").toLowerCase().trim();
   if (["video","musica","iptv","diseno_ia"].includes(c)) return c;
   if (["netflix","vipnetflix","disneyp","disneys","hbomax","primevideo","paramount","crunchyroll","vix","appletv","universal"].includes(k)) return "video";
-  if (["spotify","youtube","deezer"].includes(k)) return "musica";
+  if (["spotify","youtube","deezer","elevenreader"].includes(k)) return "musica";
   if (["stellatv1","stellatv2","stellatv3","oleadatv1","oleadatv3","latintv1","latintv2","latintv3","latintv4","liontv1","liontv2","liontv3","liontv5","evoutouch1","evoutouch2","evoutouch3","icomplay1","icomplay2","icomplay3","icomplay5","icomplay7","iptv1","iptv3","iptv4"].includes(k)) return "iptv";
   if (["canva","gemini","chatgpt","duolingo"].includes(k)) return "diseno_ia";
   return "video";

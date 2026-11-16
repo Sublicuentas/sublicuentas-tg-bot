@@ -219,7 +219,7 @@ function humanPlataforma(key = "") {
     netflix:"Netflix Premium", vipnetflix:"Netflix VIP", disneyp:"Disney Premium", disneys:"Disney Premium sin ESPN",
     hbomax:"HBO Max", primevideo:"Prime Video", paramount:"Paramount+", crunchyroll:"Crunchyroll",
     vix:"Vix", appletv:"Apple TV", universal:"Universal+", spotify:"Spotify", spotifyfamiliar:"Spotify Familiar", youtube:"YouTube", office:"Microsoft 365",
-    deezer:"Deezer", canva:"Canva", gemini:"Gemini Pro", chatgpt:"ChatGPT", duolingo:"Duolingo", office2021:"Office 2021",
+    deezer:"Deezer", elevenreader:"Eleven Reader", autocad:"Autodesk AutoCAD", /* R196u */ canva:"Canva", gemini:"Gemini Pro", chatgpt:"ChatGPT", duolingo:"Duolingo", office2021:"Office 2021",
     stellatv1:"Stella TV (1 dispositivo)", stellatv2:"Stella TV (2 dispositivos)", stellatv3:"Stella TV (3 dispositivos)",
     oleadatv1:"Oleada TV (1 dispositivo)", oleadatv3:"Oleada TV (3 dispositivos)",
     latintv1:"LatinTV (1 dispositivo)", latintv2:"LatinTV (2 dispositivos)", latintv3:"LatinTV (3 dispositivos)", latintv4:"LatinTV (4 dispositivos)",
@@ -232,7 +232,7 @@ function humanPlataforma(key = "") {
 
 function iconPlataforma(key = "") {
   const k = normalizarPlataforma(key);
-  const map = { netflix:"📺", vipnetflix:"🔥", disneyp:"🏰", disneys:"🎬", hbomax:"🎞️", primevideo:"🎥", paramount:"💿", crunchyroll:"🍥", vix:"📱", appletv:"🍎", universal:"🌍", spotify:"🎵", youtube:"▶️", office:"📎", deezer:"🎧", canva:"🎨", gemini:"✨", chatgpt:"🤖", duolingo:"🦉", stellatv1:"⭐", stellatv2:"⭐", stellatv3:"⭐", oleadatv1:"🌊", oleadatv3:"🌊", latintv1:"📡", latintv2:"📡", latintv3:"📡", latintv4:"📡", liontv1:"🦁", liontv2:"🦁", liontv3:"🦁", liontv5:"🦁", evoutouch1:"📺", evoutouch2:"📺", evoutouch3:"📺", evoutouch4:"📺", iptv1:"📡", iptv3:"📡", iptv4:"📡" };
+  const map = { netflix:"📺", vipnetflix:"🔥", disneyp:"🏰", disneys:"🎬", hbomax:"🎞️", primevideo:"🎥", paramount:"💿", crunchyroll:"🍥", vix:"📱", appletv:"🍎", universal:"🌍", spotify:"🎵", youtube:"▶️", office:"📎", deezer:"🎧", elevenreader:"🎧", autocad:"📐", canva:"🎨", gemini:"✨", chatgpt:"🤖", duolingo:"🦉", stellatv1:"⭐", stellatv2:"⭐", stellatv3:"⭐", oleadatv1:"🌊", oleadatv3:"🌊", latintv1:"📡", latintv2:"📡", latintv3:"📡", latintv4:"📡", liontv1:"🦁", liontv2:"🦁", liontv3:"🦁", liontv5:"🦁", evoutouch1:"📺", evoutouch2:"📺", evoutouch3:"📺", evoutouch4:"📺", iptv1:"📡", iptv3:"📡", iptv4:"📡" };
   return map[k] || "📦";
 }
 
@@ -257,6 +257,9 @@ function requiereClaveLocal(plataforma = "", servicio = null) {
   const p = normalizarPlataforma(plataforma);
   return !["canva", "gemini", "chatgpt", "duolingo"].includes(p);
 }
+
+// R196u · AutoCAD: contraseña OPCIONAL — no se pide en el alta; se guarda y se muestra solo si de verdad se registró.
+function claveOpcionalLocal(plataforma = "") { try { return require("./lib_entrega_plataforma").claveOpcional(plataforma); } catch (_) { return false; } }
 
 function requiereCorreoLocal(plataforma = "") {
   const cfg = platformConfigLocal(plataforma);
@@ -413,6 +416,7 @@ function renderCredencialesServicioLocal(servicio = {}, markdown = true, indent 
     out += `${indent}${identIcon} ${markdown ? `*${esc(identLabel)}:*` : `${identLabel}:`} ${esc(individual.correo || "-")}\n`;
   }
   if (requiereClaveLocal(p)) out += `${indent}🔑 ${markdown ? "*Clave:*" : "Clave:"} ${esc(getClaveServicioLocal(individual, p) || "-")}\n`;
+  else if (claveOpcionalLocal(p)) { const cv = String(individual.clave || servicio.clave || "").trim(); if (cv) out += `${indent}🔑 ${markdown ? "*Contraseña:*" : "Contraseña:"} ${esc(cv)}\n`; } // R196u · AutoCAD: solo si está registrada
   if (requierePinLocal(p)) out += `${indent}🔐 ${markdown ? "*PIN:*" : "PIN:"} ${esc(getPinServicioLocal(individual, p) || "-")}\n`;
   // R196u · Netflix VIP: PIN de perfil OPCIONAL — la línea solo aparece si el cliente lo tiene; nunca «PIN: -».
   else if (String(p || "").toLowerCase().replace(/\s+/g, "") === "vipnetflix") { const pv = String(servicio.pinPerfil || individual.pinPerfil || "").trim(); if (pv) out += `${indent}🔏 ${markdown ? "*PIN de perfil:*" : "PIN de perfil:"} ${esc(pv)}\n`; }
@@ -462,7 +466,7 @@ function docIdInventarioLocal(ident = "", plataforma = "") {
 
 function getTotalPorPlataformaLocal(plat = "") {
   const p = normalizarPlataforma(plat);
-  const map = { netflix:5, vipnetflix:1, disneyp:6, disneys:3, hbomax:5, primevideo:5, paramount:5, crunchyroll:5, vix:4, appletv:4, universal:4, spotify:1, youtube:1, deezer:1, stellatv1:1, stellatv2:2, stellatv3:3, oleadatv1:1, oleadatv3:3, latintv1:1, latintv2:2, latintv3:3, latintv4:4, liontv1:1, liontv2:2, liontv3:3, liontv5:5, evoutouch1:1, evoutouch2:2, evoutouch3:3, evoutouch4:1, icomplay1:1, icomplay2:2, icomplay3:3, icomplay5:5, icomplay7:7, iptv1:1, iptv3:3, iptv4:4, canva:1, gemini:1, chatgpt:1, duolingo:1, office:1, office2021:1 };
+  const map = { netflix:5, vipnetflix:1, disneyp:6, disneys:3, hbomax:5, primevideo:5, paramount:5, crunchyroll:5, vix:4, appletv:4, universal:4, spotify:1, youtube:1, deezer:1, elevenreader:1, autocad:1, stellatv1:1, stellatv2:2, stellatv3:3, oleadatv1:1, oleadatv3:3, latintv1:1, latintv2:2, latintv3:3, latintv4:4, liontv1:1, liontv2:2, liontv3:3, liontv5:5, evoutouch1:1, evoutouch2:2, evoutouch3:3, evoutouch4:1, icomplay1:1, icomplay2:2, icomplay3:3, icomplay5:5, icomplay7:7, iptv1:1, iptv3:3, iptv4:4, canva:1, gemini:1, chatgpt:1, duolingo:1, office:1, office2021:1 };
   return map[p] || 1;
 }
 
@@ -891,7 +895,7 @@ function normalizarCompraLocal(servicio = {}, titular = "", anterior = {}) {
       correo: requiereCorreoLocal(plat)
         ? normalizeIdentByPlatformLocal(plat, raw.correo ?? correoTop ?? previo.correo ?? servicio.correo ?? anterior.correo ?? "")
         : "",
-      clave: requiereClaveLocal(plat, { ...anterior, ...servicio }) ? String(raw.clave ?? raw.password ?? raw.pass ?? claveTop ?? previo.clave ?? servicio.clave ?? anterior.clave ?? "").trim() : "",
+      clave: requiereClaveLocal(plat, { ...anterior, ...servicio }) || claveOpcionalLocal(plat) /* R196u · AutoCAD: clave opcional */ ? String(raw.clave ?? raw.password ?? raw.pass ?? claveTop ?? previo.clave ?? servicio.clave ?? anterior.clave ?? "").trim() : "",
       pin: requierePinLocal(plat) ? String(raw.pinPerfil ?? raw.pin_perfil ?? raw.perfilPin ?? raw.pin ?? pinTop ?? previo.pin ?? "").trim() : ""
     };
   });
@@ -1563,7 +1567,7 @@ async function menuServicio(chatId, clientId, selector) {
   }
 
   const credBtns = [];
-  if (requiereClaveLocal(s.plataforma || "")) credBtns.push({ text: "🔑 Cambiar clave", callback_data: `cli:serv:edit:clave:${clientId}:${compraSel}` });
+  if (requiereClaveLocal(s.plataforma || "") || claveOpcionalLocal(s.plataforma || "")) credBtns.push({ text: claveOpcionalLocal(s.plataforma || "") ? "🔑 Contraseña (opcional)" : "🔑 Cambiar clave", callback_data: `cli:serv:edit:clave:${clientId}:${compraSel}` });
   if (requierePinLocal(s.plataforma || "")) credBtns.push({ text: "🔐 Cambiar PIN", callback_data: `cli:serv:edit:pin:${clientId}:${compraSel}` });
   if (credBtns.length) kb.push(credBtns);
   kb.push([{ text: "💰 Cambiar precio", callback_data: `cli:serv:edit:precio:${clientId}:${compraSel}` }]);

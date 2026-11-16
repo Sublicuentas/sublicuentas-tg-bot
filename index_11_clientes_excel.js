@@ -124,7 +124,7 @@ function plataformaLabel(v = "") {
     netflix: "Netflix", vipnetflix: "Netflix VIP", disneyp: "Disney Premium", disneys: "Disney Premium sin ESPN",
     hbomax: "HBO Max", primevideo: "Prime Video", paramount: "Paramount+", crunchyroll: "Crunchyroll",
     vix: "Vix", appletv: "Apple TV+", universal: "Universal+", spotify: "Spotify",
-    youtube: "YouTube Premium", deezer: "Deezer", canva: "Canva", gemini: "Gemini Pro", chatgpt: "ChatGPT",
+    youtube: "YouTube Premium", deezer: "Deezer", elevenreader: "Eleven Reader", autocad: "Autodesk AutoCAD", canva: "Canva", gemini: "Gemini Pro", chatgpt: "ChatGPT",
     office: "Office 365", office2021: "Office 2021",
     stellatv1: "Stella TV 1", stellatv2: "Stella TV 2", stellatv3: "Stella TV 3",
     oleadatv1: "Oleada TV 1", oleadatv3: "Oleada TV 3",

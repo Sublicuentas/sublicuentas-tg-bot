@@ -4,7 +4,7 @@
 // plataforma EXACTA (clave canónica): nunca se hereda a otra app (HBO ≠ Netflix ≠ Prime).
 // CommonJS a propósito (igual que _tv-digital.js).
 
-const VERSION = "2026-11-07.1";
+const VERSION = "2026-11-15.1"; // R196u · AutoCAD (invitación) y Eleven Reader (correo + contraseña)
 
 // Avisos que van en la ficha Y en la URL personalizada.
 const AVISOS = Object.freeze({
@@ -14,6 +14,9 @@ const AVISOS = Object.freeze({
     texto: "HBO Max puede pedir un código de hogar en cualquier momento, incluso apenas inicie sesión. Si le aparece, escríbanos y le ayudamos a ingresarlo." }],
   primevideo: [{ id: "prime_solo_app", destacado: true, titulo: "Importante",
     texto: "Solo disponible para la aplicación Prime Video. Prohibido ingresar en Amazon." }],
+  // R196u · AutoCAD se entrega por INVITACIÓN al correo del cliente (no es un código KEY).
+  autocad: [{ id: "autocad_invitacion", destacado: false, titulo: "Cómo activar Autodesk AutoCAD",
+    texto: "1) Abra el correo de invitación de Autodesk que llegó al correo indicado (revise también Spam o Promociones).\n2) Toque «Aceptar invitación».\n3) Inicie sesión en Autodesk con ese mismo correo (si no tiene cuenta, créela con ese correo).\n4) Descargue AutoCAD desde su cuenta Autodesk. Si no le llegó la invitación, escríbanos." }],
 });
 
 function norm(v) { return String(v == null ? "" : v).toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]/g, ""); }
@@ -29,6 +32,8 @@ function clavePlataforma(plataforma) {
   if (p.startsWith("gemini")) return "gemini";
   if (p.startsWith("duolingo")) return "duolingo";
   if (p.startsWith("chatgpt")) return "chatgpt";
+  if (p.includes("autocad") || p.startsWith("autodesk")) return "autocad"; // R196u
+  if (p.startsWith("eleven")) return "elevenreader"; // R196u
   return p;
 }
 function avisosPara(plataforma) { return (AVISOS[clavePlataforma(plataforma)] || []).map((a) => ({ ...a, version: VERSION })); }
@@ -55,6 +60,28 @@ function claveSegunModalidad(plataforma, servicio = {}) {
   if (m === "proveedor") return true;
   if (m === "correo_cliente") return false;
   return null;
+}
+
+// ── R196u · Productos nuevos (PDF v2.0 · 07) ──
+//   AutoCAD (Software): entrega por INVITACIÓN al correo del cliente. Correo obligatorio; contraseña OPCIONAL: no se pide, solo
+//   se guarda y se muestra si Sublicuentas de verdad entrega credenciales además de la invitación.
+//   Eleven Reader (Música): correo + contraseña, ambos en la ficha. Sin PIN. Sin proveedor ni costo fijo inventado.
+const ESTADOS_INVITACION = Object.freeze({ pendiente: "Pendiente de enviar", enviada: "Invitación enviada", aceptada: "Invitación aceptada" });
+function entregaPorInvitacion(plataforma) { return clavePlataforma(plataforma) === "autocad"; }
+function claveOpcional(plataforma) { return clavePlataforma(plataforma) === "autocad"; }
+function estadoInvitacion(servicio = {}) { const e = String((servicio && servicio.estadoInvitacion) || ""); return ESTADOS_INVITACION[e] ? e : "pendiente"; } // sin dato = pendiente (no se afirma que ya se envió)
+function estadoInvitacionTexto(servicio = {}) { return ESTADOS_INVITACION[estadoInvitacion(servicio)]; }
+// Líneas de la ficha de entrega de AutoCAD (WhatsApp). La contraseña solo aparece si está registrada.
+function fichaInvitacionLineas(servicio = {}, { markdown = true } = {}) {
+  const b = (t) => (markdown ? `*${t}*` : t);
+  const correo = String(servicio.correo || servicio.email || "").trim();
+  const clave = String(servicio.clave || "").trim();
+  const e = String((servicio && servicio.estadoInvitacion) || "");
+  return [
+    `📧 ${b("Correo invitado:")} ${correo || "—"}`,
+    ...(ESTADOS_INVITACION[e] ? [`📌 ${b("Estado:")} ${ESTADOS_INVITACION[e]}`] : []),
+    ...(clave ? [`🔑 ${b("Contraseña:")} ${clave}`] : []),
+  ];
 }
 
 // ── Dispositivo por SERVICIO ──
@@ -90,4 +117,4 @@ function etiquetaDispositivo(servicio = {}, perfil = null) {
   return d === "tv" ? (roku ? "TV (Roku)" : "TV") : d === "cel" ? "Celular" : "Pendiente de seleccionar";
 }
 
-module.exports = { VERSION, AVISOS, MODALIDADES, EQUIPOS, clavePlataforma, avisosPara, avisosTexto, usaModalidad, modalidadAcceso, claveSegunModalidad, familiaTv, equiposPermitidos, validarEquipoTv, etiquetaDispositivo };
+module.exports = { VERSION, AVISOS, MODALIDADES, EQUIPOS, clavePlataforma, avisosPara, avisosTexto, usaModalidad, modalidadAcceso, claveSegunModalidad, familiaTv, equiposPermitidos, validarEquipoTv, etiquetaDispositivo, ESTADOS_INVITACION, entregaPorInvitacion, claveOpcional, estadoInvitacion, estadoInvitacionTexto, fichaInvitacionLineas };

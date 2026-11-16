@@ -88,12 +88,15 @@ const CATALOGO_PROPIETARIOS = Object.freeze([
 
   item("spotify", "🎵 Música", 3, 1, "Spotify Premium", "1 mes", 110, "Acceso Premium mensual"),
   item("deezer", "🎵 Música", 3, 2, "Deezer Premium", "1 mes", 90, "Acceso Premium mensual"),
+  // R196u · sin tarifa fija: precio manual hasta que Sublicuentas lo defina (no se inventan precios).
+  item("eleven_reader", "🎵 Música", 3, 3, "Eleven Reader", "Según compra", null, "Correo y contraseña · precio manual"),
 
   item("nod32", "💻 Productividad y seguridad", 4, 1, "ESET NOD32 Antivirus", "1 año · 1 dispositivo", 399, "Licencia por 1 año para 1 dispositivo"),
   item("duolingo", "💻 Productividad y seguridad", 4, 2, "Duolingo", "1 mes", 89, "Acceso mensual"),
   item("canva", "💻 Productividad y seguridad", 4, 3, "Canva Pro", "1 mes", 69, "Activación por 1 mes"),
   item("office_365", "💻 Productividad y seguridad", 4, 4, "Office 365", "1 año", 449, "Licencia por 1 año"),
   item("office_2021", "💻 Productividad y seguridad", 4, 5, "Office 2021 Pro Plus", "Licencia permanente", 449, "Licencia permanente para Windows"),
+  item("autocad", "💻 Productividad y seguridad", 4, 6, "Autodesk AutoCAD", "Según compra", null, "Invitación al correo del cliente · precio manual"),
 
   item("gemini_pro", "🤖 Inteligencia Artificial", 5, 1, "Gemini Pro", "1 mes", 170, "Activación por 1 mes"),
 ]);

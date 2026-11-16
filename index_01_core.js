@@ -161,6 +161,10 @@ const PLATAFORMAS = {
   duolingo:    { key: "duolingo",    nombre: "Duolingo",        categoria: "diseno_ia", acceso: "solo_correo",      capacidadDefault: 1,  requiereCorreo: true,  requiereClave: false, requierePin: false, permiteUsuario: false },
   office:      { key: "office",      nombre: "Microsoft 365",   categoria: "diseno_ia", acceso: "correo_clave",     capacidadDefault: 1,  requiereCorreo: true,  requiereClave: true,  requierePin: false, permiteUsuario: false },
   office2021:  { key: "office2021",  nombre: "Office 2021",     categoria: "diseno_ia", acceso: "correo_clave",     capacidadDefault: 1,  requiereCorreo: true,  requiereClave: true,  requierePin: false, permiteUsuario: false },
+  // R196u · Autodesk AutoCAD (Software): INVITACIÓN al correo del cliente; contraseña OPCIONAL (solo si de verdad se entrega).
+  autocad:     { key: "autocad",     nombre: "Autodesk AutoCAD", categoria: "diseno_ia", acceso: "invitacion_correo", capacidadDefault: 1, requiereCorreo: true,  requiereClave: false, claveOpcional: true, requierePin: false, permiteUsuario: false },
+  // R196u · Eleven Reader (Música): correo + contraseña.
+  elevenreader: { key: "elevenreader", nombre: "Eleven Reader", categoria: "musica",   acceso: "correo_clave",     capacidadDefault: 1,  requiereCorreo: true,  requiereClave: true,  requierePin: false, permiteUsuario: false },
 };
 
 const DEFAULT_TOTALS = Object.fromEntries(

@@ -33,9 +33,9 @@ function modalidad(it = {}, categoria = "") {
   let m = "detalle";
   if (/iptv|liontv|latintv|latin tv|lion tv|icomplay|nanotech|evoutouch|oleada|tv digital/.test(txt)) m = "tv_digital";
   else if (/netflix|disney|\bmax\b|hbo|vix|viki|prime video|paramount|crunchyroll/.test(txt)) m = "perfil";
-  else if (/canva|gemini|office personal|microsoft 365|invitacion|gmail del cliente|correo del cliente/.test(txt)) m = "correo";
+  else if (/canva|gemini|office personal|microsoft 365|autocad|autodesk|invitacion|gmail del cliente|correo del cliente/.test(txt)) m = "correo"; // R196u · AutoCAD = invitación al correo
   else if (/mcafee|nod32|eset|antivirus|office 20(21|24)|licencia|serial|\bkey\b/.test(txt)) m = "licencia";
-  else if (/spotify|deezer|youtube|correo y contrasena|correo y clave/.test(txt)) m = "acceso";
+  else if (/spotify|deezer|eleven reader|youtube|correo y contrasena|correo y clave/.test(txt)) m = "acceso"; // R196u · Eleven Reader
   return { m, inferida: true };
 }
 function pideDispositivo(it = {}, m) {
