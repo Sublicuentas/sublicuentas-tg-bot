@@ -410,6 +410,8 @@ function renderCredencialesServicioLocal(servicio = {}, markdown = true, indent 
   }
   const individual = servicioParaPerfilLocal(servicio, perfiles[0] || {}, servicio.nombrePerfil || servicio.titular || "");
   let out = "";
+  // R196v · HBO: plan y modalidad reales de la venta (sin plan = venta anterior «HBO Max», no se inventa).
+  if (String(p || "").toLowerCase().replace(/\s+/g, "") === "hbomax") { const ph = { standard: "HBO Standard · 3 perfiles", platinum: "HBO Platinum · 5 perfiles" }[String(servicio.planHbo || "")]; out += `${indent}📦 ${markdown ? "*Plan:*" : "Plan:"} ${esc(ph ? (servicio.tipoVenta === "cuenta_completa" ? ph.replace(/ · \d perfiles$/, " · cuenta completa") : ph) : "sin definir (venta anterior)")}\n`; }
   if (requiereCorreoLocal(p)) {
     const identLabel = getIdentLabelLocal(p);
     const identIcon = identLabel === "Usuario" ? "👤" : "📧";
@@ -692,7 +694,14 @@ function kbPlataformasWiz(prefix = "wiz:plat", clientId = null, idx = null, cate
   const catSel = R118_CAT[categoriaCode] || "";
   if (catSel === "cuentas_completas") {
     const cc = catLib.CUENTA_COMPLETA_PLATAFORMAS.filter((k) => PLATFORM_KEYS.includes(k) || k === "viki");
-    for (const k of cc) items.push({ text: `🔐 ${humanPlataforma(k)}`, callback_data: appendCallbackContextLocal(`ccsel:${mode}:${k}`, clientId, idx) });
+    for (const k of cc) {
+      if (k === "hbomax") { // R196v
+        items.push({ text: "🔐 HBO Standard · cuenta completa", callback_data: appendCallbackContextLocal(`ccsel:${mode}:hbomaxstandard`, clientId, idx) });
+        items.push({ text: "🔐 HBO Platinum · cuenta completa", callback_data: appendCallbackContextLocal(`ccsel:${mode}:hbomaxplatinum`, clientId, idx) });
+        continue;
+      }
+      items.push({ text: `🔐 ${humanPlataforma(k)}`, callback_data: appendCallbackContextLocal(`ccsel:${mode}:${k}`, clientId, idx) });
+    }
     for (let i = 0; i < items.length; i += 2) rows.push(items.slice(i, i + 2));
     return rows;
   }
@@ -709,6 +718,11 @@ function kbPlataformasWiz(prefix = "wiz:plat", clientId = null, idx = null, cate
         });
         grupoAgregado = true;
       }
+      return;
+    }
+    if (k === "hbomax") { // R196v · HBO Standard (3) / Platinum (5): nunca «HBO Max» genérico en ventas nuevas
+      items.push({ text: "🎬 HBO Standard · 3 perfiles", callback_data: appendCallbackContextLocal(`${prefix}:hbomaxstandard`, clientId, idx) });
+      items.push({ text: "🎬 HBO Platinum · 5 perfiles", callback_data: appendCallbackContextLocal(`${prefix}:hbomaxplatinum`, clientId, idx) });
       return;
     }
     items.push({
@@ -734,7 +748,7 @@ async function getInventarioDoc(plataforma = "", acceso = "", inventarioId = "")
   return invCanon.resolverCuentaInventario(db, { plataforma: plat, acceso: ident, docIdCalculado: docIdInventarioLocal(ident, plat) }, INVENTARIO_COLLECTION);
 }
 
-async function syncServicioEnInventario({ clienteNombre = "", pagadoPor = "", plataforma = "", correo = "", clave = "", pin = "", clienteId = "", compraId = "", perfilId = "", inventarioId = "" }) {
+async function syncServicioEnInventario({ clienteNombre = "", pagadoPor = "", plataforma = "", correo = "", clave = "", pin = "", clienteId = "", compraId = "", perfilId = "", inventarioId = "", cuentaCompleta = false }) {
   const plat = normalizarPlataforma(plataforma);
   const acceso = normalizeIdentByPlatformLocal(plat, correo);
   const found = await getInventarioDoc(plat, acceso, inventarioId);
@@ -789,6 +803,7 @@ async function syncServicioEnInventario({ clienteNombre = "", pagadoPor = "", pl
       if (pagadoPor && normTxt(pagadoPor) !== normTxt(identificado.nombre)) identificado.pagadoPor = String(pagadoPor).trim();
       else delete identificado.pagadoPor;
       if (pinNorm) identificado.pin = pinNorm;
+      if (plat === "hbomax") { if (cuentaCompleta) identificado.cuentaCompleta = true; else delete identificado.cuentaCompleta; } // R196v
       if (JSON.stringify(identificado) !== JSON.stringify(clientes[idxExiste])) {
         clientes[idxExiste] = identificado;
         patch.clientes = clientes;
@@ -813,10 +828,11 @@ async function syncServicioEnInventario({ clienteNombre = "", pagadoPor = "", pl
       ...(clienteKey ? { clienteId: clienteKey } : {}),
       ...(compraKey ? { compraId: compraKey } : {}),
       ...(perfilKey ? { perfilId: perfilKey } : {}),
+      ...(plat === "hbomax" && cuentaCompleta ? { cuentaCompleta: true } : {}), // R196v
     });
     clientes = clientes.map((x, i) => ({ ...x, slot: i + 1 }));
     const ocupados = clientes.length;
-    const disponibles = Math.max(0, capacidad - ocupados);
+    const disponibles = plat === "hbomax" && clientes.some((x) => x && x.cuentaCompleta === true) ? 0 : Math.max(0, capacidad - ocupados); // R196v · completa = 0 para terceros
     const patch = { clientes, ocupados, disponibles, disp: disponibles, capacidad, accountId: ref.id, sobreasignada: ocupados > capacidad, estado: disponibles === 0 ? "llena" : "activa", updatedAt: admin.firestore.FieldValue.serverTimestamp() };
     const claveNorm = String(clave || "").trim();
     if (claveNorm && requiereClaveLocal(plat) && (!data.clave || String(data.clave || "").toLowerCase() === "sin clave")) patch.clave = claveNorm;
@@ -862,7 +878,7 @@ async function removeServicioDeInventario({ clienteNombre = "", plataforma = "",
     clientes = clientes.map((x, i) => ({ ...x, slot: i + 1 }));
     const capacidad = Number(data.capacidad || data.total || getTotalPorPlataformaLocal(plat) || 1);
     const ocupados = clientes.length;
-    const disponibles = Math.max(0, capacidad - ocupados);
+    const disponibles = plat === "hbomax" && clientes.some((x) => x && x.cuentaCompleta === true) ? 0 : Math.max(0, capacidad - ocupados); // R196v
     tx.set(ref, { clientes, ocupados, disponibles, disp: disponibles, capacidad, accountId: ref.id, sobreasignada: ocupados > capacidad, estado: disponibles === 0 ? "llena" : "activa", updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
     return { ok: true, removed: true, accountId: ref.id };
   });
@@ -971,7 +987,7 @@ async function sincronizarCompraInventarioLocal(anterior, nuevo, titular = "", o
     }
     const advertencias = [];
     for (const p of despues) {
-      const result = await syncServicioEnInventario({ clienteNombre: p.nombre || titular, pagadoPor: titular, plataforma: platNuevo, correo: p.correo, clave: p.clave, pin: p.pin, compraId: nuevo?.compraId || "", perfilId: p.perfilId || "", clienteId, inventarioId: p.inventarioId || "" });
+      const result = await syncServicioEnInventario({ clienteNombre: p.nombre || titular, pagadoPor: titular, plataforma: platNuevo, correo: p.correo, clave: p.clave, pin: p.pin, compraId: nuevo?.compraId || "", perfilId: p.perfilId || "", clienteId, inventarioId: p.inventarioId || "" , cuentaCompleta: platNuevo === "hbomax" && nuevo?.tipoVenta === "cuenta_completa" /* R196v */ });
       if (result?.added) agregados.push(p);
       if (result?.warning) advertencias.push(result.warning);
     }
@@ -1749,9 +1765,31 @@ async function mutarServiciosClienteTx(clientId, mutador, extra = null) { // R10
   });
 }
 
+// R196v · HBO Standard/Platinum en Telegram: mismas reglas que el servidor de Web/APK (lib_hbo_planes = copia fiel).
+// Devuelve el plan final (el de la venta, o el de la cuenta si la venta no trae y la cuenta sí lo tiene).
+async function validarHboTelegram(servicio = {}, compraId = "") {
+  const H = require("./lib_hbo_planes");
+  const plat = normalizarPlataforma(servicio.plataforma || "");
+  if (plat !== "hbomax") return "";
+  let plan = H.planValido(servicio.planHbo) || H.planDesdePlataforma(servicio.plataformaRaw || "");
+  const completa = servicio.tipoVenta === "cuenta_completa";
+  const perfiles = Array.isArray(servicio.perfiles) && servicio.perfiles.length ? servicio.perfiles : [servicio];
+  const vistos = new Set();
+  for (const p of perfiles) {
+    const correo = String(p?.correo || servicio.correo || "").trim(); if (!correo || vistos.has(correo.toLowerCase())) continue; vistos.add(correo.toLowerCase());
+    const found = await getInventarioDoc(plat, normalizeIdentByPlatformLocal(plat, correo), p?.inventarioId || "");
+    if (!found) continue; // cuenta fuera de Bodega: igual que hasta hoy
+    const motivo = H.validarAsignacion(found.data || {}, { plan, completa, compraId });
+    if (motivo) { const e = new Error(motivo); e.code = "hbo_regla"; throw e; }
+    if (!plan && H.planValido((found.data || {}).planHbo)) plan = H.planValido(found.data.planHbo);
+  }
+  return plan;
+}
+
 async function addServicioTx(clientId, servicio = {}) {
   const id = String(clientId || "").trim();
   if (!id) throw new Error("Cliente inválido.");
+  const planHbo = await validarHboTelegram(servicio, String(servicio.compraId || "")); // R196v
   const servicioEntrada = {
     ...servicio,
     compraId: String(servicio.compraId || recordIdLocal("compra")),
@@ -1777,6 +1815,7 @@ async function addServicioTx(clientId, servicio = {}) {
       if (!compra.correo || !compra.clave) throw new Error("Cuenta completa: falta correo o clave.");
       compra.sinPinPerfil = true; delete compra.pinPerfil;
     } else validarCompraLocal(compra);
+    if (planHbo) compra.planHbo = planHbo; // R196v
     const servicioIndex = servicios.length;
     servicios.push(compra);
     return { servicios, compra, servicioIndex, nombreTitular: cliente.nombrePerfil || "" };
@@ -2759,8 +2798,9 @@ async function wizardNext(chatId, rawText = "") {
         }
       }
 
-      const guardado = await addServicioTx(clientId, {
-        plataforma: plat,
+      let guardado;
+      try { guardado = await addServicioTx(clientId, {
+        plataforma: plat, ...(st.servicio.planHbo ? { planHbo: st.servicio.planHbo } : {}), // R196v
         correo: st.servicio.correo,
         clave: st.servicio.clave || "",
         pin: st.servicio.pin || "",
@@ -2772,7 +2812,7 @@ async function wizardNext(chatId, rawText = "") {
         fechaRenovacion: st.servicio.fechaRenovacion,
         vendedor: canonicalVendedor(st.vendedor),
         vendedor_norm: normVendedor(st.vendedor),
-      });
+      }); } catch (e) { if (e && e.code === "hbo_regla") return bot.sendMessage(chatId, `⚠️ ${e.message}\n\nEscriba otro correo de cuenta HBO o toque 🏠 Inicio.`).then(() => { st.servStep = 2; wizard.set(String(chatId), st); }); throw e; } // R196v
 
       wizard.set(String(chatId), { step: 4, clientId, nombre: st.nombre, telefono: st.telefono, vendedor: st.vendedor, servicio: {}, servStep: 1 });
       // R106: Sublicuentas/Relojes registran el pago de la compra (total + recibido + banco/responsable).

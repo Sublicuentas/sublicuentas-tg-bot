@@ -336,11 +336,13 @@ async function ajustarFechaMovimiento({ movimientoId, nuevaFecha, actor, motivo 
 
 // ---------------------------------------------------------------- R118 · cuenta completa por Telegram
 // Plataforma → correo → clave → precio → meses → (pago). Sin PIN ni perfiles; se guarda tipoVenta=cuenta_completa.
-async function iniciarCuentaCompleta(chatId, userId, { clientId, plat }) {
+async function iniciarCuentaCompleta(chatId, userId, { clientId, plat, planHbo = "" }) {
   const cat = require("./lib_catalogo_categorias");
   if (!cat.puedeSerCuentaCompleta(plat)) return bot.sendMessage(chatId, "⚠️ Esa plataforma no se vende como cuenta completa.");
-  pending.set(String(chatId), { mode: "flCcCorreo", clientId, plat, userId: String(userId) });
-  return bot.sendMessage(chatId, `🔐 *CUENTA COMPLETA · ${plat.toUpperCase()}*\n\n1) Escriba el *correo* de la cuenta:`, { parse_mode: "Markdown" });
+  const ph = planHbo ? { planHbo, plat: "hbomax" } : {}; // R196v · HBO Standard / Platinum
+  pending.set(String(chatId), { mode: "flCcCorreo", clientId, plat, userId: String(userId), ...ph });
+  const titulo = planHbo ? `HBO ${planHbo === "platinum" ? "PLATINUM" : "STANDARD"}` : plat.toUpperCase();
+  return bot.sendMessage(chatId, `🔐 *CUENTA COMPLETA · ${titulo}*\n\n1) Escriba el *correo* de la cuenta:`, { parse_mode: "Markdown" });
 }
 async function textoCuentaCompleta(chatId, userId, t, p) {
   if (p.mode === "flCcCorreo") { if (!/^\S+@\S+\.\S+$/.test(t)) return bot.sendMessage(chatId, "Escriba un correo válido."); p.correo = t; p.mode = "flCcClave"; pending.set(String(chatId), p); return bot.sendMessage(chatId, "2) Escriba la *clave* de la cuenta:", { parse_mode: "Markdown" }); }
@@ -353,7 +355,7 @@ async function textoCuentaCompleta(chatId, userId, t, p) {
     const ult = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate(); d.setUTCDate(Math.min(dia, ult)); // mes calendario
     const fecha = `${String(d.getUTCDate()).padStart(2, "0")}/${String(d.getUTCMonth() + 1).padStart(2, "0")}/${d.getUTCFullYear()}`;
     const { addServicioTx, getCliente } = require("./index_03_clientes_crm");
-    const r = await addServicioTx(p.clientId, { plataforma: p.plat, correo: p.correo, clave: p.clave, precio: p.precio, fechaRenovacion: fecha, mesesContratados: meses, tipoVenta: "cuenta_completa", categoria: "cuentas_completas", sinPinPerfil: true });
+    let r; try { r = await addServicioTx(p.clientId, { plataforma: p.plat, ...(p.planHbo ? { planHbo: p.planHbo } : {}), correo: p.correo, clave: p.clave, precio: p.precio, fechaRenovacion: fecha, mesesContratados: meses, tipoVenta: "cuenta_completa", categoria: "cuentas_completas", sinPinPerfil: true }); } catch (e) { if (e && e.code === "hbo_regla") return bot.sendMessage(chatId, `⚠️ ${e.message}`); throw e; } // R196v
     const c = await getCliente(p.clientId).catch(() => null);
     await bot.sendMessage(chatId, `✅ Cuenta completa guardada · ${p.plat} · ${lps(p.precio)} · vence ${fecha}\n(la clave no se muestra en auditoría)`);
     if (await esLibroUser(userId)) return iniciarPagoCompra(chatId, userId, { clientId: p.clientId, compraId: String(r?.servicio?.compraId || ""), plataforma: `${p.plat} · cuenta completa`, cliente: c?.nombrePerfil || c?.nombre || "Cliente" });

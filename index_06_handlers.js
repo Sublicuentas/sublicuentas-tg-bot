@@ -4843,6 +4843,8 @@ async function actividadClienteServicioLocal(clientId,idx=null,compraId=''){
 // ===============================
 // CALLBACKS
 // ===============================
+// R196v · plan HBO elegido en «➕ Agregar servicio» (se usa al guardar; el resto del flujo no cambia)
+const PLAN_HBO_ADD = new Map();
 bot.on("callback_query", async (q) => {
   if (!hasRuntimeLock()) return;
 
@@ -5976,7 +5978,7 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
         }
         if (!clientId) return bot.sendMessage(chatId, "⚠️ No encontré el cliente. Abra la ficha y vuelva a intentar.");
         if (mode === "wiz") wizard.delete(String(chatId));
-        return finLibro.iniciarCuentaCompleta(chatId, userId, { clientId: String(clientId), plat });
+        return finLibro.iniciarCuentaCompleta(chatId, userId, { clientId: String(clientId), plat, planHbo: require("./lib_hbo_planes").planDesdePlataforma(plat) }); // R196v
       }
       if (data.startsWith("platgrp:")) {
         const parts = data.split(":");
@@ -6056,6 +6058,7 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
         st.clientId = clientId || st.clientId;
         st.servicio = st.servicio || {};
         st.servicio.plataforma = plat;
+        { const ph = require("./lib_hbo_planes").planDesdePlataforma(platRaw); if (ph) st.servicio.planHbo = ph; else delete st.servicio.planHbo; } // R196v · HBO Standard / Platinum
         st.step = 4;
         if (requiereCorreoLocal(plat)) st.servStep = 2;
         else if (requiereClaveLocal(plat)) st.servStep = 3;
@@ -6228,6 +6231,7 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
       if (data.startsWith("cli:add:plat:")) {
         const parts = data.split(":");
         const plat = normalizarPlataforma(parts[3]);
+        { const ph = require("./lib_hbo_planes").planDesdePlataforma(parts[3]); if (ph) PLAN_HBO_ADD.set(String(chatId), ph); else PLAN_HBO_ADD.delete(String(chatId)); } // R196v
         const clientId = parts[4];
         if (!esPlataformaValida(plat)) return bot.sendMessage(chatId, "⚠️ Plataforma inválida.");
         if (requiereCorreoLocal(plat)) {
@@ -6344,6 +6348,7 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
             return upsertPanel(chatId, `🔐 *${humanPlataforma(plat)} · Solo PIN*\n\nEscriba el PIN para terminar el cambio de plataforma:`, [[{ text: "⬅️ Cancelar", callback_data: `cli:serv:menu:${clientId}:${compraSel}` }]]);
           }
           const patch = { plataforma: plat };
+          { const ph = require("./lib_hbo_planes").planDesdePlataforma(parts[4]); if (plat === "hbomax" && ph) patch.planHbo = ph; } // R196v · cambiar a HBO Standard / Platinum
           const identActual = getIdentServicioSyncLocal(actual);
 
           if (esSoloCorreoLocal(plat)) {
@@ -8129,8 +8134,9 @@ bot.on("message", async (msg) => {
         forceNextPanelAtBottom(chatId);
         let guardadoServ = null;
         try {
+          const phAdd = normalizarPlataforma(p.plat) === "hbomax" ? PLAN_HBO_ADD.get(String(chatId)) : ""; PLAN_HBO_ADD.delete(String(chatId)); // R196v
           guardadoServ = await addServicioTx(String(p.clientId), {
-            plataforma: p.plat,
+            plataforma: p.plat, ...(phAdd ? { planHbo: phAdd } : {}),
             correo: p.mail,
             clave: p.clave || "",
             pin: p.pin || "",

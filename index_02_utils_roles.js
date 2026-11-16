@@ -134,7 +134,7 @@ function normalizarPlataforma(v = "") {
   const aliases = {
     "netflix": "netflix", "netflix premium": "netflix", "premium netflix": "netflix", "vip netflix": "vipnetflix", "vipnetflix": "vipnetflix",
     "disney premium": "disneyp", "disneyp": "disneyp", "disney standard": "disneys", "disney standard sin espn": "disneys", "disney premium sin espn": "disneys",
-    "disneys": "disneys", "hbo": "hbomax", "hbo max": "hbomax", "hbomax": "hbomax",
+    "disneys": "disneys", "hbo": "hbomax", "hbo max": "hbomax", "hbomax": "hbomax", "hbomaxstandard": "hbomax", "hbomaxplatinum": "hbomax", "hbo standard": "hbomax", "hbo platinum": "hbomax", /* R196v · el plan viaja aparte (planHbo) */
     "prime": "primevideo", "prime video": "primevideo", "primevideo": "primevideo",
     "paramount": "paramount", "paramount plus": "paramount", "paramount+": "paramount",
     "crunchyroll": "crunchyroll", "vix": "vix", "apple tv": "appletv", "appletv": "appletv",
@@ -168,7 +168,7 @@ function normalizarPlataforma(v = "") {
   s = s.replace(/\s+/g, "");
   const aliasesCompact = {
     vipnetflix: "vipnetflix", disneypremium: "disneyp", disneyp: "disneyp",
-    disneystandard: "disneys", disneys: "disneys", hbomax: "hbomax",
+    disneystandard: "disneys", disneys: "disneys", hbomax: "hbomax", hbomaxstandard: "hbomax", hbomaxplatinum: "hbomax", hbostandard: "hbomax", hboplatinum: "hbomax", // R196v
     primevideo: "primevideo", paramount: "paramount", crunchyroll: "crunchyroll",
     appletv: "appletv", stellatv1: "stellatv1", stella1: "stellatv1",
     stellatv2: "stellatv2", stella2: "stellatv2", stellatv3: "stellatv3", stella3: "stellatv3",

@@ -184,6 +184,7 @@ function revCatalogInventoryKeys(item = {}) {
   const qty = Number((raw.match(/([1-9])\s*(?:dispositivo|pantalla)/) || [])[1] || 0);
   const keys = [];
   if (raw.includes("netflix") && raw.includes("vip")) keys.push("vipnetflix");
+  { const ph = require("./lib_hbo_planes").planDesdeNombreProducto(text); if (ph) return [`hbomax_${ph}`]; } // R196v · Standard y Platinum nunca se mezclan
   if (raw.includes("stella") && qty) keys.push(`stellatv${qty}`);
   if (raw.includes("oleada") && qty) keys.push(`oleadatv${qty}`);
   if (raw.includes("latin") && qty) keys.push(`latintv${qty}`);
@@ -191,6 +192,7 @@ function revCatalogInventoryKeys(item = {}) {
   if ((raw.includes("nanotech") || raw.includes("evoutouch")) && qty) keys.push(`evoutouch${qty}`);
   if (raw.includes("icomplay") && qty) keys.push(`icomplay${qty}`);
   if (base) keys.push(base);
+  if (base === "hbomax") keys.push("hbomax_standard", "hbomax_platinum"); // R196v · producto «HBO Max» genérico anterior: suma todo, como hasta hoy
   if (base && /^(stellatv|oleadatv|latintv|liontv|evoutouch|icomplay)\d$/.test(base)) keys.push(base.replace(/\d$/, ""));
   return [...new Set(keys.filter(Boolean))];
 }
@@ -546,17 +548,21 @@ app.get("/rev/inventario", revAuth, async (req, res) => {
       return res.status(503).json({ error: "catalogo_no_configurado", detail: "Inventario bloqueado hasta cargar la tarifa real." });
     }
     const agregados = new Map();
+    const HBO = require("./lib_hbo_planes"); // R196v · HBO Standard / Platinum: stock separado y cuentas completas
     invSnap.docs.forEach((doc) => {
       const d = doc.data() || {};
-      const key = revCanonInventory(d.plataforma || d.servicio || d.tipo || "");
+      let key = revCanonInventory(d.plataforma || d.servicio || d.tipo || "");
       if (!key) return;
+      if (key === "hbomax" && HBO.planValido(d.planHbo)) key = `hbomax_${HBO.planValido(d.planHbo)}`;
       const estado = String(d.estado || "activa").trim().toLowerCase();
       const cap = Math.max(0, revMoneyNumber(d.capacidad));
       const ocupados = Math.max(0, revMoneyNumber(d.ocupados));
       let disponibles = d.disponibles == null || d.disponibles === "" ? Math.max(0, cap - ocupados) : Math.max(0, revMoneyNumber(d.disponibles));
+      if (key.startsWith("hbomax")) disponibles = Math.min(disponibles, HBO.cuposVendibles(d)); // R196v · vendida completa = 0
       if (["inactiva", "inactivo", "suspendida", "suspendido", "bloqueada", "bloqueado"].includes(estado)) disponibles = 0;
-      const prev = agregados.get(key) || { docs: 0, disponibles: 0, capacidad: 0, ocupados: 0 };
+      const prev = agregados.get(key) || { docs: 0, disponibles: 0, capacidad: 0, ocupados: 0, vacias: 0 };
       prev.docs += 1; prev.disponibles += disponibles; prev.capacidad += cap; prev.ocupados += ocupados;
+      if (disponibles > 0 && ocupados === 0 && !(Array.isArray(d.clientes) && d.clientes.length)) prev.vacias += 1; // R196v · libres para vender como cuenta completa
       agregados.set(key, prev);
     });
 
@@ -570,12 +576,13 @@ app.get("/rev/inventario", revAuth, async (req, res) => {
         return { id:item.id, catalogId:item.id, nombre:item.nombreCompleto, estado, stock:Number.isFinite(manualCantidad)?manualCantidad:null, origen:"manual" };
       }
       const keys = revCatalogInventoryKeys(item);
+      const completaHbo = keys.some((k) => /^hbomax_/.test(k)) && /cuentas? completas?/i.test(`${item.n || ""} ${item.s || ""} ${item.categoria || item.cat || ""} ${item.tipoEntrega || ""}`.replace(/_/g, " ")); // R196v
       let docs = 0, disponibles = 0, capacidad = 0, ocupados = 0, plataforma = "";
       for (const key of keys) {
         const row = agregados.get(key);
         if (!row) continue;
         if (!plataforma) plataforma = key;
-        docs += row.docs; disponibles += row.disponibles; capacidad += row.capacidad; ocupados += row.ocupados;
+        docs += row.docs; disponibles += completaHbo ? row.vacias : row.disponibles; capacidad += row.capacidad; ocupados += row.ocupados;
       }
       if (!docs) return { id:item.id, catalogId:item.id, nombre:item.nombreCompleto, estado:"consultar", stock:null, origen:"sin_bodega" };
       const estado = disponibles <= 0 ? "agotado" : disponibles <= 2 ? "bajo" : "disponible";
@@ -1250,6 +1257,7 @@ app.post("/rev/compra", revAuth, async (req, res) => {
           perfilNombre: renglon.perfilNombre, perfilApellido: renglon.perfilApellido, perfil: renglon.perfil,
           dispositivo: renglon.dispositivo, correo: renglon.correo, marcaTv: renglon.marcaTv, modeloTv: renglon.modeloTv,
           detalleServicio: renglon.detalleServicio, datoRequerido: renglon.datoRequerido, notas: renglon.notas,
+          ...(renglon.planHbo ? { planHbo: renglon.planHbo } : {}), // R196v
           cantidad: renglon.modalidad === "cuenta_completa" ? renglon.cantidad : 1,
         });
       });
@@ -1262,6 +1270,7 @@ app.post("/rev/compra", revAuth, async (req, res) => {
         if (!snapCli.exists || !revFiltrarClientePorAliases(snapCli.data() || {}, aliases).servicios.length) return res.status(403).json({ error: "cliente_ajeno" });
       }
     }
+    productos.forEach((p) => { if (!p.planHbo) { const ph = require("./lib_hbo_planes").planDesdeNombreProducto(p.servicio || ""); if (ph) p.planHbo = ph; } }); // R196v · también pedidos v1
     productos.forEach((p) => { delete p.__raw; delete p.__item; });
 
     const comentario = cleanTg(b.comentario, 700);

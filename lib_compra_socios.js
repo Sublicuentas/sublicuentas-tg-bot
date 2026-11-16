@@ -68,6 +68,7 @@ function normalizarRenglon(p = {}, item = {}, principal = {}, index = 0) {
     cantidad: 1, perfilNombre: "", perfilApellido: "", perfil: "", dispositivo: "", correo: "", marcaTv: "", modeloTv: "",
     detalleServicio: "", datoRequerido: clean(item.datoRequerido, 60), notas: clean(p.notas, 300),
   };
+  { const ph = require("./lib_hbo_planes").planDesdeNombreProducto([item.n, item.s, item.nombreCompleto, item.nombre].filter(Boolean).join(" ")); if (ph) r.planHbo = ph; } // R196v · HBO Standard / Platinum queda en el pedido
   if (m === "cuenta_completa") {
     const n = Number(p.cantidad);
     if (!CANTIDADES.has(n)) err("cantidad", "Elija una cantidad válida.");
@@ -137,6 +138,7 @@ function lineasTelegram(productos = [], principalNombre = "") {
     const datos = [];
     const destino = p.clienteNombre || p.nombreCliente || "";
     if (destino && (p.destinatario?.tipo === "otro" || !principalNombre)) datos.push(`Para: ${destino}${p.destinatario?.tipo === "otro" ? " (otro cliente)" : ""}`);
+    if (p.planHbo) datos.push(`Plan: HBO ${p.planHbo === "platinum" ? "Platinum (5 perfiles)" : "Standard (3 perfiles)"}${p.modalidad === "cuenta_completa" ? " · cuenta completa" : ""}`); // R196v
     if (p.perfil && p.perfil !== destino) datos.push(`Perfil: ${p.perfil}`);
     if (p.dispositivo) datos.push(`Dispositivo: ${p.dispositivo}`);
     if (p.marcaTv) datos.push(`TV: ${p.marcaTv}${p.modeloTv ? ` · ${p.modeloTv}` : ""}`);

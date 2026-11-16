@@ -94,6 +94,38 @@ function validarAsignacion(d = {}, { plan = "", completa = false, compraId = "" 
   if (!completa && !yaEsta && pc && otros.length >= pc.capacidad) return `Esa cuenta ${pc.corto} ya está llena (${otros.length}/${pc.capacidad}).`;
   return "";
 }
+// Plan por el NOMBRE de un producto del catálogo de socios («HBO Max Platino», «HBO Standard · cuenta completa»…).
+// Sin palabra de plan = producto genérico anterior: "" (no se adivina).
+function planDesdeNombreProducto(texto = "") {
+  const t = String(texto || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  if (!/\bhbo\b|\bmax\b|hbomax/.test(t)) return "";
+  if (/platin/.test(t)) return "platinum";
+  if (/standard|estandar|\bstd\b/.test(t)) return "standard";
+  return "";
+}
+// Diagnóstico de SOLO LECTURA (PDF · evidencia «lista de registros ambiguos que requieren asignación humana»).
+// · Cuentas HBO sin plan (y su capacidad/ocupación). · Cuentas cuyo uso no cabe en su plan. · Ventas HBO sin plan, separando
+// las que tienen plan VERIFICABLE por su cuenta de Bodega de las que necesitan una persona. No escribe nada.
+async function diagnosticoHbo(db, { limiteClientes = 5000 } = {}) {
+  const inv = await db.collection("inventario").where("plataforma", "==", PLAT_HBO).get();
+  const cuentas = inv.docs.map((x) => ({ id: x.id, d: x.data() || {} })).filter((c) => !/eliminad|baja/i.test(String(c.d.estado || "")));
+  const porCorreo = new Map(cuentas.map((c) => [String(c.d.correo || "").trim().toLowerCase(), c]));
+  const sinPlan = cuentas.filter((c) => !planDeCuenta(c.d)).map((c) => ({ id: c.id, correo: c.d.correo || "", capacidad: Number(c.d.capacidad || 0), ocupados: ocupadosDe(c.d), sugerencia: planPorCapacidad(c.d.capacidad) ? `su capacidad (${c.d.capacidad}) coincide con ${PLANES[planPorCapacidad(c.d.capacidad)].corto}; confirme antes de marcarla` : "capacidad distinta de 3 o 5: decide una persona" }));
+  const fueraDePlan = cuentas.filter((c) => { const p = planDeCuenta(c.d); return p && ocupadosDe(c.d) > p.capacidad; }).map((c) => ({ id: c.id, correo: c.d.correo || "", plan: planDeCuenta(c.d).corto, ocupados: ocupadosDe(c.d), capacidad: planDeCuenta(c.d).capacidad }));
+  const refCli = db.collection("clientes"); const cli = await (typeof refCli.limit === "function" ? refCli.limit(limiteClientes) : refCli).get();
+  const ventasSinPlan = [];
+  cli.docs.forEach((x) => {
+    const c = x.data() || {}; if (String(c.consolidadoEn || "").trim()) return;
+    (Array.isArray(c.servicios) ? c.servicios : []).forEach((s) => {
+      if (!s || !esPlataformaHbo(s.plataforma) || planValido(s.planHbo)) return;
+      const cuenta = porCorreo.get(String(s.correo || "").trim().toLowerCase());
+      const pc = cuenta ? planDeCuenta(cuenta.d) : null;
+      ventasSinPlan.push({ clienteId: x.id, cliente: String(c.nombrePerfil || c.nombre || "Cliente").slice(0, 80), compraId: String(s.compraId || ""), correo: String(s.correo || ""), modalidad: s.tipoVenta === "cuenta_completa" ? "cuenta completa" : "perfil", planVerificable: pc ? pc.id : "", accion: pc ? `su cuenta de Bodega es ${pc.corto}: al editar la venta toma ese plan` : "requiere asignación humana (la cuenta no tiene plan o no está en Bodega)" });
+    });
+  });
+  return { ok: true, cuentas: cuentas.length, sinPlan, fueraDePlan, ventasSinPlan, ventasRequierenPersona: ventasSinPlan.filter((v) => !v.planVerificable).length, leidoAt: new Date().toISOString() };
+}
+
 // Contadores separados para Bodega: compartidas y exclusivas por plan.
 function contadoresHbo(cuentas = []) {
   const base = () => ({ cuentas: 0, compartidas: 0, libres: 0, completas: 0, completasLibres: 0 });
@@ -109,4 +141,4 @@ function contadoresHbo(cuentas = []) {
 }
 
 module.exports = { PLAT_HBO, PLANES, planDeCuenta, etiquetaPlan, resumenCuenta, planPorCapacidad, cambiarPlan, resumenHbo,
-  OPCIONES_VENTA, planDesdePlataforma, esPlataformaHbo, planValido, vendidaCompleta, cuposVendibles, validarAsignacion, contadoresHbo };
+  OPCIONES_VENTA, planDesdePlataforma, esPlataformaHbo, planValido, vendidaCompleta, cuposVendibles, validarAsignacion, contadoresHbo, planDesdeNombreProducto, diagnosticoHbo };
