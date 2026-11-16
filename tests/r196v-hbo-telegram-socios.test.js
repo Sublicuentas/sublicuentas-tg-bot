@@ -14,10 +14,10 @@ test("lib_hbo_planes.js es copia fiel de HQ api/_hbo-planes.js (mismas reglas qu
   assert.equal(R("lib_hbo_planes.js").split("\n").slice(1).join("\n"), fs.readFileSync(hq, "utf8").split("\n").slice(1).join("\n"));
 });
 
-test("10 · Telegram ofrece «HBO Standard · 3 / Platinum · 5» y «· cuenta completa»; nunca «HBO Max» genérico en ventas nuevas", () => {
+test("10 · Telegram ofrece «HBO Standard / HBO Platinum» y «· cuenta completa»; nunca «HBO Max» genérico en ventas nuevas", () => {
   const crm = R("index_03_clientes_crm.js");
-  assert.match(crm, /text: "🎬 HBO Standard · 3 perfiles", callback_data: appendCallbackContextLocal\(`\$\{prefix\}:hbomaxstandard`/);
-  assert.match(crm, /text: "🎬 HBO Platinum · 5 perfiles", callback_data: appendCallbackContextLocal\(`\$\{prefix\}:hbomaxplatinum`/);
+  assert.match(crm, /text: "🎬 HBO Standard", callback_data: appendCallbackContextLocal\(`\$\{prefix\}:hbomaxstandard`/);
+  assert.match(crm, /text: "🎬 HBO Platinum", callback_data: appendCallbackContextLocal\(`\$\{prefix\}:hbomaxplatinum`/);
   assert.match(crm, /text: "🔐 HBO Standard · cuenta completa", callback_data: appendCallbackContextLocal\(`ccsel:\$\{mode\}:hbomaxstandard`/);
   assert.match(crm, /text: "🔐 HBO Platinum · cuenta completa", callback_data: appendCallbackContextLocal\(`ccsel:\$\{mode\}:hbomaxplatinum`/);
   const roles = R("index_02_utils_roles.js");
@@ -52,7 +52,7 @@ test("10 · Socios: el pedido guarda el plan (del nombre del producto) y Telegra
   assert.equal(renglon.planHbo, "platinum");
   assert.equal(CS.normalizarRenglon({ dispositivo: "tv" }, { n: "HBO Max", categoria: "Perfiles" }, { nombre: "C", apellido: "D" }, 0).renglon.planHbo, undefined);
   const l = CS.lineasTelegram([{ servicio: "HBO Standard · cuenta completa", precioCatalogo: null, planHbo: "standard", modalidad: "cuenta_completa" }], "Cliente Demo");
-  assert.match(l.join("\n"), /Plan: HBO Standard \(3 perfiles\) · cuenta completa/);
+  assert.match(l.join("\n"), /Plan: HBO Standard · cuenta completa/);
 });
 
 test("10 · Socios /rev/inventario: stock separado Standard / Platinum; cuenta completa = cuentas vacías del plan; genérico suma todo como antes", () => {

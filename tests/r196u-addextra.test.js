@@ -155,17 +155,17 @@ test("HBO-01/02 en el bot: 📦 Plan HBO → Standard con 4 ocupados BLOQUEA; Pl
   assert.match(b.text, /Plan HBO/);
   await t.M.tryCallback(t.cb(b.callback_data), SUPER);
   assert.match(t.ultimo().t, /HBO 4\/5 · plan sin definir/);
-  await t.M.tryCallback(t.cb(t.boton(/Standard · 3/)), SUPER);
+  await t.M.tryCallback(t.cb(t.boton(/^Standard$/)), SUPER);
   assert.match(t.ultimo().t, /No se puede pasar a Standard/);
   let d = (await t.db.collection("inventario").doc("h1").get()).data();
   assert.equal(d.capacidad, 5); assert.equal(d.clientes.length, 4); assert.equal(d.planHbo, undefined);
   await t.M.tryCallback(t.cb(b.callback_data), SUPER);
-  await t.M.tryCallback(t.cb(t.boton(/Platinum · 5/)), SUPER);
+  await t.M.tryCallback(t.cb(t.boton(/^Platinum$/)), SUPER);
   assert.match(t.ultimo().t, /Platinum 4\/5/);
   d = (await t.db.collection("inventario").doc("h1").get()).data();
   assert.equal(d.planHbo, "platinum"); assert.equal(d.historialPlan.length, 1);
   await t.M.tryCallback(t.cb(b.callback_data), { adminOk: true, superOk: false });
-  assert.equal(t.ultimo().kb.flat().some((x) => /Platinum ·|Standard ·/.test(x.text)), false);
+  assert.equal(t.ultimo().kb.flat().some((x) => /^(Platinum|Standard)$/.test(x.text)), false);
   assert.match(t.M.botonesCuenta("netflix", "m1")[0][0].text, /Hogar/, "Netflix sigue con su botón de Hogar");
 });
 test("HBO en el bot: capacidad a mano bloqueada contra el plan; cuentas nuevas 5/3 nacen con plan", () => {
