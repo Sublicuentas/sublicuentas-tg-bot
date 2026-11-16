@@ -4863,6 +4863,7 @@ bot.on("callback_query", async (q) => {
     if (data.startsWith("bz:r:")) { await require("./index_36_socios_telegram").tryCallback(q,{vend}); return; }
     if (data.startsWith("baul:")) { await require("./index_37_baul_apks").tryCallback(q,{adminOk,superOk,vend}); return; } // R187 · Baúl de APKs + URLs TV (permisos en el módulo)
     if (data.startsWith("spf:")) { await require("./index_38_spotify_familias").tryCallback(q,{adminOk,superOk,vend}); return; } // R188 · Spotify Familiar (permisos en el módulo)
+    if (data.startsWith("vipx:")) { await require("./index_40_bodega_vip").tryCallback(q,{adminOk,superOk}); return; } // R196u · /addextra Bodega VIP (solo Sublicuentas)
 
     const neededPermission = callbackPermission(data);
     if (neededPermission === "self-service" && !vendOk) return bot.sendMessage(chatId, "⛔ Esta opción corresponde a su perfil de vendedor.");
@@ -7062,6 +7063,7 @@ bot.on("message", async (msg) => {
     // Oct-2026 · Buzón de dos vías: respuesta nativa o botón "Responder consulta #C…" (nunca por suposición).
     if ((adminOk || vendOk) && await require("./index_36_socios_telegram").tryMensaje(msg,{adminOk,superOk,vend})) return;
     if ((adminOk || vendOk) && await require("./index_37_baul_apks").tryMensaje(msg,{adminOk,superOk,vend})) return; // R187 · /baul, /urltv
+    if (adminOk && await require("./index_40_bodega_vip").tryMensaje(msg,{adminOk,superOk})) return; // R196u · /addextra Bodega VIP
     if ((adminOk || vendOk) && await require("./index_39_cuenta_completa").tryMensaje(msg)) return; // R196q · búsqueda/clave al cambiar a cuenta completa
     if ((adminOk || vendOk) && await require("./index_38_spotify_familias").tryMensaje(msg,{adminOk,superOk,vend})) return; // R188 · /spotify
 
