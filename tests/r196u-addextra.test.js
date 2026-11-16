@@ -174,3 +174,33 @@ test("HBO en el bot: capacidad a mano bloqueada contra el plan; cuentas nuevas 5
   assert.equal((h.match(/require\("\.\/lib_hbo_planes"\)\.planPorCapacidad\(/g) || []).length, 4);
   assert.equal(P3.planPorCapacidad(5), "platinum"); assert.equal(P3.planPorCapacidad(3), "standard");
 });
+
+/* ── Fases 4 y 5 · AutoCAD, Eleven Reader e integración en Telegram / Socios ── */
+test("CAD/ELV en Telegram: AutoCAD en Software con contraseña opcional; Eleven Reader en Música con correo + contraseña", () => {
+  const core = R("index_01_core.js");
+  assert.match(core, /autocad:\s+\{ key: "autocad",\s+nombre: "Autodesk AutoCAD", categoria: "diseno_ia", acceso: "invitacion_correo",.*requiereClave: false, claveOpcional: true, requierePin: false/);
+  assert.match(core, /elevenreader: \{ key: "elevenreader", nombre: "Eleven Reader", categoria: "musica",\s+acceso: "correo_clave",.*requiereClave: true,\s+requierePin: false/);
+  const cat = require("../lib_catalogo_categorias");
+  assert.equal(cat.clasificarServicio({ plataforma: "autocad" }).categoria, "software", "sale en 💻 Software al vender");
+  assert.equal(cat.clasificarServicio({ plataforma: "elevenreader" }).categoria, "musica", "sale en 🎵 Música al vender");
+  const E = require("../lib_entrega_plataforma");
+  assert.equal(E.claveOpcional("autocad"), true); assert.equal(E.claveOpcional("elevenreader"), false);
+  const crm = R("index_03_clientes_crm.js");
+  assert.match(crm, /clave: requiereClaveLocal\(plat, \{ \.\.\.anterior, \.\.\.servicio \}\) \|\| claveOpcionalLocal\(plat\)/, "si se escribió, se guarda");
+  assert.match(crm, /else if \(claveOpcionalLocal\(p\)\) \{ const cv = String\(individual\.clave \|\| servicio\.clave \|\| ""\)\.trim\(\); if \(cv\) out \+=/, "sin contraseña no hay línea");
+  assert.match(crm, /"🔑 Contraseña \(opcional\)"/);
+  assert.match(R("index_02_utils_roles.js"), /"eleven reader": "elevenreader",.*"autodesk autocad": "autocad"/);
+});
+test("lib_entrega_plataforma.js sigue siendo copia fiel de HQ (AutoCAD / Eleven Reader incluidos)", () => {
+  const hq = path.join(__dirname, "..", "..", "hq-gh", "api", "_entrega-plataforma.js");
+  if (!fs.existsSync(hq)) return;
+  assert.equal(R("lib_entrega_plataforma.js").split("\n").slice(1).join("\n"), fs.readFileSync(hq, "utf8").split("\n").slice(1).join("\n"));
+});
+test("Socios: AutoCAD = invitación al correo, Eleven Reader = acceso; productos de respaldo sin precio inventado", () => {
+  const S = require("../lib_compra_socios");
+  assert.equal(S.modalidad({ n: "Autodesk AutoCAD" }).m, "correo");
+  assert.equal(S.modalidad({ n: "Eleven Reader" }).m, "acceso");
+  const C = require("../index_15_catalogo_socios");
+  const cad = C.CATALOGO_PROPIETARIOS.find((x) => x.id === "autocad"), er = C.CATALOGO_PROPIETARIOS.find((x) => x.id === "eleven_reader");
+  assert.equal(cad.precio, null); assert.equal(er.precio, null); assert.equal(er.categoria, "🎵 Música");
+});
