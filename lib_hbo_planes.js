@@ -30,7 +30,7 @@ function planPorCapacidad(cap) { const n = Number(cap); return n === 5 ? "platin
 
 async function cambiarPlan(db, { inventarioId, plan, usuario = "", origen = "web" } = {}) {
   const nuevo = PLANES[String(plan || "").toLowerCase()];
-  if (!nuevo) throw new Error("Plan no válido: elija Platinum (5) o Standard (3).");
+  if (!nuevo) throw new Error("Plan no válido: elija Platinum o Standard.");
   const ref = db.collection("inventario").doc(String(inventarioId || ""));
   const iso = new Date().toISOString();
   return db.runTransaction(async (tx) => {
@@ -67,8 +67,8 @@ async function resumenHbo(db) {
 // · Una cuenta con perfiles de otros clientes no se puede vender completa. Standard y Platinum nunca se mezclan.
 // · Ventas «HBO Max» antiguas sin plan: se respetan tal cual; solo toman plan si su cuenta de Bodega ya lo tiene (verificable).
 const OPCIONES_VENTA = Object.freeze([
-  { id: "hbomax_standard", plan: "standard", label: "HBO Standard · 3 perfiles", labelCompleta: "HBO Standard · cuenta completa" },
-  { id: "hbomax_platinum", plan: "platinum", label: "HBO Platinum · 5 perfiles", labelCompleta: "HBO Platinum · cuenta completa" },
+  { id: "hbomax_standard", plan: "standard", label: "HBO Standard", labelCompleta: "HBO Standard · cuenta completa" },
+  { id: "hbomax_platinum", plan: "platinum", label: "HBO Platinum", labelCompleta: "HBO Platinum · cuenta completa" },
 ]);
 function planDesdePlataforma(v = "") { const t = String(v || "").toLowerCase().replace(/[^a-z]/g, ""); if (!/^hbo/.test(t)) return ""; if (/platinum$/.test(t)) return "platinum"; if (/standard$/.test(t)) return "standard"; return ""; }
 function esPlataformaHbo(v = "") { return /^hbo/.test(String(v || "").toLowerCase().replace(/[^a-z]/g, "")) || String(v || "").toLowerCase().trim() === "max"; }

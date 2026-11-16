@@ -411,7 +411,7 @@ function renderCredencialesServicioLocal(servicio = {}, markdown = true, indent 
   const individual = servicioParaPerfilLocal(servicio, perfiles[0] || {}, servicio.nombrePerfil || servicio.titular || "");
   let out = "";
   // R196v · HBO: plan y modalidad reales de la venta (sin plan = venta anterior «HBO Max», no se inventa).
-  if (String(p || "").toLowerCase().replace(/\s+/g, "") === "hbomax") { const ph = { standard: "HBO Standard · 3 perfiles", platinum: "HBO Platinum · 5 perfiles" }[String(servicio.planHbo || "")]; out += `${indent}📦 ${markdown ? "*Plan:*" : "Plan:"} ${esc(ph ? (servicio.tipoVenta === "cuenta_completa" ? ph.replace(/ · \d perfiles$/, " · cuenta completa") : ph) : "sin definir (venta anterior)")}\n`; }
+  if (String(p || "").toLowerCase().replace(/\s+/g, "") === "hbomax") { const ph = { standard: "HBO Standard", platinum: "HBO Platinum" }[String(servicio.planHbo || "")]; out += `${indent}📦 ${markdown ? "*Plan:*" : "Plan:"} ${esc(ph ? (servicio.tipoVenta === "cuenta_completa" ? `${ph} · cuenta completa` : ph) : "sin definir (venta anterior)")}\n`; }
   if (requiereCorreoLocal(p)) {
     const identLabel = getIdentLabelLocal(p);
     const identIcon = identLabel === "Usuario" ? "👤" : "📧";
@@ -721,8 +721,8 @@ function kbPlataformasWiz(prefix = "wiz:plat", clientId = null, idx = null, cate
       return;
     }
     if (k === "hbomax") { // R196v · HBO Standard (3) / Platinum (5): nunca «HBO Max» genérico en ventas nuevas
-      items.push({ text: "🎬 HBO Standard · 3 perfiles", callback_data: appendCallbackContextLocal(`${prefix}:hbomaxstandard`, clientId, idx) });
-      items.push({ text: "🎬 HBO Platinum · 5 perfiles", callback_data: appendCallbackContextLocal(`${prefix}:hbomaxplatinum`, clientId, idx) });
+      items.push({ text: "🎬 HBO Standard", callback_data: appendCallbackContextLocal(`${prefix}:hbomaxstandard`, clientId, idx) });
+      items.push({ text: "🎬 HBO Platinum", callback_data: appendCallbackContextLocal(`${prefix}:hbomaxplatinum`, clientId, idx) });
       return;
     }
     items.push({

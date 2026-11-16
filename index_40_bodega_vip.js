@@ -198,7 +198,7 @@ module.exports = { tryCallback: tryCallbackTodo, tryMensaje: tryMensajeTodo, ini
 const P = require("./lib_hbo_planes");
 const _botonesFase2 = botonesCuenta;
 function botonesCuentaTodo(plat, docId) {
-  if (plat === "hbomax") return [[{ text: "📦 Plan HBO (Platinum 5 / Standard 3)", callback_data: `hog:hp:${tok(docId)}` }]];
+  if (plat === "hbomax") return [[{ text: "📦 Plan HBO", callback_data: `hog:hp:${tok(docId)}` }]];
   return _botonesFase2(plat, docId);
 }
 async function planCallback(q, ctx) {
@@ -213,7 +213,7 @@ async function planCallback(q, ctx) {
       return true;
     }
     const s = await db.collection("inventario").doc(docId).get(); const d = s.data() || {}; const r = P.resumenCuenta(d);
-    const kb = ctx.superOk ? [[{ text: "Platinum · 5 perfiles", callback_data: `hog:hps:${p[2]}:platinum` }, { text: "Standard · 3 perfiles", callback_data: `hog:hps:${p[2]}:standard` }], [{ text: "✖️ Cerrar", callback_data: "vipx:x" }]] : [[{ text: "✖️ Cerrar", callback_data: "vipx:x" }]];
+    const kb = ctx.superOk ? [[{ text: "Platinum", callback_data: `hog:hps:${p[2]}:platinum` }, { text: "Standard", callback_data: `hog:hps:${p[2]}:standard` }], [{ text: "✖️ Cerrar", callback_data: "vipx:x" }]] : [[{ text: "✖️ Cerrar", callback_data: "vipx:x" }]];
     await upsertPanel(chatId, `📦 *PLAN HBO MAX*\n📧 ${esc(d.correo || "")}\n\nActual: *${esc(r.etiqueta)}*\nLibres: ${r.libres}${r.sobreocupada ? "\n⚠️ Sobreocupada: revise antes de vender." : ""}\n\n_Bajar a Standard se bloquea si hay más de 3 ocupados; nunca se saca a un cliente._`, kb);
   } catch (e) { await upsertPanel(chatId, `⚠️ ${esc(String(e?.message || e).slice(0, 200))}`, []); }
   return true;

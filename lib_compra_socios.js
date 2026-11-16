@@ -138,7 +138,7 @@ function lineasTelegram(productos = [], principalNombre = "") {
     const datos = [];
     const destino = p.clienteNombre || p.nombreCliente || "";
     if (destino && (p.destinatario?.tipo === "otro" || !principalNombre)) datos.push(`Para: ${destino}${p.destinatario?.tipo === "otro" ? " (otro cliente)" : ""}`);
-    if (p.planHbo) datos.push(`Plan: HBO ${p.planHbo === "platinum" ? "Platinum (5 perfiles)" : "Standard (3 perfiles)"}${p.modalidad === "cuenta_completa" ? " · cuenta completa" : ""}`); // R196v
+    if (p.planHbo) datos.push(`Plan: HBO ${p.planHbo === "platinum" ? "Platinum" : "Standard"}${p.modalidad === "cuenta_completa" ? " · cuenta completa" : ""}`); // R196v
     if (p.perfil && p.perfil !== destino) datos.push(`Perfil: ${p.perfil}`);
     if (p.dispositivo) datos.push(`Dispositivo: ${p.dispositivo}`);
     if (p.marcaTv) datos.push(`TV: ${p.marcaTv}${p.modeloTv ? ` · ${p.modeloTv}` : ""}`);
