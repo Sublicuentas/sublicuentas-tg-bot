@@ -68,6 +68,37 @@ async function cambiarPlan(db, { inventarioId, plan, capacidad = null, autorizar
     return { ok: true, ...resumenCuenta({ ...d, ...patch }) };
   });
 }
+// R196z4 · El plan de la CUENTA madre (inventario.planHbo) es el ÚNICO dato de plan. Las ventas HBO ligadas a esa cuenta
+// (por inventarioId o por su correo) copian ese plan para que ficha, Control Maestro, Socios y Finanzas digan lo mismo y la
+// regla «Standard y Platinum no se mezclan» no bloquee después la edición de esas ventas. Solo cambia `planHbo` de la venta
+// (con historial): nunca clientes, perfiles, PIN, precios, fechas, montos ni registros financieros.
+const normC = (v) => String(v || "").trim().toLowerCase();
+async function sincronizarPlanVentas(db, { inventarioId, usuario = "", origen = "web" } = {}) {
+  const id = String(inventarioId || ""); const s = await db.collection("inventario").doc(id).get();
+  if (!s.exists) return { ok: false, ventas: 0 };
+  const d = s.data() || {}; const plan = planValido(d.planHbo);
+  if (!esHbo(d) || !plan) return { ok: true, ventas: 0 };
+  const correo = normC(d.correo); const iso = new Date().toISOString();
+  const liga = (sv) => String(sv.inventarioId || "") === id || (correo && normC(sv.correo) === correo) || (Array.isArray(sv.perfiles) && sv.perfiles.some((p) => p && (String(p.inventarioId || "") === id || (correo && normC(p.correo) === correo))));
+  const ids = [...new Set((Array.isArray(d.clientes) ? d.clientes : []).map((c) => String(c && c.clienteId || "")).filter(Boolean))];
+  let ventas = 0;
+  for (const cid of ids) {
+    const n = await db.runTransaction(async (tx) => {
+      const ref = db.collection("clientes").doc(cid); const cs = await tx.get(ref); if (!cs.exists) return 0;
+      const c = cs.data() || {}; if (String(c.consolidadoEn || "").trim()) return 0;
+      let k = 0;
+      const servicios = (Array.isArray(c.servicios) ? c.servicios : []).map((sv) => {
+        if (!sv || !esPlataformaHbo(sv.plataforma) || !liga(sv) || sv.planHbo === plan) return sv;
+        k += 1;
+        return { ...sv, planHbo: plan, historialPlanHbo: [...(Array.isArray(sv.historialPlanHbo) ? sv.historialPlanHbo : []), { at: iso, de: sv.planHbo || "", a: plan, por: usuario, origen, inventarioId: id }].slice(-10) };
+      });
+      if (k) tx.update(ref, { servicios });
+      return k;
+    });
+    ventas += n;
+  }
+  return { ok: true, ventas };
+}
 // «Editar capacidad» (Standard o Platinum): misma regla, sin cambiar el plan.
 function editarCapacidad(db, { inventarioId, capacidad, autorizarExcepcion = false, motivo = "", usuario = "", origen = "web" } = {}) {
   return cambiarPlan(db, { inventarioId, plan: null, capacidad, autorizarExcepcion, motivo, usuario, origen });
@@ -166,5 +197,5 @@ function contadoresHbo(cuentas = []) {
   return out;
 }
 
-module.exports = { PLAT_HBO, PLANES, planDeCuenta, etiquetaPlan, resumenCuenta, planPorCapacidad, cambiarPlan, editarCapacidad, capacidadEfectiva, esPersonalizada, resumenHbo,
+module.exports = { PLAT_HBO, PLANES, planDeCuenta, etiquetaPlan, resumenCuenta, planPorCapacidad, cambiarPlan, editarCapacidad, sincronizarPlanVentas, capacidadEfectiva, esPersonalizada, resumenHbo,
   OPCIONES_VENTA, planDesdePlataforma, esPlataformaHbo, planValido, vendidaCompleta, cuposVendibles, validarAsignacion, contadoresHbo, planDesdeNombreProducto, diagnosticoHbo };

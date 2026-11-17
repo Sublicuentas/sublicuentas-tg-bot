@@ -214,6 +214,7 @@ async function guardarPlanTg(chatId, docId, t, from, { plan = null, capacidad = 
   try {
     const args = { inventarioId: docId, capacidad, autorizarExcepcion: autorizar, motivo: autorizar ? "Confirmado en Telegram" : "", usuario: usuarioTg(from), origen: "tg" };
     const r = plan ? await P.cambiarPlan(db, { ...args, plan }) : await P.editarCapacidad(db, args);
+    if (plan && r.ok && !r.yaEstaba) { try { await P.sincronizarPlanVentas(db, { inventarioId: docId, usuario: args.usuario, origen: "tg" }); } catch (_) {} } // R196z4 · ventas ligadas toman el plan de la cuenta
     await upsertPanel(chatId, `✅ *${esc(r.etiqueta)}*\nCapacidad ${r.capacidad} · Ocupados ${r.ocupados} · Libres ${r.libres}${r.personalizada ? "\n_Capacidad personalizada de esta cuenta (excepción registrada)._" : ""}`, [[{ text: "📦 Ver plan", callback_data: `hog:hp:${t}` }, { text: "✖️ Cerrar", callback_data: "vipx:x" }]]);
   } catch (e) {
     if ((e.code === "requiere_excepcion" || e.code === "sobreocupacion") && e.capacidadSugerida) {
