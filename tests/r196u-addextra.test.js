@@ -243,3 +243,16 @@ test("R196z3 Telegram: confirmar Standard 4/4 excepcional y «✏️ Editar capa
   await t.M.tryCallback(t.cb(t.boton(/Confirmar excepción de 4/)), { adminOk: true, superOk: false });
   assert.match(t.ultimo().t, /Solo Sublicuentas/);
 });
+
+test("R196z4 Telegram: al cambiar el plan, las ventas ligadas toman el plan de la cuenta (solo planHbo)", async () => {
+  const t = cargar();
+  const clientes = [1, 2, 3].map((i) => ({ clienteId: "cz", compraId: "v" + i, nombre: "Perfil " + i, slot: i }));
+  await t.db.collection("inventario").doc("h119").set({ plataforma: "hbomax", correo: "119@ejemplo.com", capacidad: 5, ocupados: 3, clientes });
+  await t.db.collection("clientes").doc("cz").set({ nombre: "Cliente Z", servicios: [{ compraId: "v1", plataforma: "hbomax", correo: "119@ejemplo.com", precio: 150, fechaRenovacion: "2026-12-01" }, { compraId: "n1", plataforma: "netflix", correo: "otro@ejemplo.com", precio: 100 }] });
+  const [[b]] = t.M.botonesCuenta("hbomax", "h119");
+  await t.M.tryCallback(t.cb(b.callback_data), SUPER);
+  await t.M.tryCallback(t.cb(t.boton(/^Platinum$/)), SUPER);
+  assert.match(t.ultimo().t, /Platinum · 3\/5/);
+  const c = (await t.db.collection("clientes").doc("cz").get()).data();
+  assert.deepEqual([c.servicios[0].planHbo, c.servicios[0].precio, c.servicios[0].fechaRenovacion, c.servicios[1].planHbo], ["platinum", 150, "2026-12-01", undefined]);
+});
