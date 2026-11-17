@@ -147,29 +147,29 @@ test("lib_hbo_planes.js es copia fiel de HQ api/_hbo-planes.js", () => {
   if (!fs.existsSync(hq)) return;
   assert.equal(R("lib_hbo_planes.js").split("\n").slice(1).join("\n"), fs.readFileSync(hq, "utf8").split("\n").slice(1).join("\n"));
 });
-test("HBO-01/02 en el bot: 📦 Plan HBO → Standard con 4 ocupados BLOQUEA; Platinum queda 4/5; admin no-super solo ve", async () => {
+test("HBO-01/02 en el bot: 📦 Plan HBO → Standard con 4 ocupados pide confirmar excepción (no saca a nadie); Platinum queda 4/5; admin no-super solo ve", async () => {
   const t = cargar();
   const clientes = [1, 2, 3, 4].map((i) => ({ clienteId: "c" + i, nombre: "Cliente " + i, slot: i }));
   await t.db.collection("inventario").doc("h1").set({ plataforma: "hbomax", correo: "hbo01@ejemplo.com", capacidad: 5, ocupados: 4, clientes });
   const [[b]] = t.M.botonesCuenta("hbomax", "h1");
   assert.match(b.text, /Plan HBO/);
   await t.M.tryCallback(t.cb(b.callback_data), SUPER);
-  assert.match(t.ultimo().t, /HBO 4\/5 · plan sin definir/);
+  assert.match(t.ultimo().t, /HBO · 4\/5 · plan sin definir/);
   await t.M.tryCallback(t.cb(t.boton(/^Standard$/)), SUPER);
-  assert.match(t.ultimo().t, /No se puede pasar a Standard/);
+  assert.match(t.ultimo().t, /capacidad excepcional de 4/); assert.ok(t.ultimo().kb.flat().some((x) => /Confirmar excepción de 4/.test(x.text))); // R196z3
   let d = (await t.db.collection("inventario").doc("h1").get()).data();
   assert.equal(d.capacidad, 5); assert.equal(d.clientes.length, 4); assert.equal(d.planHbo, undefined);
   await t.M.tryCallback(t.cb(b.callback_data), SUPER);
   await t.M.tryCallback(t.cb(t.boton(/^Platinum$/)), SUPER);
-  assert.match(t.ultimo().t, /Platinum 4\/5/);
+  assert.match(t.ultimo().t, /Platinum · 4\/5/);
   d = (await t.db.collection("inventario").doc("h1").get()).data();
   assert.equal(d.planHbo, "platinum"); assert.equal(d.historialPlan.length, 1);
   await t.M.tryCallback(t.cb(b.callback_data), { adminOk: true, superOk: false });
   assert.equal(t.ultimo().kb.flat().some((x) => /^(Platinum|Standard)$/.test(x.text)), false);
   assert.match(t.M.botonesCuenta("netflix", "m1")[0][0].text, /Hogar/, "Netflix sigue con su botón de Hogar");
 });
-test("HBO en el bot: capacidad a mano bloqueada contra el plan; cuentas nuevas 5/3 nacen con plan", () => {
-  assert.match(R("index_04_inventario_correos.js"), /const pl = require\("\.\/lib_hbo_planes"\)\.planDeCuenta\(data\); if \(pl && capacidad !== pl\.capacidad\) throw/);
+test("HBO en el bot: capacidad a mano distinta del plan va por «Editar capacidad»; cuentas nuevas 5/3 nacen con plan", () => {
+  assert.match(R("index_04_inventario_correos.js"), /if \(pl && capacidad !== pl\.capacidad && capacidad !== HP\.capacidadEfectiva\(data\)\) throw new Error\(`[^`]*Editar capacidad/); // R196z3
   const h = R("index_06_handlers.js");
   assert.equal((h.match(/require\("\.\/lib_hbo_planes"\)\.planPorCapacidad\(/g) || []).length, 4);
   assert.equal(P3.planPorCapacidad(5), "platinum"); assert.equal(P3.planPorCapacidad(3), "standard");
@@ -217,4 +217,29 @@ test("R196v · panel 🏠 Hogar en Telegram avisa si la madre está duplicada en
   assert.match(t.ultimo().t, /Hogar sin asignar/); assert.match(t.ultimo().t, /El Hogar está registrado en la otra copia/);
   assert.equal((await t.db.collection("inventario").doc("webRandom").get()).data().hogar, undefined);
   assert.match(R("index_04_inventario_correos.js"), /incidenciaHogar \+ \/\/ R196v/);
+});
+
+/* ── R196z3 · Capacidad HBO editable por cuenta (excepción confirmada), sin sacar clientes ── */
+test("R196z3 Telegram: confirmar Standard 4/4 excepcional y «✏️ Editar capacidad» con reducción protegida", async () => {
+  const t = cargar();
+  const clientes = [1, 2, 3, 4].map((i) => ({ clienteId: "c" + i, nombre: "Cliente " + i, slot: i, pin: "1" + i }));
+  await t.db.collection("inventario").doc("h9").set({ plataforma: "hbomax", correo: "hbo09@ejemplo.com", clave: "ClaveFicticia", capacidad: 5, planHbo: "platinum", ocupados: 4, clientes });
+  const [[b]] = t.M.botonesCuenta("hbomax", "h9");
+  await t.M.tryCallback(t.cb(b.callback_data), SUPER);
+  assert.match(t.ultimo().t, /Platinum · 4\/5/); assert.ok(t.ultimo().kb.flat().some((x) => /Editar capacidad/.test(x.text)));
+  await t.M.tryCallback(t.cb(t.boton(/^Standard$/)), SUPER);
+  await t.M.tryCallback(t.cb(t.boton(/Confirmar excepción de 4/)), SUPER);
+  assert.match(t.ultimo().t, /Standard · 4\/4 · Capacidad personalizada/);
+  let d = (await t.db.collection("inventario").doc("h9").get()).data();
+  assert.deepEqual([d.planHbo, d.capacidad, d.disponibles, d.capacidadPersonalizada, d.clientes.length, d.clave, d.clientes[0].pin], ["standard", 4, 0, true, 4, "ClaveFicticia", "11"]);
+  assert.match(d.capacidadExcepcion.por, /^tg:1@sublicuentas/);
+  // Editar capacidad: 3 dejaría 4 ocupados → se impide y ofrece conservar 4
+  await t.M.tryCallback(t.cb(t.boton(/Ver plan/)), SUPER);
+  await t.M.tryCallback(t.cb(t.boton(/Editar capacidad/)), SUPER);
+  assert.equal(await t.M.tryMensaje(t.msg("3"), SUPER), true);
+  assert.match(t.ultimo().t, /Quedarían 4 perfiles ocupados/); assert.ok(t.ultimo().kb.flat().some((x) => /Confirmar excepción de 4/.test(x.text)));
+  d = (await t.db.collection("inventario").doc("h9").get()).data(); assert.equal(d.capacidad, 4); assert.equal(d.clientes.length, 4);
+  // admin no-super no edita
+  await t.M.tryCallback(t.cb(t.boton(/Confirmar excepción de 4/)), { adminOk: true, superOk: false });
+  assert.match(t.ultimo().t, /Solo Sublicuentas/);
 });
