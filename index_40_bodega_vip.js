@@ -201,23 +201,51 @@ function botonesCuentaTodo(plat, docId) {
   if (plat === "hbomax") return [[{ text: "📦 Plan HBO", callback_data: `hog:hp:${tok(docId)}` }]];
   return _botonesFase2(plat, docId);
 }
+// R196z3 · Plan + capacidad por cuenta. Predeterminado Standard 3 · Platinum 5; otra capacidad = excepción de ESA cuenta,
+// confirmada por Sublicuentas. Nunca se saca, mueve ni desactiva un perfil vendido (se ofrece conservarlos).
+const usuarioTg = (from = {}) => `tg:${from.id || ""}${from.username ? "@" + from.username : ""}`;
+async function panelPlan(chatId, docId, t, superOk, aviso = "") {
+  const s = await db.collection("inventario").doc(docId).get(); const d = s.data() || {}; const r = P.resumenCuenta(d);
+  const kb = superOk ? [[{ text: "Platinum", callback_data: `hog:hps:${t}:platinum` }, { text: "Standard", callback_data: `hog:hps:${t}:standard` }], ...(r.plan ? [[{ text: "✏️ Editar capacidad", callback_data: `hog:hpc:${t}` }]] : []), [{ text: "✖️ Cerrar", callback_data: "vipx:x" }]] : [[{ text: "✖️ Cerrar", callback_data: "vipx:x" }]];
+  const pers = r.personalizada ? `\nPredeterminado de ${esc(r.nombrePlan)}: ${r.capacidadPlan}. ${r.excepcion ? `Excepción confirmada (${esc(r.excepcion.por || "—")}).` : "⚠️ Sin excepción registrada: confirme si es correcta."}` : "";
+  await upsertPanel(chatId, `${aviso ? aviso + "\n\n" : ""}📦 *PLAN HBO MAX*\n📧 ${esc(d.correo || "")}\n\nActual: *${esc(r.etiqueta)}*\nCapacidad: ${r.capacidad} · Ocupados: ${r.ocupados} · Libres: ${r.libres}${pers}${r.sobreocupada ? "\n⚠️ Sobreocupada: revise antes de vender." : ""}\n\n_Standard trae 3 y Platinum 5. Otra capacidad queda como excepción de esta cuenta. Nunca se saca a un cliente._`, kb);
+}
+async function guardarPlanTg(chatId, docId, t, from, { plan = null, capacidad = null, autorizar = false } = {}) {
+  try {
+    const args = { inventarioId: docId, capacidad, autorizarExcepcion: autorizar, motivo: autorizar ? "Confirmado en Telegram" : "", usuario: usuarioTg(from), origen: "tg" };
+    const r = plan ? await P.cambiarPlan(db, { ...args, plan }) : await P.editarCapacidad(db, args);
+    await upsertPanel(chatId, `✅ *${esc(r.etiqueta)}*\nCapacidad ${r.capacidad} · Ocupados ${r.ocupados} · Libres ${r.libres}${r.personalizada ? "\n_Capacidad personalizada de esta cuenta (excepción registrada)._" : ""}`, [[{ text: "📦 Ver plan", callback_data: `hog:hp:${t}` }, { text: "✖️ Cerrar", callback_data: "vipx:x" }]]);
+  } catch (e) {
+    if ((e.code === "requiere_excepcion" || e.code === "sobreocupacion") && e.capacidadSugerida) {
+      await upsertPanel(chatId, `⚠️ ${esc(e.message)}`, [[{ text: `✅ Confirmar excepción de ${e.capacidadSugerida}`, callback_data: `hog:hpx:${t}:${plan || "-"}:${e.capacidadSugerida}` }], [{ text: "✖️ Cancelar", callback_data: `hog:hp:${t}` }]]);
+    } else await upsertPanel(chatId, `⛔ ${esc(e.message)}`, [[{ text: "📦 Ver plan", callback_data: `hog:hp:${t}` }]]);
+  }
+}
 async function planCallback(q, ctx) {
   const chatId = q.message?.chat?.id; const p = String(q.data || "").split(":");
   const docId = TOKENS.get(p[2]); if (!docId) { await upsertPanel(chatId, "⚠️ Ese botón venció. Abra otra vez la cuenta.", []); return true; }
   try {
-    if (p[1] === "hps") {
-      if (!ctx.superOk) { await upsertPanel(chatId, "⛔ Solo Sublicuentas cambia el plan HBO.", []); return true; }
-      const usuario = `tg:${q.from?.id || ""}${q.from?.username ? "@" + q.from.username : ""}`;
-      try { const r = await P.cambiarPlan(db, { inventarioId: docId, plan: p[3], usuario, origen: "tg" }); await upsertPanel(chatId, `✅ Plan: *${esc(r.etiqueta)}*`, []); }
-      catch (e) { await upsertPanel(chatId, `⛔ ${esc(e.message)}`, []); }
-      return true;
-    }
-    const s = await db.collection("inventario").doc(docId).get(); const d = s.data() || {}; const r = P.resumenCuenta(d);
-    const kb = ctx.superOk ? [[{ text: "Platinum", callback_data: `hog:hps:${p[2]}:platinum` }, { text: "Standard", callback_data: `hog:hps:${p[2]}:standard` }], [{ text: "✖️ Cerrar", callback_data: "vipx:x" }]] : [[{ text: "✖️ Cerrar", callback_data: "vipx:x" }]];
-    await upsertPanel(chatId, `📦 *PLAN HBO MAX*\n📧 ${esc(d.correo || "")}\n\nActual: *${esc(r.etiqueta)}*\nLibres: ${r.libres}${r.sobreocupada ? "\n⚠️ Sobreocupada: revise antes de vender." : ""}\n\n_Bajar a Standard se bloquea si hay más de 3 ocupados; nunca se saca a un cliente._`, kb);
+    if (["hps", "hpc", "hpx"].includes(p[1]) && !ctx.superOk) { await upsertPanel(chatId, "⛔ Solo Sublicuentas cambia el plan o la capacidad HBO.", []); return true; }
+    if (p[1] === "hps") { await guardarPlanTg(chatId, docId, p[2], q.from, { plan: p[3] }); return true; }
+    if (p[1] === "hpx") { await guardarPlanTg(chatId, docId, p[2], q.from, { plan: p[3] && p[3] !== "-" ? p[3] : null, capacidad: Number(p[4]), autorizar: true }); return true; }
+    if (p[1] === "hpc") { pending.set(k(chatId), { mode: "hboCapValor", docId, tok: p[2] }); await upsertPanel(chatId, "✏️ *EDITAR CAPACIDAD HBO*\n\nEscriba el número de perfiles de esta cuenta (Standard trae 3, Platinum 5).\nSi es otro número, le pediré confirmar la excepción.", [[{ text: "✖️ Cancelar", callback_data: `hog:hp:${p[2]}` }]]); return true; }
+    pending.delete(k(chatId));
+    await panelPlan(chatId, docId, p[2], ctx.superOk);
   } catch (e) { await upsertPanel(chatId, `⚠️ ${esc(String(e?.message || e).slice(0, 200))}`, []); }
   return true;
 }
+const _tryMensajeFase2 = module.exports.tryMensaje;
+async function tryMensajeFase3(msg, ctx = {}) {
+  const chatId = msg?.chat?.id; const st = pending.get(k(chatId)); const t = String(msg?.text || "").trim();
+  if (st && st.mode === "hboCapValor" && t && !t.startsWith("/")) {
+    if (!ctx.superOk) return false;
+    if (!/^\d{1,2}$/.test(t)) { await upsertPanel(chatId, "⚠️ Escriba solo un número (ejemplo: 4).", [[{ text: "✖️ Cancelar", callback_data: `hog:hp:${st.tok}` }]]); return true; }
+    pending.delete(k(chatId));
+    await guardarPlanTg(chatId, st.docId, st.tok, msg.from, { capacidad: Number(t) });
+    return true;
+  }
+  return _tryMensajeFase2(msg, ctx);
+}
 const _tryCallbackFase2 = module.exports.tryCallback;
-async function tryCallbackFase3(q, ctx = {}) { const d = String(q.data || ""); if (d.startsWith("hog:hp:") || d.startsWith("hog:hps:")) return planCallback(q, ctx); return _tryCallbackFase2(q, ctx); }
-module.exports = { ...module.exports, tryCallback: tryCallbackFase3, botonesCuenta: botonesCuentaTodo };
+async function tryCallbackFase3(q, ctx = {}) { const d = String(q.data || ""); if (/^hog:hp[scx]?:/.test(d)) return planCallback(q, ctx); return _tryCallbackFase2(q, ctx); }
+module.exports = { ...module.exports, tryCallback: tryCallbackFase3, tryMensaje: tryMensajeFase3, botonesCuenta: botonesCuentaTodo };

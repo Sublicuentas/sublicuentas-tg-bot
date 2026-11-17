@@ -1,4 +1,4 @@
-// lib_hbo_planes.js = COPIA FIEL de Sublichat HQ api/_hbo-planes.js · · R196u Fase 3 — HBO Max Platinum (5 perfiles) / Standard (3 perfiles) por CUENTA. COPIA FIEL: lib_hbo_planes.js
+// lib_hbo_planes.js = COPIA FIEL de Sublichat HQ api/_hbo-planes.js · · R196u Fase 3 — HBO Max Platinum (5 perfiles) / Standard (3 perfiles) por CUENTA (R196z3: capacidad editable por cuenta). COPIA FIEL: lib_hbo_planes.js
 // PDF «Actualización operativa…» v2.0 · punto 06. Las cuentas actuales están mezcladas (respuesta del dueño), así que:
 // · La plataforma sigue siendo «hbomax» (no se renombra ni se migra nada). El plan es un dato de la CUENTA de Bodega
 //   (`planHbo`), y la capacidad de esa cuenta pasa a ser la del plan: el límite de ventas sigue siendo `capacidad`, que ya
@@ -14,23 +14,33 @@ const ocupadosDe = (d = {}) => Math.max(Number(d.ocupados || 0) || 0, Array.isAr
 const esHbo = (d = {}) => String(d.plataforma || "").toLowerCase().replace(/\s+/g, "") === PLAT_HBO;
 
 function planDeCuenta(d = {}) { const p = String(d.planHbo || "").toLowerCase(); return PLANES[p] || null; }
-// «Platinum 4/5», «Standard 2/3» o «HBO 4/5 · plan sin definir».
+// R196z3 · UNA sola capacidad para todos (Web, APK, Telegram, Control Maestro): la guardada en la cuenta (`capacidad`).
+// El plan solo da el valor PREDETERMINADO (Standard 3 · Platinum 5). Si la cuenta tiene otra capacidad, es «personalizada»
+// (excepción por cuenta madre). Antes el bot tomaba la del plan y la Web la de la cuenta: por eso no coincidían.
+function capacidadEfectiva(d = {}) { const n = Math.round(Number(d.capacidad) || 0); if (n > 0) return n; const p = planDeCuenta(d); return p ? p.capacidad : Math.max(1, Number(d.total || 5) || 5); }
+function esPersonalizada(d = {}) { const p = planDeCuenta(d); return !!p && capacidadEfectiva(d) !== p.capacidad; }
+// «Standard · 2/3», «Standard · 4/4 · Capacidad personalizada», «Platinum · cuenta completa» o «HBO · 4/5 · plan sin definir».
 function etiquetaPlan(d = {}) {
   if (!esHbo(d)) return "";
-  const p = planDeCuenta(d); const occ = ocupadosDe(d);
+  const p = planDeCuenta(d); const occ = ocupadosDe(d); const cap = capacidadEfectiva(d);
   if (p && Array.isArray(d.clientes) && d.clientes.some((c) => c && (c.cuentaCompleta === true || c.tipoVenta === "cuenta_completa"))) return `${p.corto} · cuenta completa`; // R196v
-  return p ? `${p.corto} ${occ}/${p.capacidad}` : `HBO ${occ}/${Math.max(1, Number(d.capacidad || 5))} · plan sin definir`;
+  return p ? `${p.corto} · ${occ}/${cap}${esPersonalizada(d) ? " · Capacidad personalizada" : ""}` : `HBO · ${occ}/${cap} · plan sin definir`;
 }
 function resumenCuenta(d = {}) {
-  const p = planDeCuenta(d); const cap = p ? p.capacidad : Math.max(1, Number(d.capacidad || 5)); const occ = ocupadosDe(d);
-  return { plan: p ? p.id : "", nombrePlan: p ? p.nombre : "Plan sin definir", capacidad: cap, ocupados: occ, libres: Math.max(0, cap - occ), sobreocupada: occ > cap, etiqueta: etiquetaPlan(d) };
+  const p = planDeCuenta(d); const cap = capacidadEfectiva(d); const occ = ocupadosDe(d);
+  return { plan: p ? p.id : "", nombrePlan: p ? p.nombre : "Plan sin definir", capacidad: cap, capacidadPlan: p ? p.capacidad : null, personalizada: esPersonalizada(d), excepcion: d.capacidadExcepcion || null,
+    ocupados: occ, libres: Math.max(0, cap - occ), sobreocupada: occ > cap, etiqueta: etiquetaPlan(d) };
 }
 // Plan sugerido por la capacidad al crear una cuenta nueva (5 → Platinum, 3 → Standard); cualquier otra = sin plan.
 function planPorCapacidad(cap) { const n = Number(cap); return n === 5 ? "platinum" : n === 3 ? "standard" : ""; }
 
-async function cambiarPlan(db, { inventarioId, plan, usuario = "", origen = "web" } = {}) {
-  const nuevo = PLANES[String(plan || "").toLowerCase()];
-  if (!nuevo) throw new Error("Plan no válido: elija Platinum o Standard.");
+// R196z3 · Cambiar plan y/o capacidad de UNA cuenta madre. Predeterminado: Standard 3 · Platinum 5.
+// · Otra capacidad = excepción de ESA cuenta: exige `autorizarExcepcion` (el administrador confirma) y queda registrada.
+// · Nunca menos capacidad que perfiles ocupados: se ofrece conservarlos (capacidad excepcional = ocupados). No se saca,
+//   mueve ni desactiva ningún cliente. Solo cambian planHbo, capacidad y disponibles; clientes, precios, fechas, claves y PIN no.
+const CAP_MAX = 12;
+function errorCodigo(msg, code, extra = {}) { const e = new Error(msg); e.code = code; Object.assign(e, extra); return e; }
+async function cambiarPlan(db, { inventarioId, plan, capacidad = null, autorizarExcepcion = false, motivo = "", usuario = "", origen = "web" } = {}) {
   const ref = db.collection("inventario").doc(String(inventarioId || ""));
   const iso = new Date().toISOString();
   return db.runTransaction(async (tx) => {
@@ -38,16 +48,29 @@ async function cambiarPlan(db, { inventarioId, plan, usuario = "", origen = "web
     const d = s.data() || {};
     if (!esHbo(d)) throw new Error("El plan solo aplica a cuentas HBO Max.");
     const antes = planDeCuenta(d); const occ = ocupadosDe(d);
-    if (antes && antes.id === nuevo.id && Number(d.capacidad) === nuevo.capacidad) return { ok: true, yaEstaba: true, ...resumenCuenta(d) };
-    if (occ > nuevo.capacidad) {
-      const e = new Error(`No se puede pasar a ${nuevo.corto} (${nuevo.capacidad} perfiles): la cuenta tiene ${occ} perfiles ocupados. Mueva o dé de baja perfiles primero; no se saca a ningún cliente automáticamente.`);
-      e.code = "sobreocupacion"; throw e;
+    const nuevo = plan ? PLANES[String(plan).toLowerCase()] : antes;
+    if (!nuevo) throw new Error(plan ? "Plan no válido: elija Platinum o Standard." : "Defina primero el plan (Standard o Platinum).");
+    const pedida = capacidad == null || capacidad === "" ? null : Math.round(Number(capacidad));
+    if (pedida != null && !(pedida >= 1 && pedida <= CAP_MAX)) throw new Error(`Capacidad inválida: escriba un número de 1 a ${CAP_MAX}.`);
+    let cap = pedida != null ? pedida : nuevo.capacidad;
+    if (pedida == null && occ > cap) { // bajar de plan con más ocupados: se ofrece conservarlos con excepción autorizada
+      if (!autorizarExcepcion) throw errorCodigo(`La cuenta tiene ${occ} perfiles ocupados y ${nuevo.corto} trae ${nuevo.capacidad}. Para conservarlos sin sacar a nadie, confirme una capacidad excepcional de ${occ}.`, "requiere_excepcion", { capacidadSugerida: occ, plan: nuevo.id });
+      cap = occ;
     }
-    const hist = [...(Array.isArray(d.historialPlan) ? d.historialPlan : []), { at: iso, por: usuario, origen, de: antes ? antes.id : "sin_plan", a: nuevo.id, capacidadAntes: Number(d.capacidad || 0), capacidadNueva: nuevo.capacidad, ocupados: occ }].slice(-50);
-    const patch = { planHbo: nuevo.id, capacidad: nuevo.capacidad, disponibles: nuevo.capacidad - occ, disp: nuevo.capacidad - occ, historialPlan: hist, updatedAt: iso };
+    if (cap < occ) throw errorCodigo(`Quedarían ${occ} perfiles ocupados en una capacidad de ${cap}. No se saca a ningún cliente: puede conservarlos con una capacidad excepcional de ${occ}.`, "sobreocupacion", { capacidadSugerida: occ, plan: nuevo.id });
+    const personalizada = cap !== nuevo.capacidad;
+    if (personalizada && !autorizarExcepcion) throw errorCodigo(`${nuevo.corto} trae ${nuevo.capacidad} perfiles. Una capacidad de ${cap} es una excepción de esta cuenta: confírmela.`, "requiere_excepcion", { capacidadSugerida: cap, plan: nuevo.id });
+    if (antes && antes.id === nuevo.id && capacidadEfectiva(d) === cap) return { ok: true, yaEstaba: true, ...resumenCuenta(d) };
+    const hist = [...(Array.isArray(d.historialPlan) ? d.historialPlan : []), { at: iso, por: usuario, origen, de: antes ? antes.id : "sin_plan", a: nuevo.id, capacidadAntes: Number(d.capacidad || 0), capacidadNueva: cap, ocupados: occ, ...(personalizada ? { excepcion: true, motivo: String(motivo || "").slice(0, 160) } : {}) }].slice(-50);
+    const patch = { planHbo: nuevo.id, capacidad: cap, disponibles: Math.max(0, cap - occ), disp: Math.max(0, cap - occ), capacidadPersonalizada: personalizada,
+      capacidadExcepcion: personalizada ? { capacidad: cap, capacidadPlan: nuevo.capacidad, por: usuario, origen, at: iso, motivo: String(motivo || "").slice(0, 160) } : null, historialPlan: hist, updatedAt: iso };
     tx.update(ref, patch);
     return { ok: true, ...resumenCuenta({ ...d, ...patch }) };
   });
+}
+// «Editar capacidad» (Standard o Platinum): misma regla, sin cambiar el plan.
+function editarCapacidad(db, { inventarioId, capacidad, autorizarExcepcion = false, motivo = "", usuario = "", origen = "web" } = {}) {
+  return cambiarPlan(db, { inventarioId, plan: null, capacidad, autorizarExcepcion, motivo, usuario, origen });
 }
 
 // Resumen de todas las cuentas HBO (para Bodega / Control Maestro / bot): cuántas por plan y cuáles quedan por definir.
@@ -78,8 +101,7 @@ function vendidaCompleta(d = {}) { return Array.isArray(d.clientes) && d.cliente
 // Cupos que quedan para VENDER a terceros (compartida). Completa vendida = 0, sin importar la capacidad nominal.
 function cuposVendibles(d = {}) {
   if (vendidaCompleta(d)) return 0;
-  const p = planDeCuenta(d); const cap = p ? p.capacidad : Math.max(0, Number(d.capacidad || 0));
-  return Math.max(0, cap - ocupadosDe(d));
+  return Math.max(0, capacidadEfectiva(d) - ocupadosDe(d)); // R196z3 · la capacidad de la cuenta (con excepción si la hay)
 }
 // ¿Se puede poner esta venta en esta cuenta? Devuelve "" si sí, o el motivo. `mismaVenta` = la venta ya estaba en la cuenta.
 function validarAsignacion(d = {}, { plan = "", completa = false, compraId = "" } = {}) {
@@ -91,7 +113,7 @@ function validarAsignacion(d = {}, { plan = "", completa = false, compraId = "" 
   const yaEsta = otros.length !== (Array.isArray(d.clientes) ? d.clientes.length : 0);
   if (completa && otros.length) return `Esa cuenta tiene ${otros.length} perfil(es) de otros clientes: no se puede vender como cuenta completa sin resolverlos primero.`;
   if (!completa && otros.some(esCompleta)) return "Esa cuenta ya está vendida como cuenta completa: no tiene perfiles para terceros.";
-  if (!completa && !yaEsta && pc && otros.length >= pc.capacidad) return `Esa cuenta ${pc.corto} ya está llena (${otros.length}/${pc.capacidad}).`;
+  if (!completa && !yaEsta && pc && otros.length >= capacidadEfectiva(d)) return `Esa cuenta ${pc.corto} ya está llena (${otros.length}/${capacidadEfectiva(d)}).`; // R196z3
   return "";
 }
 // Plan por el NOMBRE de un producto del catálogo de socios («HBO Max Platino», «HBO Standard · cuenta completa»…).
@@ -111,7 +133,11 @@ async function diagnosticoHbo(db, { limiteClientes = 5000 } = {}) {
   const cuentas = inv.docs.map((x) => ({ id: x.id, d: x.data() || {} })).filter((c) => !/eliminad|baja/i.test(String(c.d.estado || "")));
   const porCorreo = new Map(cuentas.map((c) => [String(c.d.correo || "").trim().toLowerCase(), c]));
   const sinPlan = cuentas.filter((c) => !planDeCuenta(c.d)).map((c) => ({ id: c.id, correo: c.d.correo || "", capacidad: Number(c.d.capacidad || 0), ocupados: ocupadosDe(c.d), sugerencia: planPorCapacidad(c.d.capacidad) ? `su capacidad (${c.d.capacidad}) coincide con ${PLANES[planPorCapacidad(c.d.capacidad)].corto}; confirme antes de marcarla` : "capacidad distinta de 3 o 5: decide una persona" }));
-  const fueraDePlan = cuentas.filter((c) => { const p = planDeCuenta(c.d); return p && ocupadosDe(c.d) > p.capacidad; }).map((c) => ({ id: c.id, correo: c.d.correo || "", plan: planDeCuenta(c.d).corto, ocupados: ocupadosDe(c.d), capacidad: planDeCuenta(c.d).capacidad }));
+  const fueraDePlan = cuentas.filter((c) => { const p = planDeCuenta(c.d); return p && ocupadosDe(c.d) > capacidadEfectiva(c.d); }).map((c) => ({ id: c.id, correo: c.d.correo || "", plan: planDeCuenta(c.d).corto, ocupados: ocupadosDe(c.d), capacidad: capacidadEfectiva(c.d) }));
+  // R196z3 · capacidad guardada distinta de la del plan SIN excepción registrada (p. ej. Platinum con capacidad 4): antes el bot
+  // mostraba la del plan y la Web la de la cuenta. Solo se informa: decide una persona (plan real o excepción).
+  const capacidadDistinta = cuentas.filter((c) => esPersonalizada(c.d) && !c.d.capacidadExcepcion).map((c) => ({ id: c.id, correo: c.d.correo || "", plan: planDeCuenta(c.d).corto, capacidadGuardada: capacidadEfectiva(c.d), capacidadPlan: planDeCuenta(c.d).capacidad, ocupados: ocupadosDe(c.d), historial: (Array.isArray(c.d.historialPlan) ? c.d.historialPlan : []).slice(-3),
+    sugerencia: ocupadosDe(c.d) > planDeCuenta(c.d).capacidad ? `tiene ${ocupadosDe(c.d)} ocupados: si es ${planDeCuenta(c.d).corto}, confirme excepción de ${ocupadosDe(c.d)}` : `confirme si es ${planDeCuenta(c.d).corto} ${planDeCuenta(c.d).capacidad} o una excepción de ${capacidadEfectiva(c.d)}` }));
   const refCli = db.collection("clientes"); const cli = await (typeof refCli.limit === "function" ? refCli.limit(limiteClientes) : refCli).get();
   const ventasSinPlan = [];
   cli.docs.forEach((x) => {
@@ -123,7 +149,7 @@ async function diagnosticoHbo(db, { limiteClientes = 5000 } = {}) {
       ventasSinPlan.push({ clienteId: x.id, cliente: String(c.nombrePerfil || c.nombre || "Cliente").slice(0, 80), compraId: String(s.compraId || ""), correo: String(s.correo || ""), modalidad: s.tipoVenta === "cuenta_completa" ? "cuenta completa" : "perfil", planVerificable: pc ? pc.id : "", accion: pc ? `su cuenta de Bodega es ${pc.corto}: al editar la venta toma ese plan` : "requiere asignación humana (la cuenta no tiene plan o no está en Bodega)" });
     });
   });
-  return { ok: true, cuentas: cuentas.length, sinPlan, fueraDePlan, ventasSinPlan, ventasRequierenPersona: ventasSinPlan.filter((v) => !v.planVerificable).length, leidoAt: new Date().toISOString() };
+  return { ok: true, cuentas: cuentas.length, sinPlan, fueraDePlan, capacidadDistinta, ventasSinPlan, ventasRequierenPersona: ventasSinPlan.filter((v) => !v.planVerificable).length, leidoAt: new Date().toISOString() };
 }
 
 // Contadores separados para Bodega: compartidas y exclusivas por plan.
@@ -140,5 +166,5 @@ function contadoresHbo(cuentas = []) {
   return out;
 }
 
-module.exports = { PLAT_HBO, PLANES, planDeCuenta, etiquetaPlan, resumenCuenta, planPorCapacidad, cambiarPlan, resumenHbo,
+module.exports = { PLAT_HBO, PLANES, planDeCuenta, etiquetaPlan, resumenCuenta, planPorCapacidad, cambiarPlan, editarCapacidad, capacidadEfectiva, esPersonalizada, resumenHbo,
   OPCIONES_VENTA, planDesdePlataforma, esPlataformaHbo, planValido, vendidaCompleta, cuposVendibles, validarAsignacion, contadoresHbo, planDesdeNombreProducto, diagnosticoHbo };

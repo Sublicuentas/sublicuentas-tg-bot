@@ -444,10 +444,11 @@ async function actualizarCapacidadCuenta(docId, valor) {
     const data = snap.data() || {};
     const ocupados = getClientesArray(data).length;
     if (capacidad < ocupados) throw new Error(`La cuenta tiene ${ocupados} clientes asociados. La capacidad no puede ser menor que ${ocupados}.`);
-    { const pl = require("./lib_hbo_planes").planDeCuenta(data); if (pl && capacidad !== pl.capacidad) throw new Error(`Esta cuenta es ${pl.nombre} (${pl.capacidad} perfiles): cambie el plan con «📦 Plan HBO» en vez de la capacidad.`); } // R196u
+    const HP = require("./lib_hbo_planes"); const pl = HP.planDeCuenta(data); // R196u · R196z3: el predeterminado del plan o la que ya tiene; otra = «Editar capacidad» (con excepción confirmada)
+    if (pl && capacidad !== pl.capacidad && capacidad !== HP.capacidadEfectiva(data)) throw new Error(`Esta cuenta es ${pl.nombre} (${pl.capacidad} perfiles por defecto). Para otra capacidad use «📦 Plan HBO» → «✏️ Editar capacidad»: le pedirá confirmar la excepción y conserva a todos los clientes.`);
     const disponibles = capacidad - ocupados;
     const estadoActual = String(data.estado || "").trim().toLowerCase();
-    const patch = {capacidad, ocupados, disponibles, disp:disponibles, updatedAt:admin.firestore.FieldValue.serverTimestamp()};
+    const patch = {capacidad, ocupados, disponibles, disp:disponibles, ...(pl && capacidad === pl.capacidad ? { capacidadPersonalizada:false, capacidadExcepcion:null } : {}), updatedAt:admin.firestore.FieldValue.serverTimestamp()};
     // Cambiar cupos no debe reactivar una cuenta suspendida o bloqueada.
     if (!estadoActual || ["activa", "llena"].includes(estadoActual)) patch.estado = disponibles ? "activa" : "llena";
     if (data.total != null) patch.total = capacidad;
