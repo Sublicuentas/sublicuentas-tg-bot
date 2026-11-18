@@ -214,10 +214,11 @@ function buildServiceRows(clientes = []) {
         vendedor: vendedorEfectivoServicio(s, c.raw || c).vendedor || c.vendedor,
         plataforma: plataformaLabel(s.plataforma || s.servicio || s.nombre || ""),
         correo: safe(p.correo || s.correo || s.usuario || s.ident || s.email || ""),
-        pin: safe(p.pinPerfil || p.pin_perfil || p.perfilPin || p.pin || (perfilIndex === 0 ? (s.pinPerfil || s.pin || s.perfil || s.clavePerfil || "") : "")),
+        pin: safe(p.pinPerfil || p.pin_perfil || p.perfilPin || p.pin || (perfilIndex === 0 ? (s.pinPerfil || s.pin_perfil || s.perfilPin || s.pin || "") : "")), // R197c · antes caía al NOMBRE del perfil (545 filas con nombre en «PIN»)
         precio: perfilIndex === 0 ? num(s.precio || s.monto || s.total) : 0,
         fecha, fechaDate: toDate(fecha), dias: daysFromToday(fecha), estado: estadoServicio(fecha),
         fechaContratacion: toDate(s.fechaContratacion || s.fechaInicio || s.createdAt) || c.fechaContratacion,
+        compraId: safe(s.compraId || ""), cuentaMadreId: safe(s.inventarioId || s.cuentaInventarioId || s.cmId || ""), mesesContratados: Number(s.mesesContratados) > 0 ? Number(s.mesesContratados) : null, // R197c · IDs reales (nunca inventados)
       }));
     });
   });
@@ -325,7 +326,13 @@ async function crearResumen(ws, clientes, servicios) {
 
   const vigentes = clientes.filter((c) => c.estado === "Vigente").length;
   const noVigentes = clientes.filter((c) => c.estado !== "Vigente").length;
-  const totalMensual = clientes.reduce((s, c) => s + c.totalMensual, 0);
+  const totalMensual = clientes.reduce((s, c) => s + c.totalMensual, 0); // precio registrado en TODAS las fichas (incluye no vigentes y vencidos)
+  // R197c · PDF «Auditoría real de cartera» (18/11/2026): separar precio registrado, valor vigente y mensualizado comprobado.
+  const activosArr = servicios.filter((s) => ["Vigente", "Vence hoy", "Riesgo 3 días"].includes(s.estado));
+  const valorVigente = activosArr.reduce((a, s) => a + num(s.precio), 0);
+  const conDuracion = activosArr.filter((s) => num(s.precio) > 0 && s.mesesContratados > 0);
+  const mensualizado = Math.round(conDuracion.reduce((a, s) => a + num(s.precio) / s.mesesContratados, 0));
+  const sinDuracion = activosArr.filter((s) => num(s.precio) > 0 && !(s.mesesContratados > 0)).length;
   const serviciosActivos = servicios.filter((s) => ["Vigente", "Vence hoy", "Riesgo 3 días"].includes(s.estado)).length;
   const venceHoy = servicios.filter((s) => s.estado === "Vence hoy").length;
   const riesgo3 = servicios.filter((s) => s.estado === "Riesgo 3 días").length;
@@ -333,7 +340,7 @@ async function crearResumen(ws, clientes, servicios) {
   addKpi(ws, 4, 2, "👥 Clientes", clientes.length, C.rojo, "#,##0");
   addKpi(ws, 4, 3, "🟢 Vigentes", vigentes, C.verde, "#,##0");
   addKpi(ws, 4, 4, "🔴 No vigentes", noVigentes, C.rojoOsc, "#,##0");
-  addKpi(ws, 4, 5, "💰 Pagos mensuales", totalMensual, C.azul, MONEY_FMT);
+  addKpi(ws, 4, 5, "💰 Valor de cartera vigente", valorVigente, C.azul, MONEY_FMT); // antes «Pagos mensuales» (sumaba no vigentes y precios de varios meses)
   addKpi(ws, 4, 6, "📦 Servicios activos", serviciosActivos, C.morado, "#,##0");
   addKpi(ws, 4, 7, "⚠️ Hoy / 3 días", `${venceHoy} / ${riesgo3}`, C.naranja, null);
 
@@ -354,6 +361,19 @@ async function crearResumen(ws, clientes, servicios) {
     styleBodyRow(r, i % 2 === 1);
     r.getCell(3).numFmt = "#,##0";
     r.getCell(4).font = { color: { argb: color }, bold: true };
+  });
+  ws.addRow([]);
+  const vh0 = ws.addRow(["", "Importes de cartera (NO son ingresos cobrados)", "Total", "Qué incluye"]);
+  styleHeader(vh0);
+  [
+    ["Precio registrado (todas las fichas)", totalMensual, "Suma de precios de todas las fichas, incluidas no vigentes y servicios vencidos"],
+    ["Valor de cartera vigente", valorVigente, `Precio de los ${activosArr.length} servicios activos (vigente, hoy, 3 días)`],
+    ["Valor mensualizado comprobado", mensualizado, `Solo ${conDuracion.length} servicios con meses contratados guardados; ${sinDuracion} sin duración no se mensualizan`],
+    ["Ingresos cobrados", "Ver Finanzas", "Este Excel no lee el libro de cobros: vigente ≠ cobrado"],
+  ].forEach(([label, value, nota], i) => {
+    const r = ws.addRow(["", label, value, nota]);
+    styleBodyRow(r, i % 2 === 1);
+    if (typeof value === "number") applyCurrency(r.getCell(3));
   });
 
   ws.addRow([]);
@@ -452,7 +472,7 @@ async function crearClientesNoVigentes(ws, clientes) {
   ws.addRow([]);
 
   addKpi(ws, 4, 2, "🔴 No vigentes", rows.length, C.rojoOsc, "#,##0");
-  addKpi(ws, 4, 3, "💰 Potencial mensual", totalPotencial, C.azul, MONEY_FMT);
+  addKpi(ws, 4, 3, "💰 Precio registrado", totalPotencial, C.azul, MONEY_FMT);
   addKpi(ws, 4, 4, "🔥 Vencidos ≤ 30 días", recientes30, C.naranja, "#,##0");
   addKpi(ws, 4, 5, "🟡 Vencidos ≤ 90 días", recientes90, C.amarillo, "#,##0");
 
@@ -529,7 +549,7 @@ async function crearClientesVigentes(ws, clientes) {
   setSubTitle(ws, "Clientes con al menos un servicio activo, en riesgo o que vence hoy", 10);
   ws.addRow([]);
   const headerNo = ws.rowCount + 1;
-  const header = ws.addRow(["#", "Nombre", "Número", "Vendedor", "Fecha contratación", "Próx. renovación", "Servicios", "Pago mensual", "Estado", "Notas"]);
+  const header = ws.addRow(["#", "Nombre", "Número", "Vendedor", "Fecha contratación", "Próx. renovación", "Servicios", "Precio registrado", "Estado", "Notas"]);
   styleHeader(header);
 
   const rows = clientes.filter((c) => c.estado === "Vigente").sort((a, b) => b.totalMensual - a.totalMensual);
@@ -548,11 +568,11 @@ async function crearClientesTop(ws, clientes) {
   ws.columns = [
     { width: 8 }, { width: 28 }, { width: 18 }, { width: 22 }, { width: 16 }, { width: 16 }, { width: 16 }, { width: 18 }, { width: 24 },
   ];
-  setTitle(ws, "CLIENTES TOP — RANKING POR PAGO MENSUAL", 9);
+  setTitle(ws, "CLIENTES TOP — RANKING POR PRECIO REGISTRADO", 9);
   setSubTitle(ws, "Ranking de clientes que más aportan a la cartera", 9);
   ws.addRow([]);
   const headerNo = ws.rowCount + 1;
-  const header = ws.addRow(["Rank", "Nombre", "Número", "Vendedor", "Servicios", "Pago mensual", "Próx. renovación", "Estado", "Barra"]);
+  const header = ws.addRow(["Rank", "Nombre", "Número", "Vendedor", "Servicios", "Precio registrado", "Próx. renovación", "Estado", "Barra"]);
   styleHeader(header);
 
   const rows = clientes.slice().sort((a, b) => b.totalMensual - a.totalMensual);
@@ -571,13 +591,13 @@ async function crearClientesTop(ws, clientes) {
 
 async function crearPagosServicios(ws, servicios) {
   ws.columns = [
-    { width: 5 }, { width: 24 }, { width: 22 }, { width: 17 }, { width: 20 }, { width: 20 }, { width: 30 }, { width: 12 }, { width: 14 }, { width: 15 }, { width: 12 }, { width: 16 }, { width: 18 },
+    { width: 5 }, { width: 24 }, { width: 22 }, { width: 17 }, { width: 20 }, { width: 20 }, { width: 30 }, { width: 12 }, { width: 14 }, { width: 15 }, { width: 12 }, { width: 16 }, { width: 18 }, { width: 22 }, { width: 22 }, { width: 22 }, { width: 10 },
   ];
-  setTitle(ws, "PAGOS Y SERVICIOS", 13);
-  setSubTitle(ws, "Una fila por perfil; el pago aparece una sola vez por compra", 13);
+  setTitle(ws, "PAGOS Y SERVICIOS", 17);
+  setSubTitle(ws, "Una fila por perfil; el precio aparece una sola vez por compra. Precio registrado en la ficha: NO es dinero cobrado (eso está en Finanzas).", 17);
   ws.addRow([]);
   const headerNo = ws.rowCount + 1;
-  const header = ws.addRow(["#", "Titular", "Perfil", "Número", "Vendedor", "Plataforma", "Correo / usuario", "PIN", "Pago compra", "Vence", "Días", "Estado", "Contratación"]);
+  const header = ws.addRow(["#", "Titular", "Perfil", "Número", "Vendedor", "Plataforma", "Correo / usuario", "PIN", "Precio registrado", "Vence", "Días", "Estado", "Contratación", "ID cliente", "ID compra", "ID cuenta madre", "Meses contratados"]); // R197c · columnas nuevas AL FINAL (compatibilidad)
   styleHeader(header);
 
   const rows = servicios.slice().sort((a, b) => {
@@ -589,6 +609,7 @@ async function crearPagosServicios(ws, servicios) {
     const r = ws.addRow([
       i + 1, s.nombre, s.perfil || s.nombre, s.telefono, s.vendedor, s.plataforma, s.correo, s.pin, s.precio,
       excelDate(s.fecha), s.dias == null ? "" : s.dias, s.estado, excelDate(s.fechaContratacion),
+      s.clienteId || "", s.compraId || "", s.cuentaMadreId || "", s.mesesContratados == null ? "" : s.mesesContratados,
     ]);
     styleBodyRow(r, i % 2 === 1);
     applyCurrency(r.getCell(9));
@@ -596,7 +617,7 @@ async function crearPagosServicios(ws, servicios) {
     r.getCell(13).numFmt = DATE_FMT;
     statusStyle(r.getCell(12), s.estado);
   });
-  addTableFilter(ws, headerNo, ws.rowCount, "M");
+  addTableFilter(ws, headerNo, ws.rowCount, "Q");
 
   try {
     ws.addConditionalFormatting({
@@ -615,7 +636,7 @@ async function crearVendedores(ws, clientes) {
   setSubTitle(ws, "Cartera, clientes vigentes y pagos por vendedor", 9);
   ws.addRow([]);
   const headerNo = ws.rowCount + 1;
-  const header = ws.addRow(["#", "Vendedor", "Clientes", "Vigentes", "No vigentes", "Servicios", "Total mensual", "Promedio", "Barra"]);
+  const header = ws.addRow(["#", "Vendedor", "Clientes", "Vigentes", "No vigentes", "Servicios", "Precio registrado", "Promedio", "Barra"]);
   styleHeader(header);
   const maxTotal = Math.max(...rows.map((r) => r.total), 1);
 
