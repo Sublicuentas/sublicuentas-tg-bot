@@ -240,15 +240,17 @@ function consumirPEPS(lotes = [], cantidad, hoy = "") {
 function resumenInventario(productos = [], lotes = [], hoy = "") {
   const en30 = (() => { const [y, m, d] = hoy.split("-").map(Number); return new Date(Date.UTC(y, m - 1, d + 30, 12)).toISOString().slice(0, 10); })();
   return productos.map((p) => {
-    const ls = lotes.filter((l) => l.productoId === p.id);
+    // R198h · «60 perfil-mes» de una activación (catálogo 365 d × 5 perfiles, sin duración real): NO es existencia disponible
+    const noAcred = (l) => String(l.unidad || "") === "perfil-mes" && !(Number(l.duracionDias) > 0) && !String(l.vigenciaHasta || "");
+    const todosLs = lotes.filter((l) => l.productoId === p.id), ls = todosLs.filter((l) => !noAcred(l));
     const vig = ls.filter((l) => !vencido(l, hoy)), venc = ls.filter((l) => vencido(l, hoy) && r6(l.disponible) > 0);
     const disponible = r6(vig.reduce((s, l) => s + r6(l.disponible), 0));
     const valorHnl = r2(vig.reduce((s, l) => s + r6(l.disponible) * (l.costoUnitarioHnl || 0), 0));
     const comprado = r6(ls.reduce((s, l) => s + r6(l.cantidad), 0)), consumido = r6(ls.reduce((s, l) => s + r6(l.consumido), 0));
     const proximo = vig.filter((l) => l.vigenciaHasta && r6(l.disponible) > 0).map((l) => l.vigenciaHasta).sort()[0] || "";
     const bajo = ls.length > 0 && disponible <= Math.max(2, Math.ceil(comprado * 0.15));
-    return { productoId: p.id, nombre: p.nombre, modelo: p.modelo, unidad: p.unidad, lotes: ls.length, comprado, consumido, disponible, valorHnl, costoPromedioHnl: disponible > 0 ? r6(valorHnl / disponible) : 0, proximoVencimiento: proximo, vencePronto: !!(proximo && proximo <= en30), vencidoSinUsar: { cantidad: r6(venc.reduce((s, l) => s + r6(l.disponible), 0)), valorHnl: r2(venc.reduce((s, l) => s + r6(l.disponible) * (l.costoUnitarioHnl || 0), 0)) }, stockBajo: bajo && p.modelo !== "costo_cero" };
-  }).filter((r) => r.lotes > 0);
+    return { productoId: p.id, nombre: p.nombre, modelo: p.modelo, unidad: p.unidad, lotes: ls.length, comprado, consumido, disponible, valorHnl, costoPromedioHnl: disponible > 0 ? r6(valorHnl / disponible) : 0, proximoVencimiento: proximo, vencePronto: !!(proximo && proximo <= en30), lotesNoAcreditados: todosLs.length - ls.length,  vencidoSinUsar: { cantidad: r6(venc.reduce((s, l) => s + r6(l.disponible), 0)), valorHnl: r2(venc.reduce((s, l) => s + r6(l.disponible) * (l.costoUnitarioHnl || 0), 0)) }, stockBajo: bajo && p.modelo !== "costo_cero" };
+  }).filter((r) => r.lotes > 0 || r.lotesNoAcreditados > 0);
 }
 
 // ---------------------------------------------------------------- manejador /api/finanzas
