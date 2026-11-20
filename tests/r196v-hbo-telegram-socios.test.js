@@ -34,7 +34,7 @@ test("10 · Telegram guarda el plan en las 3 rutas (asistente, ➕ servicio, cue
   assert.match(crm, /const planHbo = await validarHboTelegram\(servicio, String\(servicio\.compraId \|\| ""\)\); \/\/ R196v/);
   assert.match(crm, /const motivo = H\.validarAsignacion\(found\.data \|\| \{\}, \{ plan, completa, compraId \}\);/);
   assert.match(crm, /if \(planHbo\) compra\.planHbo = planHbo; \/\/ R196v/);
-  assert.match(crm, /const disponibles = plat === "hbomax" && clientes\.some\(\(x\) => x && x\.cuentaCompleta === true\) \? 0 : Math\.max\(0, capacidad - ocupados\); \/\/ R196v · completa = 0 para terceros/);
+  assert.match(crm, /const disponibles = invCanon\.disponiblesCuenta\(\{ \.\.\.data, clientes \}, capacidad, ocupados\); \/\/ R198j[^\n]*R196v · completa = 0 para terceros/); // R198j · misma regla, ahora para cualquier plataforma
   assert.match(crm, /📦 \$\{markdown \? "\*Plan:\*" : "Plan:"\}/, "la ficha muestra el plan real");
 });
 
