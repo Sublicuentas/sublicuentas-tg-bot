@@ -23,11 +23,25 @@ function identCuenta(data = {}) {
   return String(data.correo || data.ident || data.usuario || data.acceso || "").trim();
 }
 
+// R198j · Cuenta vendida como CUENTA COMPLETA (exclusiva de UN cliente): no le quedan perfiles para vender, aunque su
+// capacidad nominal sea 3 o 5. Vale la marca del cliente (cuentaCompleta) o la de la cuenta (modalidadVenta /
+// exclusivaCompraId) mientras tenga a su cliente. Sin cliente vuelve a contar como cuenta normal.
+function esCuentaCompleta(data = {}) {
+  const cl = Array.isArray(data.clientes) ? data.clientes : [];
+  if (cl.some((c) => c && (c.cuentaCompleta === true || c.tipoVenta === "cuenta_completa"))) return true;
+  const marcada = String(data.modalidadVenta || "") === "cuenta_completa" || !!String(data.exclusivaCompraId || "").trim();
+  const ocupados = Array.isArray(data.clientes) ? cl.length : Math.max(0, Number(data.ocupados) || 0);
+  return marcada && ocupados > 0;
+}
+function disponiblesCuenta(data = {}, capacidad = 0, ocupados = 0) {
+  return esCuentaCompleta(data) ? 0 : Math.max(0, Number(capacidad) - Number(ocupados));
+}
+
 function conteosCuenta(data = {}, capacidadPorDefecto = 1) {
   const clientes = Array.isArray(data.clientes) ? data.clientes : [];
   const ocupados = Array.isArray(data.clientes) ? clientes.length : Math.max(0, Number(data.ocupados) || 0);
   const capacidad = Number(data.capacidad || data.total || 0) > 0 ? Number(data.capacidad || data.total) : capacidadPorDefecto;
-  return { capacidad, ocupados, disponibles: Math.max(0, capacidad - ocupados), sobreasignada: capacidad > 0 && ocupados > capacidad };
+  return { capacidad, ocupados, disponibles: disponiblesCuenta(data, capacidad, ocupados), sobreasignada: capacidad > 0 && ocupados > capacidad };
 }
 
 function ordenarPorMasVacia(rows = [], capacidadDe = (r) => conteosCuenta(r).capacidad) {
@@ -142,6 +156,6 @@ async function editarCuentaCanonica(db, admin, { cuenta, nuevoCorreo, nuevaClave
 }
 
 module.exports = {
-  normAcceso, familiaPlataforma, identCuenta, conteosCuenta, ordenarPorMasVacia,
+  normAcceso, familiaPlataforma, identCuenta, conteosCuenta, ordenarPorMasVacia, esCuentaCompleta, disponiblesCuenta, // R198j
   resolverCuentaInventario, renombrarVinculo, accountKeyWeb, editarCuentaCanonica,
 };

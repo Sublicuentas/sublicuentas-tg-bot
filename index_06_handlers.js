@@ -803,6 +803,15 @@ function docIdInventarioLocal(ident = "", plataforma = "") {
 // para encontrar una cuenta existente se usa el resolvedor (ID → ID calculado → plataforma+correo),
 // así se encuentran también las creadas desde la Web (ID aleatorio) o con el correo cambiado.
 const invCanon = require("./lib_inventario_canonico");
+// R198j · Después de mover un perfil de cuenta: se avisa si salió de otra cuenta o si algo quedó por revisar (nunca en silencio).
+async function avisoSyncInventarioLocal(chatId, sync) {
+  try {
+    if (!sync) return;
+    const otras = Array.isArray(sync.retiradosDeOtras) ? sync.retiradosDeOtras : [];
+    if (otras.length) await bot.sendMessage(chatId, `🧹 También lo saqué de ${otras.map((x) => x.cuenta).join(", ")}: un perfil vive en una sola cuenta.`);
+    if (sync.ok === false || sync.warning) await bot.sendMessage(chatId, `⚠️ Bodega: ${sync.warning || "no se pudo sincronizar la cuenta."} Revise la cuenta anterior en Inventario.`);
+  } catch (_) {}
+}
 async function cuentaInvLocal(plataforma = "", acceso = "", docId = "") {
   const plat = normalizarPlataforma(plataforma);
   const ident = normalizeIdentByPlatformLocal(plat, acceso);
@@ -3249,7 +3258,7 @@ bot.onText(/\/sincronizar_todo/i, async (msg) => {
 
       const normalizados = salida.map((x, i) => ({ ...x, slot: i + 1 }));
       const ocupados = normalizados.length;
-      const disponibles = Math.max(0, capacidad - ocupados);
+      const disponibles = invCanon.disponiblesCuenta({ ...data, clientes: normalizados }, capacidad, ocupados); // R198j · cuenta completa = 0
       const estado = disponibles === 0 ? "llena" : "activa";
       const metadataCambio = Number(data.ocupados) !== ocupados
         || Number(data.disponibles ?? data.disp) !== disponibles
@@ -3768,7 +3777,7 @@ bot.onText(/\/fix_duplicados(?:\s+(confirmar))?/i, async (msg, match) => {
       const clientesFinal = limpios.map((c, i) => ({ ...c, slot: i + 1 }));
       const capacidad = Number(a.data.capacidad || a.data.total || 0) || clientesFinal.length || 1;
       const ocupados = clientesFinal.length;
-      const disponibles = Math.max(0, capacidad - ocupados);
+      const disponibles = invCanon.disponiblesCuenta({ ...a.data, clientes: clientesFinal }, capacidad, ocupados); // R198j
       await a.ref.set(
         {
           clientes: clientesFinal,
@@ -5563,8 +5572,9 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
         }
         const capacidad = getCapacidadCorreo(correoData, plataforma);
         const ocupados = clientesCorregidos.length;
-        const disponibles = Math.max(0, capacidad - ocupados);
-        const estado = disponibles === 0 ? "LLENA" : "CON ESPACIO";
+        const esCompleta = invCanon.esCuentaCompleta({ ...correoData, clientes: clientesCorregidos }); // R198j
+        const disponibles = invCanon.disponiblesCuenta({ ...correoData, clientes: clientesCorregidos }, capacidad, ocupados);
+        const estado = esCompleta ? "CUENTA COMPLETA" : disponibles === 0 ? "LLENA" : "CON ESPACIO";
         let txt = "👥 *Clientes en esta cuenta*\n\n";
         txt += `${identIcon(plataforma)} *${escMD(getIdentLabelLocal(plataforma))}:* ${escMD(acceso)}\n📌 *${escMD(String(plataforma).toUpperCase())}*\n\n`;
         if (!clientesCorregidos.length) txt += "_No hay clientes asignados._\n\n";
@@ -5591,6 +5601,7 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
         const correoData = found.data || {};
         const clientes = Array.isArray(correoData.clientes) ? correoData.clientes : [];
         const capacidad = getCapacidadCorreo(correoData, plataforma);
+        if (invCanon.esCuentaCompleta(correoData)) return bot.sendMessage(chatId, "❌ Esta cuenta está vendida como CUENTA COMPLETA a un cliente: no se le agregan perfiles."); // R198j
         const disponibles = Math.max(0, capacidad - clientes.length);
         if (disponibles <= 0) return bot.sendMessage(chatId, `❌ Esta cuenta ya está llena.\n\n👤 Ocupados: ${clientes.length}/${capacidad}\n✅ Disponibles: 0\n📊 Estado: LLENA`);
         pending.set(String(chatId), { mode: "mailAddClienteNombre", plataforma: normalizarPlataforma(plataforma), correo: normalizeIdentByPlatformLocal(plataforma, acceso) });
@@ -5638,7 +5649,7 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
         clientes = clientes.map((c, i) => ({ ...c, slot: i + 1 }));
         const capacidad = getCapacidadCorreo(correoData, plataforma);
         const ocupados = clientes.length;
-        const disponibles = Math.max(0, capacidad - ocupados);
+        const disponibles = invCanon.disponiblesCuenta({ ...correoData, clientes }, capacidad, ocupados); // R198j
         await ref.set({ clientes, ocupados, disponibles, disp: disponibles, estado: disponibles === 0 ? "llena" : "activa", capacidad, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
 
         // La salida desde Telegram también limpia la fila histórica del Excel
@@ -7579,6 +7590,7 @@ bot.on("message", async (msg) => {
           return mostrarPanelCorreo(chatId, p.plataforma, p.correo);
         }
         const capacidad = getCapacidadCorreo(correoData, p.plataforma);
+        if (invCanon.esCuentaCompleta(correoData)) return bot.sendMessage(chatId, "❌ Esta cuenta está vendida como CUENTA COMPLETA a un cliente: no se le agregan perfiles."); // R198j
         const disponiblesActual = Math.max(0, capacidad - clientes.length);
         if (disponiblesActual <= 0) return bot.sendMessage(chatId, "❌ Esta cuenta ya está llena.");
         clientes.push({ nombre: p.nombre, pin: t, slot: clientes.length + 1 });
@@ -8073,8 +8085,10 @@ bot.on("message", async (msg) => {
         pending.delete(String(chatId));forceNextPanelAtBottom(chatId);
         const audAntes=await actividadClienteServicioLocal(p.clientId,p.idx,p.compraId||"");
         const perfilesAntes=perfilesServicioLocal(s,c?.nombrePerfil||'');const perfilAntes=perfilesAntes[p.perfilIndex]?.nombre||perfilesAntes[p.perfilIndex]?.perfil||audAntes.perfil||'Perfil';
-        try { await patchPerfilTx(p.clientId, p.idx, p.perfilIndex, patch, p.compraId || "", p.perfilId || ""); }
+        let rPerfil = null;
+        try { rPerfil = await patchPerfilTx(p.clientId, p.idx, p.perfilIndex, patch, p.compraId || "", p.perfilId || ""); }
         catch (e) { return bot.sendMessage(chatId, `⚠️ ${e.message || "No se pudo editar el perfil."}`); }
+        await avisoSyncInventarioLocal(chatId, rPerfil && rPerfil.sync); // R198j
         const campoPerfil=p.field==='name'?'nombre del perfil':p.field==='mail'?'correo/cuenta':p.field==='key'?'clave':'PIN';
         const cambioPerfil=p.field==='name'?`${perfilAntes} → ${t}`:p.field==='mail'?`cuenta → ${patch.correo}`:p.field==='key'?'clave actualizada':'PIN actualizado';
         await registrarActividadTelegramLocal(userId,chatId,'editar_perfil',{...audAntes,perfil:p.field==='name'?t:perfilAntes,cuenta:p.field==='mail'?patch.correo:audAntes.cuenta,campo:campoPerfil,cambio:cambioPerfil},`Actualizó ${campoPerfil} de ${perfilAntes}${audAntes.cliente?` · cliente ${audAntes.cliente}`:''}${audAntes.plataforma?` · ${audAntes.plataforma}`:''}${p.field==='mail'?` · nueva cuenta ${patch.correo}`:''}.`);
@@ -8205,7 +8219,7 @@ bot.on("message", async (msg) => {
           }
 
           const auditAntes=await actividadClienteServicioLocal(p.clientId,p.idx,p.compraId||"");
-          await patchServicio(p.clientId, p.idx, patch, p.compraId || "");
+          const rPatchMail = await patchServicio(p.clientId, p.idx, patch, p.compraId || "");
           const auditDespues=await actividadClienteServicioLocal(p.clientId,p.idx,p.compraId||"");
           await registrarActividadTelegramLocal(userId,chatId,'editar_servicio',{...auditDespues,campo:'correo/cuenta',cambio:`${auditAntes.cuenta||'-'} → ${auditDespues.cuenta||patch.correo||correoIngresado}`},`Actualizó el correo/cuenta de ${auditDespues.cliente||auditAntes.cliente||'cliente'}${auditDespues.plataforma?` · ${auditDespues.plataforma}`:''}: ${auditAntes.cuenta||'-'} → ${auditDespues.cuenta||patch.correo||correoIngresado}.`);
 
@@ -8218,6 +8232,7 @@ bot.on("message", async (msg) => {
           } else {
             await bot.sendMessage(chatId, `✅ ${label} actualizado. ⚠️ No lo encontré en inventario, revise clave/PIN si aplica.`);
           }
+          await avisoSyncInventarioLocal(chatId, rPatchMail && rPatchMail.sync); // R198j
 
           return menuServicio(chatId, p.clientId, p.idx);
         } catch (e) {

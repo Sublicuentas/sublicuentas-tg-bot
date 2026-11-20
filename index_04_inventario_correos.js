@@ -239,7 +239,7 @@ function getOcupados(data = {}) {
 function getDisponibles(data = {}, plataforma = "") {
   const capacidad = getCapacidadCorreo(data, plataforma);
   const ocupados = getOcupados(data);
-  return Math.max(0, capacidad - ocupados);
+  return require("./lib_inventario_canonico").disponiblesCuenta(data, capacidad, ocupados); // R198j · cuenta completa = llena
 }
 
 function getEstado(data = {}, plataforma = "") {
@@ -446,7 +446,7 @@ async function actualizarCapacidadCuenta(docId, valor) {
     if (capacidad < ocupados) throw new Error(`La cuenta tiene ${ocupados} clientes asociados. La capacidad no puede ser menor que ${ocupados}.`);
     const HP = require("./lib_hbo_planes"); const pl = HP.planDeCuenta(data); // R196u · R196z3: el predeterminado del plan o la que ya tiene; otra = «Editar capacidad» (con excepción confirmada)
     if (pl && capacidad !== pl.capacidad && capacidad !== HP.capacidadEfectiva(data)) throw new Error(`Esta cuenta es ${pl.nombre} (${pl.capacidad} perfiles por defecto). Para otra capacidad use «📦 Plan HBO» → «✏️ Editar capacidad»: le pedirá confirmar la excepción y conserva a todos los clientes.`);
-    const disponibles = capacidad - ocupados;
+    const disponibles = require("./lib_inventario_canonico").disponiblesCuenta(data, capacidad, ocupados); // R198j
     const estadoActual = String(data.estado || "").trim().toLowerCase();
     const patch = {capacidad, ocupados, disponibles, disp:disponibles, ...(pl && capacidad === pl.capacidad ? { capacidadPersonalizada:false, capacidadExcepcion:null } : {}), updatedAt:admin.firestore.FieldValue.serverTimestamp()};
     // Cambiar cupos no debe reactivar una cuenta suspendida o bloqueada.
@@ -496,7 +496,7 @@ async function moverCuentaInventarioPlataforma(docId = "", nuevaPlataforma = "")
   const capBase = capActual === defaultAnterior ? defaultNueva : capActual;
   const capacidad = Math.max(clientes.length, capBase, 1);
   const ocupados = clientes.length;
-  const disponibles = Math.max(0, capacidad - ocupados);
+  const disponibles = require("./lib_inventario_canonico").disponiblesCuenta({ ...src, clientes }, capacidad, ocupados); // R198j
 
   const ahora = admin.firestore.FieldValue.serverTimestamp();
   const destino = {
@@ -647,7 +647,7 @@ async function enviarInventarioPlataformaEstado(chatId, plataforma = "", filtro 
       const recomendada = filtroNorm === "disponibles" && safePage === 0 && idx === 0 && capacidad > 1;
       const sobre = ocupados > capacidad ? " ⚠️ SOBREASIGNADA" : "";
       txt += `*${start + idx + 1}.* ${filtroNorm === "llenas" ? "[X]" : "[OK]"} ${getIdentIcon(plat)} ${escMD(ident)}${recomendada ? " ⭐ *MÁS VACÍA*" : ""}${sobre}\n`;
-      txt += `   Perfiles: ${ocupados}/${capacidad} • OK ${disponibles}\n`;
+      txt += require("./lib_inventario_canonico").esCuentaCompleta(r) ? `   🔐 CUENTA COMPLETA (exclusiva de un cliente) • 0 perfiles para vender\n` : `   Perfiles: ${ocupados}/${capacidad} • OK ${disponibles}\n`; // R198j
       if (requiresClavePlatform(plat) && r.clave) txt += `   Clave: ${escMD(String(r.clave))}\n`;
       const pin = getPinFromAny(r);
       if (requiresPinPlatform(plat) && pin) txt += `   PIN: ${escMD(pin)}\n`;
@@ -657,7 +657,7 @@ async function enviarInventarioPlataformaEstado(chatId, plataforma = "", filtro 
       const ident = getStoredIdent(r);
       return [
         {
-          text: `${filtroNorm === "llenas" ? "🔴" : "🟢"} ${ident} • ${getDisponibles(r, plat)}/${getCapacidadCorreo(r, plat)}`,
+          text: require("./lib_inventario_canonico").esCuentaCompleta(r) ? `🔐 ${ident} • CUENTA COMPLETA` : `${filtroNorm === "llenas" ? "🔴" : "🟢"} ${ident} • ${getDisponibles(r, plat)}/${getCapacidadCorreo(r, plat)}`, // R198j
           callback_data: `inv:open:${plat}:${encodeURIComponent(String(ident || ""))}`,
         },
       ];

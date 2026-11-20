@@ -23,13 +23,13 @@ function esPersonalizada(d = {}) { const p = planDeCuenta(d); return !!p && capa
 function etiquetaPlan(d = {}) {
   if (!esHbo(d)) return "";
   const p = planDeCuenta(d); const occ = ocupadosDe(d); const cap = capacidadEfectiva(d);
-  if (p && Array.isArray(d.clientes) && d.clientes.some((c) => c && (c.cuentaCompleta === true || c.tipoVenta === "cuenta_completa"))) return `${p.corto} · cuenta completa`; // R196v
+  if (p && vendidaCompleta(d)) return `${p.corto} · cuenta completa`; /* R198j · marca de cliente o de cuenta */ // R196v
   return p ? `${p.corto} · ${occ}/${cap}${esPersonalizada(d) ? " · Capacidad personalizada" : ""}` : `HBO · ${occ}/${cap} · plan sin definir`;
 }
 function resumenCuenta(d = {}) {
   const p = planDeCuenta(d); const cap = capacidadEfectiva(d); const occ = ocupadosDe(d);
   return { plan: p ? p.id : "", nombrePlan: p ? p.nombre : "Plan sin definir", capacidad: cap, capacidadPlan: p ? p.capacidad : null, personalizada: esPersonalizada(d), excepcion: d.capacidadExcepcion || null,
-    ocupados: occ, libres: Math.max(0, cap - occ), sobreocupada: occ > cap, etiqueta: etiquetaPlan(d) };
+    ocupados: occ, libres: vendidaCompleta(d) ? 0 : Math.max(0, cap - occ), sobreocupada: occ > cap, etiqueta: etiquetaPlan(d), cuentaCompleta: vendidaCompleta(d) }; // R198j
 }
 // Plan sugerido por la capacidad al crear una cuenta nueva (5 → Platinum, 3 → Standard); cualquier otra = sin plan.
 function planPorCapacidad(cap) { const n = Number(cap); return n === 5 ? "platinum" : n === 3 ? "standard" : ""; }
@@ -128,7 +128,7 @@ function planDesdePlataforma(v = "") { const t = String(v || "").toLowerCase().r
 function esPlataformaHbo(v = "") { return /^hbo/.test(String(v || "").toLowerCase().replace(/[^a-z]/g, "")) || String(v || "").toLowerCase().trim() === "max"; }
 function planValido(v = "") { const p = String(v || "").toLowerCase(); return PLANES[p] ? p : ""; }
 const esCompleta = (c = {}) => c && (c.cuentaCompleta === true || c.tipoVenta === "cuenta_completa");
-function vendidaCompleta(d = {}) { return Array.isArray(d.clientes) && d.clientes.some(esCompleta); }
+function vendidaCompleta(d = {}) { const cl = Array.isArray(d.clientes) ? d.clientes : []; return cl.some(esCompleta) || (cl.length > 0 && (String(d.modalidadVenta || "") === "cuenta_completa" || !!String(d.exclusivaCompraId || "").trim())); } // R198j · también la marca de la cuenta
 // Cupos que quedan para VENDER a terceros (compartida). Completa vendida = 0, sin importar la capacidad nominal.
 function cuposVendibles(d = {}) {
   if (vendidaCompleta(d)) return 0;
@@ -143,7 +143,7 @@ function validarAsignacion(d = {}, { plan = "", completa = false, compraId = "" 
   const otros = (Array.isArray(d.clientes) ? d.clientes : []).filter((c) => !compraId || String(c.compraId || "") !== String(compraId));
   const yaEsta = otros.length !== (Array.isArray(d.clientes) ? d.clientes.length : 0);
   if (completa && otros.length) return `Esa cuenta tiene ${otros.length} perfil(es) de otros clientes: no se puede vender como cuenta completa sin resolverlos primero.`;
-  if (!completa && otros.some(esCompleta)) return "Esa cuenta ya está vendida como cuenta completa: no tiene perfiles para terceros.";
+  if (!completa && (otros.some(esCompleta) || (otros.length && (String(d.modalidadVenta || "") === "cuenta_completa" || (String(d.exclusivaCompraId || "").trim() && String(d.exclusivaCompraId) !== String(compraId || "")))))) return "Esa cuenta ya está vendida como cuenta completa: no tiene perfiles para terceros.";
   if (!completa && !yaEsta && pc && otros.length >= capacidadEfectiva(d)) return `Esa cuenta ${pc.corto} ya está llena (${otros.length}/${capacidadEfectiva(d)}).`; // R196z3
   return "";
 }

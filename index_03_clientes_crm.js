@@ -822,6 +822,7 @@ async function syncServicioEnInventario({ clienteNombre = "", pagadoPor = "", pl
     // Oct-2026: si la ficha dice que el perfil está aquí, Bodega lo refleja aunque esté llena
     // (queda sobreasignada y visible). Antes no se registraba y la cuenta mostraba menos clientes.
     const llenaAntes = clientes.length >= capacidad;
+    const eraCompletaDeOtro = invCanon.esCuentaCompleta(data) && !(cuentaCompleta && !clientes.length); // R198j
     clientes.push({
       nombre: String(clienteNombre || "").trim(), pin: pinNorm, slot: clientes.length + 1,
       ...(pagadoPor && normTxt(pagadoPor) !== normTxt(clienteNombre) ? { pagadoPor: String(pagadoPor).trim() } : {}),
@@ -832,12 +833,12 @@ async function syncServicioEnInventario({ clienteNombre = "", pagadoPor = "", pl
     });
     clientes = clientes.map((x, i) => ({ ...x, slot: i + 1 }));
     const ocupados = clientes.length;
-    const disponibles = plat === "hbomax" && clientes.some((x) => x && x.cuentaCompleta === true) ? 0 : Math.max(0, capacidad - ocupados); // R196v · completa = 0 para terceros
+    const disponibles = invCanon.disponiblesCuenta({ ...data, clientes }, capacidad, ocupados); // R198j · cuenta completa (cualquier plataforma, por marca de cliente o de cuenta) = 0 // R196v · completa = 0 para terceros
     const patch = { clientes, ocupados, disponibles, disp: disponibles, capacidad, accountId: ref.id, sobreasignada: ocupados > capacidad, estado: disponibles === 0 ? "llena" : "activa", updatedAt: admin.firestore.FieldValue.serverTimestamp() };
     const claveNorm = String(clave || "").trim();
     if (claveNorm && requiereClaveLocal(plat) && (!data.clave || String(data.clave || "").toLowerCase() === "sin clave")) patch.clave = claveNorm;
     tx.set(ref, patch, { merge: true });
-    return { ok: true, synced: true, added: true, ocupados, disponibles, capacidad, accountId: ref.id, ...(llenaAntes ? { sobreasignada: true, warning: `La cuenta ${acceso} ya estaba llena: quedó sobreasignada (${ocupados}/${capacidad}).` } : {}) };
+    return { ok: true, synced: true, added: true, ocupados, disponibles, capacidad, accountId: ref.id, ...(eraCompletaDeOtro ? { warning: `La cuenta ${acceso} está vendida como CUENTA COMPLETA a otro cliente: revise esta asignación.` } : llenaAntes ? { sobreasignada: true, warning: `La cuenta ${acceso} ya estaba llena: quedó sobreasignada (${ocupados}/${capacidad}).` } : {}) };
   });
 }
 
@@ -878,7 +879,7 @@ async function removeServicioDeInventario({ clienteNombre = "", plataforma = "",
     clientes = clientes.map((x, i) => ({ ...x, slot: i + 1 }));
     const capacidad = Number(data.capacidad || data.total || getTotalPorPlataformaLocal(plat) || 1);
     const ocupados = clientes.length;
-    const disponibles = plat === "hbomax" && clientes.some((x) => x && x.cuentaCompleta === true) ? 0 : Math.max(0, capacidad - ocupados); // R196v
+    const disponibles = invCanon.disponiblesCuenta({ ...data, clientes }, capacidad, ocupados); // R198j · cuenta completa (cualquier plataforma, por marca de cliente o de cuenta) = 0 // R196v
     tx.set(ref, { clientes, ocupados, disponibles, disp: disponibles, capacidad, accountId: ref.id, sobreasignada: ocupados > capacidad, estado: disponibles === 0 ? "llena" : "activa", updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
     return { ok: true, removed: true, accountId: ref.id };
   });
@@ -967,6 +968,51 @@ function validarCompraLocal(compra = {}) {
   });
 }
 
+// R198j · Un perfil vive en UNA sola cuenta. Después de mover una compra (cambio de correo/cuenta, de plataforma o de perfil),
+// si el mismo perfil (mismo perfilId; o misma compra + mismo cliente cuando la compra es de un solo perfil) quedó también en
+// OTRA cuenta de la misma plataforma, se retira de ahí. Caso real: Carmen pasó de navidad@ a c2hi@ y quedó en las dos.
+// Nunca toca a otro cliente: sin perfilId ni compra+cliente que coincidan exactamente, no se retira nada.
+async function limpiarPerfilEnOtrasCuentasLocal({ plataforma = "", perfiles = [], compraId = "", clienteId = "" } = {}) {
+  const plat = normalizarPlataforma(plataforma);
+  const fam = invCanon.familiaPlataforma(plat);
+  const acc = (p) => invCanon.normAcceso(normalizeIdentByPlatformLocal(plat, p.correo || ""));
+  // Cada perfil con SU cuenta destino: en una compra multiperfil cada perfil puede vivir en una cuenta distinta.
+  const destinoPorPerfil = new Map(perfiles.filter((p) => String(p.perfilId || "").trim() && acc(p)).map((p) => [String(p.perfilId).trim(), acc(p)]));
+  const compraKey = String(compraId || "").trim(), clienteKey = String(clienteId || "").trim();
+  const destinoUnico = perfiles.length === 1 && compraKey && clienteKey ? acc(perfiles[0]) : "";
+  if (!destinoPorPerfil.size && !destinoUnico) return { retirados: [] };
+  // ¿Esta fila de la cuenta `cuentaAcc` es un perfil de esta compra que debería estar en OTRA cuenta?
+  const sobra = (x = {}, cuentaAcc = "") => {
+    const pid = String(x?.perfilId || "").trim();
+    if (pid) return destinoPorPerfil.has(pid) && destinoPorPerfil.get(pid) !== cuentaAcc;
+    return !!destinoUnico && destinoUnico !== cuentaAcc && String(x?.compraId || "").trim() === compraKey && String(x?.clienteId || "").trim() === clienteKey;
+  };
+  let docs = [];
+  try { docs = (await db.collection(INVENTARIO_COLLECTION).where("plataforma", "==", plat).get()).docs; } catch (e) { logErr("limpiarPerfilEnOtrasCuentas.query", e); return { retirados: [] }; }
+  const retirados = [];
+  for (const d of docs) {
+    const data = d.data() || {};
+    if (invCanon.familiaPlataforma(data.plataforma) !== fam) continue;
+    const cuentaAcc = invCanon.normAcceso(invCanon.identCuenta(data));
+    if (!(Array.isArray(data.clientes) ? data.clientes : []).some((x) => sobra(x, cuentaAcc))) continue;
+    await db.runTransaction(async (tx) => {
+      const snap = await tx.get(d.ref); if (!snap.exists) return;
+      const cur = snap.data() || {};
+      const curAcc = invCanon.normAcceso(invCanon.identCuenta(cur));
+      const antes = Array.isArray(cur.clientes) ? cur.clientes : [];
+      const quedan = antes.filter((x) => !sobra(x, curAcc));
+      if (quedan.length === antes.length) return;
+      const clientes = quedan.map((x, i) => ({ ...x, slot: i + 1 }));
+      const capacidad = Number(cur.capacidad || cur.total || getTotalPorPlataformaLocal(plat) || 1);
+      const ocupados = clientes.length;
+      const disponibles = invCanon.disponiblesCuenta({ ...cur, clientes }, capacidad, ocupados);
+      tx.set(d.ref, { clientes, ocupados, disponibles, disp: disponibles, capacidad, sobreasignada: ocupados > capacidad, estado: disponibles === 0 ? "llena" : "activa", updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+      retirados.push({ cuenta: invCanon.identCuenta(cur), perfiles: antes.length - quedan.length });
+    });
+  }
+  return { retirados };
+}
+
 async function sincronizarCompraInventarioLocal(anterior, nuevo, titular = "", opciones = {}) {
   const clienteId = String(opciones?.clienteId || "").trim();
   const platAntes = normalizarPlataforma(anterior?.plataforma || nuevo?.plataforma || "");
@@ -991,7 +1037,13 @@ async function sincronizarCompraInventarioLocal(anterior, nuevo, titular = "", o
       if (result?.added) agregados.push(p);
       if (result?.warning) advertencias.push(result.warning);
     }
-    return { ok: true, perfiles: despues.length, agregados: agregados.length, removidos: removidos.length, ...(advertencias.length ? { warning: advertencias.join(" ") } : {}) };
+    // R198j · el perfil no puede quedar también en la cuenta anterior (u otra) de la misma plataforma
+    let limpieza = { retirados: [] };
+    if (despues.length) {
+      try { limpieza = await limpiarPerfilEnOtrasCuentasLocal({ plataforma: platNuevo, perfiles: despues, compraId: nuevo?.compraId || "", clienteId }); }
+      catch (e) { logErr("limpiarPerfilEnOtrasCuentas", e); advertencias.push("No pude confirmar que el perfil salió de la cuenta anterior: revíselo en Bodega."); }
+    }
+    return { ok: true, perfiles: despues.length, agregados: agregados.length, removidos: removidos.length + limpieza.retirados.reduce((n, x) => n + x.perfiles, 0), retiradosDeOtras: limpieza.retirados, ...(advertencias.length ? { warning: advertencias.join(" ") } : {}) };
   } catch (error) {
     for (const p of agregados) {
       try { await removeServicioDeInventario({ clienteNombre: p.nombre || titular, plataforma: platNuevo, correo: p.correo, pin: p.pin, compraId: nuevo?.compraId || "", perfilId: p.perfilId || "", clienteId }); } catch (_) {}
@@ -3112,6 +3164,7 @@ async function asegurarClienteWizard(st = {}) {
 
 module.exports = {
   asegurarClienteWizard, // R142
+  limpiarPerfilEnOtrasCuentasLocal, // R198j
   mutarServiciosClienteTx, // R196q · convertir a cuenta completa en la misma transacción de la ficha
   // 🐛 FIX (ago-2026): iconPlataforma() se usaba en index_06_handlers.js
   // (botones "Mis renovaciones de hoy" / "en 3 días" y el aviso diario de
