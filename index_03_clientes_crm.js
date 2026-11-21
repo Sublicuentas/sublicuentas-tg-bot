@@ -24,6 +24,7 @@ const utils = require("./index_02_utils_roles");
 const accessControl = require("./index_23_access_control");
 const integrity = require("./index_26_integrity_guard");
 const invCanon = require("./lib_inventario_canonico"); // Oct-2026 · accountId + cupos reales
+const perfilesInv = require("./lib_perfiles_inventario"); // R199e · un perfil = una fila en Bodega (sin duplicados)
 const { registrarEventoSorteosSeguro } = require("./index_14_sorteos");
 const {
   normVendedor,
@@ -748,7 +749,18 @@ async function getInventarioDoc(plataforma = "", acceso = "", inventarioId = "")
   return invCanon.resolverCuentaInventario(db, { plataforma: plat, acceso: ident, docIdCalculado: docIdInventarioLocal(ident, plat) }, INVENTARIO_COLLECTION);
 }
 
-async function syncServicioEnInventario({ clienteNombre = "", pagadoPor = "", plataforma = "", correo = "", clave = "", pin = "", clienteId = "", compraId = "", perfilId = "", inventarioId = "", cuentaCompleta = false }) {
+// R199e · Perfiles de ESTA compra que viven en ESTA cuenta (para dejar una fila por perfil, ni más ni menos).
+function colapsarCompraEnCuentaLocal(clientes = [], { plat = "", acceso = "", clienteId = "", compraId = "", perfilesCompra = [] } = {}) {
+  const lista = (Array.isArray(perfilesCompra) ? perfilesCompra : [])
+    .filter((p) => invCanon.normAcceso(normalizeIdentByPlatformLocal(plat, p?.correo || "")) === invCanon.normAcceso(acceso));
+  const mapa = new Map();
+  if (String(clienteId || "").trim() && String(compraId || "").trim() && lista.length) {
+    mapa.set(perfilesInv.claveCompra(clienteId, compraId), lista.map((p) => ({ perfilId: String(p.perfilId || "").trim(), nombre: String(p.nombre || "").trim(), pin: String(p.pin || "").trim() })));
+  }
+  return perfilesInv.colapsarPerfilesRepetidos(clientes, { perfilesPorCompra: mapa });
+}
+
+async function syncServicioEnInventario({ clienteNombre = "", pagadoPor = "", plataforma = "", correo = "", clave = "", pin = "", clienteId = "", compraId = "", perfilId = "", inventarioId = "", cuentaCompleta = false, perfilesCompra = [] }) {
   const plat = normalizarPlataforma(plataforma);
   const acceso = normalizeIdentByPlatformLocal(plat, correo);
   const found = await getInventarioDoc(plat, acceso, inventarioId);
@@ -763,26 +775,13 @@ async function syncServicioEnInventario({ clienteNombre = "", pagadoPor = "", pl
     const perfilKey = String(perfilId || "").trim();
     const compraKey = String(compraId || "").trim();
     const clienteKey = String(clienteId || "").trim();
-    let idxExiste = perfilKey
-      ? clientes.findIndex((x) => String(x?.perfilId || "").trim() === perfilKey)
-      : -1;
-    // Primero el nombre real + PIN. Un mismo compraId puede contener varios
-    // perfiles y no debe provocar que un perfil pise a otro.
-    if (idxExiste === -1) {
-      idxExiste = clientes.findIndex((x) =>
-        normTxt(x?.nombre || "") === normTxt(clienteNombre)
-        && (!pinNorm || String(x?.pin || "") === pinNorm)
-      );
-    }
-    // Compatibilidad con inventario antiguo: si el nombre guardado era el
-    // pagador, lo adoptamos únicamente cuando el PIN también coincide.
-    if (idxExiste === -1 && pagadoPor) {
-      idxExiste = clientes.findIndex((x) =>
-        normTxt(x?.nombre || "") === normTxt(pagadoPor)
-        && (!pinNorm || String(x?.pin || "") === pinNorm)
-      );
-    }
-    // Último fallback por compraId solo si existe una única coincidencia.
+    // R199e · misma regla que la Web: por perfilId; si no, mismo cliente/compra + NOMBRE + PIN (nunca solo PIN),
+    // sin pisar la fila de un perfil hermano de la misma compra. El pagador vale como nombre alterno (fichas viejas).
+    const perfilIdsCompra = (Array.isArray(perfilesCompra) ? perfilesCompra : []).map((p) => String(p?.perfilId || "").trim()).filter(Boolean);
+    let idxExiste = perfilesInv.buscarFilaDePerfil(clientes,
+      { perfilId: perfilKey, compraId: compraKey, clienteId: clienteKey, nombre: clienteNombre, pin: pinNorm },
+      { perfilIdsCompra, nombresAlternos: pagadoPor ? [pagadoPor] : [] });
+    // Último fallback por compraId solo si existe una única coincidencia (perfil sin ID al que le cambiaron el nombre).
     if (idxExiste === -1 && !perfilKey && compraKey) {
       const porCompra = clientes.map((x, i) => ({ x, i })).filter(({ x }) =>
         String(x?.compraId || "").trim() === compraKey
@@ -808,6 +807,14 @@ async function syncServicioEnInventario({ clienteNombre = "", pagadoPor = "", pl
         clientes[idxExiste] = identificado;
         patch.clientes = clientes;
       }
+      // R199e · si quedaron filas repetidas de este mismo perfil/compra (guardados anteriores), queda una por perfil
+      const limpio = colapsarCompraEnCuentaLocal(clientes, { plat, acceso, clienteId: clienteKey, compraId: compraKey, perfilesCompra });
+      if (limpio.quitadas.length) {
+        clientes = limpio.filas;
+        const capacidadL = Number(data.capacidad || data.total || getTotalPorPlataformaLocal(plat) || 1);
+        const dispL = invCanon.disponiblesCuenta({ ...data, clientes }, capacidadL, clientes.length);
+        Object.assign(patch, { clientes, ocupados: clientes.length, disponibles: dispL, disp: dispL, sobreasignada: clientes.length > capacidadL, estado: dispL === 0 ? "llena" : "activa" });
+      }
       const claveNorm = String(clave || "").trim();
       if (claveNorm && requiereClaveLocal(plat) && (!data.clave || String(data.clave || "").toLowerCase() === "sin clave")) patch.clave = claveNorm;
       if (data.accountId !== ref.id) patch.accountId = ref.id;
@@ -831,7 +838,7 @@ async function syncServicioEnInventario({ clienteNombre = "", pagadoPor = "", pl
       ...(perfilKey ? { perfilId: perfilKey } : {}),
       ...(plat === "hbomax" && cuentaCompleta ? { cuentaCompleta: true } : {}), // R196v
     });
-    clientes = clientes.map((x, i) => ({ ...x, slot: i + 1 }));
+    clientes = colapsarCompraEnCuentaLocal(clientes, { plat, acceso, clienteId: clienteKey, compraId: compraKey, perfilesCompra }).filas; // R199e
     const ocupados = clientes.length;
     const disponibles = invCanon.disponiblesCuenta({ ...data, clientes }, capacidad, ocupados); // R198j · cuenta completa (cualquier plataforma, por marca de cliente o de cuenta) = 0 // R196v · completa = 0 para terceros
     const patch = { clientes, ocupados, disponibles, disp: disponibles, capacidad, accountId: ref.id, sobreasignada: ocupados > capacidad, estado: disponibles === 0 ? "llena" : "activa", updatedAt: admin.firestore.FieldValue.serverTimestamp() };
@@ -1033,7 +1040,7 @@ async function sincronizarCompraInventarioLocal(anterior, nuevo, titular = "", o
     }
     const advertencias = [];
     for (const p of despues) {
-      const result = await syncServicioEnInventario({ clienteNombre: p.nombre || titular, pagadoPor: titular, plataforma: platNuevo, correo: p.correo, clave: p.clave, pin: p.pin, compraId: nuevo?.compraId || "", perfilId: p.perfilId || "", clienteId, inventarioId: p.inventarioId || "" , cuentaCompleta: platNuevo === "hbomax" && nuevo?.tipoVenta === "cuenta_completa" /* R196v */ });
+      const result = await syncServicioEnInventario({ clienteNombre: p.nombre || titular, pagadoPor: titular, plataforma: platNuevo, correo: p.correo, clave: p.clave, pin: p.pin, compraId: nuevo?.compraId || "", perfilId: p.perfilId || "", clienteId, inventarioId: p.inventarioId || "" , cuentaCompleta: platNuevo === "hbomax" && nuevo?.tipoVenta === "cuenta_completa" /* R196v */, perfilesCompra: despues /* R199e */ });
       if (result?.added) agregados.push(p);
       if (result?.warning) advertencias.push(result.warning);
     }
@@ -1049,7 +1056,7 @@ async function sincronizarCompraInventarioLocal(anterior, nuevo, titular = "", o
       try { await removeServicioDeInventario({ clienteNombre: p.nombre || titular, plataforma: platNuevo, correo: p.correo, pin: p.pin, compraId: nuevo?.compraId || "", perfilId: p.perfilId || "", clienteId }); } catch (_) {}
     }
     for (const p of removidos) {
-      try { await syncServicioEnInventario({ clienteNombre: p.nombre || titular, pagadoPor: titular, plataforma: platAntes, correo: p.correo, clave: p.clave, pin: p.pin, compraId: anterior?.compraId || "", perfilId: p.perfilId || "", clienteId }); } catch (_) {}
+      try { await syncServicioEnInventario({ clienteNombre: p.nombre || titular, pagadoPor: titular, plataforma: platAntes, correo: p.correo, clave: p.clave, pin: p.pin, compraId: anterior?.compraId || "", perfilId: p.perfilId || "", clienteId, perfilesCompra: antes /* R199e */ }); } catch (_) {}
     }
     throw error;
   }
@@ -3165,6 +3172,9 @@ async function asegurarClienteWizard(st = {}) {
 module.exports = {
   asegurarClienteWizard, // R142
   limpiarPerfilEnOtrasCuentasLocal, // R198j
+  colapsarCompraEnCuentaLocal, // R199e
+  syncServicioEnInventario, // R199e · expuesto para pruebas (misma función que usa la ficha)
+  sincronizarCompraInventarioLocal, // R199e · expuesto para pruebas
   mutarServiciosClienteTx, // R196q · convertir a cuenta completa en la misma transacción de la ficha
   // 🐛 FIX (ago-2026): iconPlataforma() se usaba en index_06_handlers.js
   // (botones "Mis renovaciones de hoy" / "en 3 días" y el aviso diario de

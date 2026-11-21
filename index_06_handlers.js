@@ -389,6 +389,27 @@ function normalizeIdentByPlatformLocal(plataforma = "", ident = "") {
 
 
 
+// R199e · Perfiles que la FICHA (CRM) dice que viven en esta cuenta, por compra: clienteId|compraId → [{ perfilId, nombre, pin }].
+async function perfilesPorCompraCuentaLocal(filas = [], plataforma = "", acceso = "") {
+  const plat = normalizarPlataforma(plataforma);
+  const fam = invCanon.familiaPlataforma(plat);
+  const acc = invCanon.normAcceso(normalizeIdentByPlatformLocal(plat, acceso));
+  const mapa = new Map();
+  const ids = [...new Set((Array.isArray(filas) ? filas : []).map((f) => String(f?.clienteId || "").trim()).filter(Boolean))];
+  for (const id of ids) {
+    let cli = null;
+    try { cli = await getCliente(id); } catch (_) { cli = null; }
+    if (!cli) continue;
+    const m = perfilesInv.perfilesPorCompraDeCliente(cli, {
+      clienteId: id, familia: fam, acceso: acc, perfilesDe: perfilesServicioLocal,
+      familiaDe: (p) => invCanon.familiaPlataforma(normalizarPlataforma(p || "")),
+      accesoDe: (c) => invCanon.normAcceso(normalizeIdentByPlatformLocal(plat, c || "")),
+    });
+    for (const [k, v] of m) mapa.set(k, v);
+  }
+  return mapa;
+}
+
 async function resolverVistaClienteInventarioCRM(clienteInv = {}, plataforma = "", acceso = "") {
   const fallback = {
     nombre: String(clienteInv?.nombre || "Sin nombre").trim() || "Sin nombre",
@@ -424,6 +445,13 @@ async function resolverVistaClienteInventarioCRM(clienteInv = {}, plataforma = "
           if (accesoNorm && perfilAcceso !== accesoNorm) continue;
           const perfilPin = String(perfil?.pin || "").trim();
           if (pinNorm && perfilPin && perfilPin !== pinNorm) continue;
+          // R199e · nunca por PIN solo: la fila debe ser de ese perfil (ID) o llevar su nombre / el del pagador.
+          // Antes cualquier fila con PIN 0000 tomaba el nombre e IDs de «Leyda Blanco» y quedaba guardada así.
+          const nombrePerfilCRM = String(perfil?.nombre || perfil?.perfil || nombrePerfilRealServicioLocal(s, titular) || titular || "").trim();
+          if (!perfilesInv.filaCoincidePerfil(
+            { nombre: clienteInv?.nombre, pin: pinNorm, perfilId: fallback.perfilId, compraId: fallback.compraId, clienteId: fallback.clienteId },
+            { nombre: nombrePerfilCRM, pin: perfilPin, perfilId, compraId: String(s?.compraId || "").trim(), clienteId: String(cli?.id || "").trim() },
+            { nombresAlternos: [titular] })) continue;
           matches.push({
             nombre: String(perfil?.nombre || perfil?.perfil || nombrePerfilRealServicioLocal(s, titular) || titular || "Sin nombre").trim(),
             pagadoPor: titular,
@@ -803,6 +831,7 @@ function docIdInventarioLocal(ident = "", plataforma = "") {
 // para encontrar una cuenta existente se usa el resolvedor (ID → ID calculado → plataforma+correo),
 // así se encuentran también las creadas desde la Web (ID aleatorio) o con el correo cambiado.
 const invCanon = require("./lib_inventario_canonico");
+const perfilesInv = require("./lib_perfiles_inventario"); // R199e · un perfil = una fila (sin duplicados)
 // R198j · Después de mover un perfil de cuenta: se avisa si salió de otra cuenta o si algo quedó por revisar (nunca en silencio).
 async function avisoSyncInventarioLocal(chatId, sync) {
   try {
@@ -3702,103 +3731,58 @@ bot.onText(/^\/auditar_cliente(?:\s+(.+))?$/i, async (msg, match) => {
 // tenga un PIN real (no vacío, no "0000"), y recalcula ocupados/disponibles.
 // ===============================
 bot.onText(/\/fix_duplicados(?:\s+(confirmar))?/i, async (msg, match) => {
+  // R199e · Regla nueva: se quita solo lo que es el MISMO perfil repetido (mismo perfilId, o misma compra +
+  // nombre + PIN de más según la ficha). Antes agrupaba solo por nombre y podía borrar perfiles legítimos de una
+  // compra de 2+ perfiles. Nunca saca a otra persona ni a quien ya no está en la ficha.
   if (!hasRuntimeLock()) return;
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-
   if (!(await requirePermissionLocal(chatId, userId, "maintenance.write"))) return;
-
   const confirmar = !!(match && match[1]);
-  await bot.sendMessage(
-    chatId,
-    confirmar
-      ? "🔧 Limpiando clientes duplicados en el inventario..."
-      : "🔎 Revisando cuentas del inventario con clientes duplicados (no se guarda nada todavía)..."
-  );
-
+  await bot.sendMessage(chatId, confirmar
+    ? "🔧 Quitando registros repetidos del mismo perfil en Bodega..."
+    : "🔎 Revisando Bodega: registros repetidos del mismo perfil (no se guarda nada todavía)...");
   try {
     const snap = await db.collection("inventario").get();
     const afectadas = [];
-
-    snap.forEach((doc) => {
+    for (const doc of snap.docs) {
       const data = doc.data() || {};
       const clientes = Array.isArray(data.clientes) ? data.clientes : [];
-      if (clientes.length < 2) return;
-      const porNombre = new Map();
-      for (const c of clientes) {
-        const key = normalizeLooseText(c?.nombre || "");
-        if (!key) continue;
-        if (!porNombre.has(key)) porNombre.set(key, []);
-        porNombre.get(key).push(c);
-      }
-      const grupos = [...porNombre.values()].filter((arr) => arr.length > 1);
-      if (grupos.length) afectadas.push({ ref: doc.ref, data, grupos, totalActual: clientes.length });
-    });
-
-    if (!afectadas.length) {
-      return bot.sendMessage(chatId, "✅ No encontré clientes duplicados en ninguna cuenta del inventario.");
+      if (clientes.length < 2) continue;
+      const plat = normalizarPlataforma(data.plataforma || "");
+      const acceso = invCanon.identCuenta(data);
+      const colapso = perfilesInv.colapsarPerfilesRepetidos(clientes, { perfilesPorCompra: await perfilesPorCompraCuentaLocal(clientes, plat, acceso) });
+      if (colapso.quitadas.length) afectadas.push({ ref: doc.ref, data, plat, acceso, colapso, totalActual: clientes.length });
     }
-
+    if (!afectadas.length) return bot.sendMessage(chatId, "✅ No hay registros repetidos del mismo perfil en Bodega.");
     if (!confirmar) {
-      let txt = `⚠️ Encontré ${afectadas.length} cuenta(s) del inventario con clientes duplicados:\n\n`;
-      afectadas.slice(0, 15).forEach((a, i) => {
-        const plat = a.data.plataforma || "?";
-        const correo = a.data.correo || a.data.ident || a.ref.id;
-        txt += `${i + 1}) ${plat} — ${correo} (${a.totalActual} perfiles guardados)\n`;
-        a.grupos.forEach((g) => { txt += `   • ${g[0].nombre || "Sin nombre"} × ${g.length}\n`; });
-        txt += `\n`;
+      let txt = `⚠️ ${afectadas.length} cuenta(s) con registros repetidos del mismo perfil:\n\n`;
+      afectadas.slice(0, 20).forEach((a, n) => {
+        txt += `${n + 1}) ${humanPlataforma(a.plat)} — ${a.acceso}: ${a.totalActual} → ${a.colapso.filas.length}\n`;
+        txt += `   • quita: ${a.colapso.quitadas.map((q) => `${q.nombre || "Sin nombre"}${q.pin ? ` (PIN ${q.pin})` : ""}`).join(", ")}\n`;
       });
-      if (afectadas.length > 15) txt += `…y ${afectadas.length - 15} cuenta(s) más.\n\n`;
-      txt += `Nada se ha modificado todavía. Se va a dejar 1 solo registro por cliente (el que tenga PIN real, si hay). Para aplicar, envía:\n/fix_duplicados confirmar`;
+      if (afectadas.length > 20) txt += `…y ${afectadas.length - 20} cuenta(s) más.\n`;
+      txt += `\nNada se ha modificado. Ningún cliente sale de su cuenta: solo se borran copias del mismo perfil. Para aplicar:\n/fix_duplicados confirmar`;
       return bot.sendMessage(chatId, txt);
     }
-
-    let cuentasReparadas = 0;
-    let perfilesEliminados = 0;
-
+    let cuentas = 0, quitados = 0;
     for (const a of afectadas) {
-      const clientes = Array.isArray(a.data.clientes) ? a.data.clientes : [];
-      const porNombre = new Map();
-      const sinNombre = [];
-      for (const c of clientes) {
-        const key = normalizeLooseText(c?.nombre || "");
-        if (!key) { sinNombre.push(c); continue; }
-        if (!porNombre.has(key)) porNombre.set(key, []);
-        porNombre.get(key).push(c);
-      }
-      const limpios = [...sinNombre];
-      for (const grupo of porNombre.values()) {
-        if (grupo.length === 1) { limpios.push(grupo[0]); continue; }
-        const pinValido = (c) => c?.pin && String(c.pin).trim() && String(c.pin).trim() !== "0000";
-        const mejor = grupo.find(pinValido) || grupo.find((c) => c?.pin && String(c.pin).trim()) || grupo[0];
-        limpios.push(mejor);
-        perfilesEliminados += grupo.length - 1;
-      }
-      const clientesFinal = limpios.map((c, i) => ({ ...c, slot: i + 1 }));
-      const capacidad = Number(a.data.capacidad || a.data.total || 0) || clientesFinal.length || 1;
-      const ocupados = clientesFinal.length;
-      const disponibles = invCanon.disponiblesCuenta({ ...a.data, clientes: clientesFinal }, capacidad, ocupados); // R198j
-      await a.ref.set(
-        {
-          clientes: clientesFinal,
-          ocupados,
-          disponibles,
-          disp: disponibles,
-          estado: disponibles === 0 ? "llena" : "activa",
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        },
-        { merge: true }
-      );
-      cuentasReparadas++;
+      await db.runTransaction(async (tx) => {
+        const cur = await tx.get(a.ref); if (!cur.exists) return;
+        const d = cur.data() || {};
+        const colapso = perfilesInv.colapsarPerfilesRepetidos(Array.isArray(d.clientes) ? d.clientes : [], { perfilesPorCompra: await perfilesPorCompraCuentaLocal(d.clientes || [], a.plat, a.acceso) });
+        if (!colapso.quitadas.length) return;
+        const capacidad = Number(d.capacidad || d.total || 0) || colapso.filas.length || 1;
+        const disp = invCanon.disponiblesCuenta({ ...d, clientes: colapso.filas }, capacidad, colapso.filas.length);
+        tx.set(a.ref, { clientes: colapso.filas, ocupados: colapso.filas.length, disponibles: disp, disp, sobreasignada: colapso.filas.length > capacidad, estado: disp === 0 ? "llena" : "activa", updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        cuentas++; quitados += colapso.quitadas.length;
+      });
     }
-
-    return bot.sendMessage(
-      chatId,
-      `✅ Limpieza completada\n\n📄 Cuentas reparadas: ${cuentasReparadas}\n👤 Perfiles duplicados eliminados: ${perfilesEliminados}`
-    );
+    cacheInvalidatePrefix?.("clientes:");
+    return bot.sendMessage(chatId, `✅ Listo: ${cuentas} cuenta(s) corregida(s), ${quitados} registro(s) repetido(s) quitado(s). Ningún cliente salió de su cuenta.`);
   } catch (error) {
     logErr("fix_duplicados", error);
-    return bot.sendMessage(chatId, "⚠️ Ocurrió un error limpiando duplicados. Revise los logs del servidor.");
+    return bot.sendMessage(chatId, "⚠️ No pude revisar los duplicados. No se modificó nada.");
   }
 });
 
@@ -5564,22 +5548,32 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
           if (JSON.stringify(siguiente) !== JSON.stringify(c || {})) reparado = true;
           return siguiente;
         });
+        // R199e · filas repetidas del MISMO perfil (mismo perfilId, o misma compra+nombre+PIN de más según la ficha) → una.
+        // Nunca se quita a otra persona ni a quien ya no esté en la ficha (eso queda para revisión del dueño).
+        let quitadasRepetidas = [];
+        let clientesFinales = clientesCorregidos;
+        try {
+          const colapso = perfilesInv.colapsarPerfilesRepetidos(clientesCorregidos, { perfilesPorCompra: await perfilesPorCompraCuentaLocal(clientesCorregidos, plataforma, acceso) });
+          if (colapso.quitadas.length) { clientesFinales = colapso.filas; quitadasRepetidas = colapso.quitadas; reparado = true; }
+        } catch (e) { logErr?.("colapsarPerfilesRepetidos", e); }
+        const capacidad = getCapacidadCorreo(correoData, plataforma);
         if (reparado) {
           try {
-            await found.ref.set({ clientes: clientesCorregidos, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+            const dispR = invCanon.disponiblesCuenta({ ...correoData, clientes: clientesFinales }, capacidad, clientesFinales.length);
+            await found.ref.set({ clientes: clientesFinales, ...(quitadasRepetidas.length ? { ocupados: clientesFinales.length, disponibles: dispR, disp: dispR, sobreasignada: clientesFinales.length > capacidad, estado: dispR === 0 ? "llena" : "activa" } : {}), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
             cacheInvalidatePrefix?.("clientes:");
           } catch (_) {}
         }
-        const capacidad = getCapacidadCorreo(correoData, plataforma);
-        const ocupados = clientesCorregidos.length;
-        const esCompleta = invCanon.esCuentaCompleta({ ...correoData, clientes: clientesCorregidos }); // R198j
-        const disponibles = invCanon.disponiblesCuenta({ ...correoData, clientes: clientesCorregidos }, capacidad, ocupados);
+        const clientesCorregidosFinal = clientesFinales;
+        const ocupados = clientesCorregidosFinal.length;
+        const esCompleta = invCanon.esCuentaCompleta({ ...correoData, clientes: clientesCorregidosFinal }); // R198j
+        const disponibles = invCanon.disponiblesCuenta({ ...correoData, clientes: clientesCorregidosFinal }, capacidad, ocupados);
         const estado = esCompleta ? "CUENTA COMPLETA" : disponibles === 0 ? "LLENA" : "CON ESPACIO";
         let txt = "👥 *Clientes en esta cuenta*\n\n";
         txt += `${identIcon(plataforma)} *${escMD(getIdentLabelLocal(plataforma))}:* ${escMD(acceso)}\n📌 *${escMD(String(plataforma).toUpperCase())}*\n\n`;
-        if (!clientesCorregidos.length) txt += "_No hay clientes asignados._\n\n";
+        if (!clientesCorregidosFinal.length) txt += "_No hay clientes asignados._\n\n";
         else {
-          clientesCorregidos.forEach((c, i) => {
+          clientesCorregidosFinal.forEach((c, i) => {
             // En el inventario de Telegram se muestra únicamente el perfil real.
             // "Pagado por" es una nota exclusiva de Control Maestro.
             txt += `${i + 1}. ${escMD(c.nombre || "Sin nombre")} — PIN ${escMD(c.pin || "----")}\n`;
@@ -5587,6 +5581,7 @@ No toca Canva, Gemini, ChatGPT ni Duolingo porque son solo correo. Conserva el P
           txt += "\n";
         }
         txt += `👤 *Ocupados:* ${ocupados}/${capacidad}\n✅ *Disponibles:* ${disponibles}\n📊 *Estado:* ${escMD(estado)}`;
+        if (quitadasRepetidas.length) txt += `\n\n🧹 Se quitaron ${quitadasRepetidas.length} registro(s) repetido(s) del mismo perfil: ${escMD(quitadasRepetidas.map((q) => q.nombre || "Sin nombre").join(", "))}. Ningún cliente salió de la cuenta.`;
         return upsertPanel(chatId, txt, [
           [{ text: "⬅️ Volver a la cuenta", callback_data: `mail_panel|${normalizarPlataforma(plataforma)}|${encodeURIComponent(acceso)}` }],
           [{ text: "🏠 Inicio", callback_data: "go:inicio" }],
