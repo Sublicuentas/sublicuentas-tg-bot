@@ -214,77 +214,109 @@ function normalizeMovimiento(id, data = {}, source = "") {
 // Sin compraId: solo si TODOS los servicios de esa plataforma en la ficha son del mismo tercero (si hay duda, queda
 // el nombre de siempre). No cambia montos, bancos ni agrupaciones; solo el nombre que se muestra.
 function normNombreR200(v = "") { return String(v || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, " ").trim(); }
-function compradorDeMovimientoR200(raw = {}, cliente = null, normKey = (x) => normNombreR200(x).replace(/[^a-z0-9]/g, "")) {
-  if (!cliente) return "";
-  const servicios = Array.isArray(cliente.servicios) ? cliente.servicios : [];
-  const terceroDe = (sv) => (normNombreR200(sv?.beneficiarioTipo) === "tercero" ? safeText(sv?.beneficiarioNombre || sv?.beneficiario || "") : "");
-  const ids = [raw.compraId, raw.servicioCompraId, ...(Array.isArray(raw.compraIds) ? raw.compraIds : [])].flatMap((x) => String(x || "").split(",")).map((x) => x.trim()).filter(Boolean);
-  let elegidos = [];
-  if (ids.length) elegidos = servicios.filter((sv) => sv && ids.includes(String(sv.compraId || "").trim()));
-  if (!elegidos.length) {
+// Nombre de la persona que USA el servicio: tercero marcado en la ficha; si es tercero sin nombre, o titular pero el
+// perfil está a nombre de otra persona (nombre completo, distinto del titular), el nombre del perfil.
+let NOMBRES_FICHAS_R200 = new Set(), BODEGA_R200 = new Map(); // compraId → [{nombre, pagadoPor}]
+function nombresPerfilesR200(sv = {}) {
+  const ps = Array.isArray(sv.perfiles) && sv.perfiles.length ? sv.perfiles : [{ nombre: sv.nombrePerfil || sv.perfil || "" }];
+  return ps.map((p) => safeText(p?.nombre || p?.nombrePerfil || p?.cliente || p?.perfil || "")).filter(Boolean);
+}
+function esNombrePersonaR200(n = "") { const t = normNombreR200(n); return t.split(" ").filter((w) => /[a-zñ]{2,}/.test(w)).length >= 2 && !/^(perfil|cliente|usuario|cuenta|pantalla)\b/.test(t); }
+function usuarioDeServicioR200(sv = {}, titularNombre = "", pagador = "") {
+  const tit = normNombreR200(titularNombre), pag = normNombreR200(pagador);
+  const tipo = normNombreR200(sv?.beneficiarioTipo);
+  const benef = safeText(sv?.beneficiarioNombre || sv?.beneficiario || "");
+  if (tipo === "tercero" && benef && ![tit, pag].includes(normNombreR200(benef))) return benef;
+  const ajenos = [...new Map(nombresPerfilesR200(sv).filter((n) => esNombrePersonaR200(n)).map((n) => [normNombreR200(n), n])).entries()]
+    .filter(([k]) => k !== tit && k !== pag && !(tit && k.includes(tit)) && !(pag && k.includes(pag)));
+  // Perfil a nombre de otra persona: vale si el servicio es de tercero, o si ese nombre es el de OTRA ficha del CRM.
+  if (ajenos.length === 1 && (tipo === "tercero" || NOMBRES_FICHAS_R200.has(ajenos[0][0]))) return ajenos[0][1];
+  if (tipo === "tercero" && benef) return benef;
+  return safeText(titularNombre); // lo usa el titular de esa ficha
+}
+function idsCompraR200(raw = {}) {
+  const lista = [raw.compraId, raw.servicioCompraId, ...(Array.isArray(raw.compraIds) ? raw.compraIds : []),
+    ...(Array.isArray(raw.servicios) ? raw.servicios.map((x) => x && x.compraId) : []),
+    ...(Array.isArray(raw.asignaciones) ? raw.asignaciones.map((x) => x && x.compraId) : [])];
+  return [...new Set(lista.flatMap((x) => String(x || "").split(",")).map((x) => x.trim()).filter(Boolean))];
+}
+// Devuelve el comprador (o "" si es el mismo que pagó o si no se puede saber sin adivinar).
+function compradorDeMovimientoR200(raw = {}, cliente = null, normKey = (x) => normNombreR200(x).replace(/[^a-z0-9]/g, ""), indiceCompras = null) {
+  const pagador = safeText(raw.clienteNombre || raw.nombreCliente || raw.cliente || "") || safeText(cliente?.nombrePerfil || cliente?.nombre || "");
+  const titularDe = (c) => safeText(c?.nombrePerfil || c?.nombre || "");
+  const ids = idsCompraR200(raw);
+  let pares = []; // [ficha, servicio]
+  for (const id of ids) {
+    const propio = cliente && (cliente.servicios || []).find((sv) => sv && String(sv.compraId || "").trim() === id);
+    if (propio) { pares.push([cliente, propio]); continue; }
+    const otro = indiceCompras && indiceCompras.get(id); // la compra está en OTRA ficha (la del que la usa)
+    if (otro) pares.push(otro);
+  }
+  if (!pares.length) {
+    if (!cliente) return "";
     const k = normKey(raw.plataforma || raw.servicio || "");
     if (!k) return "";
-    elegidos = servicios.filter((sv) => sv && normKey(sv.plataforma || sv.servicio || "") === k);
-    if (!elegidos.length) return "";
-    const nombres = new Set(elegidos.map((sv) => normNombreR200(terceroDe(sv))));
-    if (nombres.size !== 1 || nombres.has("")) return ""; // hay titular u otro tercero en esa plataforma → no se adivina
-    return terceroDe(elegidos[0]);
+    const mismos = (cliente.servicios || []).filter((sv) => sv && normKey(sv.plataforma || sv.servicio || "") === k);
+    if (!mismos.length) return "";
+    const usuarios = new Set(mismos.map((sv) => normNombreR200(usuarioDeServicioR200(sv, titularDe(cliente), pagador))));
+    if (usuarios.size !== 1) return ""; // varias personas con esa plataforma → no se adivina
+    pares = [[cliente, mismos[0]]];
   }
-  const titular = normNombreR200(cliente.nombrePerfil || cliente.nombre || "");
   const nombres = [];
-  for (const sv of elegidos) {
-    const n = terceroDe(sv) || safeText(cliente.nombrePerfil || cliente.nombre || "");
-    if (n && !nombres.some((x) => normNombreR200(x) === normNombreR200(n))) nombres.push(n);
+  for (const [c, sv] of pares) { const n = usuarioDeServicioR200(sv, titularDe(c), pagador); if (n && !nombres.some((x) => normNombreR200(x) === normNombreR200(n))) nombres.push(n); }
+  if (!nombres.length || (nombres.length === 1 && normNombreR200(nombres[0]) === normNombreR200(pagador))) {
+    // Bodega: la fila del perfil guarda a quien lo usa (nombre) y a quien pagó (pagadoPor). Si pagó el mismo titular, se usa esa fila.
+    const deBodega = [];
+    for (const id of ids) for (const f of BODEGA_R200.get(id) || []) if (normNombreR200(f.pagadoPor) === normNombreR200(pagador) && esNombrePersonaR200(f.nombre) && normNombreR200(f.nombre) !== normNombreR200(pagador) && !deBodega.some((x) => normNombreR200(x) === normNombreR200(f.nombre))) deBodega.push(safeText(f.nombre));
+    return deBodega.join(" / ");
   }
-  if (!nombres.length || (nombres.length === 1 && normNombreR200(nombres[0]) === titular)) return ""; // lo compró el mismo titular
   return nombres.join(" / ");
 }
 function nombrePagadorR200(raw = {}) { return safeText(raw.clienteNombre || raw.nombreCliente || raw.cliente || raw.nombrePerfil || ""); }
 function telR200(v = "") { const d = String(v || "").replace(/\D/g, ""); return d.length >= 8 ? d.slice(-8) : ""; }
 async function aplicarCompradoresR200(movs = []) {
-  const ingresos = movs.filter((m) => m && m.raw && !["egreso"].includes(m.tipo));
-  const ids = [...new Set(ingresos.map((m) => String(m.raw.clienteId || "").trim()).filter((x) => x && !x.includes("/")))];
-  const fichas = new Map();
-  for (let i = 0; i < ids.length; i += 40) {
-    await Promise.all(ids.slice(i, i + 40).map(async (id) => {
-      try { const sn = await db.collection("clientes").doc(id).get(); if (sn && sn.exists) fichas.set(id, sn.data() || {}); } catch (e) { logErr("R200e ficha", e); }
-    }));
-  }
-  // R200e-2 · Cobros guardados SIN clienteId (ingreso manual, registros viejos): se busca la ficha por teléfono o por
-  // nombre del titular, solo si hay UNA ficha que coincide (si hay dos con el mismo nombre, no se adivina).
-  const porNombre = new Map(), porTel = new Map();
-  const sinId = ingresos.filter((m) => !fichas.has(String(m.raw.clienteId || "").trim()) && (nombrePagadorR200(m.raw) || telR200(m.raw.telefono)));
-  if (sinId.length) {
+  const ingresos = movs.filter((m) => m && m.raw && m.tipo !== "egreso" && (m.raw.clienteId || nombrePagadorR200(m.raw) || m.raw.detalle));
+  const diag = { revisados: ingresos.length, cambiados: 0, sinFicha: 0, mismoComprador: 0, detalleManual: 0 };
+  if (!ingresos.length) return diag;
+  // UNA lectura de fichas: por ID, por teléfono, por nombre (solo si es único) y por ID de compra.
+  const fichas = new Map(), porNombre = new Map(), porTel = new Map(), indiceCompras = new Map(), nombresTodos = new Map();
+  try {
+    const snap = await db.collection("clientes").get();
+    for (const d of snap.docs || []) {
+      const c = d.data() || {}; fichas.set(d.id, c);
+      for (const n of new Set([c.nombre, c.nombrePerfil].map(normNombreR200).filter(Boolean))) { porNombre.set(n, c); nombresTodos.set(n, (nombresTodos.get(n) || 0) + 1); }
+      const t = telR200(c.telefono); if (t) porTel.set(t, porTel.has(t) ? null : c);
+      for (const sv of Array.isArray(c.servicios) ? c.servicios : []) { const id = String(sv?.compraId || "").trim(); if (id) indiceCompras.set(id, indiceCompras.has(id) ? null : [c, sv]); }
+    }
+    for (const [n, k] of nombresTodos) if (k > 1) porNombre.set(n, null);
+    NOMBRES_FICHAS_R200 = new Set(nombresTodos.keys());
+    BODEGA_R200 = new Map();
     try {
-      const snap = await db.collection("clientes").get();
-      for (const d of snap.docs || []) {
-        const c = d.data() || {};
-        if (!(Array.isArray(c.servicios) && c.servicios.some((sv) => normNombreR200(sv?.beneficiarioTipo) === "tercero"))) continue; // solo interesan fichas con terceros
-        for (const n of new Set([c.nombre, c.nombrePerfil].map(normNombreR200).filter(Boolean))) porNombre.set(n, porNombre.has(n) ? null : c);
-        const t = telR200(c.telefono); if (t) porTel.set(t, porTel.has(t) ? null : c);
+      const inv = await db.collection("inventario").get();
+      for (const d of inv.docs || []) for (const f of Array.isArray((d.data() || {}).clientes) ? d.data().clientes : []) {
+        const id = String(f?.compraId || "").trim(); if (!id || !f.pagadoPor) continue;
+        if (!BODEGA_R200.has(id)) BODEGA_R200.set(id, []); BODEGA_R200.get(id).push({ nombre: f.nombre || "", pagadoPor: f.pagadoPor || "" });
       }
-      const nombresTodos = new Map(); // un nombre repetido en fichas SIN terceros también vuelve ambiguo el nombre
-      for (const d of snap.docs || []) { const c = d.data() || {}; for (const n of new Set([c.nombre, c.nombrePerfil].map(normNombreR200).filter(Boolean))) nombresTodos.set(n, (nombresTodos.get(n) || 0) + 1); }
-      for (const [n] of porNombre) if ((nombresTodos.get(n) || 0) > 1) porNombre.set(n, null);
-    } catch (e) { logErr("R200e fichas por nombre", e); }
-  }
-  const fichaDe = (raw) => fichas.get(String(raw.clienteId || "").trim()) || porTel.get(telR200(raw.telefono)) || porNombre.get(normNombreR200(nombrePagadorR200(raw))) || null;
+    } catch (e) { logErr("R200e bodega", e); }
+    for (const [id, v] of indiceCompras) if (!v) indiceCompras.delete(id);
+  } catch (e) { logErr("R200e fichas", e); return diag; }
+  const fichaDe = (raw) => fichas.get(String(raw.clienteId || "").trim()) || porTel.get(telR200(raw.telefono)) || porNombre.get(normNombreR200(nombrePagadorR200(raw) || raw.detalle)) || null;
   let normKey; try { normKey = require("./lib_catalogo_categorias").normPlataformaKey; } catch (_) { normKey = undefined; }
-  let cambios = 0;
   for (const m of ingresos) {
     const raw = m.raw, cli = fichaDe(raw);
-    if (!cli) continue;
-    const comprador = compradorDeMovimientoR200(raw, cli, normKey || undefined);
-    if (!comprador) continue;
+    if (!cli && !idsCompraR200(raw).some((id) => indiceCompras.has(id))) { diag.sinFicha++; continue; }
+    const comprador = compradorDeMovimientoR200(cli && !nombrePagadorR200(raw) && raw.detalle ? { ...raw, clienteNombre: raw.detalle } : raw, cli, normKey || undefined, indiceCompras);
+    if (!comprador) { diag.mismoComprador++; continue; }
     // Solo se reemplaza el nombre del titular/pagador; un Detalle escrito a mano distinto se respeta.
     const directo = normNombreR200(raw.detalle || raw.descripcion || raw.nota || raw.observacion || "");
-    const titulares = [nombrePagadorR200(raw), raw.clienteNombre, cli.nombrePerfil, cli.nombre].map(normNombreR200).filter(Boolean);
-    if (directo && !titulares.includes(directo)) continue;
-    raw.compradorNombre = comprador; raw.pagadoPorNombre = safeText(nombrePagadorR200(raw) || cli.nombrePerfil || cli.nombre || "");
+    const titulares = [nombrePagadorR200(raw), cli && cli.nombrePerfil, cli && cli.nombre].map(normNombreR200).filter(Boolean);
+    if (directo && !titulares.includes(directo)) { diag.detalleManual++; continue; }
+    raw.compradorNombre = comprador; raw.pagadoPorNombre = safeText(nombrePagadorR200(raw) || raw.detalle || (cli && (cli.nombrePerfil || cli.nombre)) || "");
     m.detalle = raw.reversaDe ? `${comprador} (reversa)` : comprador;
-    cambios++;
+    diag.cambiados++;
   }
-  return cambios;
+  console.log("R200E_COMPRADORES", JSON.stringify(diag)); // solo conteos, sin nombres
+  return diag;
 }
 
 async function getMovimientosPorRango(fechaInicio, fechaFin) {
