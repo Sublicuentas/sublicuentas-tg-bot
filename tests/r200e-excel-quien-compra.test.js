@@ -121,3 +121,29 @@ test("6 · cobro guardado SIN clienteId (ingreso manual): se ubica la ficha por 
   assert.equal(f.find((x) => x.monto === 71).detalle, "Elsa Tercera", "por teléfono");
   assert.equal(f.find((x) => x.monto === 72).detalle, "Nombre Repetido", "nombre en 2 fichas → no se adivina");
 });
+
+test("7 · otras formas de guardar al tercero: perfil a nombre de otra clienta, tercero sin nombre, compra en la ficha de la que usa, IDs en servicios[]", () => {
+  const { compradorDeMovimientoR200: c } = cargar(new FakeDb());
+  // perfil con nombre de otra persona en un servicio "titular" → solo si esa persona es otra ficha del CRM
+  const g = { nombre: "Gladys Prueba", servicios: [{ compraId: "k1", plataforma: "Disney", beneficiarioTipo: "titular", perfiles: [{ nombre: "Elsa Tercera" }] }] };
+  assert.equal(c({ compraId: "k1" }, g), "", "sin ficha de Elsa no se adivina");
+  // tercero marcado sin nombre: se usa el nombre del perfil
+  const g2 = { nombre: "Gladys Prueba", servicios: [{ compraId: "k2", plataforma: "Disney", beneficiarioTipo: "tercero", perfiles: [{ nombre: "Elsa Tercera" }] }] };
+  assert.equal(c({ compraId: "k2" }, g2), "Elsa Tercera");
+  // la compra vive en la ficha de Elsa, pero el cobro se registró a nombre de Gladys
+  const elsa = { nombre: "Elsa Tercera", servicios: [{ compraId: "k3", plataforma: "Disney", beneficiarioTipo: "titular" }] };
+  const idx = new Map([["k3", [elsa, elsa.servicios[0]]]]);
+  assert.equal(c({ compraId: "k3", clienteNombre: "Gladys Prueba" }, { nombre: "Gladys Prueba", servicios: [] }, undefined, idx), "Elsa Tercera");
+  // IDs dentro de servicios[] (renovación en lote)
+  assert.equal(c({ servicios: [{ compraId: "kE" }] }, clientes.cG), "Elsa Tercera");
+});
+
+test("8 · Bodega: la fila del perfil dice quién lo usa y quién pagó → se usa si la ficha no lo marcó como tercero", async () => {
+  const db = new FakeDb();
+  await db.collection("clientes").doc("cZ").set({ nombre: "Gladys Prueba", servicios: [{ compraId: "kZ", plataforma: "Disney Premium sin ESPN", beneficiarioTipo: "titular" }] });
+  await db.collection("inventario").doc("i1").set({ plataforma: "disneyp", clientes: [{ nombre: "Elsa Tercera", pagadoPor: "Gladys Prueba", compraId: "kZ", clienteId: "cZ" }] });
+  await db.collection("finanzas_movimientos").doc("z1").set({ tipo: "ingreso", fechaPago: "2026-11-16", monto: 70, banco: "Occidente", bancoId: "b1", plataforma: "Disney Premium sin ESPN", clienteId: "cZ", clienteNombre: "Gladys Prueba", compraId: "kZ" });
+  const { generarReporteExcelPorRango } = cargar(db);
+  const wb = new ExcelJS.Workbook(); await wb.xlsx.load(await generarReporteExcelPorRango("16/11/2026", "16/11/2026"));
+  assert.equal(filasIngresos(wb).find((x) => x.monto === 70).detalle, "Elsa Tercera");
+});
