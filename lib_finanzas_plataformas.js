@@ -105,7 +105,7 @@ function filasVentas(movs, { R, C, normKey, desde, hasta }) {
   const ventas = C.ventasACostear(movs, desde, R, { paraIngresos: true }).filter((v) => !v.anulada && v.fecha <= hasta);
   const filas = [];
   for (const v of ventas) {
-    const clienteBase = limpio(v.clienteNombre || v.cliente || v.socioNombre || "", 80);
+    const clienteBase = limpio(v.compradorNombre || v.clienteNombre || v.cliente || v.socioNombre || "", 80); // R200e: quien compra (tercero), no el titular que pagó
     for (const ln of lineasDeVenta(v, { C, normKey })) {
       const cliNombre = ln.cliente || clienteBase;
       const cliId = ln.cliente ? `nom:${normTxt(ln.cliente)}` : (v.clienteId ? `id:${v.clienteId}` : (cliNombre ? `nom:${normTxt(cliNombre)}` : ""));

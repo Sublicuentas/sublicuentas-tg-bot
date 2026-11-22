@@ -208,6 +208,85 @@ function normalizeMovimiento(id, data = {}, source = "") {
   };
 }
 
+// R200e · Auditoría: en el Excel sale QUIEN COMPRA, no el titular del número que pagó.
+// Caso real: Gleny Miguel pagó la cuenta de su tercera Eisa Vasquez → el Detalle debe decir «Eisa Vasquez».
+// Se busca la ficha (clienteId) y el servicio por compraId; si ese servicio es de un TERCERO se usa su nombre.
+// Sin compraId: solo si TODOS los servicios de esa plataforma en la ficha son del mismo tercero (si hay duda, queda
+// el nombre de siempre). No cambia montos, bancos ni agrupaciones; solo el nombre que se muestra.
+function normNombreR200(v = "") { return String(v || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, " ").trim(); }
+function compradorDeMovimientoR200(raw = {}, cliente = null, normKey = (x) => normNombreR200(x).replace(/[^a-z0-9]/g, "")) {
+  if (!cliente) return "";
+  const servicios = Array.isArray(cliente.servicios) ? cliente.servicios : [];
+  const terceroDe = (sv) => (normNombreR200(sv?.beneficiarioTipo) === "tercero" ? safeText(sv?.beneficiarioNombre || sv?.beneficiario || "") : "");
+  const ids = [raw.compraId, raw.servicioCompraId, ...(Array.isArray(raw.compraIds) ? raw.compraIds : [])].flatMap((x) => String(x || "").split(",")).map((x) => x.trim()).filter(Boolean);
+  let elegidos = [];
+  if (ids.length) elegidos = servicios.filter((sv) => sv && ids.includes(String(sv.compraId || "").trim()));
+  if (!elegidos.length) {
+    const k = normKey(raw.plataforma || raw.servicio || "");
+    if (!k) return "";
+    elegidos = servicios.filter((sv) => sv && normKey(sv.plataforma || sv.servicio || "") === k);
+    if (!elegidos.length) return "";
+    const nombres = new Set(elegidos.map((sv) => normNombreR200(terceroDe(sv))));
+    if (nombres.size !== 1 || nombres.has("")) return ""; // hay titular u otro tercero en esa plataforma → no se adivina
+    return terceroDe(elegidos[0]);
+  }
+  const titular = normNombreR200(cliente.nombrePerfil || cliente.nombre || "");
+  const nombres = [];
+  for (const sv of elegidos) {
+    const n = terceroDe(sv) || safeText(cliente.nombrePerfil || cliente.nombre || "");
+    if (n && !nombres.some((x) => normNombreR200(x) === normNombreR200(n))) nombres.push(n);
+  }
+  if (!nombres.length || (nombres.length === 1 && normNombreR200(nombres[0]) === titular)) return ""; // lo compró el mismo titular
+  return nombres.join(" / ");
+}
+function nombrePagadorR200(raw = {}) { return safeText(raw.clienteNombre || raw.nombreCliente || raw.cliente || raw.nombrePerfil || ""); }
+function telR200(v = "") { const d = String(v || "").replace(/\D/g, ""); return d.length >= 8 ? d.slice(-8) : ""; }
+async function aplicarCompradoresR200(movs = []) {
+  const ingresos = movs.filter((m) => m && m.raw && !["egreso"].includes(m.tipo));
+  const ids = [...new Set(ingresos.map((m) => String(m.raw.clienteId || "").trim()).filter((x) => x && !x.includes("/")))];
+  const fichas = new Map();
+  for (let i = 0; i < ids.length; i += 40) {
+    await Promise.all(ids.slice(i, i + 40).map(async (id) => {
+      try { const sn = await db.collection("clientes").doc(id).get(); if (sn && sn.exists) fichas.set(id, sn.data() || {}); } catch (e) { logErr("R200e ficha", e); }
+    }));
+  }
+  // R200e-2 · Cobros guardados SIN clienteId (ingreso manual, registros viejos): se busca la ficha por teléfono o por
+  // nombre del titular, solo si hay UNA ficha que coincide (si hay dos con el mismo nombre, no se adivina).
+  const porNombre = new Map(), porTel = new Map();
+  const sinId = ingresos.filter((m) => !fichas.has(String(m.raw.clienteId || "").trim()) && (nombrePagadorR200(m.raw) || telR200(m.raw.telefono)));
+  if (sinId.length) {
+    try {
+      const snap = await db.collection("clientes").get();
+      for (const d of snap.docs || []) {
+        const c = d.data() || {};
+        if (!(Array.isArray(c.servicios) && c.servicios.some((sv) => normNombreR200(sv?.beneficiarioTipo) === "tercero"))) continue; // solo interesan fichas con terceros
+        for (const n of new Set([c.nombre, c.nombrePerfil].map(normNombreR200).filter(Boolean))) porNombre.set(n, porNombre.has(n) ? null : c);
+        const t = telR200(c.telefono); if (t) porTel.set(t, porTel.has(t) ? null : c);
+      }
+      const nombresTodos = new Map(); // un nombre repetido en fichas SIN terceros también vuelve ambiguo el nombre
+      for (const d of snap.docs || []) { const c = d.data() || {}; for (const n of new Set([c.nombre, c.nombrePerfil].map(normNombreR200).filter(Boolean))) nombresTodos.set(n, (nombresTodos.get(n) || 0) + 1); }
+      for (const [n] of porNombre) if ((nombresTodos.get(n) || 0) > 1) porNombre.set(n, null);
+    } catch (e) { logErr("R200e fichas por nombre", e); }
+  }
+  const fichaDe = (raw) => fichas.get(String(raw.clienteId || "").trim()) || porTel.get(telR200(raw.telefono)) || porNombre.get(normNombreR200(nombrePagadorR200(raw))) || null;
+  let normKey; try { normKey = require("./lib_catalogo_categorias").normPlataformaKey; } catch (_) { normKey = undefined; }
+  let cambios = 0;
+  for (const m of ingresos) {
+    const raw = m.raw, cli = fichaDe(raw);
+    if (!cli) continue;
+    const comprador = compradorDeMovimientoR200(raw, cli, normKey || undefined);
+    if (!comprador) continue;
+    // Solo se reemplaza el nombre del titular/pagador; un Detalle escrito a mano distinto se respeta.
+    const directo = normNombreR200(raw.detalle || raw.descripcion || raw.nota || raw.observacion || "");
+    const titulares = [nombrePagadorR200(raw), raw.clienteNombre, cli.nombrePerfil, cli.nombre].map(normNombreR200).filter(Boolean);
+    if (directo && !titulares.includes(directo)) continue;
+    raw.compradorNombre = comprador; raw.pagadoPorNombre = safeText(nombrePagadorR200(raw) || cli.nombrePerfil || cli.nombre || "");
+    m.detalle = raw.reversaDe ? `${comprador} (reversa)` : comprador;
+    cambios++;
+  }
+  return cambios;
+}
+
 async function getMovimientosPorRango(fechaInicio, fechaFin) {
   const ini = normalizeDMY(fechaInicio);
   const fin = normalizeDMY(fechaFin);
@@ -734,6 +813,7 @@ async function generarReporteExcelPorRango(fechaInicio, fechaFin) {
     // R158: UNA sola lectura que cubre el período, su período de comparación y los 6 meses del resumen mensual.
     const desdeY = PLAT.dmyAYmd(ini), hastaY = PLAT.dmyAYmd(fin), lec = PLAT.rangoLectura(desdeY, hastaY);
     const amplio = await getMovimientosPorRango(PLAT.dmyAYmd(ini) === lec.desde ? ini : `${lec.desde.slice(8, 10)}/${lec.desde.slice(5, 7)}/${lec.desde.slice(0, 4)}`, fin);
+    try { await aplicarCompradoresR200(amplio); } catch (e) { logErr("R200e compradores", e); } // R200e: quien compra, no quien pagó
     const iniMsR158 = dmyToMillis(ini);
     const todosR123 = amplio.filter((m) => m.fechaTs >= iniMsR158).map((m) => ({ ...m, kind: RL.movementKind(m.raw || {}) }));
     // R123: los movimientos ANULADOS/CORREGIDOS y sus reversas no se mezclan con los vigentes: van en su propia hoja
@@ -750,7 +830,7 @@ async function generarReporteExcelPorRango(fechaInicio, fechaFin) {
         const r = m.raw || {}, t = Date.parse(r.createdAt || "") || 0, quien = String(r.clienteId || r.clienteNombre || "").toLowerCase().trim();
         const key = [quien, String(r.bancoId || m.banco).toLowerCase(), m.fecha].join("|");
         const g = quien && !r.reversaDe ? out.find((x) => x._key === key) : null;
-        if (g) { g.monto += Number(m.monto || 0); if (m.plataforma && !g.plataforma.includes(m.plataforma)) g.plataforma += ` + ${m.plataforma}`; }
+        if (g) { g.monto += Number(m.monto || 0); if (m.plataforma && !g.plataforma.includes(m.plataforma)) g.plataforma += ` + ${m.plataforma}`; if (m.detalle && !String(g.detalle || "").split(" / ").includes(m.detalle)) g.detalle = g.detalle ? `${g.detalle} / ${m.detalle}` : m.detalle; } // R200e: un pago por 2 compradores muestra los dos
         else out.push({ ...m, _key: key, _t: t });
       }
       return out;
@@ -822,6 +902,8 @@ async function generarReporteExcelPorRango(fechaInicio, fechaFin) {
 }
 
 module.exports = {
+  compradorDeMovimientoR200,
+  aplicarCompradoresR200,
   fechaRealHonduras,
   generarReporteExcelPorRango,
   getMovimientosPorRango,
