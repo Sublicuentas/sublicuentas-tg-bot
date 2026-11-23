@@ -374,6 +374,7 @@ const REV_JWT_SECRET = getJwtSecret();
 // se usan las de server_api.js y estas no se registran.
 if (!PANEL_UNIFICADA) {
 // LOGIN (revendedor con clave, o admin con ADMIN_USER/ADMIN_PASSWORD) — handler compartido
+app.get("/rev/turnstile-config", (_req, res) => { res.set("Cache-Control", "no-store"); res.json(require("./lib_turnstile").turnstileConfigPublica()); }); // R201 · solo la clave PÚBLICA
 app.post("/rev/login", revLoginIpLimiter, createRevLoginHandler({ db, bot, SUPER_ADMIN }));
 app.get("/rev/admin/me", revAdminAuth, createAdminMeHandler());
 app.post("/rev/admin/logout", revAdminAuth, createAdminLogoutHandler({ db }));

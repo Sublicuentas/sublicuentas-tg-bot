@@ -296,7 +296,7 @@ function buildCorsOptions() {
     origin(origin,cb){ cb(null,originAllowed(origin,patterns)); },
     methods:['GET','POST','PUT','PATCH','DELETE','OPTIONS'],
     allowedHeaders:['Authorization','Content-Type','X-Requested-With','X-Request-Id'],
-    exposedHeaders:['X-Request-Id','X-Catalogo-Tarifa','X-Catalogo-Origen'],
+    exposedHeaders:['X-Request-Id','X-Catalogo-Tarifa','X-Catalogo-Origen','X-Rev-Token'], // R201 · renovación de sesión
     credentials:false,maxAge:600,
   };
 }

@@ -369,6 +369,7 @@ async function revVerificarRenovacionesCliente(clienteId, renovaciones = []) {
 }
 
 // ── LOGIN (revendedor o admin) ── handler compartido: ver index_09_api_auth.js
+app.get("/rev/turnstile-config", (_req, res) => { res.set("Cache-Control", "no-store"); res.json(require("./lib_turnstile").turnstileConfigPublica()); }); // R201 · solo la clave PÚBLICA
 app.post("/rev/login", revLoginIpLimiter, createRevLoginHandler({ db, bot, SUPER_ADMIN }));
 app.get("/rev/admin/me", revAdminAuth, createAdminMeHandler());
 app.post("/rev/admin/logout", revAdminAuth, createAdminLogoutHandler({ db }));

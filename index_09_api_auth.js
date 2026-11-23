@@ -14,6 +14,7 @@ const admin = require("firebase-admin");
 const {
   findAdminAccount, verifyAdminPassword, createAdminSession, createAdminSessionAuth,
 } = require("./index_25_api_security");
+const { verificarTurnstile, ipCliente } = require("./lib_turnstile"); // R201
 
 /**
  * ✅ SEGURIDAD — Ya NO hay fallback público ("CAMBIAME_EN_RENDER").
@@ -96,6 +97,24 @@ function capacidadesRevendedor(rev = {}) {
 }
 
 /**
+ * R201 · Sesión del socio: vence a las 12 h SIN uso. Cada petición válida con más de 10 min de emitido
+ * devuelve un token nuevo de 12 h en la cabecera X-Rev-Token (el panel lo guarda solo). Sin actividad, vence.
+ * Tokens viejos de 14 días: se aceptan solo si fueron usados en las últimas 12 h desde su emisión; si no, 401.
+ */
+const REV_SESION_INACTIVIDAD = "12h";
+const REV_SESION_MS = 12 * 60 * 60 * 1000;
+function renovarSesionRev(req, res) {
+  try {
+    const p = req.rev || {};
+    if (!p.iat || p.admin || p.sid || p.jti) return; // las sesiones de admin tienen su propio control
+    if (Date.now() - p.iat * 1000 < 10 * 60 * 1000) return;
+    const { iat, exp, nbf, ...resto } = p;
+    const nuevo = jwt.sign(resto, getJwtSecret(), { expiresIn: REV_SESION_INACTIVIDAD });
+    res.set("X-Rev-Token", nuevo);
+  } catch (_) { /* nunca tumba la petición */ }
+}
+
+/**
  * Middleware: Valida JWT token para revendedor/admin
  */
 function revAuth(req, res, next) {
@@ -104,6 +123,8 @@ function revAuth(req, res, next) {
   if (!token) return res.status(401).json({ error: "sin_token" });
   try {
     req.rev = jwt.verify(token, getJwtSecret());
+    // R201 · token de 14 días emitido antes del cambio: si pasó más de 12 h desde que se emitió, se pide entrar de nuevo.
+    if (req.rev && req.rev.iat && !req.rev.admin && !req.rev.sid && !req.rev.jti && Date.now() - req.rev.iat * 1000 > REV_SESION_MS) return res.status(401).json({ error: "sesion_vencida" });
     // Los JWT emitidos antes de la corrección Geissel → Geisell conservan
     // el nombre anterior hasta 30 días. Se canonizan en memoria para que la
     // sesión siga viendo sus clientes durante la transición.
@@ -111,6 +132,7 @@ function revAuth(req, res, next) {
       req.rev = { ...req.rev, id: "geisell", nombre: "Geisell", nombre_norm: "geisell" };
     }
     if (esRevSoloCatalogo(req.rev)) req.rev = { ...req.rev, soloCatalogo: true, sinCompras: true };
+    renovarSesionRev(req, res);
     next();
   } catch (e) {
     return res.status(401).json({ error: "token_invalido" });
@@ -161,29 +183,39 @@ function revLoginIpLimiter(req, res, next) {
  * seguidos — así un atacante que rota de IP no gana nada.
  */
 const LOGIN_ATTEMPTS_COLLECTION = "login_attempts";
-const LOGIN_MAX_FALLOS = 8;
+// R201 · Protocolo de seguridad: 3 fallos en 15 min → bloqueo de 30 min (429).
+// Por USUARIO: 3. Por IP: LOGIN_MAX_FALLOS_IP (10 por defecto): en Honduras muchas personas salen
+// a internet con la misma IP de Tigo/Claro y 3 errores de otros no deben bloquear a todos.
+const LOGIN_MAX_FALLOS = 3;
+const LOGIN_MAX_FALLOS_IP = Math.max(3, Math.min(Number(process.env.LOGIN_MAX_FALLOS_IP) || 10, 50));
 const LOGIN_VENTANA_MS = 15 * 60 * 1000;
-const LOGIN_BLOQUEO_MS = 15 * 60 * 1000;
+const LOGIN_BLOQUEO_MS = 30 * 60 * 1000;
 
 function _loginAttemptKey(usuarioNorm) {
   const k = String(usuarioNorm || "").trim().toLowerCase().replace(/[^a-z0-9_.-]/g, "_").slice(0, 120);
   return "rev_" + (k || "desconocido");
 }
+function _loginIpKey(ip) {
+  // La IP no se guarda en claro: solo su huella (no es un dato que haga falta conservar).
+  return "rev_ip_" + crypto.createHash("sha256").update(String(ip || "sin_ip")).digest("hex").slice(0, 32);
+}
 
-async function checkLoginThrottle(db, usuarioNorm) {
-  const ref = db.collection(LOGIN_ATTEMPTS_COLLECTION).doc(_loginAttemptKey(usuarioNorm));
-  const snap = await ref.get();
-  if (!snap.exists) return { blocked: false };
-  const d = snap.data() || {};
+async function checkLoginThrottle(db, usuarioNorm, ip = "") {
+  const refs = [db.collection(LOGIN_ATTEMPTS_COLLECTION).doc(_loginAttemptKey(usuarioNorm))];
+  if (ip) refs.push(db.collection(LOGIN_ATTEMPTS_COLLECTION).doc(_loginIpKey(ip)));
+  const snaps = await Promise.all(refs.map((r) => r.get()));
   const now = Date.now();
-  if ((d.bloqueadoHasta || 0) > now) {
-    return { blocked: true, retryAfterSeconds: Math.ceil((d.bloqueadoHasta - now) / 1000) };
-  }
+  let hasta = 0;
+  for (const snap of snaps) { if (snap.exists) hasta = Math.max(hasta, Number((snap.data() || {}).bloqueadoHasta) || 0); }
+  if (hasta > now) return { blocked: true, retryAfterSeconds: Math.ceil((hasta - now) / 1000) };
   return { blocked: false };
 }
 
-async function registerLoginFailure(db, usuarioNorm) {
-  const ref = db.collection(LOGIN_ATTEMPTS_COLLECTION).doc(_loginAttemptKey(usuarioNorm));
+async function registerLoginFailure(db, usuarioNorm, ip = "") {
+  await _registrarFallo(db, db.collection(LOGIN_ATTEMPTS_COLLECTION).doc(_loginAttemptKey(usuarioNorm)), LOGIN_MAX_FALLOS);
+  if (ip) await _registrarFallo(db, db.collection(LOGIN_ATTEMPTS_COLLECTION).doc(_loginIpKey(ip)), LOGIN_MAX_FALLOS_IP);
+}
+async function _registrarFallo(db, ref, maximo) {
   await db.runTransaction(async (tx) => {
     const snap = await tx.get(ref);
     const now = Date.now();
@@ -192,7 +224,7 @@ async function registerLoginFailure(db, usuarioNorm) {
     const fallos = ventanaVencida ? 1 : Number(d.fallos || 0) + 1;
     const primerFalloEn = ventanaVencida ? now : d.primerFalloEn;
     const patch = { fallos, primerFalloEn, updatedAt: now };
-    if (fallos >= LOGIN_MAX_FALLOS) patch.bloqueadoHasta = now + LOGIN_BLOQUEO_MS;
+    if (fallos >= maximo) patch.bloqueadoHasta = now + LOGIN_BLOQUEO_MS;
     tx.set(ref, patch, { merge: true });
   }).catch(() => {}); // el throttle nunca debe tumbar el login por un error transitorio
 }
@@ -220,20 +252,25 @@ function createRevLoginHandler({ db, bot, SUPER_ADMIN }) {
       const password = (req.body?.password || "").trim();
       const pin = (req.body?.pin || "").trim();
       if (!usuario || !password) return res.status(400).json({ error: "faltan_datos" });
+      if (usuario.length > 80 || password.length > 200 || pin.length > 20) return res.status(400).json({ error: "credenciales" }); // R201 · entradas acotadas
+
+      // R201 · Turnstile se valida ANTES de tocar la base de datos.
+      const ts = await verificarTurnstile(req, { token: req.body?.turnstileToken, accion: "login" });
+      if (!ts.ok) return res.status(ts.status).json({ error: ts.error });
+      const ip = ipCliente(req);
+      const bloqueo429 = (t) => { res.set("Retry-After", String(t.retryAfterSeconds || 1800)); return res.status(429).json({ error: "demasiados_intentos", retryAfterSeconds: t.retryAfterSeconds }); };
 
       // Esta lectura se inicia ya y, para revendedores, viaja en paralelo con
       // la búsqueda de la cuenta. Antes eran dos esperas de Firestore seguidas.
-      const throttlePromise = checkLoginThrottle(db, usuario);
+      const throttlePromise = checkLoginThrottle(db, usuario, ip);
 
       // ── Admin FASE 3: credenciales individuales + sesión revocable ──
       const adminAccount = findAdminAccount(usuarioIngresado);
       if (adminAccount) {
         const throttle = await throttlePromise;
-        if (throttle.blocked) {
-          return res.status(429).json({ error: "demasiados_intentos", retryAfterSeconds: throttle.retryAfterSeconds });
-        }
+        if (throttle.blocked) return bloqueo429(throttle);
         if (!(await verifyAdminPassword(adminAccount, password))) {
-          await registerLoginFailure(db, usuario);
+          await registerLoginFailure(db, usuario, ip);
           return res.status(400).json({ error: "credenciales" });
         }
         clearLoginThrottle(db, usuario).catch(() => {});
@@ -249,13 +286,11 @@ function createRevLoginHandler({ db, bot, SUPER_ADMIN }) {
           db.collection("revendedores").where("nombre_norm", "==", alias).limit(1).get()
         )),
       ]);
-      if (throttle.blocked) {
-        return res.status(429).json({ error: "demasiados_intentos", retryAfterSeconds: throttle.retryAfterSeconds });
-      }
+      if (throttle.blocked) return bloqueo429(throttle);
       const encontrados = [];
       snaps.forEach(snap => snap.docs.forEach(doc => encontrados.push(doc)));
       if (!encontrados.length) {
-        await registerLoginFailure(db, usuario);
+        await registerLoginFailure(db, usuario, ip);
         return res.status(400).json({ error: "credenciales" });
       }
       // Si coexistieran las dos grafías, se usa primero la cuenta activa y
@@ -288,7 +323,7 @@ function createRevLoginHandler({ db, bot, SUPER_ADMIN }) {
       if (!doc) {
         const candidatoSetup = activos.find(candidato => !(candidato.data() || {}).passwordHash);
         if (!candidatoSetup) {
-          await registerLoginFailure(db, usuario);
+          await registerLoginFailure(db, usuario, ip);
           return res.status(400).json({ error: "credenciales" });
         }
         doc = candidatoSetup;
@@ -302,7 +337,7 @@ function createRevLoginHandler({ db, bot, SUPER_ADMIN }) {
         }
         const pinOk = await bcrypt.compare(pin, d.pinSetupHash);
         if (!pinOk) {
-          await registerLoginFailure(db, usuario);
+          await registerLoginFailure(db, usuario, ip);
           return res.status(400).json({ error: "pin_invalido" });
         }
         const hash = await bcrypt.hash(password, 10);
@@ -330,7 +365,7 @@ function createRevLoginHandler({ db, bot, SUPER_ADMIN }) {
       const nombreMostrar = String(d.nombreMostrar || "").trim().slice(0, 60);
       const etiquetaRenovacion = String(d.etiquetaRenovacion || "").trim().slice(0, 60);
       const tokenPayload = { id: doc.id, nombre, nombre_norm: nombreNorm, soloCatalogo, sinCompras, capabilities, tarifaId, nombreMostrar, etiquetaRenovacion };
-      const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: "14d" });
+      const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: REV_SESION_INACTIVIDAD }); // R201 · 12 h de inactividad (se renueva con cada uso)
       res.json({ token, nombre, nombre_norm: nombreNorm, soloCatalogo, sinCompras, capabilities, tarifaId, priceTier: tarifaId, nombreMostrar, etiquetaRenovacion });
     } catch (e) {
       console.error("rev/login", e);
@@ -421,6 +456,7 @@ module.exports = {
   esRevSoloCatalogo,
   capacidadesRevendedor,
   revAuth,
+  renovarSesionRev,
   revAdminAuth,
   revLoginIpLimiter,
   checkLoginThrottle,
