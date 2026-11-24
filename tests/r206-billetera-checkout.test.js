@@ -34,7 +34,6 @@ function fakeDb() {
 }
 const acreditar = (db, socio, negocio, monto, sub = "real", id = `m${Math.random()}`) => db.collection(BIL.COL_MOV).doc(id).set({ socio, socio_norm: BIL.norm(socio), negocio, subcuenta: sub, tipo: sub === "promocional" ? "premio" : "recarga", monto, signo: 1, estado: "acreditado" });
 const prod = (o = {}) => ({ catalogId: "disney_perfil", catalogCategory: "🎬 Streaming", servicioBase: "Disney+", catalogSub: "Perfil 1 mes", servicio: "Disney+ · Perfil 1 mes", precioCatalogo: 100, cantidad: 1, ...o });
-const conCosto = (p, costoHnl, extra = {}) => ({ [BC.claveCosto(p)]: { costoHnl, pct: null, activo: true, ...extra } });
 
 /* Compra con billetera tal como la hace /rev/compra: pedido + cargo en la MISMA transacción. */
 async function comprar(db, { id, socio = "Jimena", negocio = "sublicuentas", productos, descuentoCombo = 0, usarGiftCard = false, costos = {} }) {
@@ -58,14 +57,14 @@ test("QA-12 · dos compras simultáneas con saldo para una sola: una pasa, la ot
   const [a, b] = await Promise.all([comprar(db, { id: "c1", productos: [prod()] }), comprar(db, { id: "c2", productos: [prod()] })]);
   const ok = [a, b].filter((x) => x.ok).length, sin = [a, b].filter((x) => x.error === "saldo_insuficiente").length;
   assert.equal(ok, 1); assert.equal(sin, 1);
-  const s = await saldos(db); assert.equal(s.sublicuentas.real, 50); assert.ok(s.sublicuentas.real >= 0);
+  const s = await saldos(db); assert.equal(s.sublicuentas.real, 55); assert.ok(s.sublicuentas.real >= 0);
   assert.ok(db.intentos > 2, "la segunda transacción tuvo que repetirse al ver el primer cargo");
   assert.equal([...db._cols.get("compras").keys()].length, 1);
 });
 test("saldo insuficiente: no se crea pedido ni movimiento", async () => {
   const db = fakeDb(); await acreditar(db, "Jimena", "sublicuentas", 40);
   const r = await comprar(db, { id: "c1", productos: [prod()] });
-  assert.equal(r.error, "saldo_insuficiente"); assert.equal(r.cot.faltante, 60);
+  assert.equal(r.error, "saldo_insuficiente"); assert.equal(r.cot.faltante, 55);
   assert.equal((db._cols.get("compras") || new Map()).size, 0); assert.equal((await saldos(db)).sublicuentas.real, 40);
 });
 test("saldos separados: el saldo de Relojes no paga pedidos de Sublicuentas", async () => {
@@ -74,29 +73,24 @@ test("saldos separados: el saldo de Relojes no paga pedidos de Sublicuentas", as
   assert.equal((await comprar(db, { id: "c2", negocio: "relojes", productos: [prod()] })).ok, true);
 });
 
-test("QA-14 · descuento 5% solo con costo y margen protegido (10% del precio, mínimo L10); Netflix nunca", () => {
+test("QA-14 · 5% parejo sin pedir costo; Netflix nunca; se puede apagar o bajar el % por producto", () => {
   const p = prod(), s = { real: 1000, disponible: 1000, promocional: 0 };
-  const sinCosto = BC.cotizar({ productos: [p], totalCombo: 100, saldos: s });
-  assert.equal(sinCosto.descuento, 0); assert.equal(sinCosto.lineas[0].motivo, "Sin costo registrado");
-  const amplio = BC.cotizar({ productos: [p], totalCombo: 100, saldos: s, costos: conCosto(p, 50) });
-  assert.equal(amplio.descuento, 5); assert.equal(amplio.totalFinal, 95);           // 5% de L100
-  const justo = BC.cotizar({ productos: [p], totalCombo: 100, saldos: s, costos: conCosto(p, 87) });
-  assert.equal(justo.descuento, 3);                                                // 100−87−10 = 3 → queda L10 de ganancia
-  const nada = BC.cotizar({ productos: [p], totalCombo: 100, saldos: s, costos: conCosto(p, 92) });
-  assert.equal(nada.descuento, 0); assert.equal(nada.lineas[0].motivo, "Margen mínimo protegido");
-  const caro = prod({ precioCatalogo: 400 }); // 10% de L400 = L40 > L10
-  assert.equal(BC.cotizar({ productos: [caro], totalCombo: 400, saldos: s, costos: conCosto(caro, 345) }).descuento, 15); // 400−345−40
-  const nf = prod({ catalogId: "netflix_perfil", servicioBase: "Netflix", servicio: "Netflix · Perfil" });
-  const n = BC.cotizar({ productos: [nf], totalCombo: 100, saldos: s, costos: conCosto(nf, 10) });
+  const base = BC.cotizar({ productos: [p], totalCombo: 100, saldos: s });
+  assert.equal(base.descuento, 5); assert.equal(base.totalFinal, 95);              // sin costo registrado igual aplica
+  const caro = prod({ precioCatalogo: 160 });
+  assert.equal(BC.cotizar({ productos: [caro], totalCombo: 160, saldos: s }).descuento, 8);
+  const barato = prod({ precioCatalogo: 50 });
+  assert.equal(BC.cotizar({ productos: [barato], totalCombo: 50, saldos: s }).descuento, 2); // 2.50 → L2
+  const nf = prod({ catalogId: "netflix_vip", servicioBase: "Netflix Vip", servicio: "Netflix Vip" });
+  const n = BC.cotizar({ productos: [nf], totalCombo: 110, saldos: s });
   assert.equal(n.descuento, 0); assert.equal(n.lineas[0].motivo, "Netflix no tiene descuento");
-  const apagado = BC.cotizar({ productos: [p], totalCombo: 100, saldos: s, costos: conCosto(p, 50, { activo: false }) });
-  assert.equal(apagado.descuento, 0);
-  const pct2 = BC.cotizar({ productos: [p], totalCombo: 100, saldos: s, costos: conCosto(p, 50, { pct: 2 }) });
-  assert.equal(pct2.descuento, 2);
+  assert.equal(BC.cotizar({ productos: [p], totalCombo: 100, saldos: s, costos: { [BC.claveCosto(p)]: { activo: false, pct: null } } }).descuento, 0);
+  assert.equal(BC.cotizar({ productos: [p], totalCombo: 100, saldos: s, costos: { [BC.claveCosto(p)]: { activo: true, pct: 2 } } }).descuento, 2);
+  assert.equal(BC.cotizar({ productos: [p], totalCombo: 100, saldos: s, cfg: { ...BC.CFG_BASE, pctMax: 3 } }).descuento, 3);
 });
 test("combo: el descuento se calcula sobre el precio ya rebajado por combo, por unidad y cantidad", () => {
   const a = prod({ catalogId: "a", servicioBase: "Disney+", cantidad: 1 }), b = prod({ catalogId: "b", servicioBase: "HBO Max", precioCatalogo: 100, cantidad: 1 });
-  const c = BC.cotizar({ productos: [a, b], descuentoCombo: 10, totalCombo: 190, saldos: { disponible: 999 }, costos: { ...conCosto(a, 40), ...conCosto(b, 40) } });
+  const c = BC.cotizar({ productos: [a, b], descuentoCombo: 10, totalCombo: 190, saldos: { disponible: 999 } });
   assert.equal(c.lineas[0].neto, 95); assert.equal(c.descuento, 8); assert.equal(c.totalFinal, 182); // floor(4.75)=4 ×2
 });
 test("productos «por comisión» no se pagan con billetera", () => {
@@ -106,7 +100,7 @@ test("productos «por comisión» no se pagan con billetera", () => {
 test("QA-08 · Gift Card L100 en pedido de L70: queda L30; no se combina con descuento; Netflix no la usa", async () => {
   const db = fakeDb(); await acreditar(db, "Jimena", "sublicuentas", 100, "promocional");
   const p = prod({ precioCatalogo: 70 });
-  const r = await comprar(db, { id: "g1", productos: [p], usarGiftCard: true, costos: conCosto(p, 20) });
+  const r = await comprar(db, { id: "g1", productos: [p], usarGiftCard: true });
   assert.equal(r.ok, true); assert.equal(r.cot.giftCard, 70); assert.equal(r.cot.descuento, 0); assert.equal(r.cot.aPagarSaldo, 0);
   assert.equal((await saldos(db)).sublicuentas.promocional, 30);
   const nf = prod({ servicioBase: "Netflix", servicio: "Netflix · Perfil", precioCatalogo: 50 });
@@ -137,15 +131,16 @@ test("QA-15 · el pedido con billetera nace «pago confirmado» y la entrega sig
 test("reintento del mismo pedido no cobra dos veces", async () => {
   const db = fakeDb(); await acreditar(db, "Jimena", "sublicuentas", 300);
   await comprar(db, { id: "c1", productos: [prod()] }); const r2 = await comprar(db, { id: "c1", productos: [prod()] });
-  assert.equal(r2.dup, true); assert.equal((await saldos(db)).sublicuentas.real, 200);
+  assert.equal(r2.dup, true); assert.equal((await saldos(db)).sublicuentas.real, 205);
 });
-test("config admin: % fuera de 0–5 se rechaza; tabla calcula el descuento de hoy", async () => {
+test("config admin: % fuera de 0–5 se rechaza; tabla calcula el descuento de hoy sin costos", async () => {
   const db = fakeDb();
   assert.equal((await BC.guardarConfig(db, { pctMax: 8 })).error, "pct_invalido");
   assert.equal((await BC.guardarCosto(db, "x", { pct: 9 })).error, "pct_invalido");
   const it = { categoria: "🎬 Streaming", n: "Disney+", s: "Perfil 1 mes", nombreCompleto: "Disney+ · Perfil 1 mes", id: "d", p: 100 };
   const clave = BC.claveCosto({ catalogCategory: it.categoria, servicioBase: it.n, catalogSub: it.s });
-  await BC.guardarCosto(db, clave, { costoHnl: 50 });
-  const t = BC.tablaAdmin([it, { ...it, n: "Netflix", nombreCompleto: "Netflix" }], await BC.configuracion(db));
+  let t = BC.tablaAdmin([it, { ...it, n: "Netflix", nombreCompleto: "Netflix" }], await BC.configuracion(db));
   assert.equal(t[0].descuentoHoy, 5); assert.equal(t[1].excluido, true); assert.equal(t[1].descuentoHoy, 0);
+  await BC.guardarCosto(db, clave, { activo: false });
+  t = BC.tablaAdmin([it], await BC.configuracion(db)); assert.equal(t[0].descuentoHoy, 0);
 });
