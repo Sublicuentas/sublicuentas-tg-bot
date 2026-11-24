@@ -1647,6 +1647,9 @@ app.get("/rev/admin/comprobantes", revAdminAuth, adminAnyPermission(["socios.pag
         renovado: !!r.renovado,
         fechaAnterior: r.fechaAnterior || "",
         nuevaFecha: r.nuevaFecha || "",
+        estadoPago: r.estadoPago || "sin_confirmar", // R203
+        pagoConfirmadoPor: r.pagoConfirmadoPor || "",
+        renovadosCantidad: Math.max(1, Number(r.renovadosCantidad) || 1),
         ts,
       };
     });
@@ -1656,6 +1659,44 @@ app.get("/rev/admin/comprobantes", revAdminAuth, adminAnyPermission(["socios.pag
   } catch (e) { console.error("rev/admin/comprobantes", e); res.status(500).json({ error: "server" }); }
 });
 
+
+// ── R203 · SubliPoints: confirmar/anular el COBRO de una renovación (solo así suma +1 por servicio) ──
+app.post("/rev/admin/comprobantes/:id/pago", revAdminAuth, adminAnyPermission(["socios.compras.write","socios.compras.own.write"]), async (req, res) => {
+  try {
+    const accion = String(req.body?.accion || "").trim().toLowerCase();
+    if (!["confirmar", "anular"].includes(accion)) return res.status(400).json({ error: "accion_invalida" });
+    const ref = db.collection("renovaciones").doc(String(req.params.id || ""));
+    const snap = await ref.get();
+    if (!snap.exists) return res.status(404).json({ error: "no_existe" });
+    const r = snap.data() || {};
+    if (!isFullAdmin(req) && revNormKey(r.destino || "sublicuentas") !== adminScopeProfile(req)) return res.status(403).json({ ok:false, error:"fuera_de_ambito" });
+    const SP = require("./lib_sublipoints");
+    const por = cleanTg(req.admin?.nombre || "Admin", 80), at = new Date();
+    let sublipoints;
+    if (accion === "confirmar") {
+      if (!r.renovado) return res.status(409).json({ error: "no_renovado" });
+      sublipoints = await SP.otorgar(db, { clave: SP.claveRenovacion(ref.id), socio: r.socio, socioNorm: r.socio_norm || r.socio, tipo: "renovacion", unidades: Math.max(1, Number(r.renovadosCantidad) || 1), ref: ref.id.slice(-6), detalle: `${String(r.servicio || "Renovación").slice(0, 80)} · ${String(r.cliente || "").slice(0, 60)}`, fechaEvento: r.createdAt, por });
+      if (r.estadoPago !== "confirmado") await ref.update({ estadoPago: "confirmado", pagoConfirmadoPor: por, pagoConfirmadoAt: at, pagoHistorial: admin.firestore.FieldValue.arrayUnion({ accion, por, at: at.toISOString() }) });
+    } else {
+      sublipoints = await SP.revertir(db, { clave: SP.claveRenovacion(ref.id), motivo: cleanTg(req.body?.motivo || "Pago anulado", 160), por });
+      await ref.update({ estadoPago: "anulado", pagoAnuladoPor: por, pagoAnuladoAt: at, pagoHistorial: admin.firestore.FieldValue.arrayUnion({ accion, por, at: at.toISOString() }) });
+    }
+    res.json({ ok: true, id: ref.id, estadoPago: accion === "confirmar" ? "confirmado" : "anulado", sublipoints });
+  } catch (e) { console.error("rev/admin/comprobantes/pago", e); res.status(500).json({ error: "server" }); }
+});
+// ── R203 · SubliPoints: resumen del socio (solo el suyo) y ranking del mes para administración ──
+app.get("/rev/sublipoints", revAuth, async (req, res) => {
+  try { const SP = require("./lib_sublipoints"); res.json(await SP.resumenSocio(db, req.rev.nombre_norm || req.rev.nombre || "")); }
+  catch (e) { console.error("rev/sublipoints", e); res.status(500).json({ error: "server" }); }
+});
+app.get("/rev/admin/sublipoints", revAdminAuth, adminAnyPermission(["socios.pagos.read","socios.pagos.own.read","socios.compras.read","socios.compras.own.read"]), async (req, res) => {
+  try {
+    const SP = require("./lib_sublipoints");
+    const mes = /^\d{4}-\d{2}$/.test(String(req.query.mes || "")) ? String(req.query.mes) : SP.mesHN();
+    const [cfg, ranking] = await Promise.all([SP.config(db), SP.rankingMes(db, mes)]);
+    res.json({ ok: true, mes, inicio: cfg.inicio, ranking });
+  } catch (e) { console.error("rev/admin/sublipoints", e); res.status(500).json({ error: "server" }); }
+});
 
 // ── ADMIN: historial de compras nuevas con comprobante para Panel Dios ──
 app.get("/rev/admin/compras", revAdminAuth, adminAnyPermission(["socios.compras.read","socios.compras.own.read"]), async (req, res) => {
@@ -1755,7 +1796,7 @@ app.post("/rev/admin/comprobantes-telegram/:id/reenviar", revAdminAuth, adminAny
 app.patch("/rev/admin/compras/:id/estado", revAdminAuth, adminAnyPermission(["socios.compras.write","socios.compras.own.write"]), async (req, res) => {
   try {
     const estado = String(req.body?.estado || "").trim().toLowerCase();
-    const allowed = new Set(["pendiente", "en proceso", "falta información", "entregado", "cancelado"]);
+    const allowed = new Set(["pendiente", "pago confirmado", "en proceso", "falta información", "entregado", "cancelado"]); // R203 · «pago confirmado» = cobro verificado (SubliPoints)
     if (!allowed.has(estado)) return res.status(400).json({ error: "estado_invalido" });
     const detalle = cleanTg(req.body?.detalle || "", 300);
     const ref = db.collection("compras").doc(String(req.params.id || ""));
@@ -1773,7 +1814,16 @@ app.patch("/rev/admin/compras/:id/estado", revAdminAuth, adminAnyPermission(["so
       estadoUpdatedAt: at,
       estadoHistorial: admin.firestore.FieldValue.arrayUnion(hist),
       updatedAt: at,
+      ...(estado === "pago confirmado" && !compra.pagoConfirmadoAt ? { pagoConfirmadoAt: at, pagoConfirmadoPor: hist.por } : {}),
     });
+
+    // R203 · SubliPoints: +2 por servicio al confirmar el cobro (o al entregar, que implica pago verificado). Una sola vez.
+    let sublipoints = null;
+    try {
+      const SP = require("./lib_sublipoints");
+      if (estado === "pago confirmado" || estado === "entregado") sublipoints = await SP.otorgar(db, { clave: SP.claveCompra(ref.id), socio: compra.socio, socioNorm: compra.socio_norm || compra.socio, tipo: "venta_nueva", unidades: SP.unidadesCompra(compra), ref: ref.id.slice(-6), detalle: String(compra.servicio || "Pedido").slice(0, 120), fechaEvento: compra.createdAt || compra.ts, por: hist.por });
+      else if (estado === "cancelado") sublipoints = await SP.revertir(db, { clave: SP.claveCompra(ref.id), motivo: `Pedido cancelado${detalle ? ` · ${detalle}` : ""}`, por: hist.por });
+    } catch (e) { console.error("sublipoints compra", e?.message || e); sublipoints = { ok: false, error: "sublipoints" }; }
 
     const socioNorm = revNormKey(compra.socio_norm || compra.socio || "");
     const estadoLabel = estado.charAt(0).toUpperCase() + estado.slice(1);
@@ -1797,7 +1847,7 @@ app.patch("/rev/admin/compras/:id/estado", revAdminAuth, adminAnyPermission(["so
         }
       } catch (_) {}
     }
-    res.json({ ok:true, id:ref.id, estado, detalleEstado:detalle, estadoUpdatedAt:at.toISOString() });
+    res.json({ ok:true, id:ref.id, estado, detalleEstado:detalle, estadoUpdatedAt:at.toISOString(), sublipoints });
   } catch(e){console.error("rev/admin/compras estado",e);res.status(500).json({error:"server"})}
 });
 
