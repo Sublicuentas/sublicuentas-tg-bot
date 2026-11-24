@@ -62,12 +62,13 @@ function normNombre(v = "") {
   return String(v || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().replace(/\s+/g, " ");
 }
 
+const { textoPromo } = require("./lib_texto_avisos"); // R207 · conserva una ventaja por línea
 function clean(v, max = 500) { return String(v == null ? "" : v).replace(/[\u0000-\u001f]/g, " ").trim().slice(0, max); }
 function html(v) { return clean(v, 1000).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
 function promoPublica(doc) {
   const p = doc.data ? doc.data() || {} : doc || {};
   const ts = (v) => v?.toDate ? v.toDate().toISOString() : clean(v, 50);
-  return { id: doc.id || p.id || "", titulo:clean(p.titulo,120), plataforma:clean(p.plataforma,100), precioNormal:Number(p.precioNormal)||0, precioPromo:Number(p.precioPromo)||0, cupos:Math.max(0,Number(p.cupos)||0), vigencia:clean(p.vigencia,50), texto:clean(p.texto,1200), imagenUrl:clean(p.imagenUrl,1500), estado:clean(p.estado,30)||"borrador", destinatarios:Array.isArray(p.destinatarios)?p.destinatarios:[], enviados:Number(p.enviados)||0, fallidos:Number(p.fallidos)||0, erroresTelegram:Array.isArray(p.erroresTelegram)?p.erroresTelegram:[], createdAt:ts(p.createdAt), sentAt:ts(p.sentAt) };
+  return { id: doc.id || p.id || "", titulo:clean(p.titulo,120), plataforma:clean(p.plataforma,100), precioNormal:Number(p.precioNormal)||0, precioPromo:Number(p.precioPromo)||0, cupos:Math.max(0,Number(p.cupos)||0), vigencia:clean(p.vigencia,50), texto:textoPromo(p.texto,1200), imagenUrl:clean(p.imagenUrl,1500), estado:clean(p.estado,30)||"borrador", destinatarios:Array.isArray(p.destinatarios)?p.destinatarios:[], enviados:Number(p.enviados)||0, fallidos:Number(p.fallidos)||0, erroresTelegram:Array.isArray(p.erroresTelegram)?p.erroresTelegram:[], createdAt:ts(p.createdAt), sentAt:ts(p.sentAt) };
 }
 async function guardarImagenPromo(dataUrl, id) {
   const match = String(dataUrl || "").match(/^data:((?:image\/jpeg|image\/png|image\/webp));base64,([A-Za-z0-9+/=]+)$/i);
@@ -149,13 +150,13 @@ function formatPromoDate(v) {
 }
 
 function splitPromoText(v) {
-  const raw = clean(v, 1600).replace(/\r/g, "\n");
+  const raw = textoPromo(v, 1600);
   if (!raw) return [];
   const byLine = raw
     .split(/\n+/)
     .map((line) => line.replace(/^[-•*\s]+/, "").trim())
     .filter(Boolean);
-  if (byLine.length > 1) return byLine.slice(0, 6);
+  if (byLine.length > 1) return byLine.slice(0, 10);
   const compact = raw.replace(/\s+/g, " ").trim();
   return compact
     .split(/(?:\.\s+|!\s+|\?\s+|;\s+)/)
@@ -253,7 +254,7 @@ module.exports = function mountAdminPanel(app) {
     const ref=db.collection(PROMOCIONES_SOCIOS_COLLECTION).doc();
     const imagenUrl=req.body?.imagenData?await guardarImagenPromo(req.body.imagenData,ref.id):clean(req.body?.imagenUrl,1500);
     const destinatarios=[...new Set((Array.isArray(req.body?.destinatarios)?req.body.destinatarios:[]).map(normNombre).filter(Boolean))];
-    await ref.set({ titulo,plataforma,precioNormal:Math.max(0,Number(req.body?.precioNormal)||0),precioPromo:Math.max(0,Number(req.body?.precioPromo)||0),cupos:Math.max(0,Math.round(Number(req.body?.cupos)||0)),vigencia:clean(req.body?.vigencia,50),texto:clean(req.body?.texto,1200),imagenUrl,destinatarios,estado:"borrador",enviados:0,fallidos:0,createdAt:admin.firestore.FieldValue.serverTimestamp(),updatedAt:admin.firestore.FieldValue.serverTimestamp() });
+    await ref.set({ titulo,plataforma,precioNormal:Math.max(0,Number(req.body?.precioNormal)||0),precioPromo:Math.max(0,Number(req.body?.precioPromo)||0),cupos:Math.max(0,Math.round(Number(req.body?.cupos)||0)),vigencia:clean(req.body?.vigencia,50),texto:textoPromo(req.body?.texto,1200),imagenUrl,destinatarios,estado:"borrador",enviados:0,fallidos:0,createdAt:admin.firestore.FieldValue.serverTimestamp(),updatedAt:admin.firestore.FieldValue.serverTimestamp() });
     ok(res,{id:ref.id});
   }));
 
@@ -274,7 +275,7 @@ module.exports = function mountAdminPanel(app) {
       precioPromo:Math.max(0,Number(req.body?.precioPromo)||0),
       cupos:Math.max(0,Math.round(Number(req.body?.cupos)||0)),
       vigencia:clean(req.body?.vigencia,50),
-      texto:clean(req.body?.texto,1200),
+      texto:textoPromo(req.body?.texto,1200),
       imagenUrl,
       destinatarios,
       estado:clean(actual.estado,30)||"borrador",
@@ -397,7 +398,7 @@ module.exports = function mountAdminPanel(app) {
     await ref.set({estado:"publicada",enviados,fallidos,encolados,sinTelegram,fallbackTexto,fallbackEmoji,premiumEmojis:premiumEnabled,erroresTelegram,sentAt:admin.firestore.FieldValue.serverTimestamp(),updatedAt:admin.firestore.FieldValue.serverTimestamp()},{merge:true});
     let avisoGuardado=true;
     try{
-      await db.collection("avisos").add({texto:`${p.titulo}\n${p.plataforma} · L${Number(p.precioPromo)||0}\n${p.texto||""}`.trim(),autor:"Sublicuentas",tipo:"promocion_socios",promocionId:ref.id,imagenUrl:p.imagenUrl||"",destinatarios:p.destinatarios||[],activo:true,createdAt:admin.firestore.FieldValue.serverTimestamp()});
+      await db.collection("avisos").add({texto:`${p.titulo}\n${p.plataforma} · L${Number(p.precioPromo)||0}\n\n${textoPromo(p.texto||"")}`.trim(),autor:"Sublicuentas",tipo:"promocion_socios",promocionId:ref.id,imagenUrl:p.imagenUrl||"",destinatarios:p.destinatarios||[],activo:true,createdAt:admin.firestore.FieldValue.serverTimestamp()});
     }catch(e){avisoGuardado=false;console.error("promo aviso fail",ref.id,e.message)}
     ok(res,{id:ref.id,enviados,fallidos,encolados,sinTelegram,fallbackTexto,fallbackEmoji,premiumEmojis:premiumEnabled,erroresTelegram,avisoGuardado});
   }));
