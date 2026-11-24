@@ -69,3 +69,10 @@ test("mes en hora de Honduras (UTC−6)", () => {
   assert.equal(SP.mesHN(Date.parse("2026-12-01T03:00:00Z")), "2026-11", "9 p. m. del 30/11 en Honduras sigue siendo noviembre");
   assert.equal(SP.mesHN(Date.parse("2026-12-01T07:00:00Z")), "2026-12");
 });
+test("los dueños (Sublicuentas y Relojes) no ganan puntos ni salen en el ranking", async () => {
+  const db = await dbConInicio();
+  for (const s of ["Sublicuentas", "Relojes", "Naara", "Libni"]) assert.equal((await SP.otorgar(db, { clave: SP.claveCompra("o" + s), socio: s, tipo: "venta_nueva", fechaEvento: ahora() })).omitido, "excluido");
+  await SP.otorgar(db, { clave: SP.claveCompra("j"), socio: "Jimena", tipo: "venta_nueva", fechaEvento: ahora() });
+  assert.deepEqual((await SP.rankingMes(db)).map((x) => x.socio_norm), ["jimena"]);
+  assert.equal((await SP.resumenSocio(db, "relojes")).excluido, true);
+});
