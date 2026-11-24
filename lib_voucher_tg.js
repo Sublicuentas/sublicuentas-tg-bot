@@ -59,6 +59,7 @@ async function enviarTelegram({ token, chatId, foto = {}, caption, fetchFn = fet
     return d.ok ? d : r;
   }
   if (foto.url) return llamarTelegram(fetchFn, token, "sendPhoto", JSON.stringify({ chat_id: chatId, photo: foto.url, caption: cap }));
+  if (foto.sinArchivo) return llamarTelegram(fetchFn, token, "sendMessage", JSON.stringify({ chat_id: chatId, text: cap })); // R206 · pagado con billetera: no hay comprobante
   // Sin archivo (no debería pasar en compras con comprobante): avisar igual, marcado.
   return llamarTelegram(fetchFn, token, "sendMessage", JSON.stringify({ chat_id: chatId, text: `${cap}\n⚠️ El archivo del comprobante no se pudo adjuntar: revíselo en el panel.` }));
 }

@@ -1304,9 +1304,22 @@ app.post("/rev/compra", revAuth, async (req, res) => {
         if (d.stockCantidad !== null && d.stockCantidad !== undefined && d.stockCantidad !== "") tx.update(stockRefs[i].ref, { stockCantidad: Math.max(0, Number(d.stockCantidad) - stockRefs[i].pedidas), updatedAt: new Date() });
       });
     };
+    // ── R206 · Fase 4: pagar con saldo de billetera (o solo cotizar desde el paso «Pago») ──
+    const BC = require("./lib_billetera_checkout");
+    const pagoBilletera = String(b.metodoPago || "") === "billetera";
+    if (pagoBilletera || b.soloCotizarBilletera === true) {
+      if (hayComisionR108) return res.status(400).json({ error: "billetera_no_aplica_comision", detail: "Los productos «por comisión» se pagan con transferencia y comprobante." });
+      if (!["sublicuentas", "relojes"].includes(destino.key)) return res.status(400).json({ error: "destino_requerido", detail: "Elija si paga con su saldo de Sublicuentas o de Relojes." });
+    }
+    const bcCfg = pagoBilletera || b.soloCotizarBilletera === true ? await BC.configuracion(db) : null;
+    if (b.soloCotizarBilletera === true) {
+      const vista = await require("./lib_billetera").vistaSocio(db, live.nombre_norm || req.rev.nombre_norm);
+      return res.json({ ok: true, cotizacion: BC.cotizar({ productos, descuentoCombo, totalCombo, negocio: destino.key, saldos: vista.saldos[destino.key], usarGiftCard: b.usarGiftCard === true, ...bcCfg }) });
+    }
     const monto = hayComisionR108 ? (revMoneyNumber(b.monto) || totalCombo || 0) : totalCombo;
-    const bancoR108 = hayComisionR108 ? null : await r108Banco(b.bancoId);
-    if (!hayComisionR108 && !bancoR108) return res.status(400).json({ error: "falta_banco", detail: "Elija el banco donde se hizo el pago." });
+    const bancoR108 = hayComisionR108 || pagoBilletera ? null : await r108Banco(b.bancoId);
+    if (!hayComisionR108 && !pagoBilletera && !bancoR108) return res.status(400).json({ error: "falta_banco", detail: "Elija el banco donde se hizo el pago." });
+    if (pagoBilletera && !requestRef) return res.status(400).json({ error: "falta_operation_id", detail: "Actualice el panel." });
     if (!hayComisionR108 && !requestRef) return res.status(400).json({ error: "falta_operation_id", detail: "Actualice el panel." });
     // Oct-2026 · Web Socios: el banco también se pide en compras por comisión. Se guarda (y sale en Telegram),
     // pero esas compras siguen fuera del registro automático de ingresos, igual que antes.
@@ -1315,11 +1328,11 @@ app.post("/rev/compra", revAuth, async (req, res) => {
       ? `Combo ${productos.length} plataformas`
       : productos[0].servicio;
 
-    const imagenObj = await uploadPanelImage(b.imagen, "compras");
+    const imagenObj = pagoBilletera ? { url: "", storageError: "", sinArchivo: true } : await uploadPanelImage(b.imagen, "compras"); // R206 · con billetera no hay comprobante
     const imagenUrl = imagenObj.url || "";
     // Un pago = un pedido. Si llega exactamente la misma imagen de otro pedido, no se rechaza ni se deduplica por monto:
     // el pedido se crea marcado para revisión del equipo.
-    const comprobanteHash = (() => { const m = String(b.imagen || "").match(/;base64,(.+)$/); return m ? crypto.createHash("sha256").update(Buffer.from(m[1], "base64")).digest("hex") : ""; })();
+    const comprobanteHash = pagoBilletera ? "" : (() => { const m = String(b.imagen || "").match(/;base64,(.+)$/); return m ? crypto.createHash("sha256").update(Buffer.from(m[1], "base64")).digest("hex") : ""; })();
     let pagoRevision = null;
     if (comprobanteHash) {
       try {
@@ -1384,7 +1397,35 @@ app.post("/rev/compra", revAuth, async (req, res) => {
     doc.notificacion = VTG.notificacionInicial(compraIdPrevisto, destino.key);
     if (imagenObj.bucketName && imagenObj.url) doc.comprobanteRef = { bucket: imagenObj.bucketName, carpeta: "compras" };
     let ref;
-    if (requestRef && bancoR108) {
+    let cotBilletera = null;
+    if (pagoBilletera) {
+      // R206 · Pedido + cargo a la billetera en UNA transacción. Sin saldo suficiente no se crea nada.
+      ref = requestRef;
+      const sn = live.nombre_norm || req.rev.nombre_norm || "";
+      const r = await db.runTransaction(async (tx) => {
+        const ya = await tx.get(ref);
+        if (ya.exists) return { dup: ya.data() || {} };
+        const aplicarStock = await reservarStock(tx);
+        const cargo = await BC.prepararCargo(tx, db, { socioNorm: sn, negocio: destino.key });
+        const cot = BC.cotizar({ productos, descuentoCombo, totalCombo, negocio: destino.key, saldos: cargo.saldos, usarGiftCard: b.usarGiftCard === true, ...bcCfg });
+        if (!cot.ok) { const e = new Error(cot.error); e.status = 400; e.publicError = cot.error; e.detail = cot.detail; throw e; }
+        if (b.totalEsperadoBilletera != null && Number(b.totalEsperadoBilletera) !== cot.aPagarSaldo) { const e = new Error("precio_cambio_billetera"); e.status = 409; e.publicError = "precio_cambio_billetera"; e.cotizacion = cot; throw e; }
+        if (!cot.suficiente) { const e = new Error("saldo_insuficiente"); e.status = 409; e.publicError = "saldo_insuficiente"; e.cotizacion = cot; throw e; }
+        const ahora = new Date();
+        const docB = { ...doc, monto: cot.totalFinal, montoAutomatico: true,
+          pago: { metodo: "billetera", negocio: destino.key, lista: cot.lista, descuentoBilletera: cot.descuento, giftCard: cot.giftCard, saldoReal: cot.aPagarSaldo, totalFinal: cot.totalFinal, lineas: cot.lineas.map((l) => ({ catalogId: l.catalogId, descuento: l.descuento, motivo: l.motivo })) },
+          finanzasPendiente: "billetera_fase6", // el ingreso del pedido pagado con saldo se concilia en la Fase 6 (no hubo transferencia en esta compra)
+          estado: "pago confirmado", detalleEstado: "Pagado con saldo de billetera", pagoConfirmadoAt: ahora, pagoConfirmadoPor: "billetera",
+          estadoHistorial: [{ estado: "pago confirmado", detalle: `Pagado con saldo de billetera ${destino.label}: L${cot.aPagarSaldo}${cot.giftCard ? ` + Gift Card L${cot.giftCard}` : ""}${cot.descuento ? ` (descuento L${cot.descuento})` : ""}`, at: ahora.toISOString(), por: "sistema" }] };
+        aplicarStock();
+        tx.set(ref, docB);
+        cargo.aplicar(cot, { compraId: ref.id, socio });
+        return { cot, docB };
+      });
+      if (r.dup) { const d = r.dup; return res.json({ ok:true, id:ref.id, duplicate:true, estado:d.estado||"pendiente", destino:d.destino||"", destinoLabel:d.destinoLabel||"", totalCombo:Number(d.totalCombo||0), descuentoCombo:Number(d.descuentoCombo||0), pago: d.pago || null }); }
+      cotBilletera = r.cot; Object.assign(doc, r.docB);
+      try { const SP = require("./lib_sublipoints"); await SP.otorgar(db, { clave: SP.claveCompra(ref.id), socio, socioNorm: sn, tipo: "venta_nueva", unidades: SP.unidadesCompra(doc), ref: ref.id.slice(-6), detalle: String(servicio).slice(0, 120), fechaEvento: doc.createdAt, por: "billetera" }); } catch (e) { console.error("sublipoints billetera", e?.message || e); }
+    } else if (requestRef && bancoR108) {
       // R108: pedido + venta + ingreso del socio en UNA transacción (o todo, o nada); el requestId evita duplicados.
       ref = requestRef;
       const r = await db.runTransaction(async (tx) => {
@@ -1464,9 +1505,10 @@ app.post("/rev/compra", revAuth, async (req, res) => {
         ? `💰 Subtotal: L${subtotalCatalogo}\n🏷️ Descuento combo: L${descuentoCombo}\n✅ Total sugerido: L${totalCombo}\n💵 Monto pagado: ${monto ? `L${monto}` : "—"}`
         : `💵 Monto pagado: ${monto ? `L${monto}` : "—"}${productos[0].precioCatalogo !== null ? ` | Catálogo: L${productos[0].precioCatalogo}` : ""}`,
       doc.banco ? `🏦 Banco: ${cleanTg(doc.banco, 40)}` : "",
+      cotBilletera ? `💳 *PAGADO CON SALDO DE BILLETERA* (${destino.label})\n   Lista: L${cotBilletera.lista}${cotBilletera.descuento ? ` · Descuento billetera: L${cotBilletera.descuento}` : ""}${cotBilletera.giftCard ? ` · Gift Card: L${cotBilletera.giftCard}` : ""}\n   Cobrado del saldo: L${cotBilletera.aPagarSaldo} · Total final: L${cotBilletera.totalFinal}\n   ✅ Pago confirmado · entregar MANUALMENTE` : "",
       pagoRevision ? `⚠️ Posible comprobante repetido (igual al pedido #${pagoRevision.pedidoRelacionadoRef}). Revisar antes de aprobar.` : "",
       comentario ? `📝 Nota: ${cleanTg(comentario, 220)}` : "",
-      (imagenUrl || imagenObj.buffer) ? `📎 Comprobante adjunto` : `⚠️ Sin comprobante`,
+      cotBilletera ? "" : (imagenUrl || imagenObj.buffer) ? `📎 Comprobante adjunto` : `⚠️ Sin comprobante`,
       `🆔 Ref: ${ref.id.slice(-6)}`,
     ].filter((x) => x !== "");
     const cap = capLineas.join("\n").slice(0, 950);
@@ -1482,14 +1524,14 @@ app.post("/rev/compra", revAuth, async (req, res) => {
     await require("./lib_push").avisar(db, admin, {
       usuarios: [destino.key],
       titulo: `🛒 Pedido de ${cleanTg(socio, 40)}`,
-      cuerpo: `${resumenPush}${totalCombo ? ` · L${totalCombo}` : ""}`,
+      cuerpo: `${resumenPush}${cotBilletera ? ` · L${cotBilletera.totalFinal} · pagado con saldo` : totalCombo ? ` · L${totalCombo}` : ""}`,
       data: { tipo: "pedido", ir: "inicio", id: ref.id },
     });
 
-    res.json({ ok: true, id: ref.id, ref: ref.id.slice(-6).toUpperCase(), imagenUrl, destino: destino.key, destinoLabel: destino.label, subtotalCatalogo, totalCombo, descuentoCombo, estado: "pendiente", comprobante: !!(imagenUrl || imagenObj.buffer), notificacion: VTG.estadoPublico(notif.n) });
+    res.json({ ok: true, id: ref.id, ref: ref.id.slice(-6).toUpperCase(), imagenUrl, destino: destino.key, destinoLabel: destino.label, subtotalCatalogo, totalCombo, descuentoCombo, estado: cotBilletera ? "pago confirmado" : "pendiente", pago: cotBilletera ? doc.pago : null, comprobante: !!(imagenUrl || imagenObj.buffer), notificacion: VTG.estadoPublico(notif.n) });
   } catch (e) {
     console.error("rev/compra", e);
-    res.status(e.status || 500).json({ error: e.publicError || "server", detail: e.detail || e.message });
+    res.status(e.status || 500).json({ error: e.publicError || "server", detail: e.detail || e.message, ...(e.cotizacion ? { cotizacion: e.cotizacion } : {}) });
   }
 });
 
@@ -1693,6 +1735,31 @@ app.get("/rev/admin/billetera", revAdminAuth, adminAnyPermission(["socios.compra
   try { res.set("Cache-Control", "no-store"); res.json(await require("./lib_billetera").listaAdmin(db, { estado: String(req.query.estado || ""), alcance: isFullAdmin(req) ? "" : adminScopeProfile(req) })); }
   catch (e) { console.error("rev/admin/billetera", e); res.status(500).json({ error: "server" }); }
 });
+// R206 · Descuento por pagar con billetera: costo por producto y reglas. Solo administración general (toca márgenes).
+// Vive en billetera_config / billetera_descuentos: NO modifica precios del catálogo ni Control Maestro.
+app.get("/rev/admin/billetera/descuentos", revAdminAuth, async (req, res) => {
+  try {
+    if (!isFullAdmin(req)) return res.status(403).json({ error: "solo_admin_general" });
+    res.set("Cache-Control", "no-store");
+    const BC = require("./lib_billetera_checkout");
+    const [conf, cat] = await Promise.all([BC.configuracion(db), obtenerCatalogoSocio(db, { tarifaId: "general" })]);
+    res.json({ ok: true, config: conf.cfg, productos: BC.tablaAdmin(catalogoPlano(cat.grupos), conf) });
+  } catch (e) { console.error("rev/admin/billetera/descuentos", e); res.status(500).json({ error: "server" }); }
+});
+app.patch("/rev/admin/billetera/descuentos/config", revAdminAuth, async (req, res) => {
+  try {
+    if (!isFullAdmin(req)) return res.status(403).json({ error: "solo_admin_general" });
+    const r = await require("./lib_billetera_checkout").guardarConfig(db, req.body || {}, cleanTg(req.headers?.["x-sublichat-actor"] || req.admin?.nombre || "Admin", 80));
+    res.status(r.status).json(r.ok ? { ok: true, config: r.cfg } : r);
+  } catch (e) { console.error("rev/admin/billetera/descuentos/config", e); res.status(500).json({ error: "server" }); }
+});
+app.patch("/rev/admin/billetera/descuentos/producto/:clave", revAdminAuth, async (req, res) => {
+  try {
+    if (!isFullAdmin(req)) return res.status(403).json({ error: "solo_admin_general" });
+    const r = await require("./lib_billetera_checkout").guardarCosto(db, req.params.clave, req.body || {}, cleanTg(req.headers?.["x-sublichat-actor"] || req.admin?.nombre || "Admin", 80));
+    res.status(r.status).json(r);
+  } catch (e) { console.error("rev/admin/billetera/descuentos/producto", e); res.status(500).json({ error: "server" }); }
+});
 app.post("/rev/admin/billetera/recargas/:id/:accion", revAdminAuth, adminAnyPermission(["socios.compras.write","socios.compras.own.write"]), async (req, res) => {
   try {
     const accion = String(req.params.accion || "");
@@ -1764,6 +1831,7 @@ app.get("/rev/admin/compras", revAdminAuth, adminAnyPermission(["socios.compras.
         subtotalCatalogo: Number(r.subtotalCatalogo) || 0,
         descuentoCombo: Number(r.descuentoCombo) || 0,
         totalCombo: Number(r.totalCombo) || 0,
+        pago: r.pago && r.pago.metodo === "billetera" ? { metodo: "billetera", negocio: r.pago.negocio || "", lista: Number(r.pago.lista) || 0, descuentoBilletera: Number(r.pago.descuentoBilletera) || 0, giftCard: Number(r.pago.giftCard) || 0, saldoReal: Number(r.pago.saldoReal) || 0, totalFinal: Number(r.pago.totalFinal) || 0 } : null, // R206
         entregaTipo: r.entregaTipo || "",
         catalogCategory: r.catalogCategory || "",
         catalogSub: r.catalogSub || "",
@@ -1854,6 +1922,9 @@ app.patch("/rev/admin/compras/:id/estado", revAdminAuth, adminAnyPermission(["so
     if (!isFullAdmin(req) && revNormKey(compra.destino || "sublicuentas") !== adminScopeProfile(req)) {
       return res.status(403).json({ ok:false, error:"fuera_de_ambito" });
     }
+    // R206 · Un pedido pagado con billetera que ya se canceló (y se devolvió el saldo) no se reabre: haría una entrega sin cobro.
+    const esBilletera = compra.pago && compra.pago.metodo === "billetera";
+    if (esBilletera && String(compra.estado || "").toLowerCase() === "cancelado" && estado !== "cancelado") return res.status(409).json({ error: "billetera_ya_devuelta", detail: "Este pedido se pagó con billetera y ya se canceló con devolución. Si el socio lo quiere, debe hacer un pedido nuevo." });
     const at = new Date();
     const hist = { estado, detalle, at: at.toISOString(), por: cleanTg(req.admin?.nombre || "Admin", 80) };
     await ref.update({
@@ -1872,10 +1943,17 @@ app.patch("/rev/admin/compras/:id/estado", revAdminAuth, adminAnyPermission(["so
       if (estado === "pago confirmado" || estado === "entregado") sublipoints = await SP.otorgar(db, { clave: SP.claveCompra(ref.id), socio: compra.socio, socioNorm: compra.socio_norm || compra.socio, tipo: "venta_nueva", unidades: SP.unidadesCompra(compra), ref: ref.id.slice(-6), detalle: String(compra.servicio || "Pedido").slice(0, 120), fechaEvento: compra.createdAt || compra.ts, por: hist.por });
       else if (estado === "cancelado") sublipoints = await SP.revertir(db, { clave: SP.claveCompra(ref.id), motivo: `Pedido cancelado${detalle ? ` · ${detalle}` : ""}`, por: hist.por });
     } catch (e) { console.error("sublipoints compra", e?.message || e); sublipoints = { ok: false, error: "sublipoints" }; }
+    // R206 · Cancelar un pedido pagado con billetera devuelve el saldo UNA sola vez (ids fijos; repetir no duplica).
+    let devolucionBilletera = null;
+    if (esBilletera && estado === "cancelado") {
+      try { devolucionBilletera = await require("./lib_billetera_checkout").devolver(db, { compraId: ref.id, motivo: `Devolución · pedido cancelado${detalle ? ` · ${detalle}` : ""}`, por: hist.por }); }
+      catch (e) { console.error("billetera devolucion", ref.id, e?.message || e); devolucionBilletera = { ok: false, error: "devolucion_fallo" }; }
+    }
 
     const socioNorm = revNormKey(compra.socio_norm || compra.socio || "");
     const estadoLabel = estado.charAt(0).toUpperCase() + estado.slice(1);
-    const texto = `🛒 Pedido ${String(compra.servicio || "").trim() || ref.id.slice(-6)}: ${estadoLabel}${detalle ? ` · ${detalle}` : ""}`;
+    const devTxt = devolucionBilletera && (devolucionBilletera.real || devolucionBilletera.promocional) ? ` · Se devolvió a su billetera L${Number(devolucionBilletera.real || 0) + Number(devolucionBilletera.promocional || 0)}` : "";
+    const texto = `🛒 Pedido ${String(compra.servicio || "").trim() || ref.id.slice(-6)}: ${estadoLabel}${detalle ? ` · ${detalle}` : ""}${devTxt}`;
     if (socioNorm) {
       await db.collection("avisos").add({
         texto, autor:"Sublicuentas", tipo:"pedido_estado", compraId:ref.id,
@@ -1895,7 +1973,7 @@ app.patch("/rev/admin/compras/:id/estado", revAdminAuth, adminAnyPermission(["so
         }
       } catch (_) {}
     }
-    res.json({ ok:true, id:ref.id, estado, detalleEstado:detalle, estadoUpdatedAt:at.toISOString(), sublipoints });
+    res.json({ ok:true, id:ref.id, estado, detalleEstado:detalle, estadoUpdatedAt:at.toISOString(), sublipoints, devolucionBilletera });
   } catch(e){console.error("rev/admin/compras estado",e);res.status(500).json({error:"server"})}
 });
 

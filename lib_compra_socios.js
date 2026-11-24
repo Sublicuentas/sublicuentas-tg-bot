@@ -186,6 +186,7 @@ function pedidoPublico(id, x = {}) {
     })),
     subtotalCatalogo: Number(x.subtotalCatalogo) || 0, descuentoCombo: Number(x.descuentoCombo) || 0, totalCombo: Number(x.totalCombo) || 0,
     monto: Number(x.monto) || 0, montoAutomatico: x.montoAutomatico !== false, banco: x.banco || "", comentario: x.comentario || "",
+    pago: x.pago && x.pago.metodo === "billetera" ? { metodo: "billetera", negocio: x.pago.negocio || "", lista: Number(x.pago.lista) || 0, descuentoBilletera: Number(x.pago.descuentoBilletera) || 0, giftCard: Number(x.pago.giftCard) || 0, saldoReal: Number(x.pago.saldoReal) || 0, totalFinal: Number(x.pago.totalFinal) || 0 } : null, // R206
     comprobante: !!(x.imagenUrl || x.imagenData), createdAt: x.createdAt, estadoUpdatedAt: x.estadoUpdatedAt || x.updatedAt || x.createdAt,
     estadoHistorial: Array.isArray(x.estadoHistorial) ? x.estadoHistorial.slice(-10) : [],
     notificacion: require("./lib_voucher_tg").estadoPublico(x.notificacion), // R195 · Recibido / Pendiente de envío / Error de envío (real)

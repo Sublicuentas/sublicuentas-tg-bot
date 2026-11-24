@@ -130,4 +130,4 @@ async function listaAdmin(db, { estado = "", alcance = "" } = {}) {
   return { ok: true, recargas, saldos, total };
 }
 
-module.exports = { NEGOCIOS, BANCOS, MONTO_MIN, MONTO_MAX, saldosDe, vistaSocio, solicitarRecarga, revisarRecarga, listaAdmin, negocioDe, refNorm, recargaPublica, COL_MOV, COL_REC };
+module.exports = { norm, NEGOCIOS, BANCOS, MONTO_MIN, MONTO_MAX, saldosDe, vistaSocio, solicitarRecarga, revisarRecarga, listaAdmin, negocioDe, refNorm, recargaPublica, COL_MOV, COL_REC };
