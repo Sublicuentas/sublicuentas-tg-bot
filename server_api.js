@@ -731,9 +731,13 @@ app.post("/rev/avisos/leido", revAuth, async (req, res) => {
     if (!id || id.length > 180) return res.status(400).json({ error: "aviso_invalido" });
     const live = await revLiveProfile(req.rev, 0);
     if (!live?.id) return res.status(404).json({ error: "socio_no_encontrado" });
+    // R220 · Lectura POR SOCIO y POR AVISO, atómica (arrayUnion): dos dispositivos marcando a la vez no se pisan.
+    const ref = db.collection("revendedores").doc(String(live.id));
+    await ref.set({ avisosLeidos: admin.firestore.FieldValue.arrayUnion(id), avisosLeidosAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
     const actuales = Array.isArray(live.avisosLeidos) ? live.avisosLeidos.map(String) : [];
-    const avisosLeidos = [...new Set([...actuales, id])].slice(-200);
-    await db.collection("revendedores").doc(String(live.id)).set({ avisosLeidos }, { merge: true });
+    if (actuales.length > 450) { // recorte ocasional: se conservan los 400 más recientes (los avisos viejos ya no se listan)
+      await db.runTransaction(async (tx) => { const d = (await tx.get(ref)).data() || {}; const arr = Array.isArray(d.avisosLeidos) ? d.avisosLeidos.map(String) : []; if (arr.length > 450) tx.set(ref, { avisosLeidos: arr.slice(-400) }, { merge: true }); });
+    }
     _revLiveCache.delete(String(live.id));
     res.set("Cache-Control", "no-store");
     res.json({ ok: true, id });
