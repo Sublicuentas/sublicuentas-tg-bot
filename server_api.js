@@ -673,6 +673,30 @@ app.get("/rev/compra/estado", revAuth, async (req, res) => {
 });
 
 // ── AVISOS — buzón publicado desde Telegram (/aviso) ──
+// R213 · Mensaje del día (Inicio del socio). Mismo texto para todos durante el día de Honduras; lo decide el servidor.
+app.get("/rev/mensaje-dia", revAuth, async (req, res) => {
+  try {
+    const r = await require("./lib_mensaje_dia").delDia(db);
+    res.set("Cache-Control", "private, no-store");
+    res.json({ ok: true, fecha: r.fecha, texto: r.texto, fuente: r.fuente });
+  } catch (e) { console.error("rev/mensaje-dia", e?.message || e); res.status(e.status || 500).json({ error: "server" }); }
+});
+app.get("/rev/admin/mensajes-dia", revAdminAuth, async (req, res) => {
+  try {
+    if (!isFullAdmin(req)) return res.status(403).json({ error: "solo_admin_general" });
+    const MD = require("./lib_mensaje_dia");
+    const [dias, alertas] = await Promise.all([MD.agenda(db, { desde: String(req.query.desde || MD.fechaHN()), dias: req.query.dias }), db.collection("mensajes_dia_alertas").orderBy("fecha", "desc").limit(30).get()]);
+    res.set("Cache-Control", "no-store");
+    res.json({ ok: true, hoy: MD.fechaHN(), dias, alertas: alertas.docs.map((d) => ({ fecha: d.id, motivo: (d.data() || {}).motivo || "" })), limites: { min: MD.MIN, max: MD.MAX } });
+  } catch (e) { console.error("rev/admin/mensajes-dia", e?.message || e); res.status(e.status || 500).json({ error: "server" }); }
+});
+app.put("/rev/admin/mensajes-dia/:fecha", revAdminAuth, async (req, res) => {
+  try {
+    if (!isFullAdmin(req)) return res.status(403).json({ error: "solo_admin_general" });
+    const r = await require("./lib_mensaje_dia").guardar(db, req.params.fecha, req.body || {}, cleanTg(req.headers?.["x-sublichat-actor"] || req.admin?.nombre || "Admin", 80));
+    res.status(r.status).json(r);
+  } catch (e) { console.error("rev/admin/mensajes-dia put", e?.message || e); res.status(500).json({ error: "server" }); }
+});
 app.get("/rev/avisos", revAuth, async (req, res) => {
   try {
     // ✅ Sin where+orderBy combinado (evita necesitar índice compuesto en Firestore)
