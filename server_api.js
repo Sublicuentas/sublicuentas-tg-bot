@@ -1660,6 +1660,54 @@ app.get("/rev/admin/comprobantes", revAdminAuth, adminAnyPermission(["socios.pag
 });
 
 
+// ── R205 · Billetera Subli (Fase 3): saldos y recargas con verificación administrativa ──
+app.get("/rev/billetera", revAuth, async (req, res) => {
+  try { res.set("Cache-Control", "no-store"); res.json(await require("./lib_billetera").vistaSocio(db, req.rev.nombre_norm || req.rev.nombre)); }
+  catch (e) { console.error("rev/billetera", e); res.status(500).json({ error: "server" }); }
+});
+app.post("/rev/billetera/recargas", revAuth, async (req, res) => {
+  try {
+    const BIL = require("./lib_billetera");
+    const b = req.body || {};
+    const live = await revLiveProfile(req.rev);
+    const parsed = parsePanelImage(b.imagen); // valida formato y tamaño (máx. 7 MB)
+    if (!parsed) return res.status(400).json({ error: "comprobante_requerido", detail: "Adjunte la foto del comprobante (JPG, PNG o WEBP)." });
+    const imagenHash = crypto.createHash("sha256").update(parsed.buffer).digest("hex");
+    // Primero se valida todo (sin subir nada); solo si pasa se guarda la imagen en Storage privado (enlace firmado).
+    const pre = await BIL.solicitarRecarga(db, { socio: live.nombre || req.rev.nombre, socioNorm: live.nombre_norm || req.rev.nombre_norm, negocio: b.negocio, monto: b.monto, banco: b.banco, referencia: b.referencia, requestId: `pre_${b.requestId || ""}_${Date.now()}`, imagenHash: "" });
+    if (pre.error && pre.error !== "comprobante_requerido") return res.status(pre.status || 400).json(pre);
+    const up = await uploadPanelImage(b.imagen, "billetera-recargas");
+    const r = await BIL.solicitarRecarga(db, { socio: live.nombre || req.rev.nombre, socioNorm: live.nombre_norm || req.rev.nombre_norm, negocio: b.negocio, monto: b.monto, banco: b.banco, referencia: b.referencia, requestId: b.requestId, imagenHash, imagenUrl: up.url || "" });
+    if (r.ok && !r.duplicado) {
+      try {
+        const { getDestinoChatIds } = require("./lib_destinos_tg");
+        const ids = await getDestinoChatIds(r.recarga.negocio);
+        const txt = `💳 *Recarga de billetera* (pendiente de verificar)\nSocio: ${cleanTg(live.nombre || req.rev.nombre, 80)}\nNegocio: ${r.recarga.negocioNombre}\nMonto: L${r.recarga.monto}\nBanco: ${cleanTg(r.recarga.banco, 40)} · Ref ${cleanTg(r.recarga.referencia, 40)}\n#${r.recarga.ref}\nNo se acredita hasta confirmar el depósito en Sublichat › Revendedores › Billetera.`;
+        for (const chatId of (ids || []).slice(0, 3)) await sendTelegramMessage(chatId, txt).catch(() => {});
+      } catch (e) { console.error("billetera aviso", e?.message || e); }
+    }
+    res.status(r.status || 200).json(r);
+  } catch (e) { console.error("rev/billetera/recargas", e); res.status(e.status || 500).json({ error: e.publicError || "server" }); }
+});
+app.get("/rev/admin/billetera", revAdminAuth, adminAnyPermission(["socios.compras.write","socios.compras.own.write"]), async (req, res) => {
+  try { res.set("Cache-Control", "no-store"); res.json(await require("./lib_billetera").listaAdmin(db, { estado: String(req.query.estado || ""), alcance: isFullAdmin(req) ? "" : adminScopeProfile(req) })); }
+  catch (e) { console.error("rev/admin/billetera", e); res.status(500).json({ error: "server" }); }
+});
+app.post("/rev/admin/billetera/recargas/:id/:accion", revAdminAuth, adminAnyPermission(["socios.compras.write","socios.compras.own.write"]), async (req, res) => {
+  try {
+    const accion = String(req.params.accion || "");
+    if (!["aprobar", "rechazar"].includes(accion)) return res.status(400).json({ error: "accion_invalida" });
+    const delegado = cleanTg(req.headers?.["x-sublichat-actor"] || "", 80), adminNom = cleanTg(req.admin?.nombre || "Admin", 80);
+    const r = await require("./lib_billetera").revisarRecarga(db, { id: req.params.id, accion, por: delegado ? `${delegado} (vía ${adminNom})` : adminNom, montoRecibido: req.body?.montoRecibido, motivo: req.body?.motivo, alcance: isFullAdmin(req) ? "" : adminScopeProfile(req) });
+    if (r.ok && !r.sinCambios && r.recarga) {
+      const rec = r.recarga, d = (await db.collection("billetera_recargas").doc(rec.id).get()).data() || {};
+      const txt = accion === "aprobar" ? `💳 Recarga #${rec.ref} confirmada: se acreditaron L${rec.montoAcreditado} a su saldo ${rec.negocioNombre}.` : `💳 Recarga #${rec.ref} rechazada: ${rec.motivo}. Su saldo no cambió.`;
+      await db.collection("avisos").add({ texto: txt, autor: "Sublicuentas", tipo: "billetera", destinatarios: [d.socio_norm], activo: true, createdAt: admin.firestore.FieldValue.serverTimestamp() }).catch(() => {});
+    }
+    res.status(r.status || 200).json(r);
+  } catch (e) { console.error("rev/admin/billetera/revisar", e); res.status(500).json({ error: "server" }); }
+});
+
 // ── R203 · SubliPoints: confirmar/anular el COBRO de una renovación (solo así suma +1 por servicio) ──
 app.post("/rev/admin/comprobantes/:id/pago", revAdminAuth, adminAnyPermission(["socios.compras.write","socios.compras.own.write"]), async (req, res) => {
   try {
