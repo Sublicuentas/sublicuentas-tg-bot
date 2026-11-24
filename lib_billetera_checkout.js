@@ -6,8 +6,8 @@
    · Con billetera: el cargo se hace dentro de la MISMA transacción que crea el pedido. Se lee un documento de
      bloqueo por socio+negocio (billetera_cuentas) y el libro; si dos compras llegan a la vez, Firestore repite una
      y esa ya ve el primer cargo → nunca saldo negativo ni doble gasto. El pedido nace «pago confirmado» (no se entrega solo).
-   · Descuento por billetera: hasta 5% por producto, SOLO si le queda a Sublicuentas una ganancia de al menos
-     el 10% del precio y nunca menos de L10. Sin costo registrado → sin descuento. Netflix nunca. Se redondea hacia
+   · Descuento por billetera (dueño 23/11/2026, 21:50): 5% parejo en TODOS los productos menos Netflix. No se pide
+     costo: el dueño maneja sus márgenes. Cada producto puede apagarse o bajarse de % en Panel Dios. Se redondea hacia
      abajo a lempiras enteros. La transferencia con comprobante conserva el precio normal.
    · Gift Card (saldo promocional): solo negocio Sublicuentas, todos los productos menos Netflix. Por defecto NO se
      combina con el descuento de billetera (si usa Gift Card, el descuento es 0). Consumo parcial permitido.
@@ -18,10 +18,10 @@ const BIL = require("./lib_billetera");
 const COL_CFG = ["billetera_config", "descuentos"];
 const COL_COSTOS = "billetera_descuentos";
 const COL_LOCK = "billetera_cuentas";
-const CFG_BASE = Object.freeze({ pctMax: 5, margenMinPct: 10, margenMinHnl: 10, excluir: ["netflix"], combinarGiftDescuento: false, giftCardMaxPorPedido: null });
+const CFG_BASE = Object.freeze({ pctMax: 5, excluir: ["netflix"], combinarGiftDescuento: false, giftCardMaxPorPedido: null });
 const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 const norm = (v) => String(v || "").trim().toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
-// El costo se guarda por producto (categoría + nombre + variante), igual en tarifa general y especiales.
+// Ajuste por producto (% o apagado) guardado por categoría + nombre + variante, igual en tarifa general y especiales.
 const slugK = (v) => norm(v).replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "x";
 const claveCosto = (p) => `${slugK(p.catalogCategory || p.categoria)}__${slugK(p.servicioBase || p.n)}__${slugK(p.catalogSub ?? p.s ?? "")}`.slice(0, 140);
 const esExcluido = (p, excl = CFG_BASE.excluir) => excl.some((x) => [p.servicio, p.servicioBase, p.catalogId, p.id].some((v) => norm(v).includes(norm(x))));
@@ -31,14 +31,12 @@ async function configuracion(db) {
   const d = cfgSnap.exists ? cfgSnap.data() || {} : {};
   const cfg = {
     pctMax: Math.max(0, Math.min(5, Number(d.pctMax ?? CFG_BASE.pctMax))),
-    margenMinPct: Math.max(0, Math.min(90, Number(d.margenMinPct ?? CFG_BASE.margenMinPct))),
-    margenMinHnl: Math.max(0, Number(d.margenMinHnl ?? CFG_BASE.margenMinHnl)),
     excluir: [...new Set([...CFG_BASE.excluir, ...(Array.isArray(d.excluir) ? d.excluir.map(norm).filter(Boolean) : [])])],
     combinarGiftDescuento: d.combinarGiftDescuento === true,
     giftCardMaxPorPedido: d.giftCardMaxPorPedido == null || d.giftCardMaxPorPedido === "" ? null : Math.max(0, Number(d.giftCardMaxPorPedido)),
   };
   const costos = {};
-  for (const doc of costSnap.docs) { const c = doc.data() || {}; costos[doc.id] = { costoHnl: c.costoHnl == null || c.costoHnl === "" ? null : Number(c.costoHnl), pct: c.pct == null || c.pct === "" ? null : Math.max(0, Math.min(5, Number(c.pct))), activo: c.activo !== false }; }
+  for (const doc of costSnap.docs) { const c = doc.data() || {}; costos[doc.id] = { pct: c.pct == null || c.pct === "" ? null : Math.max(0, Math.min(5, Number(c.pct))), activo: c.activo !== false }; }
   return { cfg, costos };
 }
 
@@ -57,13 +55,10 @@ function cotizar({ productos = [], descuentoCombo = 0, totalCombo = 0, negocio =
     if (excl) motivo = "Netflix no tiene descuento";
     else if (sinDescuento) motivo = "Con Gift Card no aplica descuento";
     else if (c.activo === false) motivo = "Descuento apagado para este producto";
-    else if (c.costoHnl == null || !Number.isFinite(c.costoHnl)) motivo = "Sin costo registrado";
     else {
       const pct = c.pct != null ? Math.min(c.pct, cfg.pctMax) : cfg.pctMax;
-      const minGan = Math.max(unit * cfg.margenMinPct / 100, cfg.margenMinHnl);
-      const permitido = unit - c.costoHnl - minGan;
-      descUnit = Math.max(0, Math.floor(Math.min(unit * pct / 100, permitido)));
-      if (!descUnit) motivo = permitido <= 0 ? "Margen mínimo protegido" : "Descuento menor a L1";
+      descUnit = Math.max(0, Math.floor(unit * pct / 100));
+      if (!descUnit) motivo = "Descuento menor a L1";
     }
     return { catalogId: p.catalogId || "", clave: claveCosto(p), servicio: p.servicio || "", cantidad: cant, neto: r2(neto), descuento: descUnit * cant, motivo, excluido: excl };
   });
@@ -76,7 +71,7 @@ function cotizar({ productos = [], descuentoCombo = 0, totalCombo = 0, negocio =
   }
   const aPagarSaldo = r2(totalFinal - giftCard);
   const disponible = r2(Number(saldos.disponible ?? saldos.real) || 0);
-  return { ok: true, negocio, lista: r2(totalCombo), descuento: r2(descuento), totalFinal, giftCard, aPagarSaldo, saldoDisponible: disponible, saldoPromocional: r2(saldos.promocional || 0), suficiente: disponible >= aPagarSaldo, faltante: r2(Math.max(0, aPagarSaldo - disponible)), lineas, reglas: { pctMax: cfg.pctMax, margenMinPct: cfg.margenMinPct, margenMinHnl: cfg.margenMinHnl, combinarGiftDescuento: cfg.combinarGiftDescuento } };
+  return { ok: true, negocio, lista: r2(totalCombo), descuento: r2(descuento), totalFinal, giftCard, aPagarSaldo, saldoDisponible: disponible, saldoPromocional: r2(saldos.promocional || 0), suficiente: disponible >= aPagarSaldo, faltante: r2(Math.max(0, aPagarSaldo - disponible)), lineas, reglas: { pctMax: cfg.pctMax, combinarGiftDescuento: cfg.combinarGiftDescuento } };
 }
 
 /** Dentro de una transacción: lee el bloqueo y el libro del socio (SOLO lecturas). Devuelve los saldos y una
@@ -115,8 +110,6 @@ async function devolver(db, { compraId, motivo = "Pedido cancelado", por = "Admi
 async function guardarConfig(db, cambios = {}, por = "Admin") {
   const p = { updatedAt: new Date(), updatedPor: String(por).slice(0, 80) };
   if ("pctMax" in cambios) { const n = Number(cambios.pctMax); if (!(n >= 0 && n <= 5)) return { status: 400, error: "pct_invalido", detail: "El descuento máximo es de 0% a 5%." }; p.pctMax = n; }
-  if ("margenMinPct" in cambios) { const n = Number(cambios.margenMinPct); if (!(n >= 0 && n <= 90)) return { status: 400, error: "margen_invalido" }; p.margenMinPct = n; }
-  if ("margenMinHnl" in cambios) { const n = Number(cambios.margenMinHnl); if (!(n >= 0 && n <= 10000)) return { status: 400, error: "margen_invalido" }; p.margenMinHnl = n; }
   if ("combinarGiftDescuento" in cambios) p.combinarGiftDescuento = cambios.combinarGiftDescuento === true;
   if ("giftCardMaxPorPedido" in cambios) { const v = cambios.giftCardMaxPorPedido; p.giftCardMaxPorPedido = v === "" || v == null ? null : Math.max(0, Number(v) || 0); }
   await db.collection(COL_CFG[0]).doc(COL_CFG[1]).set(p, { merge: true });
@@ -125,7 +118,6 @@ async function guardarConfig(db, cambios = {}, por = "Admin") {
 async function guardarCosto(db, clave, cambios = {}, por = "Admin") {
   const id = String(clave || "").replace(/[\/#?]/g, "_").slice(0, 90); if (!id) return { status: 400, error: "falta_producto" };
   const p = { updatedAt: new Date(), updatedPor: String(por).slice(0, 80) };
-  if ("costoHnl" in cambios) { const v = cambios.costoHnl; if (v === "" || v == null) p.costoHnl = null; else { const n = Number(v); if (!(n >= 0 && n <= 100000)) return { status: 400, error: "costo_invalido" }; p.costoHnl = r2(n); } }
   if ("pct" in cambios) { const v = cambios.pct; if (v === "" || v == null) p.pct = null; else { const n = Number(v); if (!(n >= 0 && n <= 5)) return { status: 400, error: "pct_invalido" }; p.pct = n; } }
   if ("activo" in cambios) p.activo = cambios.activo !== false && cambios.activo !== "false";
   if (cambios.nombre) p.nombre = String(cambios.nombre).slice(0, 140);
@@ -133,14 +125,14 @@ async function guardarCosto(db, clave, cambios = {}, por = "Admin") {
   return { status: 200, ok: true, id };
 }
 
-/** Lista para Panel Dios: productos del catálogo general con su costo, % y el descuento que saldría hoy. */
+/** Lista para Panel Dios: productos del catálogo general con su %, si está activo y el descuento que saldría hoy. */
 function tablaAdmin(itemsPlanos = [], { cfg = CFG_BASE, costos = {} } = {}) {
   return itemsPlanos.filter((it) => it && it.n).map((it) => {
     const p = { catalogCategory: it.categoria, servicioBase: it.n, catalogSub: it.s || "", servicio: it.nombreCompleto || it.n, catalogId: it.id, precioCatalogo: it.p ?? null, cantidad: 1 };
     const clave = claveCosto(p), c = costos[clave] || {};
     const precio = p.precioCatalogo === null ? NaN : Number(p.precioCatalogo);
     const cot = Number.isFinite(precio) && precio > 0 ? cotizar({ productos: [p], descuentoCombo: 0, totalCombo: precio, cfg, costos }) : null;
-    return { clave, nombre: p.servicio, categoria: it.categoria || "", precio: Number.isFinite(precio) ? precio : null, costoHnl: c.costoHnl ?? null, pct: c.pct ?? null, activo: c.activo !== false, excluido: esExcluido(p, cfg.excluir), descuentoHoy: cot && cot.ok ? cot.descuento : 0, motivo: cot && cot.ok ? cot.lineas[0].motivo : "Sin precio fijo" };
+    return { clave, nombre: p.servicio, categoria: it.categoria || "", precio: Number.isFinite(precio) ? precio : null, pct: c.pct ?? null, activo: c.activo !== false, excluido: esExcluido(p, cfg.excluir), descuentoHoy: cot && cot.ok ? cot.descuento : 0, motivo: cot && cot.ok ? cot.lineas[0].motivo : "Sin precio fijo" };
   });
 }
 
