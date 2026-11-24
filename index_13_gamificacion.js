@@ -185,6 +185,8 @@ module.exports = function mountGamificacion(app) {
     try {
       const caps=await liveCaps(req.rev);
       if(!caps.recompensas)return res.status(403).json({error:"sin_permiso_recompensas"});
+      // R204 · El programa por ventas totales fue reemplazado por SubliPoints (mensual). Lo ya pedido se respeta.
+      return res.status(410).json({error:"programa_reemplazado",detail:"Las recompensas ahora se eligen con SubliPoints en Recompensas."});
       const [revDoc,cliSnap]=await Promise.all([db.collection("revendedores").doc(req.rev.id).get(),require("./index_30_espejo_firestore").getColeccion("clientes")]);
       const vendedorNorm = normVendedor(req.rev.nombre_norm || req.rev.nombre || "");
       const ventas=cliSnap.docs.reduce((total,d)=>{
@@ -201,6 +203,39 @@ module.exports = function mountGamificacion(app) {
       res.json({ok:true,id:ref.id,...doc});
     }catch(e){console.error("rev/recompensa",e);res.status(500).json({error:"server"});}
   });
-  app.get("/rev/admin/recompensas",revAdminAuth,adminPermission("recompensas.manage"),async(req,res)=>{try{const snap=await db.collection("recompensas_socios").get();const items=snap.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>dateMs(b.createdAt)-dateMs(a.createdAt));res.json({ok:true,recompensas:items})}catch(e){res.status(500).json({error:"server"})}});
-  app.patch("/rev/admin/recompensas/:id",revAdminAuth,adminPermission("recompensas.manage"),async(req,res)=>{try{const estado=String(req.body?.estado||"");if(!["pendiente","entregada","rechazada"].includes(estado))return res.status(400).json({error:"estado_invalido"});const ref=db.collection("recompensas_socios").doc(req.params.id),snap=await ref.get();if(!snap.exists)return res.status(404).json({error:"no_existe"});await ref.update({estado,updatedAt:admin.firestore.FieldValue.serverTimestamp()});res.json({ok:true,id:ref.id,estado})}catch(e){res.status(500).json({error:"server"})}});
+  /* ───── R204 · SubliPoints Fase 2: recompensas mensuales (socio) ───── */
+  const RSP = require("./lib_recompensas_sp");
+  const actorAdmin = (req) => ({ por: String(req.admin?.nombre || req.admin?.usuario || "Admin").slice(0, 80), delegado: String(req.headers?.["x-sublichat-actor"] || "").slice(0, 80) });
+  app.get("/rev/recompensas-sp", revAuth, async (req, res) => {
+    try {
+      res.set("Cache-Control", "no-store");
+      const caps = await liveCaps(req.rev);
+      if (!caps.recompensas) return res.status(403).json({ error: "sin_permiso_recompensas" });
+      res.json(await RSP.vistaSocio(db, req.rev.nombre_norm || req.rev.nombre));
+    } catch (e) { console.error("rev/recompensas-sp", e); res.status(500).json({ error: "server" }); }
+  });
+  app.post("/rev/recompensas-sp/solicitar", revAuth, async (req, res) => {
+    try {
+      const caps = await liveCaps(req.rev);
+      if (!caps.recompensas) return res.status(403).json({ error: "sin_permiso_recompensas" });
+      const r = await RSP.solicitar(db, { socio: req.rev.nombre || req.rev.nombre_norm, socioNorm: req.rev.nombre_norm || req.rev.nombre, recompensaId: req.body?.recompensaId });
+      if (r.ok && bot && SUPER_ADMIN) bot.sendMessage(SUPER_ADMIN, `🎁 RECOMPENSA SUBLIPOINTS\nSocio: ${req.rev.nombre || req.rev.nombre_norm}\nNivel: ${r.solicitud.nivel} · ${r.solicitud.mes}\nPremio: ${r.solicitud.recompensa}\nEstado: pendiente de aprobación\nAprobar en Sublichat › Revendedores › Recompensas`).catch(() => {});
+      res.status(r.status || 200).json(r);
+    } catch (e) { console.error("rev/recompensas-sp/solicitar", e); res.status(e.status || 500).json({ error: e.status ? e.message : "server" }); }
+  });
+  app.get("/rev/admin/recompensas/catalogo", revAdminAuth, adminPermission("recompensas.manage"), async (req, res) => {
+    try { res.json({ ok: true, catalogo: (await RSP.catalogo(db)).map((x) => ({ ...x, detalle: RSP.textoDuracion(x), agotado: RSP.agotado(x) })) }); }
+    catch (e) { console.error("rev/admin/recompensas/catalogo", e); res.status(500).json({ error: "server" }); }
+  });
+  app.patch("/rev/admin/recompensas/catalogo/:id", revAdminAuth, adminPermission("recompensas.manage"), async (req, res) => {
+    try { const a = actorAdmin(req); const r = await RSP.editarCatalogo(db, String(req.params.id || ""), req.body || {}, a.delegado ? `${a.delegado} (vía ${a.por})` : a.por); res.status(r.status || 200).json(r); }
+    catch (e) { console.error("rev/admin/recompensas/catalogo PATCH", e); res.status(500).json({ error: "server" }); }
+  });
+  app.get("/rev/admin/recompensas",revAdminAuth,adminPermission("recompensas.manage"),async(req,res)=>{try{const snap=await db.collection("recompensas_socios").get();const items=snap.docs.map(d=>({id:d.id,...d.data(),estadoTexto:RSP.ESTADOS[(d.data()||{}).estado]||(d.data()||{}).estado||"pendiente"})).sort((a,b)=>dateMs(b.createdAt)-dateMs(a.createdAt));res.json({ok:true,recompensas:items})}catch(e){res.status(500).json({error:"server"})}});
+  app.patch("/rev/admin/recompensas/:id",revAdminAuth,adminPermission("recompensas.manage"),async(req,res)=>{try{const estado=String(req.body?.estado||"");
+    if(["pendiente_aprobacion","aprobada","entregada","rechazada"].includes(estado)&&String(req.params.id||"").startsWith("sp_")){ // R204 · solicitudes SubliPoints
+      const a=actorAdmin(req);const r=await RSP.cambiarEstado(db,{id:req.params.id,estado,por:a.por,delegado:a.delegado,disponibilidadComprobada:req.body?.disponibilidadComprobada===true,costoRealHnl:req.body?.costoRealHnl,nota:req.body?.nota,motivo:req.body?.motivo});
+      if(r.ok&&!r.sinCambios&&r.solicitud){const sol=r.solicitud,s2=(await db.collection("recompensas_socios").doc(req.params.id).get()).data()||{};const txt=`🎁 Recompensa ${sol.recompensa}: ${sol.estadoTexto}${sol.motivo?` · ${sol.motivo}`:sol.nota?` · ${sol.nota}`:""}`;await db.collection("avisos").add({texto:txt,autor:"Sublicuentas",tipo:"recompensa_estado",destinatarios:[s2.socio_norm],activo:true,createdAt:admin.firestore.FieldValue.serverTimestamp()}).catch(()=>{});}
+      return res.status(r.status||200).json(r);
+    }if(!["pendiente","entregada","rechazada"].includes(estado))return res.status(400).json({error:"estado_invalido"});const ref=db.collection("recompensas_socios").doc(req.params.id),snap=await ref.get();if(!snap.exists)return res.status(404).json({error:"no_existe"});await ref.update({estado,updatedAt:admin.firestore.FieldValue.serverTimestamp()});res.json({ok:true,id:ref.id,estado})}catch(e){res.status(500).json({error:"server"})}});
 };

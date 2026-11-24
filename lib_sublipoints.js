@@ -22,6 +22,8 @@ const NIVELES = Object.freeze([
   { nivel: "Leyenda", min: 25 },
   { nivel: "Diamante", min: 10 },
 ]);
+// R203b · Los dueños no participan (decisión 23/11/2026): Sublicuentas y Relojes (y sus nombres internos).
+const EXCLUIDOS_BASE = Object.freeze(["sublicuentas", "sublicuentas2", "relojes", "naara", "libni"]);
 const HN_OFFSET_MS = 6 * 3600000; // Honduras: UTC−6 todo el año (sin horario de verano)
 
 function msDe(v) {
@@ -51,11 +53,12 @@ const esYaExiste = (e) => e && (e.code === 6 || e.code === "already-exists" || /
 async function config(db) {
   const ref = db.collection(DOC_CFG[0]).doc(DOC_CFG[1]);
   const snap = await ref.get();
-  if (snap.exists) { const d = snap.data() || {}; if (d.inicio) return { inicio: String(d.inicio), excluidos: Array.isArray(d.excluidos) ? d.excluidos.map(normSocio) : [] }; }
+  const excl = (arr) => [...new Set([...EXCLUIDOS_BASE, ...(Array.isArray(arr) ? arr.map(normSocio) : [])])];
+  if (snap.exists) { const d = snap.data() || {}; if (d.inicio) return { inicio: String(d.inicio), excluidos: excl(d.excluidos) }; }
   const inicio = new Date().toISOString();
-  try { await ref.create({ inicio, excluidos: [], creadoPor: "sistema (primera ejecución)", nota: "Fecha de entrada en vigor de SubliPoints. Pagos de pedidos/renovaciones creados antes no suman." }); }
-  catch (e) { if (!esYaExiste(e)) throw e; const d = (await ref.get()).data() || {}; return { inicio: String(d.inicio || inicio), excluidos: Array.isArray(d.excluidos) ? d.excluidos.map(normSocio) : [] }; }
-  return { inicio, excluidos: [] };
+  try { await ref.create({ inicio, excluidos: [], creadoPor: "sistema (primera ejecución)", nota: "Fecha de entrada en vigor de SubliPoints. Pagos de pedidos/renovaciones creados antes no suman. Sublicuentas y Relojes siempre quedan fuera." }); }
+  catch (e) { if (!esYaExiste(e)) throw e; const d = (await ref.get()).data() || {}; return { inicio: String(d.inicio || inicio), excluidos: excl(d.excluidos) }; }
+  return { inicio, excluidos: excl([]) };
 }
 
 /** Unidades comerciales de un pedido: un servicio por renglón (× cantidad en cuentas completas). */
@@ -114,13 +117,13 @@ async function resumenSocio(db, socioNorm, mes = mesHN()) {
   const actual = meses.find((m) => m.mes === mes) || { mes, puntos: 0, ventasNuevas: 0, renovaciones: 0, nivel: "Sin nivel" };
   const recientes = movs.filter((m) => m.mes === mes).sort((a, b) => msDe(b.createdAt) - msDe(a.createdAt)).slice(0, 30)
     .map((m) => ({ tipo: m.tipo, puntos: m.puntos, unidades: m.unidades, detalle: m.detalle || "", ref: m.ref || "", fecha: new Date(msDe(m.createdAt)).toISOString() }));
-  return { ok: true, inicio: cfg.inicio, mes, puntos: actual.puntos, nivel: actual.nivel, siguiente: siguienteNivel(actual.puntos), ventasNuevas: actual.ventasNuevas, renovaciones: actual.renovaciones, meses: meses.slice(0, 12), movimientos: recientes, reglas: { ventaNueva: PUNTOS.venta_nueva, renovacion: PUNTOS.renovacion, niveles: [...NIVELES].reverse() } };
+  return { ok: true, excluido: cfg.excluidos.includes(sn), inicio: cfg.inicio, mes, puntos: actual.puntos, nivel: actual.nivel, siguiente: siguienteNivel(actual.puntos), ventasNuevas: actual.ventasNuevas, renovaciones: actual.renovaciones, meses: meses.slice(0, 12), movimientos: recientes, reglas: { ventaNueva: PUNTOS.venta_nueva, renovacion: PUNTOS.renovacion, niveles: [...NIVELES].reverse() } };
 }
 
 async function rankingMes(db, mes = mesHN()) {
-  const snap = await db.collection(COL_MOV).where("mes", "==", mes).get();
+  const [snap, cfg] = await Promise.all([db.collection(COL_MOV).where("mes", "==", mes).get(), config(db)]);
   const por = {};
-  for (const d of snap.docs) { const m = d.data() || {}; (por[m.socio_norm] = por[m.socio_norm] || { socio: m.socio, socio_norm: m.socio_norm, movs: [] }).movs.push(m); }
+  for (const d of snap.docs) { const m = d.data() || {}; if (cfg.excluidos.includes(m.socio_norm)) continue; (por[m.socio_norm] = por[m.socio_norm] || { socio: m.socio, socio_norm: m.socio_norm, movs: [] }).movs.push(m); }
   return Object.values(por).map((x) => { const g = agrupar(x.movs)[0] || { puntos: 0, ventasNuevas: 0, renovaciones: 0, nivel: "Sin nivel" }; return { socio: x.socio, socio_norm: x.socio_norm, puntos: g.puntos, nivel: g.nivel, ventasNuevas: g.ventasNuevas, renovaciones: g.renovaciones }; })
     .sort((a, b) => b.puntos - a.puntos);
 }
@@ -129,4 +132,4 @@ async function rankingMes(db, mes = mesHN()) {
 const claveCompra = (id) => `compra_${id}`;
 const claveRenovacion = (id) => `renov_${id}`;
 
-module.exports = { PUNTOS, NIVELES, mesHN, nivelDe, siguienteNivel, unidadesCompra, config, otorgar, revertir, agrupar, resumenSocio, rankingMes, claveCompra, claveRenovacion, COL_MOV };
+module.exports = { EXCLUIDOS_BASE, normSocio, PUNTOS, NIVELES, mesHN, nivelDe, siguienteNivel, unidadesCompra, config, otorgar, revertir, agrupar, resumenSocio, rankingMes, claveCompra, claveRenovacion, COL_MOV };
