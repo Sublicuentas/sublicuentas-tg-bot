@@ -487,6 +487,14 @@ async function moverCuentaInventarioPlataforma(docId = "", nuevaPlataforma = "")
     }
   }
 
+  // R206 · Disney con ESPN ↔ sin ESPN: misma regla que la Web (lib_disney_tipo.js) y sus ventas ligadas pasan al mismo tipo.
+  const DT = require("./lib_disney_tipo");
+  if (DT.tipoDisney(anterior) && DT.tipoDisney(nueva)) {
+    const r = await DT.cambiarTipo(db, { inventarioId: srcSnap.id, tipo: DT.tipoDisney(nueva), autorizarExcepcion: true, motivo: "Perfiles ya vendidos (bot)", origen: "bot" });
+    let ventas = 0; try { ventas = (await DT.sincronizarVentas(db, { inventarioId: srcSnap.id, origen: "bot" })).ventas; } catch (e) { logErr("disneyTipo.ventas", e); }
+    return { ok: true, anterior, nueva: r.plataforma, ident, docId: srcSnap.id, data: { ...src, plataforma: r.plataforma, capacidad: r.capacidad, disponibles: r.disponibles }, capacidad: r.capacidad, ocupados: r.ocupados ?? getClientesArray(src).length, disponibles: r.disponibles, ventasSincronizadas: ventas };
+  }
+
   const clientes = getClientesArray(src);
   const capActual = Math.max(1, Number(src.capacidad || src.total || 0) || getCapacidadCorreo(src, anterior));
   const defaultAnterior = getCapacidadCorreo({}, anterior);
