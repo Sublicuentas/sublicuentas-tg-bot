@@ -341,6 +341,12 @@ function esUniversal(from="",subject=""){
   return f.includes("universal")||s.includes("universal")||s.includes("universal+");
 }
 
+// R201 · Rakuten Viki (noreply@viki.com)
+function esViki(from="",subject=""){
+  const f=from.toLowerCase(); const s=subject.toLowerCase();
+  return f.includes("viki") || s.includes("viki") || f.includes("rakuten");
+}
+
 function esSpotify(from="",subject=""){
   const f=from.toLowerCase(); const s=subject.toLowerCase();
   return f.includes("spotify") || s.includes("spotify");
@@ -368,7 +374,8 @@ function esReset(subject = "", _text = "") {
   const s = normalizarTextoBusqueda(subject);
   return s.includes("restablec") || s.includes("reset") || s.includes("recupera") ||
          s.includes("olvidaste") || s.includes("cambiar tu contrasena") || s.includes("cambia tu contrasena") ||
-         s.includes("change your password") || s.includes("forgot your password");
+         s.includes("change your password") || s.includes("forgot your password") ||
+         s.includes("cambio de contrasena") || s.includes("password reset") || s.includes("reset your password"); // R201 · Viki: «Solicitud de cambio de contraseña»
 }
 
 function esVix(from="",subject=""){
@@ -542,6 +549,8 @@ function extraerLink(text="", html="") {
     // Vix
     /https:\/\/[^\s"<>\]]*vix\.com[^\s"<>\]]*(?:reset|password|account|verify|email|confirm)[^\s"<>\]]*/i,
     /https:\/\/[^\s"<>\]]*vix[^\s"<>\]]*(?:reset|password|cuenta|correo|verificar|confirmar)[^\s"<>\]]*/i,
+    // R201 · Viki
+    /https:\/\/[^\s"<>\]]*viki[^\s"<>\]]*(?:reset|password|token|recover)[^\s"<>\]]*/i,
   ];
   for (const f of fuentes) {
     for (const p of pats) {
@@ -554,6 +563,26 @@ function extraerLink(text="", html="") {
     }
   }
   return null;
+}
+
+// R201 · Respaldo: muchos correos (Viki, Spotify, HBO Max) traen el botón con un link de seguimiento (click.mail…,
+// sendgrid, braze) que no lleva «reset» en la dirección. Se toma el href del BOTÓN cuyo texto dice restablecer /
+// cambiar contraseña. Solo se usa cuando el ASUNTO ya es un restablecimiento (esReset), nunca para avisos.
+const TXT_BOTON_RESET = /(restablec|reset|recupera|cambia(?:r)? (?:tu |la |su )?contrase|nueva contrase|set (?:a )?new password|change (?:your )?password|choose a new password|crear contrase)/i;
+function extraerLinkBotonReset(html="") {
+  const re = /<a\b[^>]*?href\s*=\s*["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
+  let m;
+  while ((m = re.exec(String(html || "")))) {
+    const href = m[1].replace(/&amp;/g, "&").trim();
+    const txt = normalizarTextoBusqueda(String(m[2]).replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/\s+/g, " ").trim());
+    if (!/^https:\/\//i.test(href) || !txt || txt.length > 80) continue;
+    if (/unsubscribe|darse de baja|privacy|privacidad|terminos|terms|help|ayuda|centro de ayuda/.test(txt)) continue;
+    if (TXT_BOTON_RESET.test(txt)) return href;
+  }
+  return null;
+}
+function linkResetDe(e = {}) {
+  return extraerLink(e.text, e.html) || (esReset(e.subject, e.text) ? extraerLinkBotonReset(e.html) : null);
 }
 
 function extraerLinkObtenerCodigo(html="") {
@@ -690,9 +719,9 @@ async function cmdCode(chatId, correo){
       // Restablecer contraseña siempre es un link, nunca un código numérico.
       if (esReset(e.subject, e.text)) {
         if (!emailCodigoVigente(e, 120)) continue;
-        const linkReset = extraerLink(e.text, e.html);
+        const linkReset = linkResetDe(e);
         if (linkReset) {
-          const plat = esNetflix(e.from,e.subject) ? "NETFLIX" : esDisney(e.from,e.subject) ? "DISNEY+" :
+          const plat = esNetflix(e.from,e.subject) ? "NETFLIX" : esViki(e.from,e.subject) ? "VIKI RAKUTEN" : esDisney(e.from,e.subject) ? "DISNEY+" :
             esHBO(e.from,e.subject) ? "HBO MAX" : esPrime(e.from,e.subject) ? "PRIME VIDEO" :
             esParamount(e.from,e.subject) ? "PARAMOUNT+" : esUniversal(e.from,e.subject) ? "UNIVERSAL+" :
             esSpotify(e.from,e.subject) ? "SPOTIFY" : esVix(e.from,e.subject) ? "VIX" : "CUENTA";
@@ -851,9 +880,10 @@ async function cmdLink(chatId, correo){
       const isU  = esUniversal(e.from, e.subject);
       const isV  = esVix(e.from, e.subject);
       const isS  = esSpotify(e.from, e.subject);
-      if(!isN && !isD && !isH && !isP && !isU && !isV && !isS) continue;
+      const isK  = esViki(e.from, e.subject); // R201
+      if(!isN && !isD && !isH && !isP && !isU && !isV && !isS && !isK) continue;
 
-      const link = extraerLink(e.text, e.html);
+      const link = linkResetDe(e);
       if(!link) continue;
 
       const fromL = e.from.toLowerCase();
@@ -864,6 +894,10 @@ async function cmdLink(chatId, correo){
       const isReallyUniversal = !isReallyNetflix && !isReallyDisney && !isReallyPrime && !isReallyParamount && (isU || fromL.includes("universal"));
       const isReallySpotify = !isReallyNetflix && !isReallyDisney && !isReallyPrime && !isReallyParamount && !isReallyUniversal && (isS || fromL.includes("spotify"));
       const isReallyVix = !isReallyNetflix && !isReallyDisney && !isReallyPrime && !isReallyParamount && !isReallyUniversal && !isReallySpotify && (isV || fromL.includes("vix"));
+      const isReallyViki = !isReallyNetflix && isK && !fromL.includes("disney") && !fromL.includes("spotify"); // R201
+      if (isReallyViki) return bot.sendMessage(chatId,
+        `📺 *LINK RESET VIKI RAKUTEN*\n\n📧 *Correo:* ${escMD(correo)}\n📨 *Asunto:* ${escMD(e.subject)}\n🕒 *Fecha:* ${escMD(formatearFecha(e.date))}\n\nToca el botón para abrir el link:`,
+        {parse_mode:"Markdown", reply_markup:{inline_keyboard:[[{text:"📺 Abrir link VIKI", url:link}]]}});
       const plat  = isReallyNetflix ? "NETFLIX" : isReallyDisney ? "DISNEY+" : isReallyPrime ? "PRIME VIDEO" : isReallyParamount ? "PARAMOUNT+" : isReallyUniversal ? "UNIVERSAL+" : isReallySpotify ? "SPOTIFY" : isReallyVix ? "VIX" : "HBO MAX";
       const emoji = isReallyNetflix ? "🎬" : isReallyDisney ? "🏰" : isReallyPrime ? "🎥" : isReallyParamount ? "💿" : isReallyUniversal ? "🌎" : isReallySpotify ? "🎵" : isReallyVix ? "📱" : "🎞️";
 
@@ -1039,4 +1073,4 @@ bot.onText(/^\/imapstatus(?:\s|$)/i, _imapStatusHandler);
 
 console.log("✅ Módulo IMAP v20 cargado — /code /link /hogar /prime /inbox /imapstatus");
 
-module.exports = { cmdCode, cmdLink, cmdHogar, cmdPrime, cmdInbox, cmdImapStatus, buscarEmails, estadoImapSeguro, extraerCodigoInteligente, htmlATextoVisible };
+module.exports = { cmdCode, cmdLink, cmdHogar, cmdPrime, cmdInbox, cmdImapStatus, buscarEmails, estadoImapSeguro, extraerCodigoInteligente, htmlATextoVisible, extraerLink, extraerLinkBotonReset, linkResetDe, esViki, esReset };
