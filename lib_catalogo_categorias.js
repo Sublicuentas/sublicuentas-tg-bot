@@ -23,7 +23,7 @@ const PLATAFORMA_CATEGORIA = Object.freeze({
   viki: "cuentas_completas",
 });
 // Plataformas que se pueden vender como CUENTA COMPLETA (correo + clave + precio; sin PIN ni perfil).
-const CUENTA_COMPLETA_PLATAFORMAS = Object.freeze(["viki", "disneys", "hbomax", "netflix", "crunchyroll"]);
+const CUENTA_COMPLETA_PLATAFORMAS = Object.freeze(["viki", "disneyp", "disneys", "hbomax", "netflix", "crunchyroll"]); // R203 · + Disney Premium con ESPN
 // Las que SOLO existen como cuenta completa.
 const SOLO_CUENTA_COMPLETA = Object.freeze(["viki"]);
 

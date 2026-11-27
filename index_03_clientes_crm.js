@@ -701,7 +701,7 @@ function kbPlataformasWiz(prefix = "wiz:plat", clientId = null, idx = null, cate
         items.push({ text: "🔐 HBO Platinum · cuenta completa", callback_data: appendCallbackContextLocal(`ccsel:${mode}:hbomaxplatinum`, clientId, idx) });
         continue;
       }
-      items.push({ text: `🔐 ${humanPlataforma(k)}`, callback_data: appendCallbackContextLocal(`ccsel:${mode}:${k}`, clientId, idx) });
+      items.push({ text: `🔐 ${k === "disneyp" ? "Disney Premium con ESPN" : humanPlataforma(k)}`, callback_data: appendCallbackContextLocal(`ccsel:${mode}:${k}`, clientId, idx) }); // R203
     }
     for (let i = 0; i < items.length; i += 2) rows.push(items.slice(i, i + 2));
     return rows;
