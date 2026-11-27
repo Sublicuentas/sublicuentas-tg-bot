@@ -60,17 +60,19 @@ async function previsualizar(db, texto = "") {
   const { items, invalidas } = parsearLineas(texto);
   const existentes = new Map((await unidadesVip(db)).map((u) => [normCorreo(u.correo), u]));
   const premium = await correosNetflixPremium(db);
-  const vistos = new Set(); const nuevas = [], repetidas = [], yaExistentes = [], yaAsignadas = [];
+  const vistos = new Set(); const nuevas = [], repetidas = [], yaExistentes = [], yaAsignadas = [], completarClave = [];
   const malas = invalidas.map((x) => ({ ...x }));
   for (const it of items) {
     if (vistos.has(it.correo)) { repetidas.push({ linea: it.linea, correo: it.correo }); continue; }
     vistos.add(it.correo);
     const ex = existentes.get(it.correo);
+    // R207 · unidad ya en Bodega SIN clave (pasada desde Finanzas): esta línea solo le completa la clave; nada más cambia.
+    if (ex && !String(ex.clave || "").trim()) { completarClave.push({ linea: it.linea, correo: it.correo, estado: ETIQUETA_ESTADO[estadoUnidad(ex)] }); continue; }
     if (ex) { (estadoUnidad(ex) === "asignado" ? yaAsignadas : yaExistentes).push({ linea: it.linea, correo: it.correo, estado: ETIQUETA_ESTADO[estadoUnidad(ex)] }); continue; }
     if (premium.has(it.correo)) { malas.push({ linea: it.linea, correo: it.correo, motivo: "ese correo ya es una cuenta Netflix Premium" }); continue; }
     nuevas.push({ linea: it.linea, correo: it.correo });
   }
-  return { total: items.length + invalidas.length, nuevas, repetidas, yaExistentes, yaAsignadas, invalidas: malas };
+  return { total: items.length + invalidas.length, nuevas, repetidas, yaExistentes, yaAsignadas, completarClave, invalidas: malas };
 }
 
 function datosLote({ proveedor, lote, costoUsdt, vencimientoProveedor } = {}) {
@@ -107,15 +109,27 @@ async function importar(db, { texto = "", proveedor, lote, costoUsdt, vencimient
     });
     (hecho ? creadas : yaEstaban).push(n.correo);
   }
+  const conClave = []; // R207 · solo la clave, y solo si sigue vacía (otro envío pudo completarla)
+  for (const n of prev.completarClave || []) {
+    const ref = db.collection("inventario").doc(docIdVip(n.correo));
+    const hecho = await db.runTransaction(async (tx) => {
+      const s = await tx.get(ref); if (!s.exists) return false; const d = s.data() || {};
+      if (String(d.clave || "").trim() || !claves.get(n.correo)) return false;
+      tx.update(ref, { clave: claves.get(n.correo), claveFaltante: false, ...(String(d.estadoBodega || "") === "revision" && d.revisionPorClave ? { estadoBodega: (Array.isArray(d.clientes) && d.clientes.length) ? "asignado" : "disponible", revisionPorClave: false } : {}),
+        historialBodega: [...(Array.isArray(d.historialBodega) ? d.historialBodega : []), { tipo: "clave_completada", at: iso, por: usuario, origen }].slice(-50), updatedAt: iso });
+      return true;
+    });
+    if (hecho) conClave.push(n.correo);
+  }
   if (creadas.length) {
     // auditoría sin claves
     await db.collection("auditoria_eventos").add({ tipo: "bodega_vip_lote", plataforma: PLAT, cantidad: creadas.length, proveedor: meta.proveedor, lote: meta.lote, costoUsdt: meta.costoUsdt, usuario, origen, createdAt: iso });
   }
   const existentes = prev.yaExistentes.length + prev.yaAsignadas.length + yaEstaban.length;
   return {
-    disponibles: creadas.length, existentes, errores: prev.invalidas.length + prev.repetidas.length,
+    disponibles: creadas.length, existentes, clavesCompletadas: conClave.length, errores: prev.invalidas.length + prev.repetidas.length,
     fallas: [...prev.invalidas, ...prev.repetidas.map((r) => ({ ...r, motivo: "repetido en el lote" }))].map((f) => ({ linea: f.linea, correo: f.correo || "", motivo: f.motivo })),
-    resumen: `${creadas.length} disponibles / ${existentes} ya existentes / ${prev.invalidas.length + prev.repetidas.length} errores`,
+    resumen: `${creadas.length} disponibles${conClave.length ? ` / ${conClave.length} claves completadas` : ""} / ${existentes} ya existentes / ${prev.invalidas.length + prev.repetidas.length} errores`,
   };
 }
 
